@@ -8,6 +8,8 @@ import {
   LspChatMode,
   PayloadWithChatAndMessageId,
   PayloadWithChatAndBoolean,
+  PayloadWithChatAndUsage,
+  PayloadWithChatAndNumber,
 } from "./types";
 import {
   isAssistantDelta,
@@ -33,6 +35,7 @@ import {
 import { ToolCommand } from "../../../services/refact/tools";
 import { scanFoDuplicatesWith, takeFromEndWhile } from "../../../utils";
 import { debugApp } from "../../../debugConfig";
+import { ChatHistoryItem } from "../../History/historySlice";
 
 export const newChatAction = createAction("chatThread/new");
 
@@ -57,8 +60,17 @@ export const setLastUserMessageId = createAction<PayloadWithChatAndMessageId>(
   "chatThread/setLastUserMessageId",
 );
 
+export const updateMaximumContextTokens =
+  createAction<PayloadWithChatAndNumber>(
+    "chatThread/updateMaximumContextTokens",
+  );
+
 export const setIsNewChatSuggested = createAction<PayloadWithChatAndBoolean>(
   "chatThread/setIsNewChatSuggested",
+);
+
+export const setThreadUsage = createAction<PayloadWithChatAndUsage>(
+  "chatThread/setThreadUsage",
 );
 
 export const setIsNewChatSuggestionRejected =
@@ -94,7 +106,9 @@ export const removeChatFromCache = createAction<PayloadWithId>(
   "chatThread/removeChatFromCache",
 );
 
-export const restoreChat = createAction<ChatThread>("chatThread/restoreChat");
+export const restoreChat = createAction<ChatHistoryItem>(
+  "chatThread/restoreChat",
+);
 
 export const clearChatError = createAction<PayloadWithId>(
   "chatThread/clearError",

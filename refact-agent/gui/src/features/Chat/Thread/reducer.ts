@@ -35,6 +35,7 @@ import {
   fixBrokenToolMessages,
   setIsNewChatSuggested,
   setIsNewChatSuggestionRejected,
+  setThreadUsage,
 } from "./actions";
 import { formatChatResponse } from "./utils";
 import {
@@ -42,6 +43,7 @@ import {
   isToolCallMessage,
   validateToolCall,
 } from "../../../services/refact";
+import { calculateUsageInputTokens } from "../../../utils/calculateUsageInputTokens";
 
 const createChatThread = (
   tool_use: ToolUse,
@@ -82,7 +84,7 @@ const getThreadMode = ({
     return maybeMode === "CONFIGURE" ? "AGENT" : maybeMode;
   }
 
-  return chatModeToLspMode(tool_use);
+  return chatModeToLspMode({ toolUse: tool_use });
 };
 
 const createInitialState = ({
@@ -113,7 +115,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(setToolUse, (state, action) => {
     state.thread.tool_use = action.payload;
     state.tool_use = action.payload;
-    state.thread.mode = chatModeToLspMode(action.payload);
+    state.thread.mode = chatModeToLspMode({ toolUse: action.payload });
   });
 
   builder.addCase(setPreventSend, (state, action) => {
@@ -218,6 +220,33 @@ export const chatReducer = createReducer(initialState, (builder) => {
     };
   });
 
+  builder.addCase(setThreadUsage, (state, action) => {
+    if (state.thread.id !== action.payload.chatId) return state;
+
+    const { usage } = action.payload;
+    state.thread.usage = usage;
+
+    const inputTokensAmount = calculateUsageInputTokens(usage, [
+      "prompt_tokens",
+      "cache_creation_input_tokens",
+      "cache_read_input_tokens",
+    ]);
+
+    const maximumInputTokens = state.thread.currentMaximumContextTokens;
+
+    if (maximumInputTokens && inputTokensAmount >= maximumInputTokens) {
+      const { wasSuggested, wasRejectedByUser } =
+        state.thread.new_chat_suggested;
+
+      state.thread.new_chat_suggested = {
+        wasSuggested: wasSuggested || !wasSuggested,
+        wasRejectedByUser: wasRejectedByUser
+          ? !wasRejectedByUser
+          : wasRejectedByUser,
+      };
+    }
+  });
+
   builder.addCase(setEnabledCheckpoints, (state, action) => {
     state.checkpoints_enabled = action.payload;
   });
@@ -269,7 +298,10 @@ export const chatReducer = createReducer(initialState, (builder) => {
       state.streaming = false;
     }
     state.prevent_send = true;
-    state.thread = mostUptoDateThread;
+    state.thread = {
+      new_chat_suggested: { wasSuggested: false },
+      ...mostUptoDateThread,
+    };
     state.thread.tool_use = state.thread.tool_use ?? state.tool_use;
   });
 
