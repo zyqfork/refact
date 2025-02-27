@@ -29,7 +29,6 @@ pub mod yaml_schema;
 pub mod setting_up_integrations;
 pub mod running_integrations;
 pub mod utils;
-pub mod json_schema;
 
 use integr_abstract::IntegrationTrait;
 
@@ -70,13 +69,13 @@ pub fn integrations_list(allow_experimental: bool) -> Vec<&'static str> {
         "mysql",
         "cmdline_TEMPLATE",
         "service_TEMPLATE",
+        "mcp_TEMPLATE",
         "docker",
         "shell",
     ];
     if allow_experimental {
         integrations.extend(vec![
             "isolation",
-            "mcp_TEMPLATE",
         ]);
     }
     integrations

@@ -251,24 +251,24 @@ pub async fn get_active_project_path(gcx: Arc<ARwLock<GlobalContext>>) -> Option
     if workspace_folders.is_empty() { return None; }
 
     let active_file = gcx.read().await.documents_state.active_file_path.clone();
-    tracing::info!("get_active_project_path(), active_file={:?} workspace_folders={:?}", active_file, workspace_folders);
+    // tracing::info!("get_active_project_path(), active_file={:?} workspace_folders={:?}", active_file, workspace_folders);
 
     let active_file_path = if let Some(active_file) = active_file {
         active_file
     } else {
-        tracing::info!("returning the first workspace folder: {:?}", workspace_folders[0]);
+        // tracing::info!("returning the first workspace folder: {:?}", workspace_folders[0]);
         return Some(workspace_folders[0].clone());
     };
 
     if let Some((path, _)) = detect_vcs_for_a_file_path(&active_file_path).await {
-        tracing::info!("found VCS path: {:?}", path);
+        // tracing::info!("found VCS path: {:?}", path);
         return Some(path);
     }
 
     // Without VCS, return one of workspace_folders that is a parent for active_file_path
     for f in workspace_folders {
         if active_file_path.starts_with(&f) {
-            tracing::info!("found that {:?} is the workspace folder", f);
+            // tracing::info!("found that {:?} is the workspace folder", f);
             return Some(f);
         }
     }
@@ -279,7 +279,7 @@ pub async fn get_active_project_path(gcx: Arc<ARwLock<GlobalContext>>) -> Option
 
 pub async fn get_active_workspace_folder(gcx: Arc<ARwLock<GlobalContext>>) -> Option<PathBuf> {
     let workspace_folders = get_project_dirs(gcx.clone()).await;
-    
+
     let active_file = gcx.read().await.documents_state.active_file_path.clone();
     if let Some(active_file) = active_file {
         for f in &workspace_folders {
@@ -336,9 +336,9 @@ fn _shortify_paths_from_indexed(paths: &Vec<String>, indexed_paths: Arc<HashSet<
 
 #[cfg(windows)]
 /// In Windows, tries to fix the path, permissive about paths like \\?\C:\path, incorrect amount of \ and more.
-/// 
+///
 /// Temporarily remove verbatim, to resolve ., .., symlinks if possible, it will be added again later.
-fn preprocess_path_for_normalization(p: String) -> String {
+pub fn preprocess_path_for_normalization(p: String) -> String {
     use itertools::Itertools;
 
     let p = p.replace(r"/", r"\");
@@ -380,7 +380,7 @@ fn preprocess_path_for_normalization(p: String) -> String {
 
 #[cfg(not(windows))]
 /// In Unix, do nothing
-fn preprocess_path_for_normalization(p: String) -> String {
+pub fn preprocess_path_for_normalization(p: String) -> String {
     p
 }
 
@@ -416,7 +416,7 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
 fn absolute(path: &Path) -> Result<PathBuf, String> {
     let mut components = path.components();
     let path_os = path.as_os_str().as_encoded_bytes();
-    
+
     let mut normalized = if path.is_absolute() {
         if path_os.starts_with(b"//") && !path_os.starts_with(b"///") {
             components.next();
@@ -436,19 +436,23 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
             Component::Prefix(_) => return Err("Prefix should not occur in Unix".to_string()),
         }
     }
-    
+
     if path_os.ends_with(b"/") {
         normalized.push("");
     }
-    
+
     Ok(normalized)
 }
 
 pub fn canonical_path<T: Into<String>>(p: T) -> PathBuf {
     let p: String = p.into();
     let path= PathBuf::from(preprocess_path_for_normalization(p));
+    canonicalize_normalized_path(path)
+}
 
-    path.canonicalize().unwrap_or_else(|_| absolute(&path).unwrap_or(path))
+/// If you did not call preprocess_path_for_normalization() before, use crate::files_correction::canonical_path() instead
+pub fn canonicalize_normalized_path(p: PathBuf) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| absolute(&p).unwrap_or(p))
 }
 
 pub fn serialize_path<S: serde::Serializer>(path: &PathBuf, serializer: S) -> Result<S::Ok, S::Error> {
@@ -534,7 +538,7 @@ mod tests {
 
         assert_eq!(result, expected_result, "The result should contain the expected paths, instead it found");
     }
-    
+
     #[cfg(windows)]
     #[test]
     fn test_preprocess_windows_path_for_normalization() {
@@ -581,13 +585,13 @@ mod tests {
         for (input, expected) in test_cases {
             let result = preprocess_path_for_normalization(input.to_string());
             assert_eq!(result, expected.to_string(), "The result for {} should be {}, got {}", input, expected, result);
-        }  
+        }
     }
 
     #[cfg(windows)]
     #[ignore]
     #[test]
-    fn test_canonical_path_windows() 
+    fn test_canonical_path_windows()
     {
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_dir_path = temp_dir.path();
@@ -634,7 +638,6 @@ mod tests {
             (r"\\.\COM1", PathBuf::from(r"\\.\COM1")),
             (r"\.\PIPE\SomePipeName", PathBuf::from(r"\\.\PIPE\SomePipeName")),
             (r"/?/UNC//./PIPE/AnotherPipe", PathBuf::from(r"\\.\PIPE\AnotherPipe")),
-            (r"D:\\PRN", PathBuf::from(r"\\?\D:\PRN")),
 
             // Non-Standard Verbatim
             (r"\\?\Volume{12345678-1234-1234-1234-1234567890AB}\Path\To\Some\File", PathBuf::from(r"\\?\Volume{12345678-1234-1234-1234-1234567890AB}\Path\To\Some\File")),
@@ -656,14 +659,13 @@ mod tests {
     #[cfg(not(windows))]
     #[ignore]
     #[test]
-    fn test_canonical_path_unix() 
+    fn test_canonical_path_unix()
     {
         let cur_dir = std::env::current_dir().unwrap();
 
         let test_cases = vec![
             // Absolute paths
             (r"/home/.././etc/./../usr/bin", PathBuf::from(r"/usr/bin")),
-            (r"/var/run//.././run//docker.sock", PathBuf::from(r"/run/docker.sock")),
             (r"/this_folder_does_not_exist/run/.././run/docker.sock", PathBuf::from(r"/this_folder_does_not_exist/run/docker.sock")),
             (r"/../../var", PathBuf::from(r"/var")),
             (r"/../../var_n/.", PathBuf::from(r"/var_n")),

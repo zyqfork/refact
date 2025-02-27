@@ -11,6 +11,10 @@ import {
   restoreChat,
   newIntegrationChat,
   chatResponse,
+  setThreadUsage,
+  setIsWaitingForResponse,
+  upsertToolCall,
+  sendCurrentChatToLspAfterToolCallUpdate,
 } from "../features/Chat/Thread";
 import { statisticsApi } from "../services/refact/statistics";
 import { integrationsApi } from "../services/refact/integrations";
@@ -20,7 +24,6 @@ import { promptsApi } from "../services/refact/prompts";
 import { toolsApi } from "../services/refact/tools";
 import { commandsApi, isDetailMessage } from "../services/refact/commands";
 import { pathApi } from "../services/refact/path";
-import { diffApi } from "../services/refact/diffs";
 import { pingApi } from "../services/refact/ping";
 import {
   clearError,
@@ -32,15 +35,17 @@ import { resetAttachedImagesSlice } from "../features/AttachedImages";
 import { nextTip } from "../features/TipOfTheDay";
 import { telemetryApi } from "../services/refact/telemetry";
 import { CONFIG_PATH_URL, FULL_PATH_URL } from "../services/refact/consts";
-import { resetConfirmationInteractedState } from "../features/ToolConfirmation/confirmationSlice";
 import {
-  getAgentUsageCounter,
-  getMaxFreeAgentUsage,
-} from "../features/Chat/Thread/utils";
+  resetConfirmationInteractedState,
+  updateConfirmationAfterIdeToolUse,
+} from "../features/ToolConfirmation/confirmationSlice";
 import {
   updateAgentUsage,
   updateMaxAgentUsageAmount,
 } from "../features/AgentUsage/agentUsageSlice";
+import { isChatResponseChoice } from "../services/refact";
+import { ideToolCallResponse } from "../hooks/useEventBusForIDE";
+import { upsertToolCallIntoHistory } from "../features/History/historySlice";
 
 const AUTH_ERROR_MESSAGE =
   "There is an issue with your API key. Check out your API Key or re-login";
@@ -66,7 +71,6 @@ startListening({
       // promptsApi.util.resetApiState(),
       toolsApi.util.resetApiState(),
       commandsApi.util.resetApiState(),
-      diffApi.util.resetApiState(),
       resetAttachedImagesSlice(),
       resetConfirmationInteractedState(),
     ].forEach((api) => listenerApi.dispatch(api));
@@ -99,15 +103,26 @@ startListening({
     // saving to store agent_usage counter from the backend, only one chunk has this field.
     const { payload } = action;
 
-    if ("refact_agent_request_available" in payload) {
-      const agentUsageCounter = getAgentUsageCounter(payload);
+    if (isChatResponseChoice(payload)) {
+      const {
+        usage,
+        refact_agent_max_request_num,
+        refact_agent_request_available,
+      } = payload;
 
-      dispatch(updateAgentUsage(agentUsageCounter ?? null));
-    }
+      if (
+        refact_agent_request_available !== undefined &&
+        refact_agent_request_available !== null
+      ) {
+        dispatch(updateAgentUsage(refact_agent_request_available));
+      }
 
-    if ("refact_agent_max_request_num" in payload) {
-      const maxFreeAgentUsage = getMaxFreeAgentUsage(payload);
-      dispatch(updateMaxAgentUsageAmount(maxFreeAgentUsage));
+      if (refact_agent_max_request_num !== undefined) {
+        dispatch(updateMaxAgentUsageAmount(refact_agent_max_request_num));
+      }
+      if (usage) {
+        dispatch(setThreadUsage({ chatId: payload.id, usage }));
+      }
     }
   },
 });
@@ -314,19 +329,6 @@ startListening({
     ) {
       listenerApi.dispatch(setError(action.payload));
     }
-
-    if (diffApi.endpoints.applyAllPatchesInMessages.matchRejected(action)) {
-      const errorStatus = action.payload?.status;
-      const isAuthError = errorStatus === 401;
-      const message = isAuthError
-        ? AUTH_ERROR_MESSAGE
-        : isDetailMessage(action.payload?.data)
-          ? action.payload.data.detail
-          : `Failed to apply diffs: ${action.payload?.status}`;
-
-      listenerApi.dispatch(setError(message));
-      listenerApi.dispatch(setIsAuthError(isAuthError));
-    }
   },
 });
 
@@ -404,8 +406,6 @@ startListening({
   matcher: isAnyOf(
     chatAskQuestionThunk.rejected.match,
     chatAskQuestionThunk.fulfilled.match,
-    diffApi.endpoints.patchSingleFileFromTicket.matchFulfilled,
-    diffApi.endpoints.patchSingleFileFromTicket.matchRejected,
     // give files api
     pathApi.endpoints.getFullPath.matchFulfilled,
     pathApi.endpoints.getFullPath.matchRejected,
@@ -453,34 +453,6 @@ startListening({
         scope,
         success: true,
         error_message: "",
-      });
-
-      void listenerApi.dispatch(thunk);
-    }
-
-    if (diffApi.endpoints.patchSingleFileFromTicket.matchFulfilled(action)) {
-      const success = !action.payload.results.every(
-        (result) => result.already_applied,
-      );
-      const thunk = telemetryApi.endpoints.sendTelemetryChatEvent.initiate({
-        scope: "handleShow",
-        success: success,
-        error_message: success
-          ? ""
-          : "Already applied, no significant changes generated.",
-      });
-
-      void listenerApi.dispatch(thunk);
-    }
-
-    if (
-      diffApi.endpoints.patchSingleFileFromTicket.matchRejected(action) &&
-      !action.meta.condition
-    ) {
-      const thunk = telemetryApi.endpoints.sendTelemetryChatEvent.initiate({
-        scope: "handleShow",
-        success: false,
-        error_message: action.error.message ?? JSON.stringify(action.error),
       });
 
       void listenerApi.dispatch(thunk);
@@ -538,6 +510,36 @@ startListening({
         error_message: action.error.message ?? JSON.stringify(action.error),
       });
       void listenerApi.dispatch(thunk);
+    }
+  },
+});
+
+// Tool Call results from ide.
+startListening({
+  actionCreator: ideToolCallResponse,
+  effect: (action, listenerApi) => {
+    const state = listenerApi.getState();
+
+    listenerApi.dispatch(upsertToolCallIntoHistory(action.payload));
+    listenerApi.dispatch(upsertToolCall(action.payload));
+    listenerApi.dispatch(updateConfirmationAfterIdeToolUse(action.payload));
+
+    const pauseReasons = state.confirmation.pauseReasons.filter(
+      (reason) => reason.tool_call_id !== action.payload.toolCallId,
+    );
+
+    if (pauseReasons.length === 0) {
+      listenerApi.dispatch(resetConfirmationInteractedState());
+      listenerApi.dispatch(setIsWaitingForResponse(false));
+    }
+
+    if (pauseReasons.length === 0 && action.payload.accepted) {
+      void listenerApi.dispatch(
+        sendCurrentChatToLspAfterToolCallUpdate({
+          chatId: action.payload.chatId,
+          toolCallId: action.payload.toolCallId,
+        }),
+      );
     }
   },
 });
