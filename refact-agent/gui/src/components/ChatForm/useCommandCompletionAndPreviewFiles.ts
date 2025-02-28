@@ -1,13 +1,24 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useDebounceCallback } from "usehooks-ts";
 import { Checkboxes } from "./useCheckBoxes";
-import { useHasCaps } from "../../hooks";
+import { useAppSelector, useHasCaps, useSendChatRequest } from "../../hooks";
 import { addCheckboxValuesToInput } from "./utils";
 import {
   type CommandCompletionResponse,
   commandsApi,
 } from "../../services/refact/commands";
-import { ChatContextFile } from "../../services/refact/types";
+import {
+  ChatContextFile,
+  ChatMessages,
+  ChatMeta,
+} from "../../services/refact/types";
+import {
+  selectChatId,
+  selectIsStreaming,
+  selectMessages,
+  selectModel,
+  selectThreadMode,
+} from "../../features/Chat";
 
 function useGetCommandCompletionQuery(
   query: string,
@@ -67,11 +78,32 @@ function useGetCommandPreviewQuery(
   query: string,
 ): (ChatContextFile | string)[] {
   const hasCaps = useHasCaps();
-  const { data } = commandsApi.useGetCommandPreviewQuery(query, {
-    skip: !hasCaps,
-  });
+  const { maybeAddImagesToQuestion } = useSendChatRequest();
+
+  const messages = useAppSelector(selectMessages);
+  const chatId = useAppSelector(selectChatId);
+  const isStreaming = useAppSelector(selectIsStreaming);
+  const currentThreadMode = useAppSelector(selectThreadMode);
+  const currentModel = useAppSelector(selectModel);
+
+  const userMessage = maybeAddImagesToQuestion(query);
+
+  const messagesToSend: ChatMessages = [...messages, userMessage];
+
+  const metaToSend: ChatMeta = {
+    chat_id: chatId,
+    chat_mode: currentThreadMode ?? "AGENT",
+  };
+
+  const { data } = commandsApi.useGetCommandPreviewQuery(
+    { messages: messagesToSend, meta: metaToSend, model: currentModel },
+    {
+      skip: !hasCaps || isStreaming,
+    },
+  );
+
   if (!data) return [];
-  return data;
+  return data.files;
 }
 
 function useGetPreviewFiles(query: string, checkboxes: Checkboxes) {

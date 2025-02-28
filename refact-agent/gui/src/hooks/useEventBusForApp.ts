@@ -12,15 +12,12 @@ import {
   push,
   selectPages,
 } from "../features/Pages/pagesSlice";
-import { diffApi, resetDiffApi } from "../services/refact/diffs";
-import { usePatchActions } from "./usePatchActions";
-import { showPatchTicket } from "../events";
+import { ideToolCallResponse } from "./useEventBusForIDE";
 
 export function useEventBusForApp() {
   const config = useConfig();
   const dispatch = useAppDispatch();
   const pages = useAppSelector(selectPages);
-  const { handleShow } = usePatchActions();
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -43,17 +40,15 @@ export function useEventBusForApp() {
         dispatch(newChatAction(event.data.payload));
       }
 
-      if (resetDiffApi.match(event.data)) {
-        dispatch(diffApi.util.resetApiState());
-      }
-
-      if (showPatchTicket.match(event.data)) {
-        handleShow(event.data.payload);
-      }
-
       if (setCurrentProjectInfo.match(event.data)) {
         dispatch(setCurrentProjectInfo(event.data.payload));
       }
+
+      if (ideToolCallResponse.match(event.data)) {
+        dispatch(event.data);
+      }
+
+      // TODO: ideToolEditResponse.
 
       // TODO: active project
       // vscode workspace can be found with vscode.workspace.name
@@ -65,5 +60,5 @@ export function useEventBusForApp() {
     return () => {
       window.removeEventListener("message", listener);
     };
-  }, [config.host, dispatch, handleShow, pages]);
+  }, [config.host, dispatch, pages]);
 }

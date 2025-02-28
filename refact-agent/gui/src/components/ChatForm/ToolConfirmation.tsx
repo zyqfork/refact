@@ -169,7 +169,7 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
               size="1"
               onClick={rejectToolUsage}
             >
-              Deny
+              Stop
             </Button>
           )}
         </Flex>
@@ -258,7 +258,7 @@ const PatchConfirmation: React.FC<PatchConfirmationProps> = ({
             size="1"
             onClick={rejectToolUsage}
           >
-            Deny
+            Stop
           </Button>
         </Flex>
       </Flex>

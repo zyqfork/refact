@@ -16,7 +16,7 @@ import {
   useConfig,
   useAgentUsage,
   useCapsForToolUse,
-  USAGE_LIMIT_EXHAUSTED_MESSAGE,
+  useSendChatRequest,
 } from "../../hooks";
 import { ErrorCallout, Callout } from "../Callout";
 import { ComboBox } from "../ComboBox";
@@ -25,7 +25,7 @@ import { ChatControls } from "./ChatControls";
 import { addCheckboxValuesToInput } from "./utils";
 import { useCommandCompletionAndPreviewFiles } from "./useCommandCompletionAndPreviewFiles";
 import { useAppSelector, useAppDispatch } from "../../hooks";
-import { getErrorMessage, clearError } from "../../features/Errors/errorsSlice";
+import { clearError, getErrorMessage } from "../../features/Errors/errorsSlice";
 import { useTourRefs } from "../../features/Tour";
 import { useCheckboxes } from "./useCheckBoxes";
 import { useInputValue } from "./useInputValue";
@@ -41,17 +41,22 @@ import { AttachFileButton, FileList } from "../Dropzone";
 import { useAttachedImages } from "../../hooks/useAttachedImages";
 import {
   enableSend,
+  selectChatError,
   selectChatId,
   selectIsStreaming,
   selectIsWaiting,
   selectMessages,
   selectPreventSend,
+  selectThreadMaximumTokens,
   selectThreadToolUse,
   selectToolUse,
 } from "../../features/Chat";
 import { telemetryApi } from "../../services/refact";
 import { push } from "../../features/Pages/pagesSlice";
 import { AgentCapabilities } from "./AgentCapabilities";
+import { TokensPreview } from "./TokensPreview";
+import { useUsageCounter } from "../UsageCounter/useUsageCounter";
+import classNames from "classnames";
 
 export type ChatFormProps = {
   onSubmit: (str: string) => void;
@@ -72,23 +77,36 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   const { isMultimodalitySupportedForCurrentModel } = useCapsForToolUse();
   const config = useConfig();
   const toolUse = useAppSelector(selectToolUse);
-  const error = useAppSelector(getErrorMessage);
+  const globalError = useAppSelector(getErrorMessage);
+  const chatError = useAppSelector(selectChatError);
   const information = useAppSelector(getInformationMessage);
   const pauseReasonsWithPause = useAppSelector(getPauseReasonsWithPauseStatus);
   const [helpInfo, setHelpInfo] = React.useState<React.ReactNode | null>(null);
-  const { disableInput } = useAgentUsage();
+  const { disableInput, usageLimitExhaustedMessage } = useAgentUsage();
   const isOnline = useIsOnline();
+  const { retry } = useSendChatRequest();
 
   const chatId = useAppSelector(selectChatId);
   const threadToolUse = useAppSelector(selectThreadToolUse);
   const messages = useAppSelector(selectMessages);
   const preventSend = useAppSelector(selectPreventSend);
+  const currentThreadMaximumContextTokens = useAppSelector(
+    selectThreadMaximumTokens,
+  );
+
+  const { isOverflown: arePromptTokensBiggerThanContext, currentThreadUsage } =
+    useUsageCounter();
 
   const shouldAgentCapabilitiesBeShown = useMemo(() => {
     return threadToolUse === "agent" && toolUse === "agent";
   }, [toolUse, threadToolUse]);
 
-  const onClearError = useCallback(() => dispatch(clearError()), [dispatch]);
+  const onClearError = useCallback(() => {
+    if (messages.length > 0 && chatError) {
+      retry(messages);
+    }
+    dispatch(clearError());
+  }, [dispatch, retry, messages, chatError]);
 
   const caps = useCapsForToolUse();
 
@@ -100,9 +118,26 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   const disableSend = useMemo(() => {
     // TODO: if interrupting chat some errors can occur
     if (allDisabled) return true;
+    if (
+      currentThreadMaximumContextTokens &&
+      currentThreadUsage?.prompt_tokens &&
+      currentThreadUsage.prompt_tokens > currentThreadMaximumContextTokens
+    )
+      return false;
+    if (arePromptTokensBiggerThanContext) return true;
     if (messages.length === 0) return false;
     return isWaiting || isStreaming || !isOnline || preventSend;
-  }, [isOnline, isStreaming, isWaiting, preventSend, messages, allDisabled]);
+  }, [
+    isOnline,
+    isStreaming,
+    isWaiting,
+    arePromptTokensBiggerThanContext,
+    currentThreadMaximumContextTokens,
+    currentThreadUsage?.prompt_tokens,
+    preventSend,
+    messages,
+    allDisabled,
+  ]);
 
   const { processAndInsertImages } = useAttachedImages();
   const handlePastingFile = useCallback(
@@ -151,7 +186,7 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   const handleSubmit = useCallback(() => {
     const trimmedValue = value.trim();
     if (disableInput) {
-      const action = setInformation(USAGE_LIMIT_EXHAUSTED_MESSAGE);
+      const action = setInformation(usageLimitExhaustedMessage);
       dispatch(action);
     } else if (!disableSend && trimmedValue.length > 0) {
       const valueIncludingChecks = addCheckboxValuesToInput(
@@ -168,8 +203,9 @@ export const ChatForm: React.FC<ChatFormProps> = ({
     value,
     disableInput,
     disableSend,
-    dispatch,
     checkboxes,
+    usageLimitExhaustedMessage,
+    dispatch,
     setFileInteracted,
     setLineSelectionInteracted,
     onSubmit,
@@ -266,10 +302,10 @@ export const ChatForm: React.FC<ChatFormProps> = ({
     setIsSendImmediately,
   ]);
 
-  if (error) {
+  if (globalError) {
     return (
       <ErrorCallout mt="2" onClick={onClearError} timeout={null}>
-        {error}
+        {globalError}
       </ErrorCallout>
     );
   }
@@ -314,7 +350,7 @@ export const ChatForm: React.FC<ChatFormProps> = ({
         {shouldAgentCapabilitiesBeShown && <AgentCapabilities />}
         <Form
           disabled={disableSend}
-          className={className}
+          className={classNames(styles.chatForm__form, className)}
           onSubmit={handleSubmit}
         >
           <FilesPreview files={previewFiles} />
@@ -343,33 +379,40 @@ export const ChatForm: React.FC<ChatFormProps> = ({
               />
             )}
           />
-          <Flex gap="2" className={styles.buttonGroup}>
-            {toolUse === "agent" && (
-              <AgentIntegrationsButton
-                title="Set up Agent Integrations"
+          <Flex
+            className={styles.textareaInteractive}
+            align="center"
+            justify="between"
+          >
+            <TokensPreview />
+            <Flex gap="2" className={styles.buttonGroup}>
+              {toolUse === "agent" && (
+                <AgentIntegrationsButton
+                  title="Set up Agent Integrations"
+                  size="1"
+                  type="button"
+                  onClick={handleAgentIntegrationsClick}
+                  ref={(x) => refs.setSetupIntegrations(x)}
+                />
+              )}
+              {onClose && (
+                <BackToSideBarButton
+                  disabled={isStreaming}
+                  title="Return to sidebar"
+                  size="1"
+                  onClick={onClose}
+                />
+              )}
+              {config.features?.images !== false &&
+                isMultimodalitySupportedForCurrentModel && <AttachFileButton />}
+              {/* TODO: Reserved space for microphone button coming later on */}
+              <PaperPlaneButton
+                disabled={disableSend || disableInput}
+                title="Send message"
                 size="1"
-                type="button"
-                onClick={handleAgentIntegrationsClick}
-                ref={(x) => refs.setSetupIntegrations(x)}
+                type="submit"
               />
-            )}
-            {onClose && (
-              <BackToSideBarButton
-                disabled={isStreaming}
-                title="Return to sidebar"
-                size="1"
-                onClick={onClose}
-              />
-            )}
-            {config.features?.images !== false &&
-              isMultimodalitySupportedForCurrentModel && <AttachFileButton />}
-            {/* TODO: Reserved space for microphone button coming later on */}
-            <PaperPlaneButton
-              disabled={disableSend || disableInput}
-              title="Send message"
-              size="1"
-              type="submit"
-            />
+            </Flex>
           </Flex>
         </Form>
       </Flex>

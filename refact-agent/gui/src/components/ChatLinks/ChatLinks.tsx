@@ -19,8 +19,10 @@ function maybeConcatActionAndGoToStrings(link: ChatLink): string | undefined {
 
 export const ChatLinks: React.FC = () => {
   const { linksResult, handleLinkAction, streaming } = useLinksFromLsp();
+  const { disableInput } = useAgentUsage();
   const toolUse = useAppSelector(selectThreadToolUse);
   if (streaming) return null;
+  if (disableInput) return null;
   if (toolUse !== "agent") return null;
 
   const submittingChatActions = ["post-chat", "follow-up", "summarize-project"];
@@ -74,7 +76,7 @@ export const ChatLinkButton: React.FC<{
       variant="surface"
       title={
         shouldLinkBeDisabled
-          ? "You have reached your usage limit of 20 messages a day. You can use agent again tomorrow, or upgrade to PRO."
+          ? "You have reached your usage limit for the day. You can use agent again tomorrow, or upgrade to PRO."
           : title
       }
       onClick={handleClick}
