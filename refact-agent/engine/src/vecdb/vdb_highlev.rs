@@ -81,13 +81,7 @@ async fn _create_vecdb(
     ).await {
         Ok(res) => Some(res),
         Err(err) => {
-            error!("Ooops database is broken!
-                Last error message: {}
-                You can report this issue here:
-                https://github.com/smallcloudai/refact-lsp/issues
-                Also, you can run this to erase your db:
-                `rm -rf ~/.cache/refact/refact_vecdb_cache`
-                After that restart this LSP server or your IDE.", err);
+            error!("Error while database initialization. Error: {}", err);
             return Err(err);
         }
     };
@@ -250,9 +244,16 @@ impl VecDb {
             api_key.clone(),
             memdb.clone(),
         ).await));
+
+        let mut http_client_builder = reqwest::Client::builder();
+        if cmdline.insecure {
+            http_client_builder = http_client_builder.danger_accept_invalid_certs(true)
+        }
+        let vecdb_emb_client = Arc::new(AMutex::new(http_client_builder.build().unwrap()));
+
         Ok(VecDb {
             memdb: memdb.clone(),
-            vecdb_emb_client: Arc::new(AMutex::new(reqwest::Client::new())),
+            vecdb_emb_client,
             vecdb_handler,
             vectorizer_service,
             constants: constants.clone(),
@@ -515,6 +516,19 @@ pub async fn memories_search(
         let score_b = calculate_score(b.distance, b.mstat_times_used);
         score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    let rejection_threshold = model_to_rejection_threshold(constants.embedding_model.as_str());
+    let mut filtered_results = Vec::new();
+    for rec in results.iter() {
+        if rec.distance.abs() >= rejection_threshold {
+            info!("distance {:.3} -> dropped memory {}", rec.distance, rec.memid);
+        } else {
+            info!("distance {:.3} -> kept memory {}", rec.distance, rec.memid);
+            filtered_results.push(rec.clone());
+        }
+    }
+    results = filtered_results;
+
     Ok(MemoSearchResult { query_text: query.clone(), results })
 }
 

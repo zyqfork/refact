@@ -14,9 +14,9 @@ import {
   isAssistantMessage,
   isCDInstructionMessage,
   isChatResponseChoice,
-  // isChatGetTitleResponse,
   isToolCallMessage,
   isToolMessage,
+  isUserMessage,
   ToolCall,
   ToolMessage,
   type ChatMessages,
@@ -30,15 +30,19 @@ import {
   generateChatTitle,
   sendChat,
 } from "../../../services/refact/chat";
-import { ToolCommand } from "../../../services/refact/tools";
+import { ToolCommand, toolsApi } from "../../../services/refact/tools";
 import { scanFoDuplicatesWith, takeFromEndWhile } from "../../../utils";
 import { debugApp } from "../../../debugConfig";
+import { ChatHistoryItem } from "../../History/historySlice";
+import { ideToolCallResponse } from "../../../hooks/useEventBusForIDE";
+import { capsApi } from "../../../services/refact";
 
 export const newChatAction = createAction("chatThread/new");
 
 export const newIntegrationChat = createAction<{
   integration: IntegrationMeta;
   messages: ChatMessages;
+  request_attempt_id: string;
 }>("chatThread/newIntegrationChat");
 
 export const chatResponse = createAction<PayloadWithId & ChatResponse>(
@@ -60,6 +64,11 @@ export const setLastUserMessageId = createAction<PayloadWithChatAndMessageId>(
 export const setIsNewChatSuggested = createAction<PayloadWithChatAndBoolean>(
   "chatThread/setIsNewChatSuggested",
 );
+
+export const setIsNewChatCreationMandatory =
+  createAction<PayloadWithChatAndBoolean>(
+    "chatThread/setIsNewChatCreationMandatory",
+  );
 
 export const setIsNewChatSuggestionRejected =
   createAction<PayloadWithChatAndBoolean>(
@@ -94,7 +103,9 @@ export const removeChatFromCache = createAction<PayloadWithId>(
   "chatThread/removeChatFromCache",
 );
 
-export const restoreChat = createAction<ChatThread>("chatThread/restoreChat");
+export const restoreChat = createAction<ChatHistoryItem>(
+  "chatThread/restoreChat",
+);
 
 export const clearChatError = createAction<PayloadWithId>(
   "chatThread/clearError",
@@ -141,6 +152,10 @@ export const fixBrokenToolMessages = createAction<PayloadWithId>(
   "chatThread/fixBrokenToolMessages",
 );
 
+export const upsertToolCall = createAction<
+  Parameters<typeof ideToolCallResponse>[0] & { replaceOnly?: boolean }
+>("chatThread/upsertToolCall");
+
 // TODO: This is the circular dep when imported from hooks :/
 const createAppAsyncThunk = createAsyncThunk.withTypes<{
   state: RootState;
@@ -153,7 +168,7 @@ export const chatGenerateTitleThunk = createAppAsyncThunk<
     messages: ChatMessages;
     chatId: string;
   }
->("chatThread/generateTitle", ({ messages, chatId }, thunkAPI) => {
+>("chatThread/generateTitle", async ({ messages, chatId }, thunkAPI) => {
   const state = thunkAPI.getState();
 
   const messagesToSend = messages.filter(
@@ -170,12 +185,17 @@ export const chatGenerateTitleThunk = createAppAsyncThunk<
   //   return msg;
   // });
   debugApp(`[DEBUG TITLE]: messagesToSend: `, messagesToSend);
+
+  const caps = await thunkAPI
+    .dispatch(capsApi.endpoints.getCaps.initiate(undefined))
+    .unwrap();
+  const model = caps.code_chat_default_model;
   const messagesForLsp = formatMessagesForLsp([
     ...messagesToSend,
     {
       role: "user",
       content:
-        "Generate a short 2-3 word title for the current chat that reflects the context of the user's query. The title should be specific, avoiding generic terms, and should relate to relevant files, symbols, or objects. If user message contains filename, please make sure that filename remains inside of a generated title. Please ensure the answer is strictly 2-3 words, not paragraphs of text.\nOutput should be STRICTLY 2-3 words, not explanation.",
+        "Generate a title using exactly 2-3 words that captures the essence of the user's query. The title must be specific, include any mentioned filenames, and avoid generic terms. Examples: 'File Analysis', 'Code Review'. No additional text or explanation is allowed.",
       checkpoints: [],
     },
   ]);
@@ -184,7 +204,7 @@ export const chatGenerateTitleThunk = createAppAsyncThunk<
 
   return generateChatTitle({
     messages: messagesForLsp,
-    model: state.chat.thread.model,
+    model,
     stream: true,
     abortSignal: thunkAPI.signal,
     chatId,
@@ -279,17 +299,13 @@ export const chatAskQuestionThunk = createAppAsyncThunk<
     messages: ChatMessages;
     chatId: string;
     tools: ToolCommand[] | null;
-    toolsConfirmed?: boolean;
     checkpointsEnabled?: boolean;
     mode?: LspChatMode; // used once for actions
     // TODO: make a separate function for this... and it'll need to be saved.
   }
 >(
   "chatThread/sendChat",
-  (
-    { messages, chatId, tools, mode, toolsConfirmed, checkpointsEnabled },
-    thunkAPI,
-  ) => {
+  ({ messages, chatId, tools, mode, checkpointsEnabled }, thunkAPI) => {
     const state = thunkAPI.getState();
 
     const thread =
@@ -321,7 +337,6 @@ export const chatAskQuestionThunk = createAppAsyncThunk<
       apiKey: state.config.apiKey,
       port: state.config.lspPort,
       onlyDeterministicMessages,
-      toolsConfirmed: toolsConfirmed,
       checkpointsEnabled,
       integration: thread?.integration,
       mode: realMode,
@@ -356,5 +371,60 @@ export const chatAskQuestionThunk = createAppAsyncThunk<
         thunkAPI.dispatch(setMaxNewTokens(DEFAULT_MAX_NEW_TOKENS));
         thunkAPI.dispatch(doneStreaming({ id: chatId }));
       });
+  },
+);
+
+export const sendCurrentChatToLspAfterToolCallUpdate = createAppAsyncThunk<
+  unknown,
+  { chatId: string; toolCallId: string }
+>(
+  "chatThread/sendCurrentChatToLspAfterToolCallUpdate",
+  async ({ chatId, toolCallId }, thunkApi) => {
+    const state = thunkApi.getState();
+    const toolUse = state.chat.thread.tool_use;
+    if (state.chat.thread.id !== chatId) return;
+    if (
+      state.chat.streaming ||
+      state.chat.prevent_send ||
+      state.chat.waiting_for_response
+    ) {
+      return;
+    }
+    const lastMessages = takeFromEndWhile(
+      state.chat.thread.messages,
+      (message) => !isUserMessage(message) && !isAssistantMessage(message),
+    );
+
+    const toolUseInThisSet = lastMessages.some(
+      (message) =>
+        isToolMessage(message) && message.content.tool_call_id === toolCallId,
+    );
+
+    if (!toolUseInThisSet) return;
+    thunkApi.dispatch(setIsWaitingForResponse(true));
+    // duplicate in sendChat
+    let tools = await thunkApi
+      .dispatch(toolsApi.endpoints.getTools.initiate(undefined))
+      .unwrap();
+
+    if (toolUse === "quick") {
+      tools = [];
+    } else if (toolUse === "explore") {
+      tools = tools.filter((t) => !t.function.agentic);
+    }
+    tools = tools.map((t) => {
+      const { agentic: _, ...remaining } = t.function;
+      return { ...t, function: { ...remaining } };
+    });
+
+    return thunkApi.dispatch(
+      chatAskQuestionThunk({
+        messages: state.chat.thread.messages,
+        tools,
+        chatId,
+        mode: state.chat.thread.mode,
+        checkpointsEnabled: state.chat.checkpoints_enabled,
+      }),
+    );
   },
 );

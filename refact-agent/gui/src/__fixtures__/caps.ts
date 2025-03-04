@@ -339,13 +339,17 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
     "groq-llama-3.1-8b",
     "groq-llama-3.1-70b",
   ],
+  code_chat_default_system_prompt: "default",
+  support_metadata: true,
   caps_version: 0,
 };
 
 export const EMPTY_CAPS_RESPONSE: CapsResponse = {
+  support_metadata: false,
   caps_version: 0,
   cloud_name: "",
   code_chat_default_model: "",
+  code_chat_default_system_prompt: "",
   code_chat_models: {},
   code_completion_default_model: "",
   code_completion_models: {},
