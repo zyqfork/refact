@@ -1,6 +1,6 @@
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum, DiffChunk};
-use crate::files_correction::canonical_path;
+use crate::files_correction::{canonicalize_normalized_path, preprocess_path_for_normalization};
 use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::tools::file_edit::auxiliary::{
@@ -25,32 +25,36 @@ pub struct ToolReplaceTextDoc;
 fn parse_args(args: &HashMap<String, Value>) -> Result<ToolReplaceTextDocArgs, String> {
     let path = match args.get("path") {
         Some(Value::String(s)) => {
-            let path = canonical_path(&s.trim().to_string());
+            let path = PathBuf::from(preprocess_path_for_normalization(s.trim().to_string()));
             if !path.is_absolute() {
                 return Err(format!(
-                    "argument 'path' should be an absolute path: {:?}",
+                    "Error: The provided path '{}' is not absolute. Please provide a full path starting from the root directory.",
+                    s.trim()
+                ));
+            }
+            let path = canonicalize_normalized_path(path);
+            if !path.exists() {
+                return Err(format!(
+                    "Error: The file '{:?}' does not exist. Please check if the path is correct and the file exists.",
                     path
                 ));
             }
-            if !path.exists() {
-                return Err(format!("argument 'path' doesn't exists: {:?}", path));
-            }
             path
         }
-        Some(v) => return Err(format!("argument 'path' should be a string: {:?}", v)),
-        None => return Err("argument 'path' is required".to_string()),
+        Some(v) => return Err(format!("Error: The 'path' argument must be a string, but received: {:?}", v)),
+        None => return Err("Error: The 'path' argument is required but was not provided.".to_string()),
     };
     let replacement = match args.get("replacement") {
         Some(Value::String(s)) => s,
         Some(v) => {
             return Err(format!(
-                "argument 'replacement' should be a string: {:?}",
+                "Error: The 'replacement' argument must be a string containing the new file content, but received: {:?}",
                 v
             ))
         }
         None => {
             return Err(format!(
-                "argument 'replacement' is required for the `create` command: {:?}",
+                "Error: The 'replacement' argument is required. Please provide the new content that will replace the entire file at '{:?}'.",
                 path
             ))
         }
@@ -69,7 +73,7 @@ pub async fn tool_replace_text_doc_exec(
 ) -> Result<(String, String, Vec<DiffChunk>), String> {
     let args = parse_args(args)?;
     await_ast_indexing(gcx.clone()).await?;
-    let (before_text, after_text) = write_file(&args.path, &args.replacement, dry)?;
+    let (before_text, after_text) = write_file(gcx.clone(), &args.path, &args.replacement, dry).await?;
     sync_documents_ast(gcx.clone(), &args.path).await?;
     let diff_chunks = convert_edit_to_diffchunks(args.path.clone(), &before_text, &after_text)?;
     Ok((before_text, after_text, diff_chunks))
