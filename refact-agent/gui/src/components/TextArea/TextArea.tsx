@@ -11,6 +11,11 @@ import { useUndoRedo } from "../../hooks";
 import { createSyntheticEvent } from "../../utils/createSyntheticEvent";
 import styles from "./TextArea.module.css";
 
+const INTERACTIVE_BUTTONS_CONTAINER_HEIGHT = 30;
+const MINIMAL_TEXTAREA_HEIGHT = 95;
+const VIEWPORT_HEIGHT_THRESHOLD = 0.9;
+const PADDING_TOP_EXPANDED = 8;
+
 export type TextAreaProps = React.ComponentProps<typeof RadixTextArea> &
   React.JSX.IntrinsicElements["textarea"] & {
     onTextAreaHeightChange?: (scrollHeight: number) => void;
@@ -28,13 +33,15 @@ export const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
     const handleKeyDown = useCallback(
       (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
         const isMod = event.metaKey || event.ctrlKey;
-        if (isMod && event.key === "z" && !event.shiftKey) {
+        const eventKey = event.key.toLowerCase();
+
+        if (isMod && eventKey === "z" && !event.shiftKey) {
           event.preventDefault();
           undoRedo.undo();
           setCallChange(true);
         }
 
-        if (isMod && event.key === "z" && event.shiftKey) {
+        if (isMod && eventKey === "z" && event.shiftKey) {
           event.preventDefault();
           undoRedo.redo();
           setCallChange(true);
@@ -58,13 +65,36 @@ export const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
 
     useEffect(() => {
       if (innerRef.current) {
-        innerRef.current.style.height = "1px";
-        innerRef.current.style.height =
-          2 + innerRef.current.scrollHeight + "px";
-        onTextAreaHeightChange &&
-          onTextAreaHeightChange(innerRef.current.scrollHeight);
+        const textArea = innerRef.current;
+        const parentElement = textArea.parentElement;
+
+        textArea.style.height = "1px";
+
+        const contentHeight = value
+          ? 1 + INTERACTIVE_BUTTONS_CONTAINER_HEIGHT + textArea.scrollHeight
+          : MINIMAL_TEXTAREA_HEIGHT;
+
+        textArea.style.height = contentHeight + "px";
+
+        if (parentElement) {
+          const shouldExpandPaddings =
+            textArea.scrollHeight >
+            (window.innerHeight / 2) * VIEWPORT_HEIGHT_THRESHOLD;
+
+          const updatedPaddingBottom = shouldExpandPaddings
+            ? INTERACTIVE_BUTTONS_CONTAINER_HEIGHT * 1.5
+            : 0;
+
+          const updatedPaddingTop = shouldExpandPaddings
+            ? PADDING_TOP_EXPANDED
+            : 0;
+
+          parentElement.style.paddingBottom = updatedPaddingBottom + "px";
+          parentElement.style.paddingTop = updatedPaddingTop + "px";
+        }
+        onTextAreaHeightChange && onTextAreaHeightChange(textArea.scrollHeight);
       }
-    }, [innerRef.current?.value, onTextAreaHeightChange]);
+    }, [innerRef.current?.value, value, onTextAreaHeightChange]);
 
     useEffect(() => {
       if (value !== undoRedo.state) {

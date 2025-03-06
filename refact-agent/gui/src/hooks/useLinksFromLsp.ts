@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  diffApi,
   isCommitLink,
   isPostChatLink,
   isUserMessage,
@@ -31,6 +30,7 @@ import { setInformation } from "../features/Errors/informationSlice";
 import { debugIntegrations, debugRefact } from "../debugConfig";
 import { telemetryApi } from "../services/refact/telemetry";
 import { isAbsolutePath } from "../utils";
+import { useAgentUsage } from "./useAgentUsage";
 
 export function useGetLinksFromLsp() {
   const dispatch = useAppDispatch();
@@ -41,6 +41,7 @@ export function useGetLinksFromLsp() {
   const chatId = useAppSelector(selectChatId);
   const maybeIntegration = useAppSelector(selectIntegration);
   const threadMode = useAppSelector(selectThreadMode);
+  const { shouldShow, disableInput } = useAgentUsage();
 
   // TODO: add the model
   const caps = useGetCapsQuery();
@@ -57,22 +58,33 @@ export function useGetLinksFromLsp() {
     if (maybeTools && maybeTools.length > 0) return true;
     return false;
   }, [messages]);
+
   const skipLinksRequest = useMemo(() => {
     const lastMessageIsUserMessage =
       messages.length > 0 && isUserMessage(messages[messages.length - 1]);
     if (!model) return true;
     if (!caps.data) return true;
+    if (shouldShow && disableInput) return true;
     return (
       isStreaming || isWaiting || unCalledTools || lastMessageIsUserMessage
     );
-  }, [caps.data, isStreaming, isWaiting, messages, model, unCalledTools]);
+  }, [
+    caps.data,
+    isStreaming,
+    isWaiting,
+    shouldShow,
+    disableInput,
+    messages,
+    model,
+    unCalledTools,
+  ]);
 
   const linksResult = linksApi.useGetLinksForChatQuery(
     {
       chat_id: chatId,
       messages,
       model: model ?? "",
-      mode: chatModeToLspMode(undefined, threadMode),
+      mode: chatModeToLspMode({ defaultMode: threadMode }),
       current_config_file: maybeIntegration?.path,
     },
     { skip: skipLinksRequest },
@@ -97,8 +109,6 @@ export function useLinksFromLsp() {
   const { handleGoTo } = useGoToLink();
   const { submit } = useSendChatRequest();
 
-  const [applyPatches, _applyPatchesResult] =
-    diffApi.useApplyAllPatchesInMessagesMutation();
   const [applyCommit, _applyCommitResult] = linksApi.useSendCommitMutation();
 
   const [sendTelemetryEvent] =
@@ -179,11 +189,15 @@ export function useLinksFromLsp() {
       }
 
       if (link.link_action === "patch-all") {
-        void applyPatches(messages).then(() => {
-          if ("link_goto" in link) {
-            handleGoTo({ goto: link.link_goto });
-          }
-        });
+        // TBD: smart links for patches
+        // void applyPatches(messages).then(() => {
+        //   if ("link_goto" in link) {
+        //     handleGoTo({ goto: link.link_goto });
+        //   }
+        // });
+        if ("link_goto" in link) {
+          handleGoTo({ goto: link.link_goto });
+        }
         return;
       }
 
@@ -262,15 +276,7 @@ export function useLinksFromLsp() {
       // eslint-disable-next-line no-console
       console.warn(`unknown action: ${JSON.stringify(link)}`);
     },
-    [
-      applyCommit,
-      applyPatches,
-      dispatch,
-      handleGoTo,
-      messages,
-      submit,
-      sendTelemetryEvent,
-    ],
+    [applyCommit, dispatch, handleGoTo, sendTelemetryEvent, submit],
   );
 
   const linksResult = useGetLinksFromLsp();

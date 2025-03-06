@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use regex::Regex;
 use tokio::sync::Mutex as AMutex;
-use crate::files_correction::canonical_path;
+use crate::files_correction::{canonicalize_normalized_path, preprocess_path_for_normalization};
 use tokio::sync::RwLock as ARwLock;
 use crate::global_context::GlobalContext;
 
@@ -26,13 +26,14 @@ pub struct ToolUpdateTextDocRegex;
 fn parse_args(args: &HashMap<String, Value>) -> Result<ToolUpdateTextDocRegexArgs, String> {
     let path = match args.get("path") {
         Some(Value::String(s)) => {
-            let path = canonical_path(&s.trim().to_string());
+            let path = PathBuf::from(preprocess_path_for_normalization(s.trim().to_string()));
             if !path.is_absolute() {
                 return Err(format!(
-                    "argument 'path' should be an absolute path: {:?}",
-                    path
+                    "Error: The provided path '{}' is not absolute. Please provide a full path starting from the root directory.",
+                    s.trim()
                 ));
             }
+            let path = canonicalize_normalized_path(path);
             if !path.exists() {
                 return Err(format!("argument 'path' doesn't exists: {:?}", path));
             }
@@ -46,12 +47,15 @@ fn parse_args(args: &HashMap<String, Value>) -> Result<ToolUpdateTextDocRegexArg
             match Regex::new(s) {
                 Ok(r) => r,
                 Err(err) => {
-                    return Err(format!("argument 'pattern' should be a correct regex: {:?}", err));
+                    return Err(format!(
+                        "Error: The provided regex pattern is invalid. Details: {}. Please check your regular expression syntax.",
+                        err
+                    ));
                 }
             }
         },
-        Some(v) => return Err(format!("argument 'pattern' should be a string: {:?}", v)),
-        None => return Err("argument 'pattern' is required:".to_string())
+        Some(v) => return Err(format!("Error: The 'pattern' argument must be a string containing a valid regular expression, but received: {:?}", v)),
+        None => return Err("Error: The 'pattern' argument is required. Please provide a regular expression pattern to match the text that needs to be updated.".to_string())
     };
     let replacement = match args.get("replacement") {
         Some(Value::String(s)) => s.to_string(),
@@ -79,7 +83,7 @@ pub async fn tool_update_text_doc_regex_exec(
 ) -> Result<(String, String, Vec<DiffChunk>), String> {
     let args = parse_args(args)?;
     await_ast_indexing(gcx.clone()).await?;
-    let (before_text, after_text) = str_replace_regex(&args.path, &args.pattern, &args.replacement, args.multiple, dry)?;
+    let (before_text, after_text) = str_replace_regex(gcx.clone(), &args.path, &args.pattern, &args.replacement, args.multiple, dry).await?;
     sync_documents_ast(gcx.clone(), &args.path).await?;
     let diff_chunks = convert_edit_to_diffchunks(args.path.clone(), &before_text, &after_text)?;
     Ok((before_text, after_text, diff_chunks))

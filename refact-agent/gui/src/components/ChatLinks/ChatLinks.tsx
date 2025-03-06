@@ -1,10 +1,10 @@
 import React from "react";
 import { Button } from "@radix-ui/themes";
 import { type ChatLink } from "../../services/refact/links";
-import { useAgentUsage, useAppSelector, useLinksFromLsp } from "../../hooks";
+import { useAgentUsage, useLinksFromLsp } from "../../hooks";
 import { Spinner } from "@radix-ui/themes";
 import { TruncateRight } from "../Text/TruncateRight";
-import { selectThreadToolUse } from "../../features/Chat";
+
 import styles from "./ChatLinks.module.css";
 
 function maybeConcatActionAndGoToStrings(link: ChatLink): string | undefined {
@@ -19,9 +19,9 @@ function maybeConcatActionAndGoToStrings(link: ChatLink): string | undefined {
 
 export const ChatLinks: React.FC = () => {
   const { linksResult, handleLinkAction, streaming } = useLinksFromLsp();
-  const toolUse = useAppSelector(selectThreadToolUse);
+  const { disableInput } = useAgentUsage();
   if (streaming) return null;
-  if (toolUse !== "agent") return null;
+  if (disableInput) return null;
 
   const submittingChatActions = ["post-chat", "follow-up", "summarize-project"];
 
@@ -74,7 +74,7 @@ export const ChatLinkButton: React.FC<{
       variant="surface"
       title={
         shouldLinkBeDisabled
-          ? "You have reached your usage limit of 20 messages a day. You can use agent again tomorrow, or upgrade to PRO."
+          ? "You have reached your usage limit for the day. You can use agent again tomorrow, or upgrade to PRO."
           : title
       }
       onClick={handleClick}
