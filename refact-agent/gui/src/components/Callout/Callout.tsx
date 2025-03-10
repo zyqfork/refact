@@ -32,6 +32,7 @@ export const Callout: React.FC<CalloutProps> = ({
   type = "info",
   timeout = null,
   onClick = () => void 0,
+  preventRetry = false,
   ...props
 }) => {
   const [isOpened, setIsOpened] = useState(false);
@@ -47,6 +48,8 @@ export const Callout: React.FC<CalloutProps> = ({
   }, []);
 
   const handleRetryClick = () => {
+    // TBD: why was this added, it won't close on click :/?
+    if (preventRetry) return;
     setIsOpened(false);
     const timeoutId = setTimeout(() => {
       onClick();
@@ -84,11 +87,13 @@ export const Callout: React.FC<CalloutProps> = ({
   );
 };
 
+// TODO: Authcall out should not be generic ErrorCallout
 export const ErrorCallout: React.FC<Omit<CalloutProps, "type">> = ({
   timeout = null,
   onClick,
   children,
   preventRetry,
+  className,
   ...props
 }) => {
   const logout = useLogout();
@@ -102,11 +107,12 @@ export const ErrorCallout: React.FC<Omit<CalloutProps, "type">> = ({
       timeout={timeout}
       itemType={props.itemType}
       preventRetry={isAuthError ?? preventRetry}
+      className={classNames(styles.callout_box_inner, className)}
       {...props}
     >
       Error: {children}
       {!isAuthError && (
-        <Text size="1" as="p">
+        <Text size="1" as="span" className={styles.retryText}>
           {preventRetry ? "Click to close" : "Click to retry"}
         </Text>
       )}

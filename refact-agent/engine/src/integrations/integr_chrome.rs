@@ -152,21 +152,9 @@ impl IntegrationSession for ChromeSession
 impl IntegrationTrait for ToolChrome {
     fn as_any(&self) -> &dyn std::any::Any { self }
 
-    async fn integr_settings_apply(&mut self, _gcx: Arc<ARwLock<GlobalContext>>, config_path: String, value: &serde_json::Value) -> Result<(), String> {
-        match serde_json::from_value::<SettingsChrome>(value.clone()) {
-            Ok(settings_chrome) => self.settings_chrome = settings_chrome,
-            Err(e) => {
-                tracing::error!("Failed to apply settings: {}\n{:?}", e, value);
-                return Err(e.to_string());
-            }
-        }
-        match serde_json::from_value::<IntegrationCommon>(value.clone()) {
-            Ok(x) => self.common = x,
-            Err(e) => {
-                tracing::error!("Failed to apply common settings: {}\n{:?}", e, value);
-                return Err(e.to_string());
-            }
-        }
+    async fn integr_settings_apply(&mut self, _gcx: Arc<ARwLock<GlobalContext>>, config_path: String, value: &serde_json::Value) -> Result<(), serde_json::Error> {
+        self.settings_chrome = serde_json::from_value(value.clone())?;
+        self.common = serde_json::from_value(value.clone())?;
         self.config_path = config_path;
         Ok(())
     }
@@ -406,6 +394,7 @@ async fn screenshot_jpeg_base64(
             quality: Some(75),
             from_surface: Some(true),
             capture_beyond_viewport: Some(capture_beyond_viewport),
+            optimize_for_speed: None
         }).map_err(|e| e.to_string())?.data
     };
 
@@ -535,6 +524,7 @@ fn set_device_metrics_method(
         scale: None, screen_width: None, screen_height: None,
         position_x: None, position_y: None, dont_set_visible_size: None,
         screen_orientation: None, viewport: None, display_feature: None,
+        device_posture: None,
     }
 }
 
@@ -931,7 +921,7 @@ async fn chrome_command_exec(
             let log = {
                 let tab_lock = tab.lock().await;
                 match {
-                    tab_lock.headless_tab.call_method(DOMEnable(None)).map_err(|e| e.to_string())?;
+                    tab_lock.headless_tab.call_method(DOMEnable { include_whitespace: None}).map_err(|e| e.to_string())?;
                     tab_lock.headless_tab.call_method(CSSEnable(None)).map_err(|e| e.to_string())?;
                     let element = tab_lock.headless_tab.find_element(&args.selector).map_err(|e| e.to_string())?;
                     let computed_styles = element.get_computed_styles().map_err(|e| e.to_string())?;

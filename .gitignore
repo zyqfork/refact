@@ -27,6 +27,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 _*
+!__fixtures__
+!__tests__
+
+# Include python init files, ignored by _*
+!**/__init__.py
 
 # C extensions
 *.so
@@ -285,3 +290,5 @@ dist
 # https://nextjs.org/blog/next-9-1#public-directory-support
 # public
 
+# vite cache
+.vite

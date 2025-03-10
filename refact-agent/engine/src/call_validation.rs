@@ -197,8 +197,6 @@ pub struct ChatPost {
     #[serde(default)]
     pub tool_choice: Option<String>,
     #[serde(default)]
-    pub tools_confirmation: bool,
-    #[serde(default)]
     pub checkpoints_enabled: bool,
     #[serde(default)]
     pub only_deterministic_messages: bool,  // means don't sample from the model
@@ -243,6 +241,14 @@ impl ChatMode {
             ChatMode::NO_TOOLS | ChatMode::EXPLORE => false,
             ChatMode::AGENT | ChatMode::CONFIGURE | ChatMode::PROJECT_SUMMARY | 
                 ChatMode::THINKING_AGENT => true,
+        }
+    }
+
+    pub fn is_agentic(self) -> bool {
+        match self {
+            ChatMode::AGENT | ChatMode::THINKING_AGENT => true,
+            ChatMode::NO_TOOLS | ChatMode::EXPLORE | ChatMode::CONFIGURE | 
+                ChatMode::PROJECT_SUMMARY => false,
         }
     }
 }
