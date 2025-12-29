@@ -72,11 +72,9 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
     [sendTelemetryEvent],
   );
 
-  // Combine reasoning_content and thinking_blocks into one display
   const combinedReasoning = useMemo(() => {
-    const parts: string[] = [];
     if (reasoningContent) {
-      parts.push(reasoningContent);
+      return reasoningContent;
     }
     if (thinkingBlocks && thinkingBlocks.length > 0) {
       const thinkingText = thinkingBlocks
@@ -84,10 +82,10 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
         .map((block) => block.thinking)
         .join("\n\n");
       if (thinkingText) {
-        parts.push(thinkingText);
+        return thinkingText;
       }
     }
-    return parts.length > 0 ? parts.join("\n\n") : null;
+    return null;
   }, [reasoningContent, thinkingBlocks]);
 
   return (
