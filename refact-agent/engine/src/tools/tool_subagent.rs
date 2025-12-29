@@ -31,9 +31,15 @@ Do NOT:
 - Ask clarifying questions - work with what you have
 - Exceed your step budget unnecessarily"#;
 
-static WRAP_UP_PROMPT: &str = r#"Summarize your work. What did you accomplish? What are the key findings or results?"#;
+static WRAP_UP_PROMPT: &str =
+    r#"Summarize your work. What did you accomplish? What are the key findings or results?"#;
 
-fn build_task_prompt(task: &str, expected_result: &str, tools: &[String], max_steps: usize) -> String {
+fn build_task_prompt(
+    task: &str,
+    expected_result: &str,
+    tools: &[String],
+    max_steps: usize,
+) -> String {
     format!(
         r#"# Your Task
 {task}
@@ -50,7 +56,11 @@ You have access to these tools: {tools_list}
 - Report findings clearly when done"#,
         task = task,
         expected_result = expected_result,
-        tools_list = if tools.is_empty() { "all available".to_string() } else { tools.join(", ") },
+        tools_list = if tools.is_empty() {
+            "all available".to_string()
+        } else {
+            tools.join(", ")
+        },
         max_steps = max_steps
     )
 }
@@ -73,11 +83,7 @@ async fn execute_subagent(
         ChatMessage::new("user".to_string(), task_prompt),
     ];
 
-    let tools_subset = if tools.is_empty() {
-        vec![]
-    } else {
-        tools
-    };
+    let tools_subset = if tools.is_empty() { vec![] } else { tools };
 
     let choices = subchat(
         ccx_subchat.clone(),
@@ -93,7 +99,8 @@ async fn execute_subagent(
         Some(tool_call_id.clone()),
         Some(format!("{log_prefix}-subagent")),
         Some(true),
-    ).await?;
+    )
+    .await?;
 
     let session = choices.into_iter().next().unwrap();
     let reply = session.last().unwrap().clone();
@@ -104,7 +111,9 @@ async fn execute_subagent(
 
 #[async_trait]
 impl Tool for ToolSubagent {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -147,37 +156,47 @@ impl Tool for ToolSubagent {
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
         tool_call_id: &String,
-        args: &HashMap<String, Value>
+        args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let task = match args.get("task") {
             Some(Value::String(s)) => s.clone(),
             Some(v) => return Err(format!("argument `task` is not a string: {:?}", v)),
-            None => return Err("Missing argument `task`".to_string())
+            None => return Err("Missing argument `task`".to_string()),
         };
 
         let expected_result = match args.get("expected_result") {
             Some(Value::String(s)) => s.clone(),
-            Some(v) => return Err(format!("argument `expected_result` is not a string: {:?}", v)),
-            None => return Err("Missing argument `expected_result`".to_string())
+            Some(v) => {
+                return Err(format!(
+                    "argument `expected_result` is not a string: {:?}",
+                    v
+                ))
+            }
+            None => return Err("Missing argument `expected_result`".to_string()),
         };
 
         let tools: Vec<String> = match args.get("tools") {
-            Some(Value::String(s)) if !s.trim().is_empty() => {
-                s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect()
-            },
-            _ => vec![]
+            Some(Value::String(s)) if !s.trim().is_empty() => s
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            _ => vec![],
         };
 
         let max_steps: usize = match args.get("max_steps") {
             Some(Value::String(s)) => s.parse().unwrap_or(10),
             Some(Value::Number(n)) => n.as_u64().unwrap_or(10) as usize,
-            _ => 10
+            _ => 10,
         };
         let max_steps = max_steps.min(50).max(1);
 
-        let mut usage_collector = ChatUsage { ..Default::default() };
+        let mut usage_collector = ChatUsage {
+            ..Default::default()
+        };
         let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let subchat_params: SubchatParameters = crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "subagent").await?;
+        let subchat_params: SubchatParameters =
+            crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "subagent").await?;
 
         let ccx_subchat = {
             let ccx_lock = ccx.lock().await;
@@ -190,7 +209,8 @@ impl Tool for ToolSubagent {
                 ccx_lock.chat_id.clone(),
                 ccx_lock.should_execute_remotely,
                 ccx_lock.current_model.clone(),
-            ).await;
+            )
+            .await;
             t.subchat_tx = ccx_lock.subchat_tx.clone();
             t.subchat_rx = ccx_lock.subchat_rx.clone();
             Arc::new(AMutex::new(t))
@@ -207,7 +227,8 @@ impl Tool for ToolSubagent {
             &mut usage_collector,
             tool_call_id,
             &log_prefix,
-        ).await?;
+        )
+        .await?;
 
         let report_content = format!(
             "# Subagent Report\n\n**Task:** {}\n\n**Expected Result:** {}\n\n## Result\n{}",
@@ -218,7 +239,8 @@ impl Tool for ToolSubagent {
         tracing::info!("Subagent completed task");
 
         let title = if task.len() > 80 {
-            let end = task.char_indices()
+            let end = task
+                .char_indices()
                 .take_while(|(i, _)| *i < 80)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
@@ -233,16 +255,20 @@ impl Tool for ToolSubagent {
             base_kind: "subagent".to_string(),
             base_title: Some(title),
         };
-        let memory_note = match memories_add_enriched(ccx.clone(), &report_content, enrichment_params).await {
-            Ok(path) => {
-                tracing::info!("Created enriched memory from subagent: {:?}", path);
-                format!("\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`", path.display())
-            },
-            Err(e) => {
-                tracing::warn!("Failed to create enriched memory from subagent: {}", e);
-                String::new()
-            }
-        };
+        let memory_note =
+            match memories_add_enriched(ccx.clone(), &report_content, enrichment_params).await {
+                Ok(path) => {
+                    tracing::info!("Created enriched memory from subagent: {:?}", path);
+                    format!(
+                        "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
+                        path.display()
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create enriched memory from subagent: {}", e);
+                    String::new()
+                }
+            };
         let final_message = format!("{}{}", report_content, memory_note);
 
         let mut results = vec![];
@@ -252,7 +278,9 @@ impl Tool for ToolSubagent {
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             usage: Some(usage_collector),
-            output_filter: Some(crate::postprocessing::pp_command_output::OutputFilter::no_limits()),
+            output_filter: Some(
+                crate::postprocessing::pp_command_output::OutputFilter::no_limits(),
+            ),
             ..Default::default()
         }));
 

@@ -23,7 +23,10 @@ impl ChatSession {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             chat_id: chat_id.clone(),
-            thread: ThreadParams { id: chat_id, ..Default::default() },
+            thread: ThreadParams {
+                id: chat_id,
+                ..Default::default()
+            },
             messages: Vec::new(),
             runtime: RuntimeState::default(),
             draft_message: None,
@@ -44,7 +47,12 @@ impl ChatSession {
         }
     }
 
-    pub fn new_with_trajectory(chat_id: String, messages: Vec<ChatMessage>, thread: ThreadParams, created_at: String) -> Self {
+    pub fn new_with_trajectory(
+        chat_id: String,
+        messages: Vec<ChatMessage>,
+        thread: ThreadParams,
+        created_at: String,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             chat_id,
@@ -131,7 +139,11 @@ impl ChatSession {
     }
 
     pub fn update_message(&mut self, message_id: &str, message: ChatMessage) -> Option<usize> {
-        if let Some(idx) = self.messages.iter().position(|m| m.message_id == message_id) {
+        if let Some(idx) = self
+            .messages
+            .iter()
+            .position(|m| m.message_id == message_id)
+        {
             self.messages[idx] = message.clone();
             self.emit(ChatEvent::MessageUpdated {
                 message_id: message_id.to_string(),
@@ -145,9 +157,15 @@ impl ChatSession {
     }
 
     pub fn remove_message(&mut self, message_id: &str) -> Option<usize> {
-        if let Some(idx) = self.messages.iter().position(|m| m.message_id == message_id) {
+        if let Some(idx) = self
+            .messages
+            .iter()
+            .position(|m| m.message_id == message_id)
+        {
             self.messages.remove(idx);
-            self.emit(ChatEvent::MessageRemoved { message_id: message_id.to_string() });
+            self.emit(ChatEvent::MessageRemoved {
+                message_id: message_id.to_string(),
+            });
             self.increment_version();
             self.touch();
             return Some(idx);
@@ -193,7 +211,9 @@ impl ChatSession {
     }
 
     pub fn start_stream(&mut self) -> Option<(String, Arc<AtomicBool>)> {
-        if self.runtime.state == SessionState::Generating || self.runtime.state == SessionState::ExecutingTools {
+        if self.runtime.state == SessionState::Generating
+            || self.runtime.state == SessionState::ExecutingTools
+        {
             warn!("Attempted to start stream while already generating/executing");
             return None;
         }
@@ -206,7 +226,9 @@ impl ChatSession {
         });
         self.draft_usage = None;
         self.set_runtime_state(SessionState::Generating, None);
-        self.emit(ChatEvent::StreamStarted { message_id: message_id.clone() });
+        self.emit(ChatEvent::StreamStarted {
+            message_id: message_id.clone(),
+        });
         self.touch();
         Some((message_id, self.abort_flag.clone()))
     }
@@ -216,12 +238,10 @@ impl ChatSession {
             Some(draft) => {
                 for op in &ops {
                     match op {
-                        DeltaOp::AppendContent { text } => {
-                            match &mut draft.content {
-                                ChatContent::SimpleText(s) => s.push_str(text),
-                                _ => draft.content = ChatContent::SimpleText(text.clone()),
-                            }
-                        }
+                        DeltaOp::AppendContent { text } => match &mut draft.content {
+                            ChatContent::SimpleText(s) => s.push_str(text),
+                            _ => draft.content = ChatContent::SimpleText(text.clone()),
+                        },
                         DeltaOp::AppendReasoning { text } => {
                             let r = draft.reasoning_content.get_or_insert_with(String::new);
                             r.push_str(text);
@@ -276,8 +296,14 @@ impl ChatSession {
                 ChatContent::ContextFiles(v) => !v.is_empty(),
             };
             let has_structured_data = draft.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty())
-                || draft.reasoning_content.as_ref().map_or(false, |r| !r.is_empty())
-                || draft.thinking_blocks.as_ref().map_or(false, |tb| !tb.is_empty())
+                || draft
+                    .reasoning_content
+                    .as_ref()
+                    .map_or(false, |r| !r.is_empty())
+                || draft
+                    .thinking_blocks
+                    .as_ref()
+                    .map_or(false, |tb| !tb.is_empty())
                 || !draft.citations.is_empty()
                 || draft.usage.is_some()
                 || !draft.extra.is_empty();
@@ -293,7 +319,9 @@ impl ChatSession {
                 }
                 self.add_message(draft);
             } else {
-                self.emit(ChatEvent::MessageRemoved { message_id: draft.message_id });
+                self.emit(ChatEvent::MessageRemoved {
+                    message_id: draft.message_id,
+                });
             }
         }
         self.set_runtime_state(SessionState::Error, Some(error));
@@ -307,7 +335,9 @@ impl ChatSession {
                 message_id: draft.message_id.clone(),
                 finish_reason: Some("abort".to_string()),
             });
-            self.emit(ChatEvent::MessageRemoved { message_id: draft.message_id });
+            self.emit(ChatEvent::MessageRemoved {
+                message_id: draft.message_id,
+            });
         }
         self.draft_usage = None;
         self.set_runtime_state(SessionState::Idle, None);
@@ -321,13 +351,19 @@ impl ChatSession {
     pub fn set_title(&mut self, title: String, is_generated: bool) {
         self.thread.title = title.clone();
         self.thread.is_title_generated = is_generated;
-        self.emit(ChatEvent::TitleUpdated { title, is_generated });
+        self.emit(ChatEvent::TitleUpdated {
+            title,
+            is_generated,
+        });
         self.increment_version();
         self.touch();
     }
 
     pub fn validate_tool_decision(&self, tool_call_id: &str) -> bool {
-        self.runtime.pause_reasons.iter().any(|r| r.tool_call_id == tool_call_id)
+        self.runtime
+            .pause_reasons
+            .iter()
+            .any(|r| r.tool_call_id == tool_call_id)
     }
 
     pub fn process_tool_decisions(&mut self, decisions: &[ToolDecisionItem]) -> Vec<String> {
@@ -336,7 +372,10 @@ impl ChatSession {
 
         for decision in decisions {
             if !self.validate_tool_decision(&decision.tool_call_id) {
-                warn!("Tool decision for unknown tool_call_id: {}", decision.tool_call_id);
+                warn!(
+                    "Tool decision for unknown tool_call_id: {}",
+                    decision.tool_call_id
+                );
                 continue;
             }
             if decision.accepted {
@@ -370,9 +409,23 @@ pub async fn get_or_create_session_with_trajectory(
         }
     }
 
-    let (session, is_new) = if let Some(loaded) = super::trajectories::load_trajectory_for_chat(gcx.clone(), chat_id).await {
-        info!("Loaded trajectory for chat {} with {} messages", chat_id, loaded.messages.len());
-        (ChatSession::new_with_trajectory(chat_id.to_string(), loaded.messages, loaded.thread, loaded.created_at), false)
+    let (session, is_new) = if let Some(loaded) =
+        super::trajectories::load_trajectory_for_chat(gcx.clone(), chat_id).await
+    {
+        info!(
+            "Loaded trajectory for chat {} with {} messages",
+            chat_id,
+            loaded.messages.len()
+        );
+        (
+            ChatSession::new_with_trajectory(
+                chat_id.to_string(),
+                loaded.messages,
+                loaded.thread,
+                loaded.created_at,
+            ),
+            false,
+        )
     } else {
         let mut s = ChatSession::new(chat_id.to_string());
         s.increment_version();
@@ -407,7 +460,8 @@ pub fn start_session_cleanup_task(gcx: Arc<ARwLock<GlobalContext>>) {
 
             let candidates: Vec<(String, Arc<AMutex<ChatSession>>)> = {
                 let sessions_read = sessions.read().await;
-                sessions_read.iter()
+                sessions_read
+                    .iter()
                     .map(|(chat_id, session_arc)| (chat_id.clone(), session_arc.clone()))
                     .collect()
             };
@@ -537,10 +591,14 @@ mod tests {
     fn test_snapshot_includes_draft_when_generating() {
         let mut session = make_session();
         session.start_stream();
-        session.emit_stream_delta(vec![DeltaOp::AppendContent { text: "partial".into() }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendContent {
+            text: "partial".into(),
+        }]);
         let snap = session.snapshot();
         match snap {
-            ChatEvent::Snapshot { messages, runtime, .. } => {
+            ChatEvent::Snapshot {
+                messages, runtime, ..
+            } => {
                 assert_eq!(runtime.state, SessionState::Generating);
                 assert_eq!(messages.len(), 1);
                 match &messages[0].content {
@@ -710,8 +768,12 @@ mod tests {
     fn test_emit_stream_delta_appends_content() {
         let mut session = make_session();
         session.start_stream();
-        session.emit_stream_delta(vec![DeltaOp::AppendContent { text: "Hello".into() }]);
-        session.emit_stream_delta(vec![DeltaOp::AppendContent { text: " World".into() }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendContent {
+            text: "Hello".into(),
+        }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendContent {
+            text: " World".into(),
+        }]);
         let draft = session.draft_message.as_ref().unwrap();
         match &draft.content {
             ChatContent::SimpleText(s) => assert_eq!(s, "Hello World"),
@@ -723,7 +785,9 @@ mod tests {
     fn test_emit_stream_delta_appends_reasoning() {
         let mut session = make_session();
         session.start_stream();
-        session.emit_stream_delta(vec![DeltaOp::AppendReasoning { text: "think".into() }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendReasoning {
+            text: "think".into(),
+        }]);
         session.emit_stream_delta(vec![DeltaOp::AppendReasoning { text: "ing".into() }]);
         let draft = session.draft_message.as_ref().unwrap();
         assert_eq!(draft.reasoning_content.as_ref().unwrap(), "thinking");
@@ -734,7 +798,9 @@ mod tests {
         let mut session = make_session();
         session.start_stream();
         session.emit_stream_delta(vec![DeltaOp::SetToolCalls {
-            tool_calls: vec![json!({"id":"tc1","type":"function","function":{"name":"test","arguments":"{}"}})],
+            tool_calls: vec![
+                json!({"id":"tc1","type":"function","function":{"name":"test","arguments":"{}"}}),
+            ],
         }]);
         let draft = session.draft_message.as_ref().unwrap();
         assert!(draft.tool_calls.is_some());
@@ -752,7 +818,9 @@ mod tests {
     fn test_finish_stream_adds_message() {
         let mut session = make_session();
         session.start_stream();
-        session.emit_stream_delta(vec![DeltaOp::AppendContent { text: "done".into() }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendContent {
+            text: "done".into(),
+        }]);
         session.finish_stream(Some("stop".into()));
         assert!(session.draft_message.is_none());
         assert_eq!(session.messages.len(), 1);
@@ -764,7 +832,9 @@ mod tests {
     fn test_finish_stream_with_error_keeps_content() {
         let mut session = make_session();
         session.start_stream();
-        session.emit_stream_delta(vec![DeltaOp::AppendContent { text: "partial".into() }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendContent {
+            text: "partial".into(),
+        }]);
         session.finish_stream_with_error("timeout".into());
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].finish_reason, Some("error".into()));
@@ -777,7 +847,9 @@ mod tests {
         let mut session = make_session();
         session.start_stream();
         session.emit_stream_delta(vec![DeltaOp::SetToolCalls {
-            tool_calls: vec![json!({"id":"tc1","type":"function","function":{"name":"test","arguments":"{}"}})],
+            tool_calls: vec![
+                json!({"id":"tc1","type":"function","function":{"name":"test","arguments":"{}"}}),
+            ],
         }]);
         session.finish_stream_with_error("error".into());
         assert_eq!(session.messages.len(), 1);
@@ -803,7 +875,9 @@ mod tests {
     fn test_abort_stream() {
         let mut session = make_session();
         session.start_stream();
-        session.emit_stream_delta(vec![DeltaOp::AppendContent { text: "partial".into() }]);
+        session.emit_stream_delta(vec![DeltaOp::AppendContent {
+            text: "partial".into(),
+        }]);
         session.abort_stream();
         assert!(session.draft_message.is_none());
         assert!(session.messages.is_empty());
@@ -860,7 +934,11 @@ mod tests {
         assert!(session.trajectory_dirty);
         let mut found_title = false;
         while let Ok(env) = rx.try_recv() {
-            if let ChatEvent::TitleUpdated { title, is_generated } = env.event {
+            if let ChatEvent::TitleUpdated {
+                title,
+                is_generated,
+            } = env.event
+            {
                 assert_eq!(title, "New Title");
                 assert!(is_generated);
                 found_title = true;
@@ -901,9 +979,10 @@ mod tests {
             integr_config_path: None,
         });
         session.set_runtime_state(SessionState::Paused, None);
-        let accepted = session.process_tool_decisions(&[
-            ToolDecisionItem { tool_call_id: "tc1".into(), accepted: true },
-        ]);
+        let accepted = session.process_tool_decisions(&[ToolDecisionItem {
+            tool_call_id: "tc1".into(),
+            accepted: true,
+        }]);
         assert_eq!(accepted, vec!["tc1"]);
         assert_eq!(session.runtime.pause_reasons.len(), 1);
         assert_eq!(session.runtime.state, SessionState::Paused);
@@ -920,9 +999,10 @@ mod tests {
             integr_config_path: None,
         });
         session.set_runtime_state(SessionState::Paused, None);
-        let accepted = session.process_tool_decisions(&[
-            ToolDecisionItem { tool_call_id: "tc1".into(), accepted: false },
-        ]);
+        let accepted = session.process_tool_decisions(&[ToolDecisionItem {
+            tool_call_id: "tc1".into(),
+            accepted: false,
+        }]);
         assert!(accepted.is_empty());
         assert!(session.runtime.pause_reasons.is_empty());
         assert_eq!(session.runtime.state, SessionState::Idle);
@@ -939,9 +1019,10 @@ mod tests {
             integr_config_path: None,
         });
         session.set_runtime_state(SessionState::Paused, None);
-        let accepted = session.process_tool_decisions(&[
-            ToolDecisionItem { tool_call_id: "unknown".into(), accepted: true },
-        ]);
+        let accepted = session.process_tool_decisions(&[ToolDecisionItem {
+            tool_call_id: "unknown".into(),
+            accepted: true,
+        }]);
         assert!(accepted.is_empty());
         assert_eq!(session.runtime.pause_reasons.len(), 1);
     }
@@ -957,9 +1038,10 @@ mod tests {
             integr_config_path: None,
         });
         session.set_runtime_state(SessionState::Paused, None);
-        session.process_tool_decisions(&[
-            ToolDecisionItem { tool_call_id: "tc1".into(), accepted: true },
-        ]);
+        session.process_tool_decisions(&[ToolDecisionItem {
+            tool_call_id: "tc1".into(),
+            accepted: true,
+        }]);
         assert!(session.runtime.pause_reasons.is_empty());
         assert_eq!(session.runtime.state, SessionState::Idle);
     }

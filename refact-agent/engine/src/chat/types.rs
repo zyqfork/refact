@@ -27,7 +27,9 @@ pub enum SessionState {
 }
 
 impl Default for SessionState {
-    fn default() -> Self { SessionState::Idle }
+    fn default() -> Self {
+        SessionState::Idle
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +49,9 @@ pub struct ThreadParams {
     pub is_title_generated: bool,
 }
 
-fn default_use_compression() -> bool { true }
+fn default_use_compression() -> bool {
+    true
+}
 
 impl Default for ThreadParams {
     fn default() -> Self {
@@ -171,31 +175,52 @@ pub enum ChatEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum DeltaOp {
-    AppendContent { text: String },
-    AppendReasoning { text: String },
-    SetToolCalls { tool_calls: Vec<serde_json::Value> },
-    SetThinkingBlocks { blocks: Vec<serde_json::Value> },
-    AddCitation { citation: serde_json::Value },
-    SetUsage { usage: serde_json::Value },
-    MergeExtra { extra: serde_json::Map<String, serde_json::Value> },
+    AppendContent {
+        text: String,
+    },
+    AppendReasoning {
+        text: String,
+    },
+    SetToolCalls {
+        tool_calls: Vec<serde_json::Value>,
+    },
+    SetThinkingBlocks {
+        blocks: Vec<serde_json::Value>,
+    },
+    AddCitation {
+        citation: serde_json::Value,
+    },
+    SetUsage {
+        usage: serde_json::Value,
+    },
+    MergeExtra {
+        extra: serde_json::Map<String, serde_json::Value>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
     pub chat_id: String,
-    #[serde(serialize_with = "serialize_seq_as_string", deserialize_with = "deserialize_seq_from_string")]
+    #[serde(
+        serialize_with = "serialize_seq_as_string",
+        deserialize_with = "deserialize_seq_from_string"
+    )]
     pub seq: u64,
     #[serde(flatten)]
     pub event: ChatEvent,
 }
 
 fn serialize_seq_as_string<S>(seq: &u64, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
+where
+    S: serde::Serializer,
+{
     serializer.serialize_str(&seq.to_string())
 }
 
 fn deserialize_seq_from_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where D: serde::Deserializer<'de> {
+where
+    D: serde::Deserializer<'de>,
+{
     use serde::de::Error;
     let s: String = serde::Deserialize::deserialize(deserializer)?;
     s.parse().map_err(D::Error::custom)
@@ -358,7 +383,10 @@ mod tests {
         let json = r#"{"type":"user_message","content":"hello"}"#;
         let cmd: ChatCommand = serde_json::from_str(json).unwrap();
         match cmd {
-            ChatCommand::UserMessage { content, attachments } => {
+            ChatCommand::UserMessage {
+                content,
+                attachments,
+            } => {
                 assert_eq!(content, json!("hello"));
                 assert!(attachments.is_empty());
             }
@@ -371,7 +399,11 @@ mod tests {
         let json = r#"{"type":"ide_tool_result","tool_call_id":"tc1","content":"result"}"#;
         let cmd: ChatCommand = serde_json::from_str(json).unwrap();
         match cmd {
-            ChatCommand::IdeToolResult { tool_call_id, content, tool_failed } => {
+            ChatCommand::IdeToolResult {
+                tool_call_id,
+                content,
+                tool_failed,
+            } => {
                 assert_eq!(tool_call_id, "tc1");
                 assert_eq!(content, "result");
                 assert!(!tool_failed);
@@ -385,7 +417,12 @@ mod tests {
         let json = r#"{"type":"update_message","message_id":"m1","content":"new"}"#;
         let cmd: ChatCommand = serde_json::from_str(json).unwrap();
         match cmd {
-            ChatCommand::UpdateMessage { message_id, content, attachments, regenerate } => {
+            ChatCommand::UpdateMessage {
+                message_id,
+                content,
+                attachments,
+                regenerate,
+            } => {
                 assert_eq!(message_id, "m1");
                 assert_eq!(content, json!("new"));
                 assert!(attachments.is_empty());
@@ -400,7 +437,10 @@ mod tests {
         let json = r#"{"type":"remove_message","message_id":"m1"}"#;
         let cmd: ChatCommand = serde_json::from_str(json).unwrap();
         match cmd {
-            ChatCommand::RemoveMessage { message_id, regenerate } => {
+            ChatCommand::RemoveMessage {
+                message_id,
+                regenerate,
+            } => {
                 assert_eq!(message_id, "m1");
                 assert!(!regenerate);
             }
@@ -431,13 +471,27 @@ mod tests {
     #[test]
     fn test_delta_op_serde() {
         let ops = vec![
-            DeltaOp::AppendContent { text: "hello".into() },
-            DeltaOp::AppendReasoning { text: "thinking".into() },
-            DeltaOp::SetToolCalls { tool_calls: vec![json!({"id":"1"})] },
-            DeltaOp::SetThinkingBlocks { blocks: vec![json!({"type":"thinking"})] },
-            DeltaOp::AddCitation { citation: json!({"url":"http://x"}) },
-            DeltaOp::SetUsage { usage: json!({"total_tokens":100}) },
-            DeltaOp::MergeExtra { extra: serde_json::Map::new() },
+            DeltaOp::AppendContent {
+                text: "hello".into(),
+            },
+            DeltaOp::AppendReasoning {
+                text: "thinking".into(),
+            },
+            DeltaOp::SetToolCalls {
+                tool_calls: vec![json!({"id":"1"})],
+            },
+            DeltaOp::SetThinkingBlocks {
+                blocks: vec![json!({"type":"thinking"})],
+            },
+            DeltaOp::AddCitation {
+                citation: json!({"url":"http://x"}),
+            },
+            DeltaOp::SetUsage {
+                usage: json!({"total_tokens":100}),
+            },
+            DeltaOp::MergeExtra {
+                extra: serde_json::Map::new(),
+            },
         ];
         for op in ops {
             let json = serde_json::to_value(&op).unwrap();

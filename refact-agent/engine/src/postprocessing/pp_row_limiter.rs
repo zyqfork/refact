@@ -15,7 +15,10 @@ impl Default for RowLimiter {
 
 impl RowLimiter {
     pub fn new(max_rows: usize, max_cell_chars: usize) -> Self {
-        Self { max_rows, max_cell_chars }
+        Self {
+            max_rows,
+            max_cell_chars,
+        }
     }
 
     pub fn limit_text_rows(&self, text: &str) -> String {
@@ -29,7 +32,10 @@ impl RowLimiter {
         let total = kept.len() + remaining;
         format!(
             "{}\n⚠️ showing {} of {} rows (limit: {}). 💡 Add LIMIT/WHERE to query",
-            kept.join("\n"), kept.len(), total, self.max_rows
+            kept.join("\n"),
+            kept.len(),
+            total,
+            self.max_rows
         )
     }
 
@@ -45,21 +51,23 @@ impl RowLimiter {
     }
 
     #[allow(dead_code)]
-    pub fn format_table(&self, headers: &[String], rows: Vec<Vec<String>>, total_rows: usize) -> String {
+    pub fn format_table(
+        &self,
+        headers: &[String],
+        rows: Vec<Vec<String>>,
+        total_rows: usize,
+    ) -> String {
         let mut result = String::new();
 
-        let truncated_headers: Vec<String> = headers.iter()
-            .map(|h| self.truncate_cell(h))
-            .collect();
+        let truncated_headers: Vec<String> =
+            headers.iter().map(|h| self.truncate_cell(h)).collect();
         result.push_str(&truncated_headers.join(" | "));
         result.push('\n');
         result.push_str(&"-".repeat(truncated_headers.join(" | ").len()));
         result.push('\n');
 
         for row in rows.iter().take(self.max_rows) {
-            let truncated_row: Vec<String> = row.iter()
-                .map(|c| self.truncate_cell(c))
-                .collect();
+            let truncated_row: Vec<String> = row.iter().map(|c| self.truncate_cell(c)).collect();
             result.push_str(&truncated_row.join(" | "));
             result.push('\n');
         }
@@ -94,7 +102,10 @@ mod tests {
     fn test_truncate_cell() {
         let limiter = RowLimiter::new(100, 10);
         assert_eq!(limiter.truncate_cell("short"), "short");
-        assert_eq!(limiter.truncate_cell("this is a very long cell"), "this is a …(+14ch)");
+        assert_eq!(
+            limiter.truncate_cell("this is a very long cell"),
+            "this is a …(+14ch)"
+        );
     }
 
     #[test]

@@ -9,10 +9,15 @@ use serde_json::json;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_file::return_one_candidate_or_a_good_error;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, DiffChunk};
-use crate::files_correction::{canonical_path, correct_to_nearest_dir_path, correct_to_nearest_filename, get_project_dirs, preprocess_path_for_normalization};
+use crate::files_correction::{
+    canonical_path, correct_to_nearest_dir_path, correct_to_nearest_filename, get_project_dirs,
+    preprocess_path_for_normalization,
+};
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::privacy::{check_file_privacy, load_privacy_if_needed, FilePrivacyLevel};
-use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{
+    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
+};
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 
 pub struct ToolRm {
@@ -22,7 +27,11 @@ pub struct ToolRm {
 impl ToolRm {
     fn preformat_path(path: &String) -> String {
         let trimmed = path.trim_end_matches(&['/', '\\'][..]);
-        if trimmed.is_empty() { path.clone() } else { trimmed.to_string() }
+        if trimmed.is_empty() {
+            path.clone()
+        } else {
+            trimmed.to_string()
+        }
     }
 
     fn parse_recursive(args: &HashMap<String, Value>) -> Result<(bool, Option<u32>, bool), String> {
@@ -31,9 +40,11 @@ impl ToolRm {
             Some(Value::String(s)) => {
                 let s = s.trim().to_lowercase();
                 s == "true"
-            },
+            }
             None => false,
-            Some(other) => return Err(format!("Expected boolean for 'recursive', got {:?}", other)),
+            Some(other) => {
+                return Err(format!("Expected boolean for 'recursive', got {:?}", other))
+            }
         };
         let max_depth = match args.get("max_depth") {
             Some(Value::Number(n)) => n.as_u64().map(|v| v as u32),
@@ -50,7 +61,9 @@ impl ToolRm {
 
 #[async_trait]
 impl Tool for ToolRm {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn command_to_match_against_confirm_deny(
         &self,
@@ -62,10 +75,12 @@ impl Tool for ToolRm {
             _ => return Ok("".to_string()),
         };
         let (recursive, _, dry_run) = Self::parse_recursive(args).unwrap_or((false, None, false));
-        Ok(format!("rm {} {} {}",
+        Ok(format!(
+            "rm {} {} {}",
             if recursive { "-r" } else { "" },
             if dry_run { "--dry-run" } else { "" },
-            path))
+            path
+        ))
     }
 
     fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
@@ -80,9 +95,10 @@ impl Tool for ToolRm {
         ccx: Arc<AMutex<AtCommandsContext>>,
         args: &HashMap<String, Value>,
     ) -> Result<MatchConfirmDeny, String> {
-        let command_to_match = self.command_to_match_against_confirm_deny(ccx.clone(), &args).await.map_err(|e| {
-            format!("Error getting tool command to match: {}", e)
-        })?;
+        let command_to_match = self
+            .command_to_match_against_confirm_deny(ccx.clone(), &args)
+            .await
+            .map_err(|e| format!("Error getting tool command to match: {}", e))?;
         Ok(MatchConfirmDeny {
             result: MatchConfirmDenyResult::CONFIRMATION,
             command: command_to_match,
@@ -94,11 +110,13 @@ impl Tool for ToolRm {
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
         tool_call_id: &String,
-        args: &HashMap<String, Value>
+        args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         // Get "path" argument.
         let path_str = match args.get("path") {
-            Some(Value::String(s)) if !s.trim().is_empty() => Self::preformat_path(&s.trim().to_string()),
+            Some(Value::String(s)) if !s.trim().is_empty() => {
+                Self::preformat_path(&s.trim().to_string())
+            }
             _ => return Err("Missing required argument `path`".to_string()),
         };
         let path_str = preprocess_path_for_normalization(path_str);
@@ -116,7 +134,10 @@ impl Tool for ToolRm {
             path_str.chars().any(|c| c == '?') && !only_slashes_before
         };
         if has_wildcard {
-            return Err("⚠️ Wildcards not supported. 💡 Use exact path (use tree() to find files)".to_string());
+            return Err(
+                "⚠️ Wildcards not supported. 💡 Use exact path (use tree() to find files)"
+                    .to_string(),
+            );
         }
 
         let (recursive, _max_depth, dry_run) = Self::parse_recursive(args)?;
@@ -124,26 +145,35 @@ impl Tool for ToolRm {
         let project_dirs = get_project_dirs(gcx.clone()).await;
 
         // Use file correction to get a candidate path.
-        let file_candidates = correct_to_nearest_filename(gcx.clone(), &path_str, false, ccx.lock().await.top_n).await;
-        let dir_candidates = correct_to_nearest_dir_path(gcx.clone(), &path_str, false, ccx.lock().await.top_n).await;
+        let file_candidates =
+            correct_to_nearest_filename(gcx.clone(), &path_str, false, ccx.lock().await.top_n)
+                .await;
+        let dir_candidates =
+            correct_to_nearest_dir_path(gcx.clone(), &path_str, false, ccx.lock().await.top_n)
+                .await;
         let corrected_path = if !file_candidates.is_empty() {
             return_one_candidate_or_a_good_error(
                 gcx.clone(),
                 &path_str,
                 &file_candidates,
                 &project_dirs,
-                false
-            ).await?
+                false,
+            )
+            .await?
         } else if !dir_candidates.is_empty() {
             return_one_candidate_or_a_good_error(
                 gcx.clone(),
                 &path_str,
                 &dir_candidates,
                 &project_dirs,
-                true
-            ).await?
+                true,
+            )
+            .await?
         } else {
-            return Err(format!("⚠️ Path '{}' not found. 💡 Use tree() to explore or check spelling", path_str));
+            return Err(format!(
+                "⚠️ Path '{}' not found. 💡 Use tree() to explore or check spelling",
+                path_str
+            ));
         };
 
         let true_path = canonical_path(&corrected_path);
@@ -152,7 +182,7 @@ impl Tool for ToolRm {
         if let Err(e) = check_file_privacy(
             privacy_settings.clone(),
             &true_path,
-            &FilePrivacyLevel::AllowToSendAnywhere
+            &FilePrivacyLevel::AllowToSendAnywhere,
         ) {
             return Err(format!("Cannot rm '{}': {}", path_str, e));
         }
@@ -160,7 +190,10 @@ impl Tool for ToolRm {
         // Check that the true_path is within project directories.
         let is_within_project = project_dirs.iter().any(|p| true_path.starts_with(p));
         if !is_within_project && !gcx.read().await.cmdline.inside_container {
-            return Err(format!("⚠️ '{}' is outside project directories. 💡 rm() only works within workspace", path_str));
+            return Err(format!(
+                "⚠️ '{}' is outside project directories. 💡 rm() only works within workspace",
+                path_str
+            ));
         }
 
         // Check if path exists.
@@ -170,11 +203,14 @@ impl Tool for ToolRm {
 
         // Check if we have write permission to the parent directory.
         if let Some(parent) = true_path.parent() {
-            let parent_metadata = fs::metadata(parent).await.map_err(|e| {
-                format!("Failed to check parent directory permissions: {}", e)
-            })?;
+            let parent_metadata = fs::metadata(parent)
+                .await
+                .map_err(|e| format!("Failed to check parent directory permissions: {}", e))?;
             if parent_metadata.permissions().readonly() {
-                return Err(format!("No write permission to parent directory of '{}'", corrected_path));
+                return Err(format!(
+                    "No write permission to parent directory of '{}'",
+                    corrected_path
+                ));
             }
         }
 
@@ -187,7 +223,7 @@ impl Tool for ToolRm {
                 Err(e) => {
                     tracing::warn!("Failed to get file content: {}", e);
                     String::new()
-                },
+                }
             };
             if let Ok(meta) = fs::metadata(&true_path).await {
                 file_size = Some(meta.len());
@@ -197,25 +233,33 @@ impl Tool for ToolRm {
         let corrections = path_str != corrected_path;
         if is_dir {
             if !recursive {
-                return Err(format!("⚠️ '{}' is a directory. 💡 Use rm(path:'{}', recursive:true)", corrected_path, corrected_path));
+                return Err(format!(
+                    "⚠️ '{}' is a directory. 💡 Use rm(path:'{}', recursive:true)",
+                    corrected_path, corrected_path
+                ));
             }
             if dry_run {
                 messages.push(ContextEnum::ChatMessage(ChatMessage {
                     role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!("[Dry run] Would remove directory '{}'", corrected_path)),
+                    content: ChatContent::SimpleText(format!(
+                        "[Dry run] Would remove directory '{}'",
+                        corrected_path
+                    )),
                     tool_calls: None,
                     tool_call_id: tool_call_id.clone(),
                     ..Default::default()
                 }));
                 return Ok((corrections, messages));
             }
-            fs::remove_dir_all(&true_path).await.map_err(|e| {
-                format!("Failed to remove directory '{}': {}", corrected_path, e)
-            })?;
+            fs::remove_dir_all(&true_path)
+                .await
+                .map_err(|e| format!("Failed to remove directory '{}': {}", corrected_path, e))?;
             // Invalidate cache entries for all files under the deleted directory
             {
                 let mut gcx_write = gcx.write().await;
-                let paths_to_remove: Vec<_> = gcx_write.documents_state.memory_document_map
+                let paths_to_remove: Vec<_> = gcx_write
+                    .documents_state
+                    .memory_document_map
                     .keys()
                     .filter(|p| p.starts_with(&true_path))
                     .cloned()
@@ -235,18 +279,25 @@ impl Tool for ToolRm {
             if dry_run {
                 messages.push(ContextEnum::ChatMessage(ChatMessage {
                     role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!("[Dry run] Would remove file '{}'", corrected_path)),
+                    content: ChatContent::SimpleText(format!(
+                        "[Dry run] Would remove file '{}'",
+                        corrected_path
+                    )),
                     tool_calls: None,
                     tool_call_id: tool_call_id.clone(),
                     ..Default::default()
                 }));
                 return Ok((corrections, messages));
             }
-            fs::remove_file(&true_path).await.map_err(|e| {
-                format!("Failed to remove file '{}': {}", corrected_path, e)
-            })?;
+            fs::remove_file(&true_path)
+                .await
+                .map_err(|e| format!("Failed to remove file '{}': {}", corrected_path, e))?;
             // Invalidate cache entry for the deleted file
-            gcx.write().await.documents_state.memory_document_map.remove(&true_path);
+            gcx.write()
+                .await
+                .documents_state
+                .memory_document_map
+                .remove(&true_path);
             if !file_content.is_empty() {
                 let diff_chunk = DiffChunk {
                     file_name: corrected_path.clone(),
@@ -269,7 +320,11 @@ impl Tool for ToolRm {
             } else {
                 let mut message = format!("Removed file '{}'", corrected_path);
                 if let Some(file_size) = file_size {
-                    message = format!("{} ({})", message, crate::nicer_logs::human_readable_bytes(file_size));
+                    message = format!(
+                        "{} ({})",
+                        message,
+                        crate::nicer_logs::human_readable_bytes(file_size)
+                    );
                 }
                 messages.push(ContextEnum::ChatMessage(ChatMessage {
                     role: "tool".to_string(),

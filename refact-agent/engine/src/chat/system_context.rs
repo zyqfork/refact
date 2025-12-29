@@ -68,9 +68,28 @@ const INSTRUCTION_DIR_PATTERNS: &[(&str, &[&str])] = &[
     (".claude", &["settings.json", "settings.local.json"]),
     (".refact", &["project_summary.yaml", "instructions.md"]),
     // VSCode - all shareable configs
-    (".vscode", &["settings.json", "launch.json", "tasks.json", "extensions.json"]),
+    (
+        ".vscode",
+        &[
+            "settings.json",
+            "launch.json",
+            "tasks.json",
+            "extensions.json",
+        ],
+    ),
     // JetBrains IDEs - shareable configs + workspace.xml (filtered)
-    (".idea", &["workspace.xml", "vcs.xml", "misc.xml", "modules.xml", "compiler.xml", "encodings.xml", "jarRepositories.xml"]),
+    (
+        ".idea",
+        &[
+            "workspace.xml",
+            "vcs.xml",
+            "misc.xml",
+            "modules.xml",
+            "compiler.xml",
+            "encodings.xml",
+            "jarRepositories.xml",
+        ],
+    ),
     (".idea/runConfigurations", &["*.xml"]),
     (".idea/codeStyles", &["*.xml"]),
     (".idea/inspectionProfiles", &["*.xml"]),
@@ -83,10 +102,18 @@ const ENV_MARKERS: &[(&str, &str, &str)] = &[
     // Python
     ("venv", "python_venv", "Python virtual environment"),
     (".venv", "python_venv", "Python virtual environment"),
-    ("env", "python_venv", "Python virtual environment (generic name)"),
+    (
+        "env",
+        "python_venv",
+        "Python virtual environment (generic name)",
+    ),
     (".env", "python_venv", "Python virtual environment (hidden)"),
     ("poetry.lock", "poetry", "Poetry dependency manager"),
-    ("pyproject.toml", "python_project", "Python project (PEP 517/518)"),
+    (
+        "pyproject.toml",
+        "python_project",
+        "Python project (PEP 517/518)",
+    ),
     ("Pipfile", "pipenv", "Pipenv environment"),
     ("Pipfile.lock", "pipenv", "Pipenv environment"),
     ("requirements.txt", "pip", "Pip requirements"),
@@ -277,12 +304,15 @@ impl GitInfo {
         }
 
         if !self.branches.is_empty() {
-            let other_branches: Vec<_> = self.branches.iter()
+            let other_branches: Vec<_> = self
+                .branches
+                .iter()
                 .filter(|b| Some(*b) != self.current_branch.as_ref())
                 .take(10)
                 .collect();
             if !other_branches.is_empty() {
-                let branch_list = other_branches.iter()
+                let branch_list = other_branches
+                    .iter()
                     .map(|b| format!("`{}`", b))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -296,7 +326,9 @@ impl GitInfo {
         }
 
         if !self.remotes.is_empty() {
-            let remote_list = self.remotes.iter()
+            let remote_list = self
+                .remotes
+                .iter()
                 .map(|(name, url)| format!("`{}` → {}", name, url))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -304,27 +336,33 @@ impl GitInfo {
         }
 
         if !self.staged_files.is_empty() {
-            lines.push(format!("**Staged** ({} files): {}",
+            lines.push(format!(
+                "**Staged** ({} files): {}",
                 self.staged_files.len(),
                 format_file_list(&self.staged_files, 5)
             ));
         }
 
         if !self.modified_files.is_empty() {
-            lines.push(format!("**Modified** ({} files): {}",
+            lines.push(format!(
+                "**Modified** ({} files): {}",
                 self.modified_files.len(),
                 format_file_list(&self.modified_files, 5)
             ));
         }
 
         if !self.untracked_files.is_empty() {
-            lines.push(format!("**Untracked** ({} files): {}",
+            lines.push(format!(
+                "**Untracked** ({} files): {}",
                 self.untracked_files.len(),
                 format_file_list(&self.untracked_files, 5)
             ));
         }
 
-        if self.staged_files.is_empty() && self.modified_files.is_empty() && self.untracked_files.is_empty() {
+        if self.staged_files.is_empty()
+            && self.modified_files.is_empty()
+            && self.untracked_files.is_empty()
+        {
             lines.push("**Status**: Clean working directory".to_string());
         }
 
@@ -333,7 +371,11 @@ impl GitInfo {
 }
 
 fn format_file_list(files: &[String], max_show: usize) -> String {
-    let shown: Vec<_> = files.iter().take(max_show).map(|f| format!("`{}`", f)).collect();
+    let shown: Vec<_> = files
+        .iter()
+        .take(max_show)
+        .map(|f| format!("`{}`", f))
+        .collect();
     let remaining = files.len().saturating_sub(max_show);
     if remaining > 0 {
         format!("{} (+{} more)", shown.join(", "), remaining)
@@ -380,7 +422,9 @@ impl SystemInfo {
             datetime_local: now_local.format("%Y-%m-%d %H:%M:%S").to_string(),
             datetime_utc: now_utc.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
             timezone: now_local.format("%Z").to_string(),
-            shell: std::env::var("SHELL").ok().or_else(|| std::env::var("COMSPEC").ok()),
+            shell: std::env::var("SHELL")
+                .ok()
+                .or_else(|| std::env::var("COMSPEC").ok()),
         }
     }
 
@@ -444,7 +488,10 @@ impl SystemInfo {
             "## System Information".to_string(),
             format!("- **OS**: {} ({})", self.os_version, self.arch),
             format!("- **User**: {}@{}", self.username, self.hostname),
-            format!("- **DateTime**: {} ({})", self.datetime_local, self.timezone),
+            format!(
+                "- **DateTime**: {} ({})",
+                self.datetime_local, self.timezone
+            ),
         ];
         if let Some(shell) = &self.shell {
             lines.push(format!("- **Shell**: {}", shell));
@@ -562,13 +609,18 @@ fn extract_workspace_xml_important_parts(content: &str) -> Option<String> {
 
         for cfg in &configs {
             if result.len() >= MAX_WORKSPACE_XML_CHARS {
-                result.push_str(&format!("  # ... and {} more configurations\n", configs.len() - configs.iter().position(|c| c.name == cfg.name).unwrap_or(0)));
+                result.push_str(&format!(
+                    "  # ... and {} more configurations\n",
+                    configs.len() - configs.iter().position(|c| c.name == cfg.name).unwrap_or(0)
+                ));
                 break;
             }
 
             result.push_str(&format!("  - name: {}\n", cfg.name));
 
-            let env_prefix: String = cfg.envs.iter()
+            let env_prefix: String = cfg
+                .envs
+                .iter()
                 .filter(|(k, _)| k != "PYTHONUNBUFFERED")
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
@@ -661,15 +713,20 @@ fn parse_run_configuration(config_xml: &str) -> Option<RunConfig> {
 
 fn extract_xml_attr(xml: &str, attr: &str) -> Option<String> {
     let pattern = format!(r#"{}="([^"]*)""#, regex::escape(attr));
-    Regex::new(&pattern).ok()
+    Regex::new(&pattern)
+        .ok()
         .and_then(|re| re.captures(xml))
         .and_then(|cap| cap.get(1))
         .map(|m| m.as_str().to_string())
 }
 
 fn extract_option_value(xml: &str, option_name: &str) -> Option<String> {
-    let pattern = format!(r#"<option\s+name="{}"\s+value="([^"]*)""#, regex::escape(option_name));
-    Regex::new(&pattern).ok()
+    let pattern = format!(
+        r#"<option\s+name="{}"\s+value="([^"]*)""#,
+        regex::escape(option_name)
+    );
+    Regex::new(&pattern)
+        .ok()
         .and_then(|re| re.captures(xml))
         .and_then(|cap| cap.get(1))
         .map(|m| m.as_str().to_string())
@@ -765,11 +822,16 @@ pub async fn find_instruction_files(project_dirs: &[PathBuf]) -> Vec<Instruction
                                         None
                                     };
 
-                                    if entry_name == "workspace.xml" && processed_content.is_none() {
+                                    if entry_name == "workspace.xml" && processed_content.is_none()
+                                    {
                                         continue;
                                     }
 
-                                    tracing::info!("Found instruction file (dir pattern {}): {}", dir_pattern, path_str);
+                                    tracing::info!(
+                                        "Found instruction file (dir pattern {}): {}",
+                                        dir_pattern,
+                                        path_str
+                                    );
                                     files.push(InstructionFile {
                                         file_name: entry_name.clone(),
                                         file_path: path_str.clone(),
@@ -829,7 +891,9 @@ fn determine_tool_source(pattern: &str) -> String {
         "gemini.md" => "gemini".to_string(),
         ".cursorrules" | ".cursor/rules" => "cursor".to_string(),
         "global_rules.md" | ".windsurf/rules" => "windsurf".to_string(),
-        "copilot-instructions.md" | ".github" | ".github/instructions" => "github_copilot".to_string(),
+        "copilot-instructions.md" | ".github" | ".github/instructions" => {
+            "github_copilot".to_string()
+        }
         ".aider.conf.yml" => "aider".to_string(),
         "refact.md" | ".refact" => "refact".to_string(),
         _ => "unknown".to_string(),
@@ -889,7 +953,10 @@ fn categorize_config(file_name: &str) -> String {
         "typescript".to_string()
     } else if lower.contains("commit") || lower.contains("husky") || lower.contains("pre-commit") {
         "git_hooks".to_string()
-    } else if lower.contains("mkdocs") || lower.contains("docusaurus") || lower.contains("book.toml") {
+    } else if lower.contains("mkdocs")
+        || lower.contains("docusaurus")
+        || lower.contains("book.toml")
+    {
         "documentation".to_string()
     } else if lower.contains("env") {
         "environment".to_string()
@@ -927,27 +994,31 @@ pub async fn gather_git_info(project_dirs: &[PathBuf]) -> Vec<GitInfo> {
 
             match Repository::open(&vcs_root) {
                 Ok(repo) => {
-                    let current_branch = repo.head().ok()
+                    let current_branch = repo
+                        .head()
+                        .ok()
                         .and_then(|h| h.shorthand().map(String::from));
 
-                    let branches = repo.branches(Some(git2::BranchType::Local))
+                    let branches = repo
+                        .branches(Some(git2::BranchType::Local))
                         .map(|branches| {
                             branches
                                 .filter_map(|b| b.ok())
-                                .filter_map(|(branch, _)| branch.name().ok().flatten().map(String::from))
+                                .filter_map(|(branch, _)| {
+                                    branch.name().ok().flatten().map(String::from)
+                                })
                                 .collect()
                         })
                         .unwrap_or_default();
 
                     let remotes = get_git_remotes(&vcs_root).unwrap_or_default();
 
-                    let (staged, unstaged) = get_diff_statuses(
-                        git2::StatusShow::IndexAndWorkdir,
-                        &repo,
-                        false
-                    ).unwrap_or_default();
+                    let (staged, unstaged) =
+                        get_diff_statuses(git2::StatusShow::IndexAndWorkdir, &repo, false)
+                            .unwrap_or_default();
 
-                    let staged_files: Vec<String> = staged.iter()
+                    let staged_files: Vec<String> = staged
+                        .iter()
                         .map(|f| f.relative_path.to_string_lossy().to_string())
                         .filter(|p| !path_starts_with_hidden(p))
                         .collect();
@@ -1047,7 +1118,10 @@ pub fn generate_environment_instructions(environments: &[DetectedEnvironment]) -
         instructions.push("### Python".to_string());
         for env in &python_envs {
             let active_marker = if env.is_active { " ✓ (active)" } else { "" };
-            instructions.push(format!("- **{}**: `{}`{}", env.description, env.path, active_marker));
+            instructions.push(format!(
+                "- **{}**: `{}`{}",
+                env.description, env.path, active_marker
+            ));
         }
 
         let has_venv = python_envs.iter().any(|e| e.env_type == "python_venv");
@@ -1062,14 +1136,18 @@ pub fn generate_environment_instructions(environments: &[DetectedEnvironment]) -
             instructions.push("uv run python <script.py>".to_string());
             instructions.push("```".to_string());
         } else if has_poetry {
-            instructions.push("**Preferred**: Use `poetry` for Python package management:".to_string());
+            instructions
+                .push("**Preferred**: Use `poetry` for Python package management:".to_string());
             instructions.push("```bash".to_string());
             instructions.push("poetry install".to_string());
             instructions.push("poetry run python <script.py>".to_string());
             instructions.push("```".to_string());
         } else if has_venv {
             if let Some(venv) = python_envs.iter().find(|e| e.env_type == "python_venv") {
-                instructions.push("**Preferred**: Use the virtual environment directly (no activation needed):".to_string());
+                instructions.push(
+                    "**Preferred**: Use the virtual environment directly (no activation needed):"
+                        .to_string(),
+                );
                 instructions.push("```bash".to_string());
                 if cfg!(windows) {
                     instructions.push(format!("{}/Scripts/python.exe <script.py>", venv.path));
@@ -1096,7 +1174,8 @@ pub fn generate_environment_instructions(environments: &[DetectedEnvironment]) -
 
         instructions.push(String::new());
         if has_bun {
-            instructions.push("**Preferred**: Use `bun` as the runtime/package manager:".to_string());
+            instructions
+                .push("**Preferred**: Use `bun` as the runtime/package manager:".to_string());
             instructions.push("```bash".to_string());
             instructions.push("bun install".to_string());
             instructions.push("bun run <script>".to_string());
@@ -1170,7 +1249,12 @@ pub async fn generate_compact_project_tree(
         }
 
         let tree = TreeNode::build(&relative_paths);
-        let tree_str = print_compact_tree(&tree, &project_name, max_depth, MAX_TREE_CHARS.saturating_sub(result.len()));
+        let tree_str = print_compact_tree(
+            &tree,
+            &project_name,
+            max_depth,
+            MAX_TREE_CHARS.saturating_sub(result.len()),
+        );
 
         if result.len() + tree_str.len() > MAX_TREE_CHARS {
             if result.is_empty() {
@@ -1186,7 +1270,18 @@ pub async fn generate_compact_project_tree(
     Ok(result)
 }
 
-const SKIP_DIRS: &[&str] = &["__pycache__", "node_modules", ".git", ".svn", ".hg", "target", "dist", "build", ".next", ".nuxt"];
+const SKIP_DIRS: &[&str] = &[
+    "__pycache__",
+    "node_modules",
+    ".git",
+    ".svn",
+    ".hg",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+];
 
 fn path_has_skip_component(path: &Path) -> bool {
     path.components().any(|c| {
@@ -1207,7 +1302,12 @@ fn path_starts_with_hidden(path: &str) -> bool {
     path.starts_with('.') || path.contains("/.")
 }
 
-fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max_chars: usize) -> String {
+fn print_compact_tree(
+    tree: &TreeNode,
+    project_name: &str,
+    max_depth: usize,
+    max_chars: usize,
+) -> String {
     fn count_extensions(node: &TreeNode) -> std::collections::HashMap<String, usize> {
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (name, child) in &node.children {
@@ -1219,7 +1319,8 @@ fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max
                     *counts.entry(ext).or_insert(0) += count;
                 }
             } else {
-                let ext = name.rfind('.')
+                let ext = name
+                    .rfind('.')
                     .map(|i| name[i..].to_string())
                     .unwrap_or_else(|| "(no ext)".to_string());
                 *counts.entry(ext).or_insert(0) += 1;
@@ -1234,7 +1335,8 @@ fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max
         }
         let mut sorted: Vec<_> = counts.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));
-        let parts: Vec<String> = sorted.iter()
+        let parts: Vec<String> = sorted
+            .iter()
             .take(5)
             .map(|(ext, count)| format!("{} {}", count, ext))
             .collect();
@@ -1273,7 +1375,9 @@ fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max
             let ext_summary = format_extensions(&ext_counts);
             output.push_str(&format!("{}{}/{}\n", indent, name, ext_summary));
 
-            let mut subdirs: Vec<_> = node.children.iter()
+            let mut subdirs: Vec<_> = node
+                .children
+                .iter()
                 .filter(|(n, child)| !should_skip_name(n) && child.is_dir())
                 .collect();
             subdirs.sort_by(|a, b| a.0.cmp(b.0));
@@ -1282,7 +1386,15 @@ fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max
                 if output.len() >= max_chars {
                     break;
                 }
-                traverse(child, child_name, depth + 1, max_depth, output, max_chars, truncated);
+                traverse(
+                    child,
+                    child_name,
+                    depth + 1,
+                    max_depth,
+                    output,
+                    max_chars,
+                    truncated,
+                );
             }
         }
     }
@@ -1293,7 +1405,9 @@ fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max
     let root_ext_summary = format_extensions(&root_ext_counts);
     result.push_str(&format!("{}/{}\n", project_name, root_ext_summary));
 
-    let mut entries: Vec<_> = tree.children.iter()
+    let mut entries: Vec<_> = tree
+        .children
+        .iter()
         .filter(|(n, child)| !should_skip_name(n) && child.is_dir())
         .collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
@@ -1303,7 +1417,15 @@ fn print_compact_tree(tree: &TreeNode, project_name: &str, max_depth: usize, max
         if result.len() >= max_chars {
             break;
         }
-        traverse(node, name, 1, max_depth, &mut result, max_chars, &mut truncated);
+        traverse(
+            node,
+            name,
+            1,
+            max_depth,
+            &mut result,
+            max_chars,
+            &mut truncated,
+        );
     }
 
     if truncated {
@@ -1327,7 +1449,9 @@ pub async fn gather_system_context(
     let git_info = gather_git_info(&project_dirs).await;
 
     let project_tree = if include_tree {
-        generate_compact_project_tree(gcx.clone(), tree_max_depth).await.ok()
+        generate_compact_project_tree(gcx.clone(), tree_max_depth)
+            .await
+            .ok()
     } else {
         None
     };
@@ -1366,7 +1490,11 @@ pub async fn create_instruction_files_message(
             match tokio::fs::read_to_string(&instr_file.file_path).await {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!("Failed to read instruction file {}: {}", instr_file.file_path, e);
+                    tracing::warn!(
+                        "Failed to read instruction file {}: {}",
+                        instr_file.file_path,
+                        e
+                    );
                     continue;
                 }
             }
@@ -1387,8 +1515,12 @@ pub async fn create_instruction_files_message(
         }
         if was_truncated {
             final_content.push_str("\n\n[TRUNCATED]");
-            tracing::info!("Truncated instruction file {} from {} to {} chars",
-                instr_file.file_path, content_len, MAX_FILE_SIZE);
+            tracing::info!(
+                "Truncated instruction file {} from {} to {} chars",
+                instr_file.file_path,
+                content_len,
+                MAX_FILE_SIZE
+            );
         }
 
         context_files.push(ContextFile {
@@ -1407,7 +1539,11 @@ pub async fn create_instruction_files_message(
         let paths_content = format!(
             "Additional instruction files (paths only, limit of {} full files reached):\n{}",
             MAX_INCLUDED_FILES,
-            paths_only.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n")
+            paths_only
+                .iter()
+                .map(|p| format!("- {}", p))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
         context_files.push(ContextFile {
             file_name: "(additional files - paths only)".to_string(),
@@ -1419,7 +1555,10 @@ pub async fn create_instruction_files_message(
             usefulness: 50.0,
             skip_pp: true,
         });
-        tracing::info!("Listed {} additional instruction files as paths only", paths_only.len());
+        tracing::info!(
+            "Listed {} additional instruction files as paths only",
+            paths_only.len()
+        );
     }
 
     if context_files.is_empty() {
@@ -1428,7 +1567,9 @@ pub async fn create_instruction_files_message(
 
     tracing::info!(
         "Created project context message: {} full files, {} paths only",
-        context_files.len().saturating_sub(if paths_only.is_empty() { 0 } else { 1 }),
+        context_files
+            .len()
+            .saturating_sub(if paths_only.is_empty() { 0 } else { 1 }),
         paths_only.len()
     );
 

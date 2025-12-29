@@ -105,7 +105,10 @@ impl CaptureBuffer {
         let mut result = self.head.join("\n");
 
         if self.truncated {
-            let skipped = self.total_lines.saturating_sub(self.head.len()).saturating_sub(self.tail.len());
+            let skipped = self
+                .total_lines
+                .saturating_sub(self.head.len())
+                .saturating_sub(self.tail.len());
             if !result.is_empty() {
                 result.push('\n');
             }
@@ -136,7 +139,6 @@ impl CaptureBuffer {
 
         result
     }
-
 }
 
 #[cfg(test)]

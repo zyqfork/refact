@@ -5,7 +5,9 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ChatContent, ChatMessage, ChatMeta, ChatMode, ChatUsage, SamplingParameters};
+use crate::call_validation::{
+    ChatContent, ChatMessage, ChatMeta, ChatMode, ChatUsage, SamplingParameters,
+};
 use crate::global_context::GlobalContext;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::constants::CHAT_TOP_N;
@@ -36,7 +38,11 @@ pub fn start_generation(
     Box::pin(async move {
         let (messages, thread, chat_id) = {
             let session = session_arc.lock().await;
-            (session.messages.clone(), session.thread.clone(), session.chat_id.clone())
+            (
+                session.messages.clone(),
+                session.thread.clone(),
+                session.chat_id.clone(),
+            )
         };
 
         let abort_flag = {
@@ -44,13 +50,25 @@ pub fn start_generation(
             match session.start_stream() {
                 Some((_message_id, abort_flag)) => abort_flag,
                 None => {
-                    warn!("Cannot start generation for {}: already generating", chat_id);
+                    warn!(
+                        "Cannot start generation for {}: already generating",
+                        chat_id
+                    );
                     return;
                 }
             }
         };
 
-        if let Err(e) = run_llm_generation(gcx.clone(), session_arc.clone(), messages, thread, chat_id.clone(), abort_flag).await {
+        if let Err(e) = run_llm_generation(
+            gcx.clone(),
+            session_arc.clone(),
+            messages,
+            thread,
+            chat_id.clone(),
+            abort_flag,
+        )
+        .await
+        {
             let mut session = session_arc.lock().await;
             if !session.abort_flag.load(Ordering::SeqCst) {
                 session.finish_stream_with_error(e);
@@ -77,14 +95,16 @@ pub async fn run_llm_generation(
     let chat_mode = parse_chat_mode(&thread.mode);
 
     let tools: Vec<crate::tools::tools_description::ToolDesc> =
-        crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode).await
+        crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
+            .await
             .into_iter()
             .map(|tool| tool.tool_description())
             .collect();
 
     info!("session generation: tools count = {}", tools.len());
 
-    let caps = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await
+    let caps = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
         .map_err(|e| e.message)?;
     let model_rec = crate::caps::resolve_chat_model(caps, &thread.model)?;
 
@@ -107,50 +127,73 @@ pub async fn run_llm_generation(
 
     let (session_has_system, session_has_project_context) = {
         let session = session_arc.lock().await;
-        let has_system = session.messages.first().map(|m| m.role == "system").unwrap_or(false);
-        let has_project_ctx = session.messages.iter().any(|m|
-            m.role == "context_file" && m.tool_call_id == crate::chat::system_context::PROJECT_CONTEXT_MARKER
-        );
+        let has_system = session
+            .messages
+            .first()
+            .map(|m| m.role == "system")
+            .unwrap_or(false);
+        let has_project_ctx = session.messages.iter().any(|m| {
+            m.role == "context_file"
+                && m.tool_call_id == crate::chat::system_context::PROJECT_CONTEXT_MARKER
+        });
         (has_system, has_project_ctx)
     };
 
-    let needs_preamble = !session_has_system || (!session_has_project_context && thread.include_project_info);
+    let needs_preamble =
+        !session_has_system || (!session_has_project_context && thread.include_project_info);
 
     if needs_preamble {
-        let tool_names: std::collections::HashSet<String> = tools.iter()
-            .map(|t| t.name.clone())
-            .collect();
+        let tool_names: std::collections::HashSet<String> =
+            tools.iter().map(|t| t.name.clone()).collect();
         let mut has_rag_results = crate::scratchpads::scratchpad_utils::HasRagResults::new();
-        let messages_with_preamble = prepend_the_right_system_prompt_and_maybe_more_initial_messages(
-            gcx.clone(),
-            messages.clone(),
-            &meta,
-            &mut has_rag_results,
-            tool_names,
-        ).await;
+        let messages_with_preamble =
+            prepend_the_right_system_prompt_and_maybe_more_initial_messages(
+                gcx.clone(),
+                messages.clone(),
+                &meta,
+                &mut has_rag_results,
+                tool_names,
+            )
+            .await;
 
-        let first_user_idx_in_new = messages_with_preamble.iter()
+        let first_user_idx_in_new = messages_with_preamble
+            .iter()
             .position(|m| m.role == "user")
             .unwrap_or(messages_with_preamble.len());
 
         if first_user_idx_in_new > 0 {
             let mut session = session_arc.lock().await;
-            let first_user_idx_in_session = session.messages.iter()
+            let first_user_idx_in_session = session
+                .messages
+                .iter()
                 .position(|m| m.role == "user")
                 .unwrap_or(0);
 
-            for (i, msg) in messages_with_preamble.iter().take(first_user_idx_in_new).enumerate() {
-                if session.messages.iter().any(|m| m.role == msg.role && m.role == "system") && msg.role == "system" {
+            for (i, msg) in messages_with_preamble
+                .iter()
+                .take(first_user_idx_in_new)
+                .enumerate()
+            {
+                if session
+                    .messages
+                    .iter()
+                    .any(|m| m.role == msg.role && m.role == "system")
+                    && msg.role == "system"
+                {
                     continue;
                 }
-                if session.messages.iter().any(|m| m.role == "cd_instruction") && msg.role == "cd_instruction" {
+                if session.messages.iter().any(|m| m.role == "cd_instruction")
+                    && msg.role == "cd_instruction"
+                {
                     continue;
                 }
                 let mut msg_with_id = msg.clone();
                 if msg_with_id.message_id.is_empty() {
                     msg_with_id.message_id = Uuid::new_v4().to_string();
                 }
-                session.messages.insert(first_user_idx_in_session + i, msg_with_id.clone());
+                session
+                    .messages
+                    .insert(first_user_idx_in_session + i, msg_with_id.clone());
                 session.emit(ChatEvent::MessageAdded {
                     message: msg_with_id,
                     index: first_user_idx_in_session + i,
@@ -168,7 +211,11 @@ pub async fn run_llm_generation(
         enrich_messages_with_knowledge(gcx.clone(), &mut messages).await;
         if messages.len() > msg_count_before {
             let mut session = session_arc.lock().await;
-            let session_last_user_idx = session.messages.iter().rposition(|m| m.role == "user").unwrap_or(0);
+            let session_last_user_idx = session
+                .messages
+                .iter()
+                .rposition(|m| m.role == "user")
+                .unwrap_or(0);
             let local_last_user_idx = messages.iter().rposition(|m| m.role == "user").unwrap_or(0);
             if local_last_user_idx > 0 {
                 let enriched_msg = &messages[local_last_user_idx - 1];
@@ -177,13 +224,18 @@ pub async fn run_llm_generation(
                     if msg_with_id.message_id.is_empty() {
                         msg_with_id.message_id = Uuid::new_v4().to_string();
                     }
-                    session.messages.insert(session_last_user_idx, msg_with_id.clone());
+                    session
+                        .messages
+                        .insert(session_last_user_idx, msg_with_id.clone());
                     session.emit(ChatEvent::MessageAdded {
                         message: msg_with_id,
                         index: session_last_user_idx,
                     });
                     session.increment_version();
-                    info!("Saved knowledge enrichment context_file to session at index {}", session_last_user_idx);
+                    info!(
+                        "Saved knowledge enrichment context_file to session at index {}",
+                        session_last_user_idx
+                    );
                 }
             }
         }
@@ -205,7 +257,8 @@ pub async fn run_llm_generation(
         chat_id.clone(),
         false,
         model_rec.base.id.clone(),
-    ).await;
+    )
+    .await;
     let ccx_arc = Arc::new(AMutex::new(ccx));
 
     let options = ChatPrepareOptions {
@@ -227,7 +280,8 @@ pub async fn run_llm_generation(
         &mut parameters,
         &options,
         &None,
-    ).await?;
+    )
+    .await?;
 
     run_streaming_generation(
         gcx,
@@ -237,7 +291,8 @@ pub async fn run_llm_generation(
         parameters,
         abort_flag,
         chat_mode,
-    ).await
+    )
+    .await
 }
 
 async fn run_streaming_generation(
@@ -305,7 +360,9 @@ async fn run_streaming_generation(
         fn on_finish(&mut self, _choice_idx: usize, _finish_reason: Option<String>) {}
     }
 
-    let mut collector = SessionCollector { session_arc: session_arc.clone() };
+    let mut collector = SessionCollector {
+        session_arc: session_arc.clone(),
+    };
     let results = run_llm_stream(gcx.clone(), params, 1, &mut collector).await?;
 
     let result = results.into_iter().next().unwrap_or_default();
@@ -317,8 +374,13 @@ async fn run_streaming_generation(
             draft.content = ChatContent::SimpleText(result.content);
 
             if !result.tool_calls_raw.is_empty() {
-                info!("Parsing {} accumulated tool calls", result.tool_calls_raw.len());
-                let parsed: Vec<_> = result.tool_calls_raw.iter()
+                info!(
+                    "Parsing {} accumulated tool calls",
+                    result.tool_calls_raw.len()
+                );
+                let parsed: Vec<_> = result
+                    .tool_calls_raw
+                    .iter()
                     .filter_map(|tc| normalize_tool_call(tc))
                     .collect();
                 info!("Successfully parsed {} tool calls", parsed.len());

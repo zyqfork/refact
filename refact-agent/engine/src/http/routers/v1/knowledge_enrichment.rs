@@ -35,9 +35,14 @@ pub async fn enrich_messages_with_knowledge(
 
     let existing_paths = get_existing_context_file_paths(messages);
 
-    if let Some(knowledge_context) = create_knowledge_context(gcx, &query_normalized, &existing_paths).await {
+    if let Some(knowledge_context) =
+        create_knowledge_context(gcx, &query_normalized, &existing_paths).await
+    {
         messages.insert(last_user_idx, knowledge_context);
-        tracing::info!("Injected knowledge context before user message at position {}", last_user_idx);
+        tracing::info!(
+            "Injected knowledge context before user message at position {}",
+            last_user_idx
+        );
     }
 }
 
@@ -95,19 +100,41 @@ fn count_strong_signals(query: &str) -> usize {
 
     // Error/debug keywords
     let error_keywords = [
-        "error", "panic", "exception", "traceback", "stack trace",
-        "segfault", "failed", "unable to", "cannot", "doesn't work",
-        "does not work", "broken", "bug", "crash"
+        "error",
+        "panic",
+        "exception",
+        "traceback",
+        "stack trace",
+        "segfault",
+        "failed",
+        "unable to",
+        "cannot",
+        "doesn't work",
+        "does not work",
+        "broken",
+        "bug",
+        "crash",
     ];
     if error_keywords.iter().any(|kw| query_lower.contains(kw)) {
         count += 1;
     }
 
     // File references
-    let file_extensions = [".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".cpp", ".c", ".h"];
-    let config_files = ["cargo.toml", "package.json", "tsconfig", "pyproject", ".yaml", ".yml", ".toml"];
+    let file_extensions = [
+        ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".cpp", ".c", ".h",
+    ];
+    let config_files = [
+        "cargo.toml",
+        "package.json",
+        "tsconfig",
+        "pyproject",
+        ".yaml",
+        ".yml",
+        ".toml",
+    ];
     if file_extensions.iter().any(|ext| query_lower.contains(ext))
-        || config_files.iter().any(|f| query_lower.contains(f)) {
+        || config_files.iter().any(|f| query_lower.contains(f))
+    {
         count += 1;
     }
 
@@ -124,8 +151,14 @@ fn count_strong_signals(query: &str) -> usize {
 
     // Explicit retrieval intent
     let retrieval_phrases = [
-        "search", "find", "where is", "which file", "look up",
-        "in this repo", "in the codebase", "in the project"
+        "search",
+        "find",
+        "where is",
+        "which file",
+        "look up",
+        "in this repo",
+        "in the codebase",
+        "in the project",
     ];
     if retrieval_phrases.iter().any(|p| query_lower.contains(p)) {
         count += 1;
@@ -144,7 +177,19 @@ fn count_weak_signals(query_raw: &str, query_normalized: &str) -> usize {
 
     // Starts with question word
     let query_lower = query_raw.trim().to_lowercase();
-    let question_starters = ["how", "why", "what", "where", "when", "can", "should", "could", "would", "is there", "are there"];
+    let question_starters = [
+        "how",
+        "why",
+        "what",
+        "where",
+        "when",
+        "can",
+        "should",
+        "could",
+        "would",
+        "is there",
+        "are there",
+    ];
     if question_starters.iter().any(|s| query_lower.starts_with(s)) {
         count += 1;
     }
@@ -162,7 +207,9 @@ async fn create_knowledge_context(
     query_text: &str,
     existing_paths: &HashSet<String>,
 ) -> Option<ChatMessage> {
-    let memories = memories_search(gcx.clone(), query_text, KNOWLEDGE_TOP_N, TRAJECTORY_TOP_N).await.ok()?;
+    let memories = memories_search(gcx.clone(), query_text, KNOWLEDGE_TOP_N, TRAJECTORY_TOP_N)
+        .await
+        .ok()?;
 
     let high_score_memories: Vec<_> = memories
         .into_iter()
@@ -180,7 +227,11 @@ async fn create_knowledge_context(
         return None;
     }
 
-    tracing::info!("Knowledge enrichment: {} memories passed threshold {}", high_score_memories.len(), KNOWLEDGE_SCORE_THRESHOLD);
+    tracing::info!(
+        "Knowledge enrichment: {} memories passed threshold {}",
+        high_score_memories.len(),
+        KNOWLEDGE_SCORE_THRESHOLD
+    );
 
     let context_files: Vec<ContextFile> = high_score_memories
         .iter()
@@ -217,7 +268,9 @@ fn has_knowledge_enrichment_near(messages: &[ChatMessage], user_idx: usize) -> b
     let search_end = (user_idx + 2).min(messages.len());
 
     for i in search_start..search_end {
-        if messages[i].role == "context_file" && messages[i].tool_call_id == KNOWLEDGE_ENRICHMENT_MARKER {
+        if messages[i].role == "context_file"
+            && messages[i].tool_call_id == KNOWLEDGE_ENRICHMENT_MARKER
+        {
             tracing::info!("Skipping enrichment - already enriched at position {}", i);
             return true;
         }
@@ -234,7 +287,7 @@ fn get_existing_context_file_paths(messages: &[ChatMessage]) -> HashSet<String> 
                 ChatContent::SimpleText(text) => {
                     serde_json::from_str::<Vec<ContextFile>>(text).unwrap_or_default()
                 }
-                _ => vec![]
+                _ => vec![],
             };
             for file in files {
                 paths.insert(file.file_name.clone());

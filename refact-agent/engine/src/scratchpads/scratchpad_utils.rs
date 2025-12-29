@@ -44,7 +44,9 @@ pub fn parse_image_b64_from_image_url_openai(image_url: &str) -> Option<(String,
 }
 
 pub fn max_tokens_for_rag_chat(n_ctx: usize, maxgen: usize) -> usize {
-    (n_ctx / 4).saturating_sub(maxgen).saturating_sub(RESERVE_FOR_QUESTION_AND_FOLLOWUP)
+    (n_ctx / 4)
+        .saturating_sub(maxgen)
+        .saturating_sub(RESERVE_FOR_QUESTION_AND_FOLLOWUP)
 }
 
 fn calculate_image_tokens_by_dimensions_openai(mut width: u32, mut height: u32) -> i32 {
@@ -70,7 +72,9 @@ fn calculate_image_tokens_by_dimensions_openai(mut width: u32, mut height: u32) 
 const MAX_IMAGE_BASE64_LEN: usize = 15 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
-pub fn image_reader_from_b64string(image_b64: &str) -> Result<ImageReader<Cursor<Vec<u8>>>, String> {
+pub fn image_reader_from_b64string(
+    image_b64: &str,
+) -> Result<ImageReader<Cursor<Vec<u8>>>, String> {
     if image_b64.len() > MAX_IMAGE_BASE64_LEN {
         return Err(format!("image base64 too large: {} bytes", image_b64.len()));
     }
@@ -80,14 +84,19 @@ pub fn image_reader_from_b64string(image_b64: &str) -> Result<ImageReader<Cursor
         return Err(format!("image too large: {} bytes", image_bytes.len()));
     }
     let cursor = Cursor::new(image_bytes);
-    let reader = ImageReader::new(cursor).with_guessed_format().map_err(|e| e.to_string())?;
+    let reader = ImageReader::new(cursor)
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
     Ok(reader)
 }
 
 // for detail = high. all images w detail = low cost 85 tokens (independent of image size)
 pub fn calculate_image_tokens_openai(image_string: &String, detail: &str) -> Result<i32, String> {
-    let reader = image_reader_from_b64string(&image_string).map_err(|_| "Failed to read image".to_string())?;
-    let (width, height) = reader.into_dimensions().map_err(|_| "Failed to get dimensions".to_string())?;
+    let reader = image_reader_from_b64string(&image_string)
+        .map_err(|_| "Failed to read image".to_string())?;
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|_| "Failed to get dimensions".to_string())?;
 
     match detail {
         "high" => Ok(calculate_image_tokens_by_dimensions_openai(width, height)),
@@ -107,7 +116,11 @@ mod tests {
         let height = 1024;
         let expected_tokens = 765;
         let tokens = calculate_image_tokens_by_dimensions_openai(width, height);
-        assert_eq!(tokens, expected_tokens, "Expected {} tokens, but got {}", expected_tokens, tokens);
+        assert_eq!(
+            tokens, expected_tokens,
+            "Expected {} tokens, but got {}",
+            expected_tokens, tokens
+        );
     }
 
     #[test]
@@ -122,9 +135,15 @@ mod tests {
         );
 
         let invalid_image_url = "data:image/png;base64,";
-        assert_eq!(parse_image_b64_from_image_url_openai(invalid_image_url), None);
+        assert_eq!(
+            parse_image_b64_from_image_url_openai(invalid_image_url),
+            None
+        );
 
         let non_matching_url = "https://example.com/image.png";
-        assert_eq!(parse_image_b64_from_image_url_openai(non_matching_url), None);
+        assert_eq!(
+            parse_image_b64_from_image_url_openai(non_matching_url),
+            None
+        );
     }
 }

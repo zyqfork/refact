@@ -30,7 +30,7 @@ pub struct MemoRecord {
     pub title: Option<String>,
     pub created: Option<String>,
     pub kind: Option<String>,
-    pub score: Option<f32>,  // VecDB similarity score (lower distance = higher relevance)
+    pub score: Option<f32>, // VecDB similarity score (lower distance = higher relevance)
 }
 
 fn generate_slug(content: &str) -> String {
@@ -74,7 +74,9 @@ pub fn create_frontmatter(
         "preference" => 365,
         _ => 90,
     };
-    let review_after = (now + Duration::days(review_days)).format("%Y-%m-%d").to_string();
+    let review_after = (now + Duration::days(review_days))
+        .format("%Y-%m-%d")
+        .to_string();
 
     KnowledgeFrontmatter {
         id: Some(Uuid::new_v4().to_string()),
@@ -93,7 +95,8 @@ pub fn create_frontmatter(
 }
 
 async fn get_all_knowledge_dirs(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<PathBuf> {
-    get_project_dirs(gcx).await
+    get_project_dirs(gcx)
+        .await
         .into_iter()
         .map(|p| p.join(KNOWLEDGE_FOLDER_NAME))
         .filter(|p| p.exists())
@@ -112,7 +115,9 @@ pub async fn memories_add(
     content: &str,
 ) -> Result<PathBuf, String> {
     let knowledge_dir = get_first_knowledge_dir(gcx.clone()).await?;
-    fs::create_dir_all(&knowledge_dir).await.map_err(|e| format!("Failed to create knowledge dir: {}", e))?;
+    fs::create_dir_all(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to create knowledge dir: {}", e))?;
 
     let filename = generate_filename(content);
     let file_path = knowledge_dir.join(&filename);
@@ -122,18 +127,20 @@ pub async fn memories_add(
     }
 
     let md_content = format!("{}\n\n{}", frontmatter.to_yaml(), content);
-    fs::write(&file_path, &md_content).await.map_err(|e| format!("Failed to write knowledge file: {}", e))?;
+    fs::write(&file_path, &md_content)
+        .await
+        .map_err(|e| format!("Failed to write knowledge file: {}", e))?;
 
     info!("Created knowledge entry: {}", file_path.display());
 
     if let Some(vecdb) = gcx.read().await.vec_db.lock().await.as_ref() {
-        vecdb.vectorizer_enqueue_files(&vec![file_path.to_string_lossy().to_string()], true).await;
+        vecdb
+            .vectorizer_enqueue_files(&vec![file_path.to_string_lossy().to_string()], true)
+            .await;
     }
 
     Ok(file_path)
 }
-
-
 
 pub async fn memories_search(
     gcx: Arc<ARwLock<GlobalContext>>,
@@ -155,13 +162,21 @@ pub async fn memories_search(
     }
 
     let vecdb = vecdb_guard.as_ref().unwrap();
-    let search_result = vecdb.vecdb_search(query.to_string(), (top_n_memories + top_n_trajectories) * 5, None).await
+    let search_result = vecdb
+        .vecdb_search(
+            query.to_string(),
+            (top_n_memories + top_n_trajectories) * 5,
+            None,
+        )
+        .await
         .map_err(|e| format!("VecDB search failed: {}", e))?;
     drop(vecdb_guard);
 
     use std::collections::HashMap;
 
-    struct KnowledgeMatch { best_score: f32 }
+    struct KnowledgeMatch {
+        best_score: f32,
+    }
     struct TrajectoryMatch {
         best_score: f32,
         matched_ranges: Vec<(u64, u64)>,
@@ -177,13 +192,19 @@ pub async fn memories_search(
         if path_str.contains(KNOWLEDGE_FOLDER_NAME) {
             knowledge_matches
                 .entry(rec.file_path.clone())
-                .and_modify(|m| { if score > m.best_score { m.best_score = score; } })
+                .and_modify(|m| {
+                    if score > m.best_score {
+                        m.best_score = score;
+                    }
+                })
                 .or_insert(KnowledgeMatch { best_score: score });
         } else if path_str.contains(".refact/trajectories/") && path_str.ends_with(".json") {
             trajectory_matches
                 .entry(rec.file_path.clone())
                 .and_modify(|m| {
-                    if score > m.best_score { m.best_score = score; }
+                    if score > m.best_score {
+                        m.best_score = score;
+                    }
                     m.matched_ranges.push((rec.start_line, rec.end_line));
                 })
                 .or_insert(TrajectoryMatch {
@@ -197,7 +218,11 @@ pub async fn memories_search(
 
     // Process knowledge files (whole content)
     let mut sorted_knowledge: Vec<_> = knowledge_matches.into_iter().collect();
-    sorted_knowledge.sort_by(|a, b| b.1.best_score.partial_cmp(&a.1.best_score).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_knowledge.sort_by(|a, b| {
+        b.1.best_score
+            .partial_cmp(&a.1.best_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for (file_path, file_match) in sorted_knowledge.into_iter().take(top_n_memories) {
         let text = match get_file_text_from_memory_or_disk(gcx.clone(), &file_path).await {
@@ -212,7 +237,10 @@ pub async fn memories_search(
 
         let content = text[content_start..].trim().to_string();
         let line_count = content.lines().count();
-        let id = frontmatter.id.clone().unwrap_or_else(|| file_path.to_string_lossy().to_string());
+        let id = frontmatter
+            .id
+            .clone()
+            .unwrap_or_else(|| file_path.to_string_lossy().to_string());
 
         records.push(MemoRecord {
             memid: id,
@@ -229,7 +257,11 @@ pub async fn memories_search(
 
     // Process trajectories (matched parts only)
     let mut sorted_trajectories: Vec<_> = trajectory_matches.into_iter().collect();
-    sorted_trajectories.sort_by(|a, b| b.1.best_score.partial_cmp(&a.1.best_score).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_trajectories.sort_by(|a, b| {
+        b.1.best_score
+            .partial_cmp(&a.1.best_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for (file_path, traj_match) in sorted_trajectories.into_iter().take(top_n_trajectories) {
         let text = match get_file_text_from_memory_or_disk(gcx.clone(), &file_path).await {
@@ -242,10 +274,12 @@ pub async fn memories_search(
             Err(_) => continue,
         };
 
-        let traj_id = file_path.file_stem()
+        let traj_id = file_path
+            .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        let traj_title = traj_json.get("title")
+        let traj_title = traj_json
+            .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Untitled")
             .to_string();
@@ -263,8 +297,12 @@ pub async fn memories_search(
 
             for idx in start_idx..=end_idx {
                 if let Some(msg) = messages.get(idx) {
-                    let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let content = msg.get("content")
+                    let role = msg
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let content = msg
+                        .get("content")
                         .map(|v| {
                             if let Some(s) = v.as_str() {
                                 s.chars().take(500).collect::<String>()
@@ -305,9 +343,16 @@ pub async fn memories_search(
         });
     }
 
-    tracing::info!("memories_search: found {} knowledge + {} trajectories",
-        records.iter().filter(|r| r.kind.as_deref() != Some("trajectory")).count(),
-        records.iter().filter(|r| r.kind.as_deref() == Some("trajectory")).count()
+    tracing::info!(
+        "memories_search: found {} knowledge + {} trajectories",
+        records
+            .iter()
+            .filter(|r| r.kind.as_deref() != Some("trajectory"))
+            .count(),
+        records
+            .iter()
+            .filter(|r| r.kind.as_deref() == Some("trajectory"))
+            .count()
     );
 
     if !records.is_empty() {
@@ -335,57 +380,74 @@ async fn memories_search_fallback(
         if !knowledge_dir.exists() {
             continue;
         }
-        for entry in WalkDir::new(knowledge_dir).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path.to_string_lossy().contains("/archive/") {
-            continue;
-        }
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "md" && ext != "mdx" {
-            continue;
-        }
+        for entry in WalkDir::new(knowledge_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.to_string_lossy().contains("/archive/") {
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "md" && ext != "mdx" {
+                continue;
+            }
 
-        let text = match get_file_text_from_memory_or_disk(gcx.clone(), &path.to_path_buf()).await {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
+            let text =
+                match get_file_text_from_memory_or_disk(gcx.clone(), &path.to_path_buf()).await {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
 
-        let text_lower = text.to_lowercase();
-        let score: usize = query_words.iter().filter(|w| text_lower.contains(*w)).count();
-        if score == 0 {
-            continue;
-        }
+            let text_lower = text.to_lowercase();
+            let score: usize = query_words
+                .iter()
+                .filter(|w| text_lower.contains(*w))
+                .count();
+            if score == 0 {
+                continue;
+            }
 
-        let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
-        if frontmatter.is_archived() {
-            continue;
-        }
+            let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
+            if frontmatter.is_archived() {
+                continue;
+            }
 
-        let id = frontmatter.id.clone().unwrap_or_else(|| path.to_string_lossy().to_string());
-        let content_preview: String = text[content_start..].chars().take(500).collect();
+            let id = frontmatter
+                .id
+                .clone()
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            let content_preview: String = text[content_start..].chars().take(500).collect();
 
-        // Normalize keyword score to 0-1 range (assuming max ~10 word matches)
-        let normalized_score = (score as f32 / 10.0).min(1.0);
+            // Normalize keyword score to 0-1 range (assuming max ~10 word matches)
+            let normalized_score = (score as f32 / 10.0).min(1.0);
 
-        scored_results.push((score, MemoRecord {
-            memid: id,
-            tags: frontmatter.tags,
-            content: content_preview,
-            file_path: Some(path.to_path_buf()),
-            line_range: None,
-            title: frontmatter.title,
-            created: frontmatter.created,
-            kind: frontmatter.kind,
-            score: Some(normalized_score),
-        }));
+            scored_results.push((
+                score,
+                MemoRecord {
+                    memid: id,
+                    tags: frontmatter.tags,
+                    content: content_preview,
+                    file_path: Some(path.to_path_buf()),
+                    line_range: None,
+                    title: frontmatter.title,
+                    created: frontmatter.created,
+                    kind: frontmatter.kind,
+                    score: Some(normalized_score),
+                },
+            ));
         }
     }
 
     scored_results.sort_by(|a, b| b.0.cmp(&a.0));
-    Ok(scored_results.into_iter().take(top_n).map(|(_, r)| r).collect())
+    Ok(scored_results
+        .into_iter()
+        .take(top_n)
+        .map(|(_, r)| r)
+        .collect())
 }
 
 pub async fn deprecate_document(
@@ -394,7 +456,8 @@ pub async fn deprecate_document(
     superseded_by: Option<&str>,
     reason: &str,
 ) -> Result<(), String> {
-    let text = get_file_text_from_memory_or_disk(gcx.clone(), doc_path).await
+    let text = get_file_text_from_memory_or_disk(gcx.clone(), doc_path)
+        .await
         .map_err(|e| format!("Failed to read document: {}", e))?;
 
     let (mut frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
@@ -407,45 +470,69 @@ pub async fn deprecate_document(
     }
 
     let deprecated_banner = format!("\n\n> ⚠️ **DEPRECATED**: {}\n", reason);
-    let new_content = format!("{}\n{}{}", frontmatter.to_yaml(), deprecated_banner, content);
+    let new_content = format!(
+        "{}\n{}{}",
+        frontmatter.to_yaml(),
+        deprecated_banner,
+        content
+    );
 
-    fs::write(doc_path, new_content).await.map_err(|e| format!("Failed to write: {}", e))?;
+    fs::write(doc_path, new_content)
+        .await
+        .map_err(|e| format!("Failed to write: {}", e))?;
 
     info!("Deprecated document: {}", doc_path.display());
 
     if let Some(vecdb) = gcx.read().await.vec_db.lock().await.as_ref() {
-        vecdb.vectorizer_enqueue_files(&vec![doc_path.to_string_lossy().to_string()], true).await;
+        vecdb
+            .vectorizer_enqueue_files(&vec![doc_path.to_string_lossy().to_string()], true)
+            .await;
     }
 
     Ok(())
 }
 
-pub async fn archive_document(gcx: Arc<ARwLock<GlobalContext>>, doc_path: &PathBuf) -> Result<PathBuf, String> {
+pub async fn archive_document(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    doc_path: &PathBuf,
+) -> Result<PathBuf, String> {
     let knowledge_dir = get_first_knowledge_dir(gcx.clone()).await?;
     let archive_dir = knowledge_dir.join("archive");
-    fs::create_dir_all(&archive_dir).await.map_err(|e| format!("Failed to create archive dir: {}", e))?;
+    fs::create_dir_all(&archive_dir)
+        .await
+        .map_err(|e| format!("Failed to create archive dir: {}", e))?;
 
     let filename = doc_path.file_name().ok_or("Invalid filename")?;
     let archive_path = archive_dir.join(filename);
 
-    fs::rename(doc_path, &archive_path).await.map_err(|e| format!("Failed to move to archive: {}", e))?;
+    fs::rename(doc_path, &archive_path)
+        .await
+        .map_err(|e| format!("Failed to move to archive: {}", e))?;
 
-    info!("Archived document: {} -> {}", doc_path.display(), archive_path.display());
+    info!(
+        "Archived document: {} -> {}",
+        doc_path.display(),
+        archive_path.display()
+    );
 
     Ok(archive_path)
 }
 
 fn extract_entities(content: &str) -> Vec<String> {
-    let backtick_re = Regex::new(r"`([a-zA-Z_][a-zA-Z0-9_:]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*)`").unwrap();
-    backtick_re.captures_iter(content)
+    let backtick_re =
+        Regex::new(r"`([a-zA-Z_][a-zA-Z0-9_:]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*)`").unwrap();
+    backtick_re
+        .captures_iter(content)
         .map(|c| c.get(1).unwrap().as_str().to_string())
         .filter(|e| e.len() >= 3 && e.len() <= 100)
         .collect()
 }
 
 fn extract_file_paths(content: &str) -> Vec<String> {
-    let path_re = Regex::new(r"(?:^|[\s`])((?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)").unwrap();
-    path_re.captures_iter(content)
+    let path_re =
+        Regex::new(r"(?:^|[\s`])((?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)").unwrap();
+    path_re
+        .captures_iter(content)
         .map(|c| c.get(1).unwrap().as_str().to_string())
         .collect()
 }
@@ -467,7 +554,8 @@ pub async fn memories_add_enriched(
     let entities = extract_entities(content);
     let detected_paths = extract_file_paths(content);
 
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0).await
+    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
         .map_err(|e| format!("Failed to load caps: {}", e.message))?;
     let light_model = if caps.defaults.chat_light_model.is_empty() {
         caps.defaults.chat_default_model.clone()
@@ -483,11 +571,20 @@ pub async fn memories_add_enriched(
         files.into_iter().take(30).collect()
     };
 
-    let candidate_docs: Vec<(String, String)> = kg.active_docs()
+    let candidate_docs: Vec<(String, String)> = kg
+        .active_docs()
         .take(20)
         .map(|d| {
-            let id = d.frontmatter.id.clone().unwrap_or_else(|| d.path.to_string_lossy().to_string());
-            let title = d.frontmatter.title.clone().unwrap_or_else(|| "Untitled".to_string());
+            let id = d
+                .frontmatter
+                .id
+                .clone()
+                .unwrap_or_else(|| d.path.to_string_lossy().to_string());
+            let title = d
+                .frontmatter
+                .title
+                .clone()
+                .unwrap_or_else(|| "Untitled".to_string());
             (id, title)
         })
         .collect();
@@ -499,44 +596,64 @@ pub async fn memories_add_enriched(
         &entities,
         &candidate_files,
         &candidate_docs,
-    ).await;
+    )
+    .await;
 
-    let (final_title, final_tags, final_filenames, final_kind, final_links, review_days) = match enrichment {
-        Ok(e) => {
-            let mut tags = params.base_tags.clone();
-            tags.extend(e.tags);
-            tags.sort();
-            tags.dedup();
+    let (final_title, final_tags, final_filenames, final_kind, final_links, review_days) =
+        match enrichment {
+            Ok(e) => {
+                let mut tags = params.base_tags.clone();
+                tags.extend(e.tags);
+                tags.sort();
+                tags.dedup();
 
-            let mut files = params.base_filenames.clone();
-            files.extend(e.filenames);
-            files.sort();
-            files.dedup();
+                let mut files = params.base_filenames.clone();
+                files.extend(e.filenames);
+                files.sort();
+                files.dedup();
 
-            let kind = e.kind.unwrap_or_else(|| params.base_kind.clone());
+                let kind = e.kind.unwrap_or_else(|| params.base_kind.clone());
 
-            (
-                e.title.or(params.base_title.clone()).or_else(|| content.lines().next().map(|l| l.trim_start_matches('#').trim().to_string())),
-                if tags.is_empty() { vec![params.base_kind.clone()] } else { tags },
-                files,
-                kind,
-                e.links,
-                e.review_after_days.unwrap_or(90),
-            )
-        }
-        Err(e) => {
-            warn!("Enrichment failed, using defaults: {}", e);
-            let tags = if params.base_tags.is_empty() { vec![params.base_kind.clone()] } else { params.base_tags };
-            (
-                params.base_title.or_else(|| content.lines().next().map(|l| l.trim_start_matches('#').trim().to_string())),
-                tags,
-                params.base_filenames,
-                params.base_kind,
-                vec![],
-                90,
-            )
-        }
-    };
+                (
+                    e.title.or(params.base_title.clone()).or_else(|| {
+                        content
+                            .lines()
+                            .next()
+                            .map(|l| l.trim_start_matches('#').trim().to_string())
+                    }),
+                    if tags.is_empty() {
+                        vec![params.base_kind.clone()]
+                    } else {
+                        tags
+                    },
+                    files,
+                    kind,
+                    e.links,
+                    e.review_after_days.unwrap_or(90),
+                )
+            }
+            Err(e) => {
+                warn!("Enrichment failed, using defaults: {}", e);
+                let tags = if params.base_tags.is_empty() {
+                    vec![params.base_kind.clone()]
+                } else {
+                    params.base_tags
+                };
+                (
+                    params.base_title.or_else(|| {
+                        content
+                            .lines()
+                            .next()
+                            .map(|l| l.trim_start_matches('#').trim().to_string())
+                    }),
+                    tags,
+                    params.base_filenames,
+                    params.base_kind,
+                    vec![],
+                    90,
+                )
+            }
+        };
 
     let now = Local::now();
     let frontmatter = KnowledgeFrontmatter {
@@ -551,18 +668,18 @@ pub async fn memories_add_enriched(
         status: Some("active".to_string()),
         superseded_by: None,
         deprecated_at: None,
-        review_after: Some((now + Duration::days(review_days)).format("%Y-%m-%d").to_string()),
+        review_after: Some(
+            (now + Duration::days(review_days))
+                .format("%Y-%m-%d")
+                .to_string(),
+        ),
     };
 
     let file_path = memories_add(gcx.clone(), &frontmatter, content).await?;
     let new_doc_id = frontmatter.id.clone().unwrap();
 
-    let deprecation_candidates = kg.get_deprecation_candidates(
-        &final_tags,
-        &final_filenames,
-        &entities,
-        Some(&new_doc_id),
-    );
+    let deprecation_candidates =
+        kg.get_deprecation_candidates(&final_tags, &final_filenames, &entities, Some(&new_doc_id));
 
     if !deprecation_candidates.is_empty() {
         let snippet: String = content.chars().take(500).collect();
@@ -575,7 +692,9 @@ pub async fn memories_add_enriched(
             &final_filenames,
             &snippet,
             &deprecation_candidates,
-        ).await {
+        )
+        .await
+        {
             Ok(result) => {
                 for decision in result.deprecate {
                     if decision.confidence >= 0.75 {
@@ -585,10 +704,15 @@ pub async fn memories_add_enriched(
                                 &doc.path,
                                 Some(&new_doc_id),
                                 &decision.reason,
-                            ).await {
+                            )
+                            .await
+                            {
                                 warn!("Failed to deprecate {}: {}", decision.target_id, e);
                             } else {
-                                info!("Deprecated {} (confidence: {:.2}): {}", decision.target_id, decision.confidence, decision.reason);
+                                info!(
+                                    "Deprecated {} (confidence: {:.2}): {}",
+                                    decision.target_id, decision.confidence, decision.reason
+                                );
                             }
                         }
                     }

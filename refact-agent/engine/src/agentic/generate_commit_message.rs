@@ -341,7 +341,9 @@ pub fn remove_fencing(message: &String) -> Vec<String> {
         if in_code_block {
             let part_lines: Vec<&str> = part.lines().collect();
             if !part_lines.is_empty() {
-                let start_idx = if part_lines[0].trim().split_whitespace().count() <= 1 && part_lines.len() > 1 {
+                let start_idx = if part_lines[0].trim().split_whitespace().count() <= 1
+                    && part_lines.len() > 1
+                {
                     1
                 } else {
                     0
@@ -383,7 +385,10 @@ mod tests {
     #[test]
     fn test_language_tag() {
         let input = "```rust\nfn main() {\n    println!(\"Hello\");\n}\n```".to_string();
-        assert_eq!(remove_fencing(&input), vec!["fn main() {\n    println!(\"Hello\");\n}".to_string()]);
+        assert_eq!(
+            remove_fencing(&input),
+            vec!["fn main() {\n    println!(\"Hello\");\n}".to_string()]
+        );
     }
 
     #[test]
@@ -395,7 +400,13 @@ mod tests {
     #[test]
     fn test_multiple_code_blocks() {
         let input = "First paragraph\n```\nFirst code\n```\nMiddle text\n```python\ndef hello():\n    print('world')\n```\nLast paragraph".to_string();
-        assert_eq!(remove_fencing(&input), vec!["First code".to_string(), "def hello():\n    print('world')".to_string()]);
+        assert_eq!(
+            remove_fencing(&input),
+            vec![
+                "First code".to_string(),
+                "def hello():\n    print('world')".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -447,16 +458,19 @@ pub async fn generate_commit_message_by_diff(
         Ok(caps) => Ok(caps.defaults.chat_default_model.clone()),
         Err(_) => Err("No caps available".to_string()),
     }?;
-    let ccx: Arc<AMutex<AtCommandsContext>> = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        N_CTX,
-        1,
-        false,
-        messages.clone(),
-        "".to_string(),
-        false,
-        model_id.clone(),
-    ).await));
+    let ccx: Arc<AMutex<AtCommandsContext>> = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            N_CTX,
+            1,
+            false,
+            messages.clone(),
+            "".to_string(),
+            false,
+            model_id.clone(),
+        )
+        .await,
+    ));
     let new_messages = subchat_single(
         ccx.clone(),
         &model_id,
@@ -473,8 +487,8 @@ pub async fn generate_commit_message_by_diff(
         None,
         None,
     )
-        .await
-        .map_err(|e| format!("Error: {}", e))?;
+    .await
+    .map_err(|e| format!("Error: {}", e))?;
 
     let commit_message = new_messages
         .into_iter()
@@ -501,7 +515,14 @@ pub async fn generate_commit_message_by_diff(
 pub async fn _generate_commit_message_for_projects(
     gcx: Arc<ARwLock<GlobalContext>>,
 ) -> Result<HashMap<PathBuf, String>, String> {
-    let project_folders = gcx.read().await.documents_state.workspace_folders.lock().unwrap().clone();
+    let project_folders = gcx
+        .read()
+        .await
+        .documents_state
+        .workspace_folders
+        .lock()
+        .unwrap()
+        .clone();
     let mut commit_messages = HashMap::new();
 
     for folder in project_folders {
@@ -528,12 +549,16 @@ pub async fn _generate_commit_message_for_projects(
             .map_err(|e| format!("Failed to execute command for folder {folder:?}: {e}"))?;
 
         if !output.status.success() {
-            warn!("Command failed for folder {folder:?}: {}", String::from_utf8_lossy(&output.stderr));
+            warn!(
+                "Command failed for folder {folder:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             continue;
         }
 
         let diff_output = String::from_utf8_lossy(&output.stdout).to_string();
-        let commit_message = generate_commit_message_by_diff(gcx.clone(), &diff_output, &None).await?;
+        let commit_message =
+            generate_commit_message_by_diff(gcx.clone(), &diff_output, &None).await?;
         commit_messages.insert(folder, commit_message);
     }
 

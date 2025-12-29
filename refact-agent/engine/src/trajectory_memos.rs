@@ -72,7 +72,11 @@ async fn process_abandoned_trajectories(gcx: Arc<ARwLock<GlobalContext>>) -> Res
             continue;
         }
 
-        for entry in WalkDir::new(&trajectories_dir).max_depth(1).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(&trajectories_dir)
+            .max_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if !path.is_file() || path.extension().map(|e| e != "json").unwrap_or(true) {
                 continue;
@@ -80,8 +84,12 @@ async fn process_abandoned_trajectories(gcx: Arc<ARwLock<GlobalContext>>) -> Res
 
             match process_single_trajectory(gcx.clone(), path.to_path_buf(), &threshold).await {
                 Ok(true) => info!("trajectory_memos: extracted memos from {}", path.display()),
-                Ok(false) => {},
-                Err(e) => warn!("trajectory_memos: failed to process {}: {}", path.display(), e),
+                Ok(false) => {}
+                Err(e) => warn!(
+                    "trajectory_memos: failed to process {}: {}",
+                    path.display(),
+                    e
+                ),
             }
         }
     }
@@ -97,11 +105,16 @@ async fn process_single_trajectory(
     let content = fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
     let mut trajectory: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
 
-    if trajectory.get("memo_extracted").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if trajectory
+        .get("memo_extracted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return Ok(false);
     }
 
-    let updated_at = trajectory.get("updated_at")
+    let updated_at = trajectory
+        .get("updated_at")
         .and_then(|v| v.as_str())
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
@@ -115,7 +128,8 @@ async fn process_single_trajectory(
         return Ok(false);
     }
 
-    let messages = trajectory.get("messages")
+    let messages = trajectory
+        .get("messages")
         .and_then(|v| v.as_array())
         .ok_or("No messages")?;
 
@@ -123,17 +137,32 @@ async fn process_single_trajectory(
         return Ok(false);
     }
 
-    let trajectory_id = trajectory.get("id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-    let current_title = trajectory.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+    let trajectory_id = trajectory
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let current_title = trajectory
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Untitled")
+        .to_string();
 
-    let is_title_generated = trajectory.get("extra")
+    let is_title_generated = trajectory
+        .get("extra")
         .and_then(|e| e.get("isTitleGenerated"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
     let chat_messages = build_chat_messages(messages);
 
-    let extraction = extract_memos_and_meta(gcx.clone(), chat_messages, &current_title, is_title_generated).await?;
+    let extraction = extract_memos_and_meta(
+        gcx.clone(),
+        chat_messages,
+        &current_title,
+        is_title_generated,
+    )
+    .await?;
 
     let traj_obj = trajectory.as_object_mut().ok_or("Invalid trajectory")?;
 
@@ -141,11 +170,16 @@ async fn process_single_trajectory(
         traj_obj.insert("overview".to_string(), Value::String(meta.overview.clone()));
         if is_title_generated && !meta.title.is_empty() {
             traj_obj.insert("title".to_string(), Value::String(meta.title.clone()));
-            info!("trajectory_memos: updated title '{}' -> '{}' for {}", current_title, meta.title, trajectory_id);
+            info!(
+                "trajectory_memos: updated title '{}' -> '{}' for {}",
+                current_title, meta.title, trajectory_id
+            );
         }
     }
 
-    let memo_title = extraction.meta.as_ref()
+    let memo_title = extraction
+        .meta
+        .as_ref()
         .filter(|_| is_title_generated)
         .map(|m| m.title.clone())
         .unwrap_or(current_title);
@@ -161,8 +195,7 @@ async fn process_single_trajectory(
 
         let content_with_source = format!(
             "{}\n\n---\nSource: trajectory `{}`",
-            memo.content,
-            trajectory_id
+            memo.content, trajectory_id
         );
 
         if let Err(e) = memories_add(gcx.clone(), &frontmatter, &content_with_source).await {
@@ -174,14 +207,19 @@ async fn process_single_trajectory(
 
     let tmp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(&trajectory).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, &json).await.map_err(|e| e.to_string())?;
-    fs::rename(&tmp_path, &path).await.map_err(|e| e.to_string())?;
+    fs::write(&tmp_path, &json)
+        .await
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, &path)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(true)
 }
 
 fn build_chat_messages(messages: &[Value]) -> Vec<ChatMessage> {
-    messages.iter()
+    messages
+        .iter()
         .filter_map(|msg| {
             let role = msg.get("role").and_then(|v| v.as_str())?;
             if role == "context_file" || role == "cd_instruction" {
@@ -233,7 +271,8 @@ async fn extract_memos_and_meta(
     current_title: &str,
     is_title_generated: bool,
 ) -> Result<ExtractionResult, String> {
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0).await
+    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
         .map_err(|e| e.message)?;
 
     let model_id = if caps.defaults.chat_light_model.is_empty() {
@@ -242,7 +281,9 @@ async fn extract_memos_and_meta(
         caps.defaults.chat_light_model.clone()
     };
 
-    let n_ctx = caps.chat_models.get(&model_id)
+    let n_ctx = caps
+        .chat_models
+        .get(&model_id)
         .map(|m| m.base.n_ctx)
         .unwrap_or(4096);
 
@@ -258,22 +299,41 @@ async fn extract_memos_and_meta(
         ..Default::default()
     });
 
-    let ccx = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        n_ctx,
-        1,
-        false,
-        messages.clone(),
-        "".to_string(),
-        false,
-        model_id.clone(),
-    ).await));
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            n_ctx,
+            1,
+            false,
+            messages.clone(),
+            "".to_string(),
+            false,
+            model_id.clone(),
+        )
+        .await,
+    ));
 
     let response = subchat_single(
-        ccx, &model_id, messages, None, None, false, Some(0.0), None, 1, None, false, None, None, None,
-    ).await.map_err(|e| e.to_string())?;
+        ccx,
+        &model_id,
+        messages,
+        None,
+        None,
+        false,
+        Some(0.0),
+        None,
+        1,
+        None,
+        false,
+        None,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
-    let response_text = response.into_iter()
+    let response_text = response
+        .into_iter()
         .flatten()
         .last()
         .and_then(|m| match m.content {

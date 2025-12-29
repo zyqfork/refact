@@ -7,14 +7,21 @@ use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use crate::subchat::subchat_single;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult};
+use crate::tools::tools_description::{
+    Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
+};
 use crate::integrations::integr_abstract::IntegrationConfirmation;
-use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile, PostprocessSettings};
+use crate::call_validation::{
+    ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile,
+    PostprocessSettings,
+};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_or_a_good_error};
 use crate::caps::resolve_chat_model;
 use crate::custom_error::ScratchError;
-use crate::files_correction::{canonicalize_normalized_path, get_project_dirs, preprocess_path_for_normalization};
+use crate::files_correction::{
+    canonicalize_normalized_path, get_project_dirs, preprocess_path_for_normalization,
+};
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::try_load_caps_quickly_if_not_present;
 use crate::postprocessing::pp_context_files::postprocess_context_files;
@@ -25,13 +32,11 @@ pub struct ToolStrategicPlanning {
     pub config_path: String,
 }
 
-
 static TOKENS_EXTRA_BUDGET_PERCENT: f32 = 0.06;
 
 static SOLVER_PROMPT: &str = r#"Your task is to identify and solve the problem by the given conversation and context files.
 The solution must be robust and complete and adressing all corner cases.
 Also make a couple of alternative ways to solve the problem, if the initial solution doesn't work."#;
-
 
 static GUARDRAILS_PROMPT: &str = r#"💿 Now confirm the plan with the user"#;
 
@@ -86,42 +91,52 @@ fn spawn_entertainment_task(
 async fn _make_prompt(
     ccx: Arc<AMutex<AtCommandsContext>>,
     subchat_params: &SubchatParameters,
-    problem_statement: &String, 
+    problem_statement: &String,
     important_paths: &Vec<PathBuf>,
     previous_messages: &Vec<ChatMessage>,
 ) -> Result<String, String> {
     let gcx = ccx.lock().await.global_context.clone();
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0).await.map_err(|x| x.message)?;
+    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
+        .map_err(|x| x.message)?;
     let model_rec = resolve_chat_model(caps, &subchat_params.subchat_model)?;
-    let tokenizer = crate::tokens::cached_tokenizer(gcx.clone(), &model_rec.base).await
-        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e)).map_err(|x| x.message)?;
-    let tokens_extra_budget = (subchat_params.subchat_n_ctx as f32 * TOKENS_EXTRA_BUDGET_PERCENT) as usize;
-    let mut tokens_budget: i64 = (subchat_params.subchat_n_ctx - subchat_params.subchat_max_new_tokens - subchat_params.subchat_tokens_for_rag - tokens_extra_budget) as i64;
+    let tokenizer = crate::tokens::cached_tokenizer(gcx.clone(), &model_rec.base)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(|x| x.message)?;
+    let tokens_extra_budget =
+        (subchat_params.subchat_n_ctx as f32 * TOKENS_EXTRA_BUDGET_PERCENT) as usize;
+    let mut tokens_budget: i64 = (subchat_params.subchat_n_ctx
+        - subchat_params.subchat_max_new_tokens
+        - subchat_params.subchat_tokens_for_rag
+        - tokens_extra_budget) as i64;
     let final_message = problem_statement.to_string();
     tokens_budget -= count_text_tokens_with_fallback(tokenizer.clone(), &final_message) as i64;
     let mut context = "".to_string();
     let mut context_files = vec![];
     for p in important_paths.iter() {
-        context_files.push(match get_file_text_from_memory_or_disk(gcx.clone(), &p).await {
-            Ok(text) => {
-                let total_lines = text.lines().count();
-                tracing::info!("adding file '{:?}' to the context", p);
-                ContextFile {
-                    file_name: p.to_string_lossy().to_string(),
-                    file_content: "".to_string(),
-                    line1: 1,
-                    line2: total_lines.max(1),
-                    symbols: vec![],
-                    gradient_type: 4,
-                    usefulness: 100.0,
-                    skip_pp: false,
+        context_files.push(
+            match get_file_text_from_memory_or_disk(gcx.clone(), &p).await {
+                Ok(text) => {
+                    let total_lines = text.lines().count();
+                    tracing::info!("adding file '{:?}' to the context", p);
+                    ContextFile {
+                        file_name: p.to_string_lossy().to_string(),
+                        file_content: "".to_string(),
+                        line1: 1,
+                        line2: total_lines.max(1),
+                        symbols: vec![],
+                        gradient_type: 4,
+                        usefulness: 100.0,
+                        skip_pp: false,
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!("failed to read file '{:?}'. Skipping...", p);
+                    continue;
                 }
             },
-            Err(_) => {
-                tracing::warn!("failed to read file '{:?}'. Skipping...", p);
-                continue;
-            }
-        })
+        )
     }
     for message in previous_messages.iter().rev() {
         let message_row = match message.role.as_str() {
@@ -139,11 +154,15 @@ async fn _make_prompt(
                 format!("📎:\n{}\n\n", &message.content.content_text_only())
             }
             _ => {
-                tracing::info!("skip adding message to the context: {}", crate::nicer_logs::first_n_chars(&message.content.content_text_only(), 40));
+                tracing::info!(
+                    "skip adding message to the context: {}",
+                    crate::nicer_logs::first_n_chars(&message.content.content_text_only(), 40)
+                );
                 continue;
             }
         };
-        let left_tokens = tokens_budget - count_text_tokens_with_fallback(tokenizer.clone(), &message_row) as i64;
+        let left_tokens =
+            tokens_budget - count_text_tokens_with_fallback(tokenizer.clone(), &message_row) as i64;
         if left_tokens < 0 {
             // we do not end here, maybe there are smaller useful messages at the beginning
             continue;
@@ -163,17 +182,20 @@ async fn _make_prompt(
             subchat_params.subchat_tokens_for_rag + tokens_budget.max(0) as usize,
             false,
             &pp_settings,
-        ).await;
+        )
+        .await;
         for context_file in pp_files {
-            files_context.push_str(
-                &format!("📎 {}:{}-{}\n```\n{}```\n\n",
-                         context_file.file_name,
-                         context_file.line1,
-                         context_file.line2,
-                         context_file.file_content)
-            );
+            files_context.push_str(&format!(
+                "📎 {}:{}-{}\n```\n{}```\n\n",
+                context_file.file_name,
+                context_file.line1,
+                context_file.line2,
+                context_file.file_content
+            ));
         }
-        Ok(format!("{final_message}\n\n# Conversation\n{context}\n\n# Files context\n{files_context}"))
+        Ok(format!(
+            "{final_message}\n\n# Conversation\n{context}\n\n# Files context\n{files_context}"
+        ))
     } else {
         Ok(format!("{final_message}\n\n# Conversation\n{context}"))
     }
@@ -204,7 +226,8 @@ async fn _execute_subchat_iteration(
         Some(usage_collector),
         Some(tool_call_id.clone()),
         Some(format!("{log_prefix}-strategic-planning-{log_suffix}")),
-    ).await?;
+    )
+    .await?;
 
     let session = choices.into_iter().next().unwrap();
     let reply = session.last().unwrap().clone();
@@ -213,11 +236,12 @@ async fn _execute_subchat_iteration(
     Ok((session, reply))
 }
 
-
 #[async_trait]
 impl Tool for ToolStrategicPlanning {
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
             name: "strategic_planning".to_string(),
@@ -239,12 +263,12 @@ impl Tool for ToolStrategicPlanning {
             parameters_required: vec!["important_paths".to_string()],
         }
     }
-    
+
     async fn tool_execute(
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
         tool_call_id: &String,
-        args: &HashMap<String, Value>
+        args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
         let important_paths = match args.get("important_paths") {
@@ -252,23 +276,40 @@ impl Tool for ToolStrategicPlanning {
                 let mut paths = vec![];
                 for s in s.split(",") {
                     let s_raw = s.trim().to_string();
-                    let candidates_file = file_repair_candidates(gcx.clone(), &s_raw, 3, false).await;
-                    paths.push(match return_one_candidate_or_a_good_error(gcx.clone(), &s_raw, &candidates_file, &get_project_dirs(gcx.clone()).await, false).await {
-                        Ok(f) => canonicalize_normalized_path(PathBuf::from(preprocess_path_for_normalization(f.trim().to_string()))),
-                        Err(_) => {
-                            tracing::info!("cannot find a good file candidate for `{s_raw}`");
-                            continue;
-                        }
-                    })
+                    let candidates_file =
+                        file_repair_candidates(gcx.clone(), &s_raw, 3, false).await;
+                    paths.push(
+                        match return_one_candidate_or_a_good_error(
+                            gcx.clone(),
+                            &s_raw,
+                            &candidates_file,
+                            &get_project_dirs(gcx.clone()).await,
+                            false,
+                        )
+                        .await
+                        {
+                            Ok(f) => canonicalize_normalized_path(PathBuf::from(
+                                preprocess_path_for_normalization(f.trim().to_string()),
+                            )),
+                            Err(_) => {
+                                tracing::info!("cannot find a good file candidate for `{s_raw}`");
+                                continue;
+                            }
+                        },
+                    )
                 }
                 paths
-            },
+            }
             Some(v) => return Err(format!("argument `paths` is not a string: {:?}", v)),
-            None => return Err("Missing argument `paths`".to_string())
+            None => return Err("Missing argument `paths`".to_string()),
         };
-        let mut usage_collector = ChatUsage { ..Default::default() };
+        let mut usage_collector = ChatUsage {
+            ..Default::default()
+        };
         let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let subchat_params: SubchatParameters = crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "strategic_planning").await?;
+        let subchat_params: SubchatParameters =
+            crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "strategic_planning")
+                .await?;
         let external_messages = {
             let ccx_lock = ccx.lock().await;
             ccx_lock.messages.clone()
@@ -284,7 +325,8 @@ impl Tool for ToolStrategicPlanning {
                 ccx_lock.chat_id.clone(),
                 ccx_lock.should_execute_remotely,
                 ccx_lock.current_model.clone(),
-            ).await;
+            )
+            .await;
             t.subchat_tx = ccx_lock.subchat_tx.clone();
             t.subchat_rx = ccx_lock.subchat_rx.clone();
             let tx = ccx_lock.subchat_tx.clone();
@@ -300,8 +342,9 @@ impl Tool for ToolStrategicPlanning {
             &subchat_params,
             &SOLVER_PROMPT.to_string(),
             &important_paths,
-            &external_messages
-        ).await?;
+            &external_messages,
+        )
+        .await?;
         let history: Vec<ChatMessage> = vec![ChatMessage::new("user".to_string(), prompt)];
         tracing::info!("FIRST ITERATION: Get the initial solution");
         let result = _execute_subchat_iteration(
@@ -313,15 +356,23 @@ impl Tool for ToolStrategicPlanning {
             tool_call_id,
             "get-initial-solution",
             &log_prefix,
-        ).await;
+        )
+        .await;
 
         cancel_token.cancel();
 
         let (_, initial_solution) = result?;
-        let solution_content = format!("# Solution\n{}", initial_solution.content.content_text_only());
-        tracing::info!("strategic planning response (combined):\n{}", solution_content);
+        let solution_content = format!(
+            "# Solution\n{}",
+            initial_solution.content.content_text_only()
+        );
+        tracing::info!(
+            "strategic planning response (combined):\n{}",
+            solution_content
+        );
 
-        let filenames: Vec<String> = important_paths.iter()
+        let filenames: Vec<String> = important_paths
+            .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         let enrichment_params = EnrichmentParams {
@@ -330,16 +381,26 @@ impl Tool for ToolStrategicPlanning {
             base_kind: "decision".to_string(),
             base_title: Some("Strategic Plan".to_string()),
         };
-        let memory_note = match memories_add_enriched(ccx.clone(), &solution_content, enrichment_params).await {
-            Ok(path) => {
-                tracing::info!("Created enriched memory from strategic planning: {:?}", path);
-                format!("\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`", path.display())
-            },
-            Err(e) => {
-                tracing::warn!("Failed to create enriched memory from strategic planning: {}", e);
-                String::new()
-            }
-        };
+        let memory_note =
+            match memories_add_enriched(ccx.clone(), &solution_content, enrichment_params).await {
+                Ok(path) => {
+                    tracing::info!(
+                        "Created enriched memory from strategic planning: {:?}",
+                        path
+                    );
+                    format!(
+                        "\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`",
+                        path.display()
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to create enriched memory from strategic planning: {}",
+                        e
+                    );
+                    String::new()
+                }
+            };
         let final_message = format!("{}{}", solution_content, memory_note);
 
         let mut results = vec![];
@@ -349,9 +410,11 @@ impl Tool for ToolStrategicPlanning {
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             usage: Some(usage_collector),
-            output_filter: Some(crate::postprocessing::pp_command_output::OutputFilter::no_limits()),
+            output_filter: Some(
+                crate::postprocessing::pp_command_output::OutputFilter::no_limits(),
+            ),
             ..Default::default()
-        }));  
+        }));
         results.push(ContextEnum::ChatMessage(ChatMessage {
             role: "cd_instruction".to_string(),
             content: ChatContent::SimpleText(GUARDRAILS_PROMPT.to_string()),
@@ -375,7 +438,8 @@ impl Tool for ToolStrategicPlanning {
             _ => return Ok("".to_string()),
         };
         let truncated_paths = if paths.len() > 100 {
-            let end = paths.char_indices()
+            let end = paths
+                .char_indices()
                 .take_while(|(i, _)| *i < 100)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
@@ -399,9 +463,10 @@ impl Tool for ToolStrategicPlanning {
         ccx: Arc<AMutex<AtCommandsContext>>,
         args: &HashMap<String, Value>,
     ) -> Result<MatchConfirmDeny, String> {
-        let command_to_match = self.command_to_match_against_confirm_deny(ccx.clone(), &args).await.map_err(|e| {
-            format!("Error getting tool command to match: {}", e)
-        })?;
+        let command_to_match = self
+            .command_to_match_against_confirm_deny(ccx.clone(), &args)
+            .await
+            .map_err(|e| format!("Error getting tool command to match: {}", e))?;
         Ok(MatchConfirmDeny {
             result: MatchConfirmDenyResult::CONFIRMATION,
             command: command_to_match,

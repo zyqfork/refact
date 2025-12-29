@@ -8,7 +8,10 @@ use crate::global_context::try_load_caps_quickly_if_not_present;
 use crate::yaml_configs::customization_loader::load_customization;
 use crate::caps::{is_cloud_model, resolve_chat_model, resolve_model};
 
-pub async fn unwrap_subchat_params(ccx: Arc<AMutex<AtCommandsContext>>, tool_name: &str) -> Result<SubchatParameters, String> {
+pub async fn unwrap_subchat_params(
+    ccx: Arc<AMutex<AtCommandsContext>>,
+    tool_name: &str,
+) -> Result<SubchatParameters, String> {
     let (gcx, params_mb) = {
         let ccx_locked = ccx.lock().await;
         let gcx = ccx_locked.global_context.clone();
@@ -29,13 +32,19 @@ pub async fn unwrap_subchat_params(ccx: Arc<AMutex<AtCommandsContext>>, tool_nam
         }
     };
 
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0).await.map_err_to_string()?;
+    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
+        .map_err_to_string()?;
 
     if !params.subchat_model.is_empty() {
         match resolve_chat_model(caps.clone(), &params.subchat_model) {
             Ok(_) => return Ok(params),
             Err(e) => {
-                tracing::warn!("Specified subchat_model {} is not available: {}", params.subchat_model, e);
+                tracing::warn!(
+                    "Specified subchat_model {} is not available: {}",
+                    params.subchat_model,
+                    e
+                );
             }
         }
     }
@@ -49,16 +58,22 @@ pub async fn unwrap_subchat_params(ccx: Arc<AMutex<AtCommandsContext>>, tool_nam
 
     params.subchat_model = match resolve_model(&caps.chat_models, model_to_resolve) {
         Ok(model_rec) => {
-            if !is_cloud_model(&current_model) && is_cloud_model(&model_rec.base.id)
-                && params.subchat_model_type != ChatModelType::Light {
+            if !is_cloud_model(&current_model)
+                && is_cloud_model(&model_rec.base.id)
+                && params.subchat_model_type != ChatModelType::Light
+            {
                 current_model.to_string()
             } else {
                 model_rec.base.id.clone()
             }
-        },
+        }
         Err(e) => {
-            tracing::warn!("{:?} model is not available: {}. Using {} model as a fallback.",
-                params.subchat_model_type, e, current_model);
+            tracing::warn!(
+                "{:?} model is not available: {}. Using {} model as a fallback.",
+                params.subchat_model_type,
+                e,
+                current_model
+            );
             current_model
         }
     };

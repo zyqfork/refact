@@ -6,7 +6,6 @@ use crate::scratchpads::multimodality::MultimodalElement;
 use crate::tokens::count_text_tokens_with_fallback;
 use crate::postprocessing::pp_command_output::output_mini_postprocessing;
 
-
 fn limit_text_by_tokens(
     tokenizer: Option<Arc<Tokenizer>>,
     text: &str,
@@ -44,23 +43,29 @@ pub async fn postprocess_plain_text(
 
     for mut msg in plain_text_messages.into_iter() {
         if let Some(ref filter) = msg.output_filter {
-            if filter.limit_lines < usize::MAX || filter.limit_chars < usize::MAX || !filter.grep.is_empty() || !filter.remove_from_output.is_empty() {
+            if filter.limit_lines < usize::MAX
+                || filter.limit_chars < usize::MAX
+                || !filter.grep.is_empty()
+                || !filter.remove_from_output.is_empty()
+            {
                 msg.content = match msg.content {
                     ChatContent::SimpleText(text) => {
                         ChatContent::SimpleText(output_mini_postprocessing(filter, &text))
-                    },
-                    ChatContent::Multimodal(elements) => {
-                        let filtered_elements = elements.into_iter().map(|mut el| {
-                            if el.is_text() {
-                                el.m_content = output_mini_postprocessing(filter, &el.m_content);
-                            }
-                            el
-                        }).collect();
-                        ChatContent::Multimodal(filtered_elements)
-                    },
-                    ChatContent::ContextFiles(files) => {
-                        ChatContent::ContextFiles(files)
                     }
+                    ChatContent::Multimodal(elements) => {
+                        let filtered_elements = elements
+                            .into_iter()
+                            .map(|mut el| {
+                                if el.is_text() {
+                                    el.m_content =
+                                        output_mini_postprocessing(filter, &el.m_content);
+                                }
+                                el
+                            })
+                            .collect();
+                        ChatContent::Multimodal(filtered_elements)
+                    }
+                    ChatContent::ContextFiles(files) => ChatContent::ContextFiles(files),
                 };
             }
         }
@@ -74,17 +79,19 @@ pub async fn postprocess_plain_text(
         };
 
         if effective_limit < 50 {
-            msg.content = ChatContent::SimpleText("... truncated (token limit reached)".to_string());
+            msg.content =
+                ChatContent::SimpleText("... truncated (token limit reached)".to_string());
             new_messages.push(msg);
             continue;
         }
 
         let tokens_used = match msg.content {
             ChatContent::SimpleText(ref text) => {
-                let (new_content, used) = limit_text_by_tokens(tokenizer.clone(), text, effective_limit);
+                let (new_content, used) =
+                    limit_text_by_tokens(tokenizer.clone(), text, effective_limit);
                 msg.content = ChatContent::SimpleText(new_content);
                 used
-            },
+            }
             ChatContent::Multimodal(ref elements) => {
                 let mut new_content = vec![];
                 let mut used_in_msg = 0;
@@ -92,7 +99,8 @@ pub async fn postprocess_plain_text(
                 for element in elements {
                     if element.is_text() {
                         let remaining = effective_limit.saturating_sub(used_in_msg);
-                        let (new_text, used) = limit_text_by_tokens(tokenizer.clone(), &element.m_content, remaining);
+                        let (new_text, used) =
+                            limit_text_by_tokens(tokenizer.clone(), &element.m_content, remaining);
                         used_in_msg += used;
                         new_content.push(MultimodalElement {
                             m_type: element.m_type.clone(),
@@ -113,10 +121,8 @@ pub async fn postprocess_plain_text(
                 }
                 msg.content = ChatContent::Multimodal(new_content);
                 used_in_msg
-            },
-            ChatContent::ContextFiles(_) => {
-                msg.content.size_estimate(tokenizer.clone(), style)
             }
+            ChatContent::ContextFiles(_) => msg.content.size_estimate(tokenizer.clone(), style),
         };
 
         remaining_budget = remaining_budget.saturating_sub(tokens_used);

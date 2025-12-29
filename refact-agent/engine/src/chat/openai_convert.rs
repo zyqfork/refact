@@ -7,7 +7,11 @@ use crate::call_validation::{ChatContent, ChatMessage, ContextFile, DiffChunk};
 // When going through litellm proxy, litellm handles the conversion to Anthropic native format.
 // Tool results use role="tool" with tool_call_id (OpenAI format), not tool_result blocks.
 // Thinking blocks are preserved in assistant messages' content arrays for Anthropic models.
-pub fn convert_messages_to_openai_format(mut messages: Vec<ChatMessage>, style: &Option<String>, model_id: &str) -> Vec<Value> {
+pub fn convert_messages_to_openai_format(
+    mut messages: Vec<ChatMessage>,
+    style: &Option<String>,
+    model_id: &str,
+) -> Vec<Value> {
     if let Some(last_asst_idx) = messages.iter().rposition(|m| m.role == "assistant") {
         let has_only_thinking = messages[last_asst_idx]
             .content
@@ -45,12 +49,22 @@ pub fn convert_messages_to_openai_format(mut messages: Vec<ChatMessage>, style: 
             // Litellm will convert to Anthropic native format if needed.
             match &msg.content {
                 ChatContent::Multimodal(multimodal_content) => {
-                    let texts = multimodal_content.iter().filter(|x|x.is_text()).collect::<Vec<_>>();
-                    let images = multimodal_content.iter().filter(|x|x.is_image()).collect::<Vec<_>>();
+                    let texts = multimodal_content
+                        .iter()
+                        .filter(|x| x.is_text())
+                        .collect::<Vec<_>>();
+                    let images = multimodal_content
+                        .iter()
+                        .filter(|x| x.is_image())
+                        .collect::<Vec<_>>();
                     let text = if texts.is_empty() {
                         "attached images below".to_string()
                     } else {
-                        texts.iter().map(|x|x.m_content.clone()).collect::<Vec<_>>().join("\n")
+                        texts
+                            .iter()
+                            .map(|x| x.m_content.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     };
                     let mut msg_cloned = msg.clone();
                     msg_cloned.content = ChatContent::SimpleText(text);
@@ -63,40 +77,39 @@ pub fn convert_messages_to_openai_format(mut messages: Vec<ChatMessage>, style: 
                         };
                         delay_images.push(msg_img.into_value(&style, model_id));
                     }
-                },
+                }
                 ChatContent::SimpleText(_) => {
                     results.push(msg.into_value(&style, model_id));
-                },
+                }
                 ChatContent::ContextFiles(_) => {
                     // Context files as tool results - pass through
                     results.push(msg.into_value(&style, model_id));
                 }
             }
-
         } else if msg.role == "assistant" || msg.role == "system" {
             flush_delayed_images(&mut results, &mut delay_images);
             results.push(msg.into_value(&style, model_id));
-
         } else if msg.role == "user" {
             flush_delayed_images(&mut results, &mut delay_images);
             results.push(msg.into_value(&style, model_id));
-
         } else if msg.role == "diff" {
             // Always use OpenAI format for diff results (as tool role).
             // Litellm will convert to Anthropic native format if needed.
-            let extra_message = match serde_json::from_str::<Vec<DiffChunk>>(&msg.content.content_text_only()) {
-                Ok(chunks) => {
-                    if chunks.is_empty() {
-                        "Nothing has changed.".to_string()
-                    } else {
-                        chunks.iter()
-                            .filter(|x| !x.application_details.is_empty())
-                            .map(|x| x.application_details.clone())
-                            .join("\n")
+            let extra_message =
+                match serde_json::from_str::<Vec<DiffChunk>>(&msg.content.content_text_only()) {
+                    Ok(chunks) => {
+                        if chunks.is_empty() {
+                            "Nothing has changed.".to_string()
+                        } else {
+                            chunks
+                                .iter()
+                                .filter(|x| !x.application_details.is_empty())
+                                .map(|x| x.application_details.clone())
+                                .join("\n")
+                        }
                     }
-                },
-                Err(_) => "".to_string()
-            };
+                    Err(_) => "".to_string(),
+                };
             let content_text = format!("The operation has succeeded.\n{extra_message}");
             let tool_msg = ChatMessage {
                 role: "tool".to_string(),
@@ -106,14 +119,12 @@ pub fn convert_messages_to_openai_format(mut messages: Vec<ChatMessage>, style: 
                 ..Default::default()
             };
             results.push(tool_msg.into_value(&style, model_id));
-
         } else if msg.role == "plain_text" || msg.role == "cd_instruction" {
             flush_delayed_images(&mut results, &mut delay_images);
-            results.push(ChatMessage::new(
-                "user".to_string(),
-                msg.content.content_text_only(),
-            ).into_value(&style, model_id));
-
+            results.push(
+                ChatMessage::new("user".to_string(), msg.content.content_text_only())
+                    .into_value(&style, model_id),
+            );
         } else if msg.role == "context_file" {
             flush_delayed_images(&mut results, &mut delay_images);
             // Handle both new structured format and legacy JSON string format
@@ -128,21 +139,26 @@ pub fn convert_messages_to_openai_format(mut messages: Vec<ChatMessage>, style: 
                             continue;
                         }
                     }
-                },
+                }
                 ChatContent::Multimodal(_) => {
                     error!("unexpected multimodal content for context_file role");
                     continue;
                 }
             };
             for context_file in context_files {
-                results.push(ChatMessage::new(
-                    "user".to_string(),
-                    format!("{}:{}-{}\n```\n{}```",
+                results.push(
+                    ChatMessage::new(
+                        "user".to_string(),
+                        format!(
+                            "{}:{}-{}\n```\n{}```",
                             context_file.file_name,
                             context_file.line1,
                             context_file.line2,
-                            context_file.file_content),
-                ).into_value(&style, model_id));
+                            context_file.file_content
+                        ),
+                    )
+                    .into_value(&style, model_id),
+                );
             }
         } else {
             warn!("unknown role: {}", msg.role);
@@ -152,7 +168,6 @@ pub fn convert_messages_to_openai_format(mut messages: Vec<ChatMessage>, style: 
 
     results
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -176,7 +191,8 @@ mod tests {
                 role: "tool".to_string(),
                 content: ChatContent::Multimodal(vec![
                     MultimodalElement::new("text".to_string(), "text".to_string()).unwrap(),
-                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string()).unwrap(),
+                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string())
+                        .unwrap(),
                 ]),
                 ..Default::default()
             },
@@ -187,7 +203,8 @@ mod tests {
                 role: "tool".to_string(),
                 content: ChatContent::Multimodal(vec![
                     MultimodalElement::new("text".to_string(), "text".to_string()).unwrap(),
-                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string()).unwrap(),
+                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string())
+                        .unwrap(),
                 ]),
                 ..Default::default()
             },
@@ -207,12 +224,14 @@ mod tests {
             json!({"role": "user", "content": "IMAGE_HERE"}),
         ];
 
-        let roles_out_expected: Vec<_> = expected_output.iter()
+        let roles_out_expected: Vec<_> = expected_output
+            .iter()
             .map(|x| x.get("role").unwrap().as_str().unwrap().to_string())
             .collect();
 
         let output = convert_messages_to_openai_format(messages, &style(), "Refact/gpt-4o");
-        let roles_out: Vec<_> = output.iter()
+        let roles_out: Vec<_> = output
+            .iter()
             .map(|x| x.get("role").unwrap().as_str().unwrap().to_string())
             .collect();
 
@@ -226,7 +245,9 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: ChatContent::SimpleText("".to_string()),
-                thinking_blocks: Some(vec![json!({"type": "thinking", "thinking": "deep thought"})]),
+                thinking_blocks: Some(vec![
+                    json!({"type": "thinking", "thinking": "deep thought"}),
+                ]),
                 ..Default::default()
             },
         ];
@@ -258,8 +279,15 @@ mod tests {
         ];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         let content = output[1].get("content");
-        assert!(content.is_none() || content.unwrap().as_str().map(|s| s.is_empty()).unwrap_or(true)
-            || content.unwrap().is_array());
+        assert!(
+            content.is_none()
+                || content
+                    .unwrap()
+                    .as_str()
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+                || content.unwrap().is_array()
+        );
     }
 
     #[test]
@@ -275,7 +303,10 @@ mod tests {
         ];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         let content = output[1].get("content").unwrap();
-        assert!(!content.as_str().unwrap_or("").contains("Previous reasoning"));
+        assert!(!content
+            .as_str()
+            .unwrap_or("")
+            .contains("Previous reasoning"));
     }
 
     #[test]
@@ -290,16 +321,15 @@ mod tests {
             file_name_rename: None,
             is_file: true,
             application_details: "Applied successfully".into(),
-        }]).unwrap();
+        }])
+        .unwrap();
 
-        let messages = vec![
-            ChatMessage {
-                role: "diff".to_string(),
-                content: ChatContent::SimpleText(diff_content),
-                tool_call_id: "tc1".into(),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "diff".to_string(),
+            content: ChatContent::SimpleText(diff_content),
+            tool_call_id: "tc1".into(),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].get("role").unwrap(), "tool");
@@ -310,14 +340,12 @@ mod tests {
 
     #[test]
     fn test_diff_role_empty_chunks() {
-        let messages = vec![
-            ChatMessage {
-                role: "diff".to_string(),
-                content: ChatContent::SimpleText("[]".into()),
-                tool_call_id: "tc1".into(),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "diff".to_string(),
+            content: ChatContent::SimpleText("[]".into()),
+            tool_call_id: "tc1".into(),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         let content = output[0].get("content").unwrap().as_str().unwrap();
         assert!(content.contains("Nothing has changed"));
@@ -325,14 +353,12 @@ mod tests {
 
     #[test]
     fn test_diff_role_invalid_json() {
-        let messages = vec![
-            ChatMessage {
-                role: "diff".to_string(),
-                content: ChatContent::SimpleText("not json".into()),
-                tool_call_id: "tc1".into(),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "diff".to_string(),
+            content: ChatContent::SimpleText("not json".into()),
+            tool_call_id: "tc1".into(),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].get("role").unwrap(), "tool");
@@ -357,13 +383,11 @@ mod tests {
             make_context_file("main.rs", "fn main() {}"),
             make_context_file("lib.rs", "pub mod x;"),
         ];
-        let messages = vec![
-            ChatMessage {
-                role: "context_file".to_string(),
-                content: ChatContent::ContextFiles(files),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "context_file".to_string(),
+            content: ChatContent::ContextFiles(files),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 2);
         assert_eq!(output[0].get("role").unwrap(), "user");
@@ -377,36 +401,38 @@ mod tests {
     fn test_context_file_legacy_json() {
         let files = vec![make_context_file("test.py", "print('hi')")];
         let json_str = serde_json::to_string(&files).unwrap();
-        let messages = vec![
-            ChatMessage {
-                role: "context_file".to_string(),
-                content: ChatContent::SimpleText(json_str),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "context_file".to_string(),
+            content: ChatContent::SimpleText(json_str),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 1);
-        assert!(output[0].get("content").unwrap().as_str().unwrap().contains("test.py"));
+        assert!(output[0]
+            .get("content")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("test.py"));
     }
 
     #[test]
     fn test_context_file_invalid_json_skipped() {
-        let messages = vec![
-            ChatMessage {
-                role: "context_file".to_string(),
-                content: ChatContent::SimpleText("not valid json".into()),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "context_file".to_string(),
+            content: ChatContent::SimpleText("not valid json".into()),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert!(output.is_empty());
     }
 
     #[test]
     fn test_plain_text_converts_to_user() {
-        let messages = vec![
-            ChatMessage::new("plain_text".to_string(), "some instruction".to_string()),
-        ];
+        let messages = vec![ChatMessage::new(
+            "plain_text".to_string(),
+            "some instruction".to_string(),
+        )];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].get("role").unwrap(), "user");
@@ -415,9 +441,10 @@ mod tests {
 
     #[test]
     fn test_cd_instruction_converts_to_user() {
-        let messages = vec![
-            ChatMessage::new("cd_instruction".to_string(), "cd /path".to_string()),
-        ];
+        let messages = vec![ChatMessage::new(
+            "cd_instruction".to_string(),
+            "cd /path".to_string(),
+        )];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].get("role").unwrap(), "user");
@@ -437,14 +464,12 @@ mod tests {
 
     #[test]
     fn test_tool_simple_text() {
-        let messages = vec![
-            ChatMessage {
-                role: "tool".to_string(),
-                content: ChatContent::SimpleText("tool result".into()),
-                tool_call_id: "tc1".into(),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "tool".to_string(),
+            content: ChatContent::SimpleText("tool result".into()),
+            tool_call_id: "tc1".into(),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].get("role").unwrap(), "tool");
@@ -453,20 +478,25 @@ mod tests {
 
     #[test]
     fn test_tool_multimodal_no_text() {
-        let messages = vec![
-            ChatMessage {
-                role: "tool".to_string(),
-                content: ChatContent::Multimodal(vec![
-                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string()).unwrap(),
-                ]),
-                tool_call_id: "tc1".into(),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "tool".to_string(),
+            content: ChatContent::Multimodal(vec![MultimodalElement::new(
+                "image/png".to_string(),
+                TEST_PNG_1X1.to_string(),
+            )
+            .unwrap()]),
+            tool_call_id: "tc1".into(),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 2);
         assert_eq!(output[0].get("role").unwrap(), "tool");
-        assert!(output[0].get("content").unwrap().as_str().unwrap().contains("attached images"));
+        assert!(output[0]
+            .get("content")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("attached images"));
         assert_eq!(output[1].get("role").unwrap(), "user");
     }
 
@@ -475,9 +505,11 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "tool".to_string(),
-                content: ChatContent::Multimodal(vec![
-                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string()).unwrap(),
-                ]),
+                content: ChatContent::Multimodal(vec![MultimodalElement::new(
+                    "image/png".to_string(),
+                    TEST_PNG_1X1.to_string(),
+                )
+                .unwrap()]),
                 ..Default::default()
             },
             ChatMessage::new("user".to_string(), "what's in the image?".to_string()),
@@ -490,15 +522,15 @@ mod tests {
 
     #[test]
     fn test_delayed_images_flushed_at_end() {
-        let messages = vec![
-            ChatMessage {
-                role: "tool".to_string(),
-                content: ChatContent::Multimodal(vec![
-                    MultimodalElement::new("image/png".to_string(), TEST_PNG_1X1.to_string()).unwrap(),
-                ]),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "tool".to_string(),
+            content: ChatContent::Multimodal(vec![MultimodalElement::new(
+                "image/png".to_string(),
+                TEST_PNG_1X1.to_string(),
+            )
+            .unwrap()]),
+            ..Default::default()
+        }];
         let output = convert_messages_to_openai_format(messages, &style(), "test-model");
         assert_eq!(output.len(), 2);
         assert_eq!(output[1].get("role").unwrap(), "user");

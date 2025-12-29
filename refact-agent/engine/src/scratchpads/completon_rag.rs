@@ -65,8 +65,10 @@ async fn _render_context_files(
         }
         "chat" => {
             for m in postprocessed_messages {
-                context_files_prompt
-                    .push_str(&format!("Filename: {}\nUseful content:\n```\n{}\n```\n\n", m.file_name, m.file_content));
+                context_files_prompt.push_str(&format!(
+                    "Filename: {}\nUseful content:\n```\n{}\n```\n\n",
+                    m.file_name, m.file_content
+                ));
             }
             context_files_prompt
         }
@@ -121,7 +123,8 @@ async fn _cursor_position_to_context_file(
             info!("adding {} to context", double_colon_path);
         }
         let defs: Vec<Arc<AstDefinition>> =
-            crate::ast::ast_db::definitions(ast_index.clone(), double_colon_path.as_str()).unwrap_or_else(trace_and_default);
+            crate::ast::ast_db::definitions(ast_index.clone(), double_colon_path.as_str())
+                .unwrap_or_else(trace_and_default);
         if defs.len() != 1 {
             tracing::warn!(
                 "hmm, number of definitions for {} is {} which is not one",

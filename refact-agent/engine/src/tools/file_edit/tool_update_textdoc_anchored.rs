@@ -4,11 +4,12 @@ use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::privacy::load_privacy_if_needed;
 use crate::tools::file_edit::auxiliary::{
-    await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary,
-    parse_bool_arg, parse_path_for_update, parse_string_arg, str_replace_anchored,
-    sync_documents_ast, AnchorMode,
+    await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, parse_bool_arg,
+    parse_path_for_update, parse_string_arg, str_replace_anchored, sync_documents_ast, AnchorMode,
 };
-use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{
+    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -37,22 +38,40 @@ async fn parse_args(
     let privacy = load_privacy_if_needed(gcx.clone()).await;
     let path = parse_path_for_update(gcx, args, privacy).await?;
 
-    let mode_str = parse_string_arg(args, "mode", "Use 'replace_between', 'insert_after', or 'insert_before'")?;
+    let mode_str = parse_string_arg(
+        args,
+        "mode",
+        "Use 'replace_between', 'insert_after', or 'insert_before'",
+    )?;
     let mode = match mode_str.as_str() {
         "replace_between" => AnchorMode::ReplaceBetween,
         "insert_after" => AnchorMode::InsertAfter,
         "insert_before" => AnchorMode::InsertBefore,
-        _ => return Err(format!("⚠️ Invalid mode '{}'. 💡 Use 'replace_between', 'insert_after', or 'insert_before'", mode_str)),
+        _ => {
+            return Err(format!(
+            "⚠️ Invalid mode '{}'. 💡 Use 'replace_between', 'insert_after', or 'insert_before'",
+            mode_str
+        ))
+        }
     };
 
     let (anchor1, anchor2) = match mode {
         AnchorMode::ReplaceBetween => {
-            let before = parse_string_arg(args, "anchor_before", "Provide text that marks start of region")?;
-            let after = parse_string_arg(args, "anchor_after", "Provide text that marks end of region")?;
+            let before = parse_string_arg(
+                args,
+                "anchor_before",
+                "Provide text that marks start of region",
+            )?;
+            let after = parse_string_arg(
+                args,
+                "anchor_after",
+                "Provide text that marks end of region",
+            )?;
             (before, Some(after))
         }
         _ => {
-            let anchor = parse_string_arg(args, "anchor", "Provide text to locate insert position")?;
+            let anchor =
+                parse_string_arg(args, "anchor", "Provide text to locate insert position")?;
             (anchor, None)
         }
     };
@@ -60,7 +79,14 @@ async fn parse_args(
     let content = parse_string_arg(args, "content", "Provide the new content")?;
     let multiple = parse_bool_arg(args, "multiple", false)?;
 
-    Ok(Args { path, mode, anchor1, anchor2, content, multiple })
+    Ok(Args {
+        path,
+        mode,
+        anchor1,
+        anchor2,
+        content,
+        multiple,
+    })
 }
 
 pub async fn tool_update_text_doc_anchored_exec(
@@ -79,7 +105,8 @@ pub async fn tool_update_text_doc_anchored_exec(
         &a.content,
         a.multiple,
         dry,
-    ).await?;
+    )
+    .await?;
     sync_documents_ast(gcx.clone(), &a.path).await?;
     let chunks = convert_edit_to_diffchunks(a.path.clone(), &before, &after)?;
     let summary = edit_result_summary(&before, &after, &a.path);
@@ -88,7 +115,9 @@ pub async fn tool_update_text_doc_anchored_exec(
 
 #[async_trait]
 impl Tool for ToolUpdateTextDocAnchored {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn tool_execute(
         &mut self,
@@ -98,13 +127,16 @@ impl Tool for ToolUpdateTextDocAnchored {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
         let (_, _, chunks, _) = tool_update_text_doc_anchored_exec(gcx, args, false).await?;
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "diff".to_string(),
-            content: ChatContent::SimpleText(json!(chunks).to_string()),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "diff".to_string(),
+                content: ChatContent::SimpleText(json!(chunks).to_string()),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     async fn match_against_confirm_deny(

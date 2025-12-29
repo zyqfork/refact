@@ -104,14 +104,14 @@ pub async fn generate_code_edit(
         ccx.clone(),
         &model_id,
         messages,
-        Some(vec![]),  // No tools - pure generation
+        Some(vec![]), // No tools - pure generation
         None,
         false,
         Some(TEMPERATURE),
         None,
         1,
         None,
-        false,  // Don't prepend system prompt - we have our own
+        false, // Don't prepend system prompt - we have our own
         None,
         None,
         None,
@@ -141,7 +141,10 @@ mod tests {
     #[test]
     fn test_remove_markdown_fences_with_language() {
         let input = "```python\ndef hello():\n    print('world')\n```";
-        assert_eq!(remove_markdown_fences(input), "def hello():\n    print('world')");
+        assert_eq!(
+            remove_markdown_fences(input),
+            "def hello():\n    print('world')"
+        );
     }
 
     #[test]

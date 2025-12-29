@@ -5,7 +5,9 @@ use serde_json::{json, Value};
 use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
-use crate::at_commands::at_commands::{AtCommandsContext, AtParam, filter_only_context_file_from_context_tool};
+use crate::at_commands::at_commands::{
+    AtCommandsContext, AtParam, filter_only_context_file_from_context_tool,
+};
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::http::http_post_json;
 use crate::http::routers::v1::at_commands::{CommandExecutePost, CommandExecuteResponse};
@@ -14,9 +16,7 @@ use crate::postprocessing::pp_context_files::postprocess_context_files;
 use crate::postprocessing::pp_plain_text::postprocess_plain_text;
 use crate::scratchpads::scratchpad_utils::{HasRagResults, max_tokens_for_rag_chat};
 
-
 pub const MIN_RAG_CONTEXT_LIMIT: usize = 256;
-
 
 pub async fn run_at_commands_locally(
     ccx: Arc<AMutex<AtCommandsContext>>,
@@ -27,7 +27,12 @@ pub async fn run_at_commands_locally(
 ) -> (Vec<ChatMessage>, bool) {
     let (n_ctx, top_n, is_preview, gcx) = {
         let ccx_locked = ccx.lock().await;
-        (ccx_locked.n_ctx, ccx_locked.top_n, ccx_locked.is_preview, ccx_locked.global_context.clone())
+        (
+            ccx_locked.n_ctx,
+            ccx_locked.top_n,
+            ccx_locked.is_preview,
+            ccx_locked.global_context.clone(),
+        )
     };
     if !is_preview {
         let preview_cache = gcx.read().await.at_commands_preview_cache.clone();
@@ -60,11 +65,19 @@ pub async fn run_at_commands_locally(
     let mut new_messages = original_messages;
     for (idx, mut msg) in messages_after_user_msg.into_iter().enumerate() {
         let (mut content, original_images) = if let ChatContent::Multimodal(parts) = &msg.content {
-            let text = parts.iter()
-                .filter_map(|p| if p.m_type == "text" { Some(p.m_content.as_str()) } else { None })
+            let text = parts
+                .iter()
+                .filter_map(|p| {
+                    if p.m_type == "text" {
+                        Some(p.m_content.as_str())
+                    } else {
+                        None
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let images = parts.iter()
+            let images = parts
+                .iter()
                 .filter(|p| p.m_type.starts_with("image/"))
                 .cloned()
                 .collect::<Vec<_>>();
@@ -72,7 +85,10 @@ pub async fn run_at_commands_locally(
         } else {
             (msg.content.content_text_only(), None)
         };
-        let content_n_tokens = msg.content.count_tokens(tokenizer.clone(), &None).unwrap_or(0) as usize;
+        let content_n_tokens = msg
+            .content
+            .count_tokens(tokenizer.clone(), &None)
+            .unwrap_or(0) as usize;
 
         let mut context_limit = reserve_for_context / messages_with_at.max(1);
         context_limit = context_limit.saturating_sub(content_n_tokens);
@@ -94,7 +110,8 @@ pub async fn run_at_commands_locally(
         let mut plain_text_messages = vec![];
         for exec_result in messages_exec_output.into_iter() {
             // at commands exec() can produce role "user" "assistant" "diff" "plain_text"
-            if let ContextEnum::ChatMessage(raw_msg) = exec_result {  // means not context_file
+            if let ContextEnum::ChatMessage(raw_msg) = exec_result {
+                // means not context_file
                 if raw_msg.role != "plain_text" {
                     stream_back_to_user.push_in_json(json!(raw_msg));
                     new_messages.push(raw_msg);
@@ -114,7 +131,10 @@ pub async fn run_at_commands_locally(
                     (context_limit / 2, context_limit / 2)
                 }
             };
-            info!("context_limit {} tokens_limit_plain {} tokens_limit_files: {}", context_limit, tokens_limit_plain, tokens_limit_files);
+            info!(
+                "context_limit {} tokens_limit_plain {} tokens_limit_files: {}",
+                context_limit, tokens_limit_plain, tokens_limit_files
+            );
 
             let t0 = std::time::Instant::now();
 
@@ -123,7 +143,8 @@ pub async fn run_at_commands_locally(
                 tokenizer.clone(),
                 tokens_limit_plain,
                 &None,
-            ).await;
+            )
+            .await;
             for m in pp_plain_text {
                 // OUTPUT: plain text after all custom messages
                 stream_back_to_user.push_in_json(json!(m));
@@ -133,7 +154,11 @@ pub async fn run_at_commands_locally(
             info!("tokens_limit_files {}", tokens_limit_files);
             let (gcx, mut pp_settings, pp_skeleton) = {
                 let ccx_locked = ccx.lock().await;
-                (ccx_locked.global_context.clone(), ccx_locked.postprocess_parameters.clone(), ccx_locked.pp_skeleton)
+                (
+                    ccx_locked.global_context.clone(),
+                    ccx_locked.postprocess_parameters.clone(),
+                    ccx_locked.pp_skeleton,
+                )
             };
             pp_settings.use_ast_based_pp = false;
             pp_settings.max_files_n = top_n;
@@ -147,10 +172,14 @@ pub async fn run_at_commands_locally(
                 tokens_limit_files,
                 false,
                 &pp_settings,
-            ).await;
+            )
+            .await;
             let (post_processed_files, _notes) = post_processed;
             if !post_processed_files.is_empty() {
-                let json_vec = post_processed_files.iter().map(|p| { json!(p)}).collect::<Vec<Value>>();
+                let json_vec = post_processed_files
+                    .iter()
+                    .map(|p| json!(p))
+                    .collect::<Vec<Value>>();
                 if !json_vec.is_empty() {
                     let message = ChatMessage::new(
                         "context_file".to_string(),
@@ -160,7 +189,10 @@ pub async fn run_at_commands_locally(
                     new_messages.push(message);
                 }
             }
-            info!("postprocess_plain_text_messages + postprocess_context_files {:.3}s", t0.elapsed().as_secs_f32());
+            info!(
+                "postprocess_plain_text_messages + postprocess_context_files {:.3}s",
+                t0.elapsed().as_secs_f32()
+            );
         }
 
         if content.trim().len() > 0 || original_images.is_some() {
@@ -199,7 +231,7 @@ pub async fn run_at_commands_remotely(
             ccx_locked.n_ctx,
             ccx_locked.subchat_tool_parameters.clone(),
             ccx_locked.postprocess_parameters.clone(),
-            ccx_locked.chat_id.clone()
+            ccx_locked.chat_id.clone(),
         )
     };
 
@@ -243,7 +275,8 @@ pub async fn correct_at_arg(
         }
     };
     if !param.is_value_valid(ccx.clone(), &completion).await {
-        arg.ok = false; arg.reason = Some("incorrect argument; completion did not help".to_string());
+        arg.ok = false;
+        arg.reason = Some("incorrect argument; completion did not help".to_string());
         return;
     }
     arg.text = completion;
@@ -254,7 +287,7 @@ pub async fn execute_at_commands_in_query(
     query: &mut String,
 ) -> (Vec<ContextEnum>, Vec<AtCommandMember>) {
     let at_commands = ccx.lock().await.at_commands.clone();
-    let at_command_names = at_commands.keys().map(|x|x.clone()).collect::<Vec<_>>();
+    let at_command_names = at_commands.keys().map(|x| x.clone()).collect::<Vec<_>>();
     let mut context_enums = vec![];
     let mut highlight_members = vec![];
     let mut clips: Vec<(String, usize, usize)> = vec![];
@@ -263,23 +296,46 @@ pub async fn execute_at_commands_in_query(
     for (w_idx, (word, pos1, pos2)) in words.iter().enumerate() {
         let cmd = match at_commands.get(word) {
             Some(c) => c,
-            None => { continue; }
+            None => {
+                continue;
+            }
         };
-        let args = words.iter().skip(w_idx + 1).map(|x|x.clone()).collect::<Vec<_>>();
+        let args = words
+            .iter()
+            .skip(w_idx + 1)
+            .map(|x| x.clone())
+            .collect::<Vec<_>>();
 
         let mut cmd_member = AtCommandMember::new("cmd".to_string(), word.clone(), *pos1, *pos2);
         let mut arg_members = vec![];
-        for (text, pos1, pos2) in args.iter().map(|x|x.clone()) {
-            if at_command_names.contains(&text) { break; }
+        for (text, pos1, pos2) in args.iter().map(|x| x.clone()) {
+            if at_command_names.contains(&text) {
+                break;
+            }
             // TODO: break if there's \n\n
-            arg_members.push(AtCommandMember::new("arg".to_string(), text.clone(), pos1, pos2));
+            arg_members.push(AtCommandMember::new(
+                "arg".to_string(),
+                text.clone(),
+                pos1,
+                pos2,
+            ));
         }
 
-        match cmd.at_execute(ccx.clone(), &mut cmd_member, &mut arg_members).await {
+        match cmd
+            .at_execute(ccx.clone(), &mut cmd_member, &mut arg_members)
+            .await
+        {
             Ok((res, text_on_clip)) => {
                 context_enums.extend(res);
-                clips.push((text_on_clip, cmd_member.pos1, arg_members.last().map(|x|x.pos2).unwrap_or(cmd_member.pos2)));
-            },
+                clips.push((
+                    text_on_clip,
+                    cmd_member.pos1,
+                    arg_members
+                        .last()
+                        .map(|x| x.pos2)
+                        .unwrap_or(cmd_member.pos2),
+                ));
+            }
             Err(e) => {
                 cmd_member.ok = false;
                 cmd_member.reason = Some(format!("incorrect argument; failed to complete: {}", e));
@@ -309,7 +365,14 @@ pub struct AtCommandMember {
 
 impl AtCommandMember {
     pub fn new(kind: String, text: String, pos1: usize, pos2: usize) -> Self {
-        Self { kind, text, pos1, pos2, ok: true, reason: None}
+        Self {
+            kind,
+            text,
+            pos1,
+            pos2,
+            ok: true,
+            reason: None,
+        }
     }
 }
 
@@ -320,18 +383,21 @@ pub fn parse_words_from_line(line: &String) -> Vec<(String, usize, usize)> {
 
     // let word_regex = Regex::new(r#"(@?[^ !?@\n]*)"#).expect("Invalid regex");
     // let word_regex = Regex::new(r#"(@?[^ !?@\n]+|\n|@)"#).expect("Invalid regex");
-    let word_regex = Regex::new(r#"(@?\S*)"#).expect("Invalid regex");         // fixed windows
+    let word_regex = Regex::new(r#"(@?\S*)"#).expect("Invalid regex"); // fixed windows
 
     let mut results = vec![];
     for cap in word_regex.captures_iter(line) {
         if let Some(matched) = cap.get(1) {
             let trimmed_match = trim_punctuation(&matched.as_str().to_string());
-            results.push((trimmed_match.clone(), matched.start(), matched.start() + trimmed_match.len()));
+            results.push((
+                trimmed_match.clone(),
+                matched.start(),
+                matched.start() + trimmed_match.len(),
+            ));
         }
     }
     results
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -339,10 +405,13 @@ mod tests {
 
     #[test]
     fn test_parse_words_from_line_with_link() {
-        let line = "Check out this link: https://doc.rust-lang.org/book/ch03-04-comments.html".to_string();
+        let line =
+            "Check out this link: https://doc.rust-lang.org/book/ch03-04-comments.html".to_string();
         let parsed_words = parse_words_from_line(&line);
 
-        let link = parsed_words.iter().find(|(word, _, _)| word == "https://doc.rust-lang.org/book/ch03-04-comments.html");
+        let link = parsed_words
+            .iter()
+            .find(|(word, _, _)| word == "https://doc.rust-lang.org/book/ch03-04-comments.html");
         assert!(link.is_some(), "The link should be parsed as a single word");
         if let Some((word, _start, _end)) = link {
             assert_eq!(word, "https://doc.rust-lang.org/book/ch03-04-comments.html");

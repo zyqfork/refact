@@ -50,7 +50,8 @@ pub async fn handle_v1_knowledge_graph(
 
     for (id, doc) in &kg.docs {
         let label = doc.frontmatter.title.clone().unwrap_or_else(|| {
-            doc.path.file_stem()
+            doc.path
+                .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| id.clone())
         });
@@ -62,7 +63,7 @@ pub async fn handle_v1_knowledge_graph(
                 Some("code") => "doc_code",
                 Some("decision") => "doc_decision",
                 _ => "doc",
-            }
+            },
         };
         nodes.push(KgNodeJson {
             id: id.clone(),
@@ -141,9 +142,19 @@ pub async fn handle_v1_knowledge_graph(
         }
     }
 
-    let active_docs = kg.docs.values().filter(|d| d.frontmatter.is_active()).count();
-    let deprecated_docs = kg.docs.values().filter(|d| d.frontmatter.is_deprecated()).count();
-    let trajectory_count = kg.docs.values()
+    let active_docs = kg
+        .docs
+        .values()
+        .filter(|d| d.frontmatter.is_active())
+        .count();
+    let deprecated_docs = kg
+        .docs
+        .values()
+        .filter(|d| d.frontmatter.is_deprecated())
+        .count();
+    let trajectory_count = kg
+        .docs
+        .values()
         .filter(|d| d.frontmatter.kind.as_deref() == Some("trajectory"))
         .count();
 
@@ -158,10 +169,17 @@ pub async fn handle_v1_knowledge_graph(
         trajectory_count,
     };
 
-    let response = KnowledgeGraphJson { nodes, edges, stats };
+    let response = KnowledgeGraphJson {
+        nodes,
+        edges,
+        stats,
+    };
 
     let json_string = serde_json::to_string_pretty(&response).map_err(|e| {
-        ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("JSON serialization error: {}", e))
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("JSON serialization error: {}", e),
+        )
     })?;
 
     Ok(Response::builder()

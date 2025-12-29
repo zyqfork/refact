@@ -19,7 +19,8 @@ pub async fn handle_v1_chat_subscribe(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Response<Body>, ScratchError> {
-    let chat_id = params.get("chat_id")
+    let chat_id = params
+        .get("chat_id")
         .ok_or_else(|| ScratchError::new(StatusCode::BAD_REQUEST, "chat_id required".to_string()))?
         .clone();
 
@@ -137,15 +138,20 @@ pub async fn handle_v1_chat_command(
     }
 
     let validation_error = match &request.command {
-        ChatCommand::UserMessage { content, attachments } => {
-            validate_content_with_attachments(content, attachments).err()
-        }
-        ChatCommand::RetryFromIndex { content, attachments, .. } => {
-            validate_content_with_attachments(content, attachments).err()
-        }
-        ChatCommand::UpdateMessage { content, attachments, .. } => {
-            validate_content_with_attachments(content, attachments).err()
-        }
+        ChatCommand::UserMessage {
+            content,
+            attachments,
+        } => validate_content_with_attachments(content, attachments).err(),
+        ChatCommand::RetryFromIndex {
+            content,
+            attachments,
+            ..
+        } => validate_content_with_attachments(content, attachments).err(),
+        ChatCommand::UpdateMessage {
+            content,
+            attachments,
+            ..
+        } => validate_content_with_attachments(content, attachments).err(),
         _ => None,
     };
 
@@ -158,7 +164,10 @@ pub async fn handle_v1_chat_command(
         return Ok(Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .header("Content-Type", "application/json")
-            .body(Body::from(format!(r#"{{"status":"invalid_content","error":"{}"}}"#, error)))
+            .body(Body::from(format!(
+                r#"{{"status":"invalid_content","error":"{}"}}"#,
+                error
+            )))
             .unwrap());
     }
 

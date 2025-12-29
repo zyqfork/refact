@@ -61,7 +61,8 @@ pub async fn prepare_chat_passthrough(
     let tool_names: HashSet<String> = tools.iter().map(|x| x.name.clone()).collect();
 
     // 1. Resolve model early to get reasoning params before history limiting
-    let caps = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await
+    let caps = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
         .map_err(|e| e.message)?;
     let model_record = resolve_chat_model(caps, model_id)?;
 
@@ -79,7 +80,11 @@ pub async fn prepare_chat_passthrough(
     adapt_sampling_for_reasoning_models(sampling_parameters, &model_record);
 
     // 3. System prompt injection (decoupled from allow_at_commands)
-    let prompt_tool_names = if options.allow_at_commands { tool_names.clone() } else { HashSet::new() };
+    let prompt_tool_names = if options.allow_at_commands {
+        tool_names.clone()
+    } else {
+        HashSet::new()
+    };
     let messages = if options.prepend_system_prompt {
         prepend_the_right_system_prompt_and_maybe_more_initial_messages(
             gcx.clone(),
@@ -87,7 +92,8 @@ pub async fn prepare_chat_passthrough(
             meta,
             &mut has_rag_results,
             prompt_tool_names,
-        ).await
+        )
+        .await
     } else {
         messages
     };
@@ -100,7 +106,8 @@ pub async fn prepare_chat_passthrough(
             sampling_parameters.max_new_tokens,
             messages,
             &mut has_rag_results,
-        ).await
+        )
+        .await
     } else {
         (messages, false)
     };
@@ -110,7 +117,8 @@ pub async fn prepare_chat_passthrough(
         if let Some(last_msg) = messages.last() {
             if last_msg.role == "assistant" {
                 if let Some(ref tool_calls) = last_msg.tool_calls {
-                    let filtered_calls: Vec<_> = tool_calls.iter()
+                    let filtered_calls: Vec<_> = tool_calls
+                        .iter()
                         .filter(|tc| tool_names.contains(&tc.function.name))
                         .cloned()
                         .collect();
@@ -128,7 +136,8 @@ pub async fn prepare_chat_passthrough(
                             &thread,
                             ChatMode::AGENT,
                             super::tools::ExecuteToolsOptions::default(),
-                        ).await;
+                        )
+                        .await;
                         messages.extend(tool_results);
                     }
                 }
@@ -139,14 +148,16 @@ pub async fn prepare_chat_passthrough(
     // 6. Build tools JSON - only insert key if there are tools
     let mut big_json = json!({});
     let filtered_tools: Vec<ToolDesc> = if options.supports_tools {
-        tools.iter()
+        tools
+            .iter()
             .filter(|x| x.is_supported_by(model_id))
             .cloned()
             .collect()
     } else {
         vec![]
     };
-    let openai_tools: Vec<Value> = filtered_tools.iter()
+    let openai_tools: Vec<Value> = filtered_tools
+        .iter()
         .map(|tool| tool.clone().into_openai_style())
         .collect();
     let tools_str_for_limit = if openai_tools.is_empty() {
@@ -168,20 +179,19 @@ pub async fn prepare_chat_passthrough(
     )?;
 
     // 8. Strip thinking blocks if thinking is disabled
-    let limited_adapted_msgs = strip_thinking_blocks_if_disabled(limited_msgs, sampling_parameters, &model_record);
+    let limited_adapted_msgs =
+        strip_thinking_blocks_if_disabled(limited_msgs, sampling_parameters, &model_record);
 
     // 9. Convert to OpenAI format
-    let converted_messages = convert_messages_to_openai_format(
-        limited_adapted_msgs,
-        style,
-        &model_record.base.id,
-    );
+    let converted_messages =
+        convert_messages_to_openai_format(limited_adapted_msgs, style, &model_record.base.id);
 
     big_json["messages"] = json!(converted_messages);
     big_json["compression_strength"] = json!(compression_strength);
 
     // 10. Serialize without panic
-    let body = serde_json::to_string(&big_json).map_err(|e| format!("JSON serialization error: {}", e))?;
+    let body =
+        serde_json::to_string(&big_json).map_err(|e| format!("JSON serialization error: {}", e))?;
     let prompt = format!("PASSTHROUGH {}", body);
 
     Ok(PreparedChat { prompt })
@@ -207,14 +217,15 @@ fn adapt_sampling_for_reasoning_models(
                 sampling_parameters.max_new_tokens *= 2;
             }
             sampling_parameters.temperature = model_record.default_temperature;
-        },
+        }
         "anthropic" => {
             let budget_tokens = if sampling_parameters.max_new_tokens > MIN_BUDGET_TOKENS {
                 (sampling_parameters.max_new_tokens / 2).max(MIN_BUDGET_TOKENS)
             } else {
                 0
             };
-            let should_enable_thinking = (model_record.supports_boost_reasoning && sampling_parameters.boost_reasoning)
+            let should_enable_thinking = (model_record.supports_boost_reasoning
+                && sampling_parameters.boost_reasoning)
                 || sampling_parameters.reasoning_effort.is_some();
             if should_enable_thinking && budget_tokens > 0 {
                 sampling_parameters.thinking = Some(json!({
@@ -223,13 +234,12 @@ fn adapt_sampling_for_reasoning_models(
                 }));
             }
             sampling_parameters.reasoning_effort = None;
-        },
+        }
         "qwen" => {
-            sampling_parameters.enable_thinking = Some(
-                model_record.supports_boost_reasoning && sampling_parameters.boost_reasoning
-            );
+            sampling_parameters.enable_thinking =
+                Some(model_record.supports_boost_reasoning && sampling_parameters.boost_reasoning);
             sampling_parameters.temperature = model_record.default_temperature;
-        },
+        }
         _ => {
             sampling_parameters.temperature = model_record.default_temperature;
         }
@@ -237,7 +247,8 @@ fn adapt_sampling_for_reasoning_models(
 }
 
 fn is_thinking_enabled(sampling_parameters: &SamplingParameters) -> bool {
-    sampling_parameters.thinking
+    sampling_parameters
+        .thinking
         .as_ref()
         .and_then(|t| t.get("type"))
         .and_then(|t| t.as_str())
@@ -253,10 +264,13 @@ fn strip_thinking_blocks_if_disabled(
     model_record: &ChatModelRecord,
 ) -> Vec<ChatMessage> {
     if model_record.supports_reasoning.is_none() || !is_thinking_enabled(sampling_parameters) {
-        messages.into_iter().map(|mut msg| {
-            msg.thinking_blocks = None;
-            msg
-        }).collect()
+        messages
+            .into_iter()
+            .map(|mut msg| {
+                msg.thinking_blocks = None;
+                msg
+            })
+            .collect()
     } else {
         messages
     }

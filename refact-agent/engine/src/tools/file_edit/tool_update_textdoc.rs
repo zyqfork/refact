@@ -4,10 +4,12 @@ use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::privacy::load_privacy_if_needed;
 use crate::tools::file_edit::auxiliary::{
-    await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary,
-    parse_bool_arg, parse_path_for_update, parse_string_arg, str_replace, sync_documents_ast,
+    await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, parse_bool_arg,
+    parse_path_for_update, parse_string_arg, str_replace, sync_documents_ast,
 };
-use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{
+    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -36,7 +38,12 @@ async fn parse_args(
     let old_str = parse_string_arg(args, "old_str", "Use cat() to find exact text to replace")?;
     let replacement = parse_string_arg(args, "replacement", "Provide the new text")?;
     let multiple = parse_bool_arg(args, "multiple", false)?;
-    Ok(Args { path, old_str, replacement, multiple })
+    Ok(Args {
+        path,
+        old_str,
+        replacement,
+        multiple,
+    })
 }
 
 pub async fn tool_update_text_doc_exec(
@@ -46,7 +53,15 @@ pub async fn tool_update_text_doc_exec(
 ) -> Result<(String, String, Vec<DiffChunk>, String), String> {
     let a = parse_args(gcx.clone(), args).await?;
     await_ast_indexing(gcx.clone()).await?;
-    let (before, after) = str_replace(gcx.clone(), &a.path, &a.old_str, &a.replacement, a.multiple, dry).await?;
+    let (before, after) = str_replace(
+        gcx.clone(),
+        &a.path,
+        &a.old_str,
+        &a.replacement,
+        a.multiple,
+        dry,
+    )
+    .await?;
     sync_documents_ast(gcx.clone(), &a.path).await?;
     let chunks = convert_edit_to_diffchunks(a.path.clone(), &before, &after)?;
     let summary = edit_result_summary(&before, &after, &a.path);
@@ -55,7 +70,9 @@ pub async fn tool_update_text_doc_exec(
 
 #[async_trait]
 impl Tool for ToolUpdateTextDoc {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn tool_execute(
         &mut self,
@@ -65,13 +82,16 @@ impl Tool for ToolUpdateTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
         let (_, _, chunks, _summary) = tool_update_text_doc_exec(gcx, args, false).await?;
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "diff".to_string(),
-            content: ChatContent::SimpleText(json!(chunks).to_string()),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "diff".to_string(),
+                content: ChatContent::SimpleText(json!(chunks).to_string()),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     async fn match_against_confirm_deny(

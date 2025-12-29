@@ -34,7 +34,9 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    pub fn to_string(&self) -> String { format!("{:?}", self).to_lowercase() }
+    pub fn to_string(&self) -> String {
+        format!("{:?}", self).to_lowercase()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -42,7 +44,7 @@ pub struct SamplingParameters {
     #[serde(default)]
     pub max_new_tokens: usize, // TODO: rename it to `max_completion_tokens` everywhere, including chat-js
     pub temperature: Option<f32>,
-    pub top_p: Option<f32>,  // NOTE: deprecated
+    pub top_p: Option<f32>, // NOTE: deprecated
     #[serde(default)]
     pub stop: Vec<String>,
     pub n: Option<usize>,
@@ -50,11 +52,11 @@ pub struct SamplingParameters {
     pub boost_reasoning: bool,
     // NOTE: use the following arguments for direct API calls
     #[serde(default)]
-    pub reasoning_effort: Option<ReasoningEffort>,  // OpenAI style reasoning
+    pub reasoning_effort: Option<ReasoningEffort>, // OpenAI style reasoning
     #[serde(default)]
-    pub thinking: Option<serde_json::Value>,  // Anthropic style reasoning
+    pub thinking: Option<serde_json::Value>, // Anthropic style reasoning
     #[serde(default)]
-    pub enable_thinking: Option<bool>,  // Qwen style reasoning
+    pub enable_thinking: Option<bool>, // Qwen style reasoning
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,7 +128,9 @@ pub struct ContextFile {
     pub skip_pp: bool, // if true, skip postprocessing compression for this file
 }
 
-fn default_gradient_type_value() -> i32 { -1 }
+fn default_gradient_type_value() -> i32 {
+    -1
+}
 
 #[derive(Debug, Clone)]
 pub enum ContextEnum {
@@ -191,7 +195,7 @@ pub struct ChatMessage {
     pub usage: Option<ChatUsage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checkpoints: Vec<Checkpoint>,
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_blocks: Option<Vec<serde_json::Value>>,
     /// Citations from web search results
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -216,7 +220,7 @@ pub enum ModelType {
 pub enum ChatModelType {
     Light,
     Default,
-    Thinking
+    Thinking,
 }
 
 impl Default for ChatModelType {
@@ -324,15 +328,20 @@ impl ChatMode {
     pub fn supports_checkpoints(self) -> bool {
         match self {
             ChatMode::NO_TOOLS => false,
-            ChatMode::AGENT | ChatMode::CONFIGURE | ChatMode::PROJECT_SUMMARY | ChatMode::EXPLORE => true,
+            ChatMode::AGENT
+            | ChatMode::CONFIGURE
+            | ChatMode::PROJECT_SUMMARY
+            | ChatMode::EXPLORE => true,
         }
     }
 
     pub fn is_agentic(self) -> bool {
         match self {
             ChatMode::AGENT => true,
-            ChatMode::NO_TOOLS | ChatMode::EXPLORE | ChatMode::CONFIGURE |
-                ChatMode::PROJECT_SUMMARY => false,
+            ChatMode::NO_TOOLS
+            | ChatMode::EXPLORE
+            | ChatMode::CONFIGURE
+            | ChatMode::PROJECT_SUMMARY => false,
         }
     }
 }
@@ -366,15 +375,15 @@ pub struct DiffChunk {
 #[serde(default)]
 pub struct PostprocessSettings {
     pub use_ast_based_pp: bool,
-    pub useful_background: f32,          // first, fill usefulness of all lines with this
-    pub useful_symbol_default: f32,      // when a symbol present, set usefulness higher
+    pub useful_background: f32, // first, fill usefulness of all lines with this
+    pub useful_symbol_default: f32, // when a symbol present, set usefulness higher
     // search results fill usefulness as it passed from outside
-    pub downgrade_parent_coef: f32,      // goto parent from search results and mark it useful, with this coef
-    pub downgrade_body_coef: f32,        // multiply body usefulness by this, so it's less useful than the declaration
+    pub downgrade_parent_coef: f32, // goto parent from search results and mark it useful, with this coef
+    pub downgrade_body_coef: f32, // multiply body usefulness by this, so it's less useful than the declaration
     pub comments_propagate_up_coef: f32, // mark comments above a symbol as useful, with this coef
     pub close_small_gaps: bool,
-    pub take_floor: f32,                 // take/dont value
-    pub max_files_n: usize,              // don't produce more than n files in output
+    pub take_floor: f32,    // take/dont value
+    pub max_files_n: usize, // don't produce more than n files in output
 }
 
 impl Default for PostprocessSettings {
@@ -526,8 +535,11 @@ mod tests {
     }
 }
 
-pub fn deserialize_messages_from_post(messages: &Vec<serde_json::Value>) -> Result<Vec<ChatMessage>, ScratchError> {
-    let messages: Vec<ChatMessage> = messages.iter()
+pub fn deserialize_messages_from_post(
+    messages: &Vec<serde_json::Value>,
+) -> Result<Vec<ChatMessage>, ScratchError> {
+    let messages: Vec<ChatMessage> = messages
+        .iter()
         .map(|x| serde_json::from_value(x.clone()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {

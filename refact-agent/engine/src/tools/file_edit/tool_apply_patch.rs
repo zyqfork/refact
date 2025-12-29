@@ -7,7 +7,9 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, normalize_line_endings,
     parse_path_for_update, parse_string_arg, restore_line_endings, sync_documents_ast, write_file,
 };
-use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{
+    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
+};
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -69,7 +71,10 @@ fn parse_unified_diff(patch: &str) -> Result<Vec<Hunk>, String> {
                 } else if line.is_empty() {
                     old_lines.push(String::new());
                     new_lines.push(String::new());
-                } else if line.starts_with("---") || line.starts_with("+++") || line.starts_with("\\") {
+                } else if line.starts_with("---")
+                    || line.starts_with("+++")
+                    || line.starts_with("\\")
+                {
                     i += 1;
                     continue;
                 } else {
@@ -84,17 +89,26 @@ fn parse_unified_diff(patch: &str) -> Result<Vec<Hunk>, String> {
             if old_start != 0 && old_lines.len() != old_count {
                 return Err(format!(
                     "⚠️ Hunk header says {} old lines but body has {}. 💡 Regenerate patch",
-                    old_count, old_lines.len()
+                    old_count,
+                    old_lines.len()
                 ));
             }
-            hunks.push(Hunk { old_start, old_count, old_lines, new_lines });
+            hunks.push(Hunk {
+                old_start,
+                old_count,
+                old_lines,
+                new_lines,
+            });
         } else {
             i += 1;
         }
     }
 
     if hunks.is_empty() {
-        return Err("⚠️ No valid hunks found. 💡 Use unified diff: @@ -line,count +line,count @@".to_string());
+        return Err(
+            "⚠️ No valid hunks found. 💡 Use unified diff: @@ -line,count +line,count @@"
+                .to_string(),
+        );
     }
     Ok(hunks)
 }
@@ -109,19 +123,24 @@ fn parse_hunk_header(header: &str) -> Result<(usize, usize), String> {
     let old_range = parts[0].trim_start_matches('-');
     let (start, count) = if old_range.contains(',') {
         let p: Vec<&str> = old_range.split(',').collect();
-        let s = p[0].parse::<usize>()
+        let s = p[0]
+            .parse::<usize>()
             .map_err(|_| format!("⚠️ Invalid start '{}' in hunk header", p[0]))?;
-        let c = p[1].parse::<usize>()
+        let c = p[1]
+            .parse::<usize>()
             .map_err(|_| format!("⚠️ Invalid count '{}' in hunk header", p[1]))?;
         (s, c)
     } else {
-        let s = old_range.parse::<usize>()
+        let s = old_range
+            .parse::<usize>()
             .map_err(|_| format!("⚠️ Invalid line '{}' in hunk header", old_range))?;
         (s, 1)
     };
 
     if start == 0 && count != 0 {
-        return Err("⚠️ Line 0 only valid with count 0 (insert at top). 💡 Use @@ -0,0 +1,N @@".to_string());
+        return Err(
+            "⚠️ Line 0 only valid with count 0 (insert at top). 💡 Use @@ -0,0 +1,N @@".to_string(),
+        );
     }
     Ok((start, count))
 }
@@ -130,7 +149,11 @@ fn apply_hunks(content: &str, hunks: Vec<Hunk>) -> Result<String, String> {
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     for (idx, hunk) in hunks.into_iter().enumerate().rev() {
-        let start_idx = if hunk.old_start == 0 { 0 } else { hunk.old_start - 1 };
+        let start_idx = if hunk.old_start == 0 {
+            0
+        } else {
+            hunk.old_start - 1
+        };
         let end_idx = start_idx + hunk.old_lines.len();
 
         if hunk.old_start == 0 && hunk.old_count == 0 {
@@ -141,22 +164,30 @@ fn apply_hunks(content: &str, hunks: Vec<Hunk>) -> Result<String, String> {
         if start_idx > lines.len() {
             return Err(format!(
                 "⚠️ Hunk {} starts at line {} but file has {} lines. 💡 Re-read with cat()",
-                idx + 1, hunk.old_start, lines.len()
+                idx + 1,
+                hunk.old_start,
+                lines.len()
             ));
         }
         if end_idx > lines.len() {
             return Err(format!(
                 "⚠️ Hunk {} extends to line {} but file has {} lines. 💡 Check boundaries",
-                idx + 1, end_idx, lines.len()
+                idx + 1,
+                end_idx,
+                lines.len()
             ));
         }
 
-        let file_slice: Vec<&str> = lines[start_idx..end_idx].iter().map(|s| s.as_str()).collect();
+        let file_slice: Vec<&str> = lines[start_idx..end_idx]
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         let expected: Vec<&str> = hunk.old_lines.iter().map(|s| s.as_str()).collect();
         if file_slice != expected {
             return Err(format!(
                 "⚠️ Hunk {} mismatch at line {}. 💡 File changed, re-read with cat()",
-                idx + 1, hunk.old_start
+                idx + 1,
+                hunk.old_start
             ));
         }
 
@@ -196,7 +227,9 @@ pub async fn tool_apply_patch_exec(
 
 #[async_trait]
 impl Tool for ToolApplyPatch {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn tool_execute(
         &mut self,
@@ -206,13 +239,16 @@ impl Tool for ToolApplyPatch {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
         let (_, _, chunks, _) = tool_apply_patch_exec(gcx, args, false).await?;
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "diff".to_string(),
-            content: ChatContent::SimpleText(json!(chunks).to_string()),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "diff".to_string(),
+                content: ChatContent::SimpleText(json!(chunks).to_string()),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     async fn match_against_confirm_deny(

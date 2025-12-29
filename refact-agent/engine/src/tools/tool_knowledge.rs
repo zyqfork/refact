@@ -19,7 +19,9 @@ pub struct ToolGetKnowledge {
 
 #[async_trait]
 impl Tool for ToolGetKnowledge {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -62,14 +64,16 @@ impl Tool for ToolGetKnowledge {
         let memories = memories_search(gcx.clone(), &search_key, 5, 0).await?;
 
         let mut seen_memids = HashSet::new();
-        let mut unique_memories: Vec<_> = memories.into_iter()
+        let mut unique_memories: Vec<_> = memories
+            .into_iter()
             .filter(|m| seen_memids.insert(m.memid.clone()))
             .collect();
 
         if !unique_memories.is_empty() {
             let kg = build_knowledge_graph(gcx.clone()).await;
 
-            let initial_ids: Vec<String> = unique_memories.iter()
+            let initial_ids: Vec<String> = unique_memories
+                .iter()
                 .filter_map(|m| m.file_path.as_ref())
                 .filter_map(|p| kg.get_doc_by_path(p))
                 .filter_map(|d| d.frontmatter.id.clone())
@@ -91,7 +95,7 @@ impl Tool for ToolGetKnowledge {
                             title: doc.frontmatter.title.clone(),
                             created: doc.frontmatter.created.clone(),
                             kind: doc.frontmatter.kind.clone(),
-                            score: None,  // KG expansion doesn't have scores
+                            score: None, // KG expansion doesn't have scores
                         });
                     }
                 }
@@ -107,38 +111,45 @@ impl Tool for ToolGetKnowledge {
         let memories_str = if unique_memories.is_empty() {
             "No relevant knowledge found.".to_string()
         } else {
-            unique_memories.iter().take(8).map(|m| {
-                let mut result = String::new();
-                if let Some(path) = &m.file_path {
-                    result.push_str(&format!("📄 {}", path.display()));
-                    if let Some((start, end)) = m.line_range {
-                        result.push_str(&format!(":{}-{}", start, end));
+            unique_memories
+                .iter()
+                .take(8)
+                .map(|m| {
+                    let mut result = String::new();
+                    if let Some(path) = &m.file_path {
+                        result.push_str(&format!("📄 {}", path.display()));
+                        if let Some((start, end)) = m.line_range {
+                            result.push_str(&format!(":{}-{}", start, end));
+                        }
+                        result.push('\n');
                     }
-                    result.push('\n');
-                }
-                if let Some(title) = &m.title {
-                    result.push_str(&format!("📌 {}\n", title));
-                }
-                if let Some(kind) = &m.kind {
-                    result.push_str(&format!("📦 {}\n", kind));
-                }
-                if !m.tags.is_empty() {
-                    result.push_str(&format!("🏷️ {}\n", m.tags.join(", ")));
-                }
-                result.push_str(&m.content);
-                result.push_str("\n\n---\n");
-                result
-            }).collect()
+                    if let Some(title) = &m.title {
+                        result.push_str(&format!("📌 {}\n", title));
+                    }
+                    if let Some(kind) = &m.kind {
+                        result.push_str(&format!("📦 {}\n", kind));
+                    }
+                    if !m.tags.is_empty() {
+                        result.push_str(&format!("🏷️ {}\n", m.tags.join(", ")));
+                    }
+                    result.push_str(&m.content);
+                    result.push_str("\n\n---\n");
+                    result
+                })
+                .collect()
         };
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(memories_str),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            output_filter: Some(OutputFilter::no_limits()),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(memories_str),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                output_filter: Some(OutputFilter::no_limits()),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

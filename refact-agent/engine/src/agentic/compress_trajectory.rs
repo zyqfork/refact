@@ -77,7 +77,7 @@ const TEMPERATURE: f32 = 0.0;
 
 fn gather_used_tools(messages: &Vec<ChatMessage>) -> Vec<String> {
     let mut tools: Vec<String> = Vec::new();
-    
+
     for message in messages {
         if let Some(tool_calls) = &message.tool_calls {
             for tool_call in tool_calls {
@@ -87,7 +87,7 @@ fn gather_used_tools(messages: &Vec<ChatMessage>) -> Vec<String> {
             }
         }
     }
-    
+
     tools
 }
 
@@ -106,30 +106,32 @@ pub async fn compress_trajectory(
             } else {
                 Err(format!(
                     "Model '{}' not found, server has these models: {:?}",
-                    model_id, caps.chat_models.keys()
+                    model_id,
+                    caps.chat_models.keys()
                 ))
             }
-        },
+        }
         Err(_) => Err("No caps available".to_string()),
     }?;
     let mut messages_compress = messages.clone();
-    messages_compress.push(
-        ChatMessage {
-            role: "user".to_string(),
-            content: ChatContent::SimpleText(COMPRESSION_MESSAGE.to_string()),
-            ..Default::default()
-        },
-    );
-    let ccx: Arc<AMutex<AtCommandsContext>> = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        n_ctx,
-        1,
-        false,
-        messages_compress.clone(),
-        "".to_string(),
-        false,
-        model_id.clone(),
-    ).await));
+    messages_compress.push(ChatMessage {
+        role: "user".to_string(),
+        content: ChatContent::SimpleText(COMPRESSION_MESSAGE.to_string()),
+        ..Default::default()
+    });
+    let ccx: Arc<AMutex<AtCommandsContext>> = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            n_ctx,
+            1,
+            false,
+            messages_compress.clone(),
+            "".to_string(),
+            false,
+            model_id.clone(),
+        )
+        .await,
+    ));
     let tools = gather_used_tools(&messages);
     let new_messages = subchat_single(
         ccx.clone(),
@@ -141,12 +143,14 @@ pub async fn compress_trajectory(
         Some(TEMPERATURE),
         None,
         1,
-        None, 
+        None,
         true,
         None,
         None,
         None,
-    ).await.map_err(|e| format!("Error: {}", e))?;
+    )
+    .await
+    .map_err(|e| format!("Error: {}", e))?;
 
     let content = new_messages
         .into_iter()
@@ -161,6 +165,7 @@ pub async fn compress_trajectory(
         .flatten()
         .flatten()
         .ok_or("No traj message was generated".to_string())?;
-    let compressed_message = format!("{content}\n\nPlease, continue the conversation based on the provided summary");
+    let compressed_message =
+        format!("{content}\n\nPlease, continue the conversation based on the provided summary");
     Ok(compressed_message)
 }

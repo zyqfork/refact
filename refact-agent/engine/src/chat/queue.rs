@@ -28,7 +28,10 @@ pub fn find_allowed_command_while_paused(queue: &VecDeque<CommandRequest>) -> Op
     None
 }
 
-pub fn apply_setparams_patch(thread: &mut ThreadParams, patch: &serde_json::Value) -> (bool, serde_json::Value) {
+pub fn apply_setparams_patch(
+    thread: &mut ThreadParams,
+    patch: &serde_json::Value,
+) -> (bool, serde_json::Value) {
     let mut changed = false;
 
     if let Some(model) = patch.get("model").and_then(|v| v.as_str()) {
@@ -168,7 +171,10 @@ pub async fn process_command_queue(
         };
 
         match request.command {
-            ChatCommand::UserMessage { content, attachments } => {
+            ChatCommand::UserMessage {
+                content,
+                attachments,
+            } => {
                 let mut session = session_arc.lock().await;
                 let parsed_content = parse_content_with_attachments(&content, &attachments);
 
@@ -191,7 +197,11 @@ pub async fn process_command_queue(
                 maybe_save_trajectory(gcx.clone(), session_arc.clone()).await;
                 start_generation(gcx.clone(), session_arc.clone()).await;
             }
-            ChatCommand::RetryFromIndex { index, content, attachments } => {
+            ChatCommand::RetryFromIndex {
+                index,
+                content,
+                attachments,
+            } => {
                 let mut session = session_arc.lock().await;
                 session.truncate_messages(index);
                 let parsed_content = parse_content_with_attachments(&content, &attachments);
@@ -213,7 +223,8 @@ pub async fn process_command_queue(
                     continue;
                 }
                 let mut session = session_arc.lock().await;
-                let (mut changed, sanitized_patch) = apply_setparams_patch(&mut session.thread, &patch);
+                let (mut changed, sanitized_patch) =
+                    apply_setparams_patch(&mut session.thread, &patch);
 
                 let title_in_patch = patch.get("title").and_then(|v| v.as_str());
                 let is_gen_in_patch = patch.get("is_title_generated").and_then(|v| v.as_bool());
@@ -231,7 +242,9 @@ pub async fn process_command_queue(
                         changed = true;
                     }
                 }
-                session.emit(ChatEvent::ThreadUpdated { params: sanitized_patch });
+                session.emit(ChatEvent::ThreadUpdated {
+                    params: sanitized_patch,
+                });
                 if changed {
                     session.increment_version();
                     session.touch();
@@ -241,14 +254,24 @@ pub async fn process_command_queue(
                 let mut session = session_arc.lock().await;
                 session.abort_stream();
             }
-            ChatCommand::ToolDecision { tool_call_id, accepted } => {
-                let decisions = vec![ToolDecisionItem { tool_call_id: tool_call_id.clone(), accepted }];
+            ChatCommand::ToolDecision {
+                tool_call_id,
+                accepted,
+            } => {
+                let decisions = vec![ToolDecisionItem {
+                    tool_call_id: tool_call_id.clone(),
+                    accepted,
+                }];
                 handle_tool_decisions(gcx.clone(), session_arc.clone(), &decisions).await;
             }
             ChatCommand::ToolDecisions { decisions } => {
                 handle_tool_decisions(gcx.clone(), session_arc.clone(), &decisions).await;
             }
-            ChatCommand::IdeToolResult { tool_call_id, content, tool_failed } => {
+            ChatCommand::IdeToolResult {
+                tool_call_id,
+                content,
+                tool_failed,
+            } => {
                 let mut session = session_arc.lock().await;
                 let tool_message = ChatMessage {
                     message_id: Uuid::new_v4().to_string(),
@@ -263,13 +286,22 @@ pub async fn process_command_queue(
                 drop(session);
                 start_generation(gcx.clone(), session_arc.clone()).await;
             }
-            ChatCommand::UpdateMessage { message_id, content, attachments, regenerate } => {
+            ChatCommand::UpdateMessage {
+                message_id,
+                content,
+                attachments,
+                regenerate,
+            } => {
                 let mut session = session_arc.lock().await;
                 if session.runtime.state == SessionState::Generating {
                     session.abort_stream();
                 }
                 let parsed_content = parse_content_with_attachments(&content, &attachments);
-                if let Some(idx) = session.messages.iter().position(|m| m.message_id == message_id) {
+                if let Some(idx) = session
+                    .messages
+                    .iter()
+                    .position(|m| m.message_id == message_id)
+                {
                     let mut updated_msg = session.messages[idx].clone();
                     updated_msg.content = parsed_content;
                     session.update_message(&message_id, updated_msg);
@@ -281,7 +313,10 @@ pub async fn process_command_queue(
                     }
                 }
             }
-            ChatCommand::RemoveMessage { message_id, regenerate } => {
+            ChatCommand::RemoveMessage {
+                message_id,
+                regenerate,
+            } => {
                 let mut session = session_arc.lock().await;
                 if session.runtime.state == SessionState::Generating {
                     session.abort_stream();
@@ -323,14 +358,22 @@ async fn handle_tool_decisions(
             }
         }
 
-        let tool_calls: Vec<crate::call_validation::ChatToolCall> = session.messages.iter()
+        let tool_calls: Vec<crate::call_validation::ChatToolCall> = session
+            .messages
+            .iter()
             .filter_map(|m| m.tool_calls.as_ref())
             .flatten()
             .filter(|tc| accepted.contains(&tc.id))
             .cloned()
             .collect();
 
-        (accepted, remaining, tool_calls, session.messages.clone(), session.thread.clone())
+        (
+            accepted,
+            remaining,
+            tool_calls,
+            session.messages.clone(),
+            session.thread.clone(),
+        )
     };
 
     if has_remaining_pauses {
@@ -344,7 +387,15 @@ async fn handle_tool_decisions(
         }
 
         let chat_mode = super::generation::parse_chat_mode(&thread.mode);
-        let (tool_results, _) = execute_tools(gcx.clone(), &tool_calls_to_execute, &messages, &thread, chat_mode, super::tools::ExecuteToolsOptions::default()).await;
+        let (tool_results, _) = execute_tools(
+            gcx.clone(),
+            &tool_calls_to_execute,
+            &messages,
+            &thread,
+            chat_mode,
+            super::tools::ExecuteToolsOptions::default(),
+        )
+        .await;
 
         {
             let mut session = session_arc.lock().await;
@@ -366,17 +417,27 @@ async fn create_checkpoint_for_message(
 ) -> Vec<crate::git::checkpoints::Checkpoint> {
     use crate::git::checkpoints::create_workspace_checkpoint;
 
-    let latest_checkpoint = session.messages.iter().rev()
+    let latest_checkpoint = session
+        .messages
+        .iter()
+        .rev()
         .find(|msg| msg.role == "user" && !msg.checkpoints.is_empty())
         .and_then(|msg| msg.checkpoints.first().cloned());
 
     match create_workspace_checkpoint(gcx, latest_checkpoint.as_ref(), &session.chat_id).await {
         Ok((checkpoint, _)) => {
-            tracing::info!("Checkpoint created for chat {}: {:?}", session.chat_id, checkpoint);
+            tracing::info!(
+                "Checkpoint created for chat {}: {:?}",
+                session.chat_id,
+                checkpoint
+            );
             vec![checkpoint]
         }
         Err(e) => {
-            warn!("Failed to create checkpoint for chat {}: {}", session.chat_id, e);
+            warn!(
+                "Failed to create checkpoint for chat {}: {}",
+                session.chat_id, e
+            );
             Vec::new()
         }
     }
@@ -431,7 +492,10 @@ mod tests {
     fn test_find_allowed_command_finds_tool_decisions() {
         let mut queue = VecDeque::new();
         queue.push_back(make_request(ChatCommand::ToolDecisions {
-            decisions: vec![ToolDecisionItem { tool_call_id: "tc1".into(), accepted: true }],
+            decisions: vec![ToolDecisionItem {
+                tool_call_id: "tc1".into(),
+                accepted: true,
+            }],
         }));
         assert_eq!(find_allowed_command_while_paused(&queue), Some(0));
     }

@@ -39,7 +39,8 @@ pub fn record_before_edit(path: &PathBuf, content: &str) {
         entries.remove(0);
     }
 
-    let total_bytes: usize = h.values()
+    let total_bytes: usize = h
+        .values()
         .flat_map(|v| v.iter())
         .map(|e| e.content.len())
         .sum();

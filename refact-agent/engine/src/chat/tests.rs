@@ -5,7 +5,9 @@ mod tests {
     use crate::scratchpads::multimodality::MultimodalElement;
     use crate::chat::types::{ChatEvent, DeltaOp, SessionState, PauseReason};
 
-    fn extract_extra_fields(json_val: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    fn extract_extra_fields(
+        json_val: &serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
         let mut result = serde_json::Map::new();
         if let Some(obj) = json_val.as_object() {
             for (key, val) in obj {
@@ -36,17 +38,15 @@ mod tests {
             message_id: "msg-123".to_string(),
             role: "assistant".to_string(),
             content: ChatContent::SimpleText("Hello world".to_string()),
-            tool_calls: Some(vec![
-                ChatToolCall {
-                    id: "call-1".to_string(),
-                    index: None,
-                    function: ChatToolFunction {
-                        name: "test_tool".to_string(),
-                        arguments: r#"{"arg": "value"}"#.to_string(),
-                    },
-                    tool_type: "function".to_string(),
-                }
-            ]),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call-1".to_string(),
+                index: None,
+                function: ChatToolFunction {
+                    name: "test_tool".to_string(),
+                    arguments: r#"{"arg": "value"}"#.to_string(),
+                },
+                tool_type: "function".to_string(),
+            }]),
             tool_call_id: "".to_string(),
             tool_failed: None,
             usage: Some(ChatUsage {
@@ -56,7 +56,9 @@ mod tests {
             }),
             finish_reason: Some("stop".to_string()),
             reasoning_content: Some("I think therefore I am".to_string()),
-            thinking_blocks: Some(vec![json!({"type": "thinking", "thinking": "deep thought"})]),
+            thinking_blocks: Some(vec![
+                json!({"type": "thinking", "thinking": "deep thought"}),
+            ]),
             citations: vec![json!({"url": "https://example.com", "title": "Example"})],
             extra: {
                 let mut m = serde_json::Map::new();
@@ -69,7 +71,8 @@ mod tests {
         };
 
         let serialized = serde_json::to_value(&original).expect("serialize");
-        let deserialized: ChatMessage = serde_json::from_value(serialized.clone()).expect("deserialize");
+        let deserialized: ChatMessage =
+            serde_json::from_value(serialized.clone()).expect("deserialize");
 
         assert_eq!(deserialized.message_id, original.message_id);
         assert_eq!(deserialized.role, original.role);
@@ -92,7 +95,10 @@ mod tests {
 
         assert_eq!(deserialized.citations.len(), 1);
 
-        assert!(deserialized.extra.contains_key("custom_field") || deserialized.extra.contains_key("metering_balance"));
+        assert!(
+            deserialized.extra.contains_key("custom_field")
+                || deserialized.extra.contains_key("metering_balance")
+        );
     }
 
     #[test]
@@ -100,9 +106,11 @@ mod tests {
         let original = ChatMessage {
             message_id: "msg-mm".to_string(),
             role: "user".to_string(),
-            content: ChatContent::Multimodal(vec![
-                MultimodalElement::new("text".to_string(), "Hello".to_string()).unwrap(),
-            ]),
+            content: ChatContent::Multimodal(vec![MultimodalElement::new(
+                "text".to_string(),
+                "Hello".to_string(),
+            )
+            .unwrap()]),
             ..Default::default()
         };
 
@@ -150,12 +158,15 @@ mod tests {
             "nested_unknown": {"a": 1, "b": 2}
         });
 
-        let deserialized: ChatMessage = serde_json::from_value(json_with_unknown).expect("deserialize");
+        let deserialized: ChatMessage =
+            serde_json::from_value(json_with_unknown).expect("deserialize");
 
         assert_eq!(deserialized.message_id, "msg-unk");
-        assert!(deserialized.extra.contains_key("unknown_field_1") ||
-                deserialized.extra.contains_key("unknown_field_2") ||
-                deserialized.extra.contains_key("nested_unknown"));
+        assert!(
+            deserialized.extra.contains_key("unknown_field_1")
+                || deserialized.extra.contains_key("unknown_field_2")
+                || deserialized.extra.contains_key("nested_unknown")
+        );
     }
 
     #[test]
@@ -293,21 +304,36 @@ mod tests {
         assert!(!extra.contains_key("choices"));
     }
 
-    fn merge_tool_calls(
-        existing: &mut Vec<ChatToolCall>,
-        new_calls: &[serde_json::Value],
-    ) {
+    fn merge_tool_calls(existing: &mut Vec<ChatToolCall>, new_calls: &[serde_json::Value]) {
         for call_val in new_calls {
-            let index = call_val.get("index")
-                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            let index = call_val
+                .get("index")
+                .and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                })
                 .map(|i| i as usize);
 
-            let id = call_val.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let call_type = call_val.get("type").and_then(|v| v.as_str()).unwrap_or("function").to_string();
+            let id = call_val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let call_type = call_val
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("function")
+                .to_string();
 
             let func = call_val.get("function");
-            let name = func.and_then(|f| f.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string());
-            let args = func.and_then(|f| f.get("arguments")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = func
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let args = func
+                .and_then(|f| f.get("arguments"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             if let Some(name) = name {
                 let new_call = ChatToolCall {
@@ -472,8 +498,12 @@ mod tests {
     #[test]
     fn test_delta_op_append_content() {
         let ops = vec![
-            DeltaOp::AppendContent { text: "Hello ".to_string() },
-            DeltaOp::AppendContent { text: "world".to_string() },
+            DeltaOp::AppendContent {
+                text: "Hello ".to_string(),
+            },
+            DeltaOp::AppendContent {
+                text: "world".to_string(),
+            },
         ];
 
         let mut content = String::new();
@@ -489,8 +519,12 @@ mod tests {
     #[test]
     fn test_delta_op_append_reasoning() {
         let ops = vec![
-            DeltaOp::AppendReasoning { text: "First ".to_string() },
-            DeltaOp::AppendReasoning { text: "thought".to_string() },
+            DeltaOp::AppendReasoning {
+                text: "First ".to_string(),
+            },
+            DeltaOp::AppendReasoning {
+                text: "thought".to_string(),
+            },
         ];
 
         let mut reasoning = String::new();
@@ -513,7 +547,7 @@ mod tests {
                 let mut m = serde_json::Map::new();
                 m.insert("new_field".to_string(), json!(123));
                 m
-            }
+            },
         };
 
         if let DeltaOp::MergeExtra { extra: new_extra } = op {
@@ -534,21 +568,21 @@ mod tests {
                     let mut m = serde_json::Map::new();
                     m.insert("metering_a".to_string(), json!(1));
                     m
-                }
+                },
             },
             DeltaOp::MergeExtra {
                 extra: {
                     let mut m = serde_json::Map::new();
                     m.insert("metering_b".to_string(), json!(2));
                     m
-                }
+                },
             },
             DeltaOp::MergeExtra {
                 extra: {
                     let mut m = serde_json::Map::new();
                     m.insert("metering_a".to_string(), json!(10));
                     m
-                }
+                },
             },
         ];
 
@@ -596,7 +630,10 @@ mod tests {
         assert_eq!(format!("{:?}", SessionState::Idle), "Idle");
         assert_eq!(format!("{:?}", SessionState::Generating), "Generating");
         assert_eq!(format!("{:?}", SessionState::Paused), "Paused");
-        assert_eq!(format!("{:?}", SessionState::ExecutingTools), "ExecutingTools");
+        assert_eq!(
+            format!("{:?}", SessionState::ExecutingTools),
+            "ExecutingTools"
+        );
         assert_eq!(format!("{:?}", SessionState::Error), "Error");
     }
 
@@ -644,8 +681,6 @@ mod tests {
 
     #[test]
     fn test_chat_event_serialization_pause_required() {
-
-
         let event = ChatEvent::PauseRequired {
             reasons: vec![PauseReason {
                 reason_type: "confirmation".to_string(),
@@ -831,12 +866,21 @@ mod tests {
 
     fn normalize_tool_call(tc: &serde_json::Value) -> Option<ChatToolCall> {
         let function = tc.get("function")?;
-        let name = function.get("name").and_then(|n| n.as_str()).filter(|s| !s.is_empty())?;
+        let name = function
+            .get("name")
+            .and_then(|n| n.as_str())
+            .filter(|s| !s.is_empty())?;
 
-        let id = tc.get("id")
+        let id = tc
+            .get("id")
             .and_then(|i| i.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()));
+            .unwrap_or_else(|| {
+                format!(
+                    "call_{}",
+                    uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()
+                )
+            });
 
         let arguments = match function.get("arguments") {
             Some(serde_json::Value::String(s)) => s.clone(),
@@ -844,7 +888,8 @@ mod tests {
             _ => String::new(),
         };
 
-        let tool_type = tc.get("type")
+        let tool_type = tc
+            .get("type")
             .and_then(|t| t.as_str())
             .unwrap_or("function")
             .to_string();
@@ -963,8 +1008,11 @@ mod tests {
         assert!(!is_thinking_enabled(&params));
     }
 
-    fn is_thinking_enabled(sampling_parameters: &crate::call_validation::SamplingParameters) -> bool {
-        sampling_parameters.thinking
+    fn is_thinking_enabled(
+        sampling_parameters: &crate::call_validation::SamplingParameters,
+    ) -> bool {
+        sampling_parameters
+            .thinking
             .as_ref()
             .and_then(|t| t.get("type"))
             .and_then(|t| t.as_str())
@@ -976,39 +1024,43 @@ mod tests {
 
     #[test]
     fn test_strip_thinking_blocks_removes_when_disabled() {
-        let messages = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: ChatContent::SimpleText("Hello".to_string()),
-                thinking_blocks: Some(vec![json!({"type": "thinking", "thinking": "deep thought"})]),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText("Hello".to_string()),
+            thinking_blocks: Some(vec![
+                json!({"type": "thinking", "thinking": "deep thought"}),
+            ]),
+            ..Default::default()
+        }];
 
-        let stripped: Vec<_> = messages.into_iter().map(|mut msg| {
-            msg.thinking_blocks = None;
-            msg
-        }).collect();
+        let stripped: Vec<_> = messages
+            .into_iter()
+            .map(|mut msg| {
+                msg.thinking_blocks = None;
+                msg
+            })
+            .collect();
 
         assert!(stripped[0].thinking_blocks.is_none());
     }
 
     #[test]
     fn test_strip_thinking_blocks_preserves_content() {
-        let messages = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: ChatContent::SimpleText("Hello world".to_string()),
-                thinking_blocks: Some(vec![json!({"type": "thinking", "thinking": "thought"})]),
-                reasoning_content: Some("reasoning".to_string()),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText("Hello world".to_string()),
+            thinking_blocks: Some(vec![json!({"type": "thinking", "thinking": "thought"})]),
+            reasoning_content: Some("reasoning".to_string()),
+            ..Default::default()
+        }];
 
-        let stripped: Vec<_> = messages.into_iter().map(|mut msg| {
-            msg.thinking_blocks = None;
-            msg
-        }).collect();
+        let stripped: Vec<_> = messages
+            .into_iter()
+            .map(|mut msg| {
+                msg.thinking_blocks = None;
+                msg
+            })
+            .collect();
 
         match &stripped[0].content {
             ChatContent::SimpleText(s) => assert_eq!(s, "Hello world"),
@@ -1047,9 +1099,12 @@ mod tests {
         use std::collections::HashSet;
 
         let all_tool_names = vec!["tool_a", "tool_b", "tool_c", "tool_d"];
-        let allowed: HashSet<String> = vec!["tool_a".to_string(), "tool_c".to_string()].into_iter().collect();
+        let allowed: HashSet<String> = vec!["tool_a".to_string(), "tool_c".to_string()]
+            .into_iter()
+            .collect();
 
-        let filtered: Vec<_> = all_tool_names.into_iter()
+        let filtered: Vec<_> = all_tool_names
+            .into_iter()
             .filter(|name| allowed.contains(*name))
             .collect();
 
@@ -1063,10 +1118,16 @@ mod tests {
     fn test_prompt_tool_names_empty_when_at_commands_disabled() {
         use std::collections::HashSet;
 
-        let tool_names: HashSet<String> = vec!["tool_a".to_string(), "tool_b".to_string()].into_iter().collect();
+        let tool_names: HashSet<String> = vec!["tool_a".to_string(), "tool_b".to_string()]
+            .into_iter()
+            .collect();
         let allow_at_commands = false;
 
-        let prompt_tool_names = if allow_at_commands { tool_names.clone() } else { HashSet::new() };
+        let prompt_tool_names = if allow_at_commands {
+            tool_names.clone()
+        } else {
+            HashSet::new()
+        };
 
         assert!(prompt_tool_names.is_empty());
     }
@@ -1075,10 +1136,16 @@ mod tests {
     fn test_prompt_tool_names_preserved_when_at_commands_enabled() {
         use std::collections::HashSet;
 
-        let tool_names: HashSet<String> = vec!["tool_a".to_string(), "tool_b".to_string()].into_iter().collect();
+        let tool_names: HashSet<String> = vec!["tool_a".to_string(), "tool_b".to_string()]
+            .into_iter()
+            .collect();
         let allow_at_commands = true;
 
-        let prompt_tool_names = if allow_at_commands { tool_names.clone() } else { HashSet::new() };
+        let prompt_tool_names = if allow_at_commands {
+            tool_names.clone()
+        } else {
+            HashSet::new()
+        };
 
         assert_eq!(prompt_tool_names.len(), 2);
         assert!(prompt_tool_names.contains("tool_a"));

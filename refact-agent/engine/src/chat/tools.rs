@@ -7,7 +7,10 @@ use uuid::Uuid;
 use indexmap::IndexMap;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ChatContent, ChatMessage, ChatMode, ChatToolCall, ContextFile, PostprocessSettings, SubchatParameters};
+use crate::call_validation::{
+    ChatContent, ChatMessage, ChatMode, ChatToolCall, ContextFile, PostprocessSettings,
+    SubchatParameters,
+};
 use crate::global_context::GlobalContext;
 use crate::constants::CHAT_TOP_N;
 use crate::postprocessing::pp_tool_results::{postprocess_tool_results, ToolBudget};
@@ -22,20 +25,15 @@ use super::types::*;
 use super::generation::start_generation;
 use super::trajectories::maybe_save_trajectory;
 
-async fn get_effective_n_ctx(
-    gcx: Arc<ARwLock<GlobalContext>>,
-    thread: &ThreadParams,
-) -> usize {
+async fn get_effective_n_ctx(gcx: Arc<ARwLock<GlobalContext>>, thread: &ThreadParams) -> usize {
     if let Some(cap) = thread.context_tokens_cap {
         return cap;
     }
     match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
-        Ok(caps) => {
-            match crate::caps::resolve_chat_model(caps, &thread.model) {
-                Ok(model_rec) => model_rec.base.n_ctx,
-                Err(_) => 128000,
-            }
-        }
+        Ok(caps) => match crate::caps::resolve_chat_model(caps, &thread.model) {
+            Ok(model_rec) => model_rec.base.n_ctx,
+            Err(_) => 128000,
+        },
         Err(_) => 128000,
     }
 }
@@ -74,13 +72,18 @@ fn spawn_subchat_bridge(
                             continue;
                         }
 
-                        let attached_files = value.get("add_message")
+                        let attached_files = value
+                            .get("add_message")
                             .and_then(|am| am.get("content"))
                             .and_then(|c| c.as_array())
-                            .map(|arr| arr.iter()
-                                .filter_map(|item| item.get("file_name").and_then(|f| f.as_str()))
-                                .map(|s| s.to_string())
-                                .collect::<Vec<_>>())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|item| {
+                                        item.get("file_name").and_then(|f| f.as_str())
+                                    })
+                                    .map(|s| s.to_string())
+                                    .collect::<Vec<_>>()
+                            })
                             .unwrap_or_default();
 
                         let mut session = session_arc.lock().await;
@@ -144,7 +147,8 @@ pub async fn check_tool_calls_and_continue(
         match last_msg {
             Some(m) if m.role == "assistant" && m.tool_calls.is_some() => {
                 let all_calls = m.tool_calls.clone().unwrap();
-                let client_calls: Vec<_> = all_calls.into_iter()
+                let client_calls: Vec<_> = all_calls
+                    .into_iter()
                     .filter(|tc| !is_server_executed_tool(&tc.id))
                     .collect();
                 (
@@ -166,9 +170,13 @@ pub async fn check_tool_calls_and_continue(
         return;
     }
 
-    info!("check_tool_calls_and_continue: {} tool calls to process", tool_calls.len());
+    info!(
+        "check_tool_calls_and_continue: {} tool calls to process",
+        tool_calls.len()
+    );
 
-    let (confirmations, denials) = check_tools_confirmation(gcx.clone(), &tool_calls, &messages, chat_mode).await;
+    let (confirmations, denials) =
+        check_tools_confirmation(gcx.clone(), &tool_calls, &messages, chat_mode).await;
 
     let denied_ids: Vec<String> = denials.iter().map(|d| d.tool_call_id.clone()).collect();
     if !denials.is_empty() {
@@ -192,7 +200,8 @@ pub async fn check_tool_calls_and_continue(
         return;
     }
 
-    let tools_to_execute: Vec<_> = tool_calls.iter()
+    let tools_to_execute: Vec<_> = tool_calls
+        .iter()
         .filter(|tc| !denied_ids.contains(&tc.id))
         .cloned()
         .collect();
@@ -214,8 +223,9 @@ pub async fn check_tool_calls_and_continue(
         &messages,
         &thread,
         chat_mode,
-        ExecuteToolsOptions::default()
-    ).await;
+        ExecuteToolsOptions::default(),
+    )
+    .await;
 
     {
         let mut session = session_arc.lock().await;
@@ -240,30 +250,38 @@ pub async fn check_tools_confirmation(
     let mut confirmations = Vec::new();
     let mut denials = Vec::new();
 
-    let ccx = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        1000,
-        1,
-        false,
-        messages.to_vec(),
-        String::new(),
-        false,
-        String::new(),
-    ).await));
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            1000,
+            1,
+            false,
+            messages.to_vec(),
+            String::new(),
+            false,
+            String::new(),
+        )
+        .await,
+    ));
 
-    let all_tools = crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode).await
-        .into_iter()
-        .map(|tool| {
-            let spec = tool.tool_description();
-            (spec.name, tool)
-        })
-        .collect::<indexmap::IndexMap<_, _>>();
+    let all_tools =
+        crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
+            .await
+            .into_iter()
+            .map(|tool| {
+                let spec = tool.tool_description();
+                (spec.name, tool)
+            })
+            .collect::<indexmap::IndexMap<_, _>>();
 
     for tool_call in tool_calls {
         let tool = match all_tools.get(&tool_call.function.name) {
             Some(t) => t,
             None => {
-                info!("Unknown tool: {}, skipping confirmation check", tool_call.function.name);
+                info!(
+                    "Unknown tool: {}, skipping confirmation check",
+                    tool_call.function.name
+                );
                 continue;
             }
         };
@@ -284,31 +302,32 @@ pub async fn check_tools_confirmation(
             };
 
         match tool.match_against_confirm_deny(ccx.clone(), &args).await {
-            Ok(result) => {
-                match result.result {
-                    MatchConfirmDenyResult::DENY => {
-                        denials.push(PauseReason {
-                            reason_type: "denial".to_string(),
-                            command: result.command,
-                            rule: result.rule,
-                            tool_call_id: tool_call.id.clone(),
-                            integr_config_path: tool.has_config_path(),
-                        });
-                    }
-                    MatchConfirmDenyResult::CONFIRMATION => {
-                        confirmations.push(PauseReason {
-                            reason_type: "confirmation".to_string(),
-                            command: result.command,
-                            rule: result.rule,
-                            tool_call_id: tool_call.id.clone(),
-                            integr_config_path: tool.has_config_path(),
-                        });
-                    }
-                    _ => {}
+            Ok(result) => match result.result {
+                MatchConfirmDenyResult::DENY => {
+                    denials.push(PauseReason {
+                        reason_type: "denial".to_string(),
+                        command: result.command,
+                        rule: result.rule,
+                        tool_call_id: tool_call.id.clone(),
+                        integr_config_path: tool.has_config_path(),
+                    });
                 }
-            }
+                MatchConfirmDenyResult::CONFIRMATION => {
+                    confirmations.push(PauseReason {
+                        reason_type: "confirmation".to_string(),
+                        command: result.command,
+                        rule: result.rule,
+                        tool_call_id: tool_call.id.clone(),
+                        integr_config_path: tool.has_config_path(),
+                    });
+                }
+                _ => {}
+            },
             Err(e) => {
-                info!("Error checking confirmation for {}: {}", tool_call.function.name, e);
+                info!(
+                    "Error checking confirmation for {}: {}",
+                    tool_call.function.name, e
+                );
             }
         }
     }
@@ -333,30 +352,34 @@ pub async fn execute_tools_with_session(
     let budget = match ToolBudget::try_from_n_ctx(n_ctx) {
         Ok(b) => b,
         Err(e) => {
-            let error_messages: Vec<ChatMessage> = tool_calls.iter().map(|tc| {
-                ChatMessage {
+            let error_messages: Vec<ChatMessage> = tool_calls
+                .iter()
+                .map(|tc| ChatMessage {
                     message_id: Uuid::new_v4().to_string(),
                     role: "tool".to_string(),
                     content: ChatContent::SimpleText(format!("Error: {}", e)),
                     tool_call_id: tc.id.clone(),
                     tool_failed: Some(true),
                     ..Default::default()
-                }
-            }).collect();
+                })
+                .collect();
             return (error_messages, false);
         }
     };
 
-    let ccx = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        n_ctx,
-        CHAT_TOP_N,
-        false,
-        messages.to_vec(),
-        thread.id.clone(),
-        false,
-        thread.model.clone(),
-    ).await));
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            n_ctx,
+            CHAT_TOP_N,
+            false,
+            messages.to_vec(),
+            thread.id.clone(),
+            false,
+            thread.model.clone(),
+        )
+        .await,
+    ));
 
     {
         let mut ccx_locked = ccx.lock().await;
@@ -368,7 +391,8 @@ pub async fn execute_tools_with_session(
 
     let cancel_flag = spawn_subchat_bridge(ccx.clone(), session_arc);
 
-    let result = execute_tools_inner(gcx, ccx, tool_calls, chat_mode, budget, options, messages).await;
+    let result =
+        execute_tools_inner(gcx, ccx, tool_calls, chat_mode, budget, options, messages).await;
 
     cancel_flag.store(true, Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -385,13 +409,15 @@ async fn execute_tools_inner(
     options: ExecuteToolsOptions,
     messages: &[ChatMessage],
 ) -> (Vec<ChatMessage>, bool) {
-    let mut all_tools = crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode).await
-        .into_iter()
-        .map(|tool| {
-            let spec = tool.tool_description();
-            (spec.name, tool)
-        })
-        .collect::<indexmap::IndexMap<_, _>>();
+    let mut all_tools =
+        crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
+            .await
+            .into_iter()
+            .map(|tool| {
+                let spec = tool.tool_description();
+                (spec.name, tool)
+            })
+            .collect::<indexmap::IndexMap<_, _>>();
 
     let mut tool_messages: Vec<ChatMessage> = Vec::new();
     let mut context_files: Vec<ContextFile> = Vec::new();
@@ -403,7 +429,10 @@ async fn execute_tools_inner(
                 tool_messages.push(ChatMessage {
                     message_id: Uuid::new_v4().to_string(),
                     role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!("Error: tool '{}' not found", tool_call.function.name)),
+                    content: ChatContent::SimpleText(format!(
+                        "Error: tool '{}' not found",
+                        tool_call.function.name
+                    )),
                     tool_call_id: tool_call.id.clone(),
                     tool_failed: Some(true),
                     ..Default::default()
@@ -473,7 +502,8 @@ async fn execute_tools_inner(
         budget,
         pp_settings,
         messages,
-    ).await;
+    )
+    .await;
 
     (results, true)
 }
@@ -494,30 +524,34 @@ pub async fn execute_tools(
     let budget = match ToolBudget::try_from_n_ctx(n_ctx) {
         Ok(b) => b,
         Err(e) => {
-            let error_messages: Vec<ChatMessage> = tool_calls.iter().map(|tc| {
-                ChatMessage {
+            let error_messages: Vec<ChatMessage> = tool_calls
+                .iter()
+                .map(|tc| ChatMessage {
                     message_id: Uuid::new_v4().to_string(),
                     role: "tool".to_string(),
                     content: ChatContent::SimpleText(format!("Error: {}", e)),
                     tool_call_id: tc.id.clone(),
                     tool_failed: Some(true),
                     ..Default::default()
-                }
-            }).collect();
+                })
+                .collect();
             return (error_messages, false);
         }
     };
 
-    let ccx = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        n_ctx,
-        CHAT_TOP_N,
-        false,
-        messages.to_vec(),
-        thread.id.clone(),
-        false,
-        thread.model.clone(),
-    ).await));
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            n_ctx,
+            CHAT_TOP_N,
+            false,
+            messages.to_vec(),
+            thread.id.clone(),
+            false,
+            thread.model.clone(),
+        )
+        .await,
+    ));
 
     {
         let mut ccx_locked = ccx.lock().await;
@@ -527,13 +561,15 @@ pub async fn execute_tools(
         }
     }
 
-    let mut all_tools = crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode).await
-        .into_iter()
-        .map(|tool| {
-            let spec = tool.tool_description();
-            (spec.name, tool)
-        })
-        .collect::<indexmap::IndexMap<_, _>>();
+    let mut all_tools =
+        crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
+            .await
+            .into_iter()
+            .map(|tool| {
+                let spec = tool.tool_description();
+                (spec.name, tool)
+            })
+            .collect::<indexmap::IndexMap<_, _>>();
 
     let mut tool_messages: Vec<ChatMessage> = Vec::new();
     let mut context_files: Vec<ContextFile> = Vec::new();
@@ -545,7 +581,10 @@ pub async fn execute_tools(
                 tool_messages.push(ChatMessage {
                     message_id: Uuid::new_v4().to_string(),
                     role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!("Error: tool '{}' not found", tool_call.function.name)),
+                    content: ChatContent::SimpleText(format!(
+                        "Error: tool '{}' not found",
+                        tool_call.function.name
+                    )),
                     tool_call_id: tool_call.id.clone(),
                     tool_failed: Some(true),
                     ..Default::default()
@@ -615,9 +654,8 @@ pub async fn execute_tools(
         budget,
         pp_settings,
         messages,
-    ).await;
+    )
+    .await;
 
     (results, true)
 }
-
-

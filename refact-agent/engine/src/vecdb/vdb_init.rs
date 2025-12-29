@@ -14,7 +14,9 @@ use tokio::sync::RwLock as ARwLock;
 
 async fn get_default_vecdb_dir(gcx: Arc<ARwLock<GlobalContext>>) -> Option<PathBuf> {
     let project_dirs = get_project_dirs(gcx).await;
-    project_dirs.first().map(|root| root.join(".refact").join("vecdb"))
+    project_dirs
+        .first()
+        .map(|root| root.join(".refact").join("vecdb"))
 }
 
 pub struct VecDbInitConfig {
@@ -64,18 +66,28 @@ pub async fn init_vecdb_fail_safe(
 
     loop {
         attempt += 1;
-        info!("VecDb init attempt {}/{}", attempt, init_config.max_attempts);
+        info!(
+            "VecDb init attempt {}/{}",
+            attempt, init_config.max_attempts
+        );
 
-        match VecDb::init(vecdb_dir, legacy_cache_dir, cmdline.clone(), constants.clone()).await {
+        match VecDb::init(
+            vecdb_dir,
+            legacy_cache_dir,
+            cmdline.clone(),
+            constants.clone(),
+        )
+        .await
+        {
             Ok(vecdb) => {
                 info!("Successfully initialized VecDb on attempt {}", attempt);
-                
+
                 if init_config.test_search_after_init {
                     match vecdb_test_search(&vecdb).await {
                         Ok(_) => {
                             info!("VecDb test search successful");
                             return Ok(vecdb);
-                        },
+                        }
                         Err(err) => {
                             warn!("VecDb test search failed: {}", err);
                             if attempt >= init_config.max_attempts {
@@ -86,10 +98,13 @@ pub async fn init_vecdb_fail_safe(
                 } else {
                     return Ok(vecdb);
                 }
-            },
+            }
             Err(err) => {
                 if attempt >= init_config.max_attempts {
-                    error!("VecDb initialization failed after {} attempts. Last error: {}", attempt, err);
+                    error!(
+                        "VecDb initialization failed after {} attempts. Last error: {}",
+                        attempt, err
+                    );
                     return Err(VecDbInitError::InitializationError(err));
                 } else {
                     warn!(
@@ -97,8 +112,9 @@ pub async fn init_vecdb_fail_safe(
                         attempt, err, delay
                     );
                     sleep(delay).await;
-                    
-                    let new_delay_ms = (delay.as_millis() as f64 * init_config.backoff_factor) as u64;
+
+                    let new_delay_ms =
+                        (delay.as_millis() as f64 * init_config.backoff_factor) as u64;
                     delay = Duration::from_millis(new_delay_ms.min(init_config.max_delay_ms));
                 }
             }
@@ -110,7 +126,7 @@ async fn vecdb_test_search(vecdb: &VecDb) -> Result<(), String> {
     let test_query = "test query".to_string();
     let top_n = 3;
     let filter = None;
-    
+
     match VecdbSearch::vecdb_search(vecdb, test_query, top_n, filter).await {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Test search failed: {}", e)),
@@ -142,21 +158,24 @@ pub async fn initialize_vecdb_with_context(
         cmdline.clone(),
         constants,
         config,
-    ).await?;
-    
+    )
+    .await?;
+
     debug!("VecDb initialization successful, updating global context");
-    
+
     let vec_db_arc = Arc::new(AMutex::new(Some(vec_db)));
     {
         let mut gcx_locked = gcx.write().await;
         gcx_locked.vec_db = vec_db_arc.clone();
         gcx_locked.vec_db_error = "".to_string();
     }
-    
+
     debug!("Enqueuing workspace files for vectorization");
-    crate::files_in_workspace::enqueue_all_files_from_workspace_folders(gcx.clone(), true, true).await;
-    crate::files_in_jsonl::enqueue_all_docs_from_jsonl_but_read_first(gcx.clone(), true, true).await;
-    
+    crate::files_in_workspace::enqueue_all_files_from_workspace_folders(gcx.clone(), true, true)
+        .await;
+    crate::files_in_jsonl::enqueue_all_docs_from_jsonl_but_read_first(gcx.clone(), true, true)
+        .await;
+
     debug!("Starting background tasks for vectorization");
     {
         let vec_db_locked = vec_db_arc.lock().await;
@@ -165,7 +184,7 @@ pub async fn initialize_vecdb_with_context(
             let _background_tasks = BackgroundTasksHolder::new(tasks);
         }
     }
-    
+
     info!("VecDb initialization and setup complete");
     Ok(())
 }

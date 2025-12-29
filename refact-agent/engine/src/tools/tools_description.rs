@@ -100,9 +100,7 @@ pub struct ToolConfig {
 
 impl Default for ToolConfig {
     fn default() -> Self {
-        ToolConfig {
-            enabled: true,
-        }
+        ToolConfig { enabled: true }
     }
 }
 
@@ -131,16 +129,22 @@ pub trait Tool: Send + Sync {
     async fn match_against_confirm_deny(
         &self,
         ccx: Arc<AMutex<AtCommandsContext>>,
-        args: &HashMap<String, Value>
+        args: &HashMap<String, Value>,
     ) -> Result<MatchConfirmDeny, String> {
-        let command_to_match = self.command_to_match_against_confirm_deny(ccx.clone(), &args).await.map_err(|e| {
-            format!("Error getting tool command to match: {}", e)
-        })?;
+        let command_to_match = self
+            .command_to_match_against_confirm_deny(ccx.clone(), &args)
+            .await
+            .map_err(|e| format!("Error getting tool command to match: {}", e))?;
 
         if !command_to_match.is_empty() {
             if let Some(rules) = &self.confirm_deny_rules() {
-                tracing::info!("confirmation: match {:?} against {:?}", command_to_match, rules);
-                let (is_denied, deny_rule) = command_should_be_denied(&command_to_match, &rules.deny);
+                tracing::info!(
+                    "confirmation: match {:?} against {:?}",
+                    command_to_match,
+                    rules
+                );
+                let (is_denied, deny_rule) =
+                    command_should_be_denied(&command_to_match, &rules.deny);
                 if is_denied {
                     return Ok(MatchConfirmDeny {
                         result: MatchConfirmDenyResult::DENY,
@@ -148,7 +152,8 @@ pub trait Tool: Send + Sync {
                         rule: deny_rule.clone(),
                     });
                 }
-                let (needs_confirmation, confirmation_rule) = command_should_be_confirmed_by_user(&command_to_match, &rules.ask_user);
+                let (needs_confirmation, confirmation_rule) =
+                    command_should_be_confirmed_by_user(&command_to_match, &rules.ask_user);
                 if needs_confirmation {
                     return Ok(MatchConfirmDeny {
                         result: MatchConfirmDenyResult::CONFIRMATION,
@@ -175,9 +180,7 @@ pub trait Tool: Send + Sync {
         Ok("".to_string())
     }
 
-    fn confirm_deny_rules(
-        &self,
-    ) -> Option<IntegrationConfirmation> {
+    fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
         None
     }
 
@@ -198,30 +201,36 @@ pub trait Tool: Send + Sync {
         let config: serde_yaml::Value = serde_yaml::from_str(&config)
             .map_err(|e| format!("Error parsing config file: {}", e))?;
 
-        let config = config.get("tools")
-            .and_then(|tools| tools.get(&tool_name));
+        let config = config.get("tools").and_then(|tools| tools.get(&tool_name));
 
         match config {
             None => Ok(ToolConfig::default()),
             Some(config) => {
-                let config: ToolConfig = serde_yaml::from_value(config.clone())
-                    .unwrap_or_default();
+                let config: ToolConfig = serde_yaml::from_value(config.clone()).unwrap_or_default();
                 Ok(config)
             }
         }
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }   // "ast", "vecdb"
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    } // "ast", "vecdb"
 
     #[allow(dead_code)] // Trait method for future usage tracking
     fn usage(&mut self) -> &mut Option<ChatUsage> {
         static mut DEFAULT_USAGE: Option<ChatUsage> = None;
         #[allow(static_mut_refs)]
-        unsafe { &mut DEFAULT_USAGE }
+        unsafe {
+            &mut DEFAULT_USAGE
+        }
     }
 }
 
-pub async fn set_tool_config(config_path: String, tool_name: String, new_config: ToolConfig) -> Result<(), String> {
+pub async fn set_tool_config(
+    config_path: String,
+    tool_name: String,
+    new_config: ToolConfig,
+) -> Result<(), String> {
     let config_file = tokio::fs::read_to_string(&config_path)
         .await
         .map_err(|e| format!("Error reading config file: {}", e))?;
@@ -229,11 +238,18 @@ pub async fn set_tool_config(config_path: String, tool_name: String, new_config:
     let mut config: serde_yaml::Mapping = serde_yaml::from_str(&config_file)
         .map_err(|e| format!("Error parsing config file: {}", e))?;
 
-    let tools: &mut serde_yaml::Mapping = match config.get_mut("tools").and_then(|tools| tools.as_mapping_mut()) {
+    let tools: &mut serde_yaml::Mapping = match config
+        .get_mut("tools")
+        .and_then(|tools| tools.as_mapping_mut())
+    {
         Some(tools) => tools,
         None => {
-            config.insert(serde_yaml::Value::String("tools".to_string()), serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
-            config.get_mut("tools")
+            config.insert(
+                serde_yaml::Value::String("tools".to_string()),
+                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            );
+            config
+                .get_mut("tools")
                 .expect("tools was just inserted")
                 .as_mapping_mut()
                 .expect("tools is a mapping, it was just inserted")
@@ -241,9 +257,9 @@ pub async fn set_tool_config(config_path: String, tool_name: String, new_config:
     };
 
     tools.insert(
-        serde_yaml::Value::String(tool_name), 
+        serde_yaml::Value::String(tool_name),
         serde_yaml::to_value(new_config)
-            .map_err_with_prefix("ToolConfig should always be serializable.")?
+            .map_err_with_prefix("ToolConfig should always be serializable.")?,
     );
 
     tokio::fs::write(config_path, serde_yaml::to_string(&config).unwrap())
@@ -259,7 +275,9 @@ where
 {
     let s = String::deserialize(deserializer)?;
     if !s.chars().next().map_or(false, |c| c.is_ascii_lowercase())
-        || !s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        || !s
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
         || s.contains("__")
         || s.ends_with('_')
     {
@@ -275,7 +293,7 @@ fn default_param_type() -> String {
 }
 
 /// TODO: Think a better way to know if we can send array type to the model
-/// 
+///
 /// For now, anthropic models support it, gpt models don't, for other, we'll need to test
 pub fn model_supports_array_param_type(model_id: &str) -> bool {
     model_id.contains("claude")
@@ -287,15 +305,18 @@ pub fn make_openai_tool_value(
     parameters_required: Vec<String>,
     parameters: Vec<ToolParam>,
 ) -> Value {
-    let params_properties = parameters.iter().map(|param| {
-        (
-            param.name.clone(),
-            json!({
-                "type": param.param_type,
-                "description": param.description
-            })
-        )
-    }).collect::<serde_json::Map<_, _>>();
+    let params_properties = parameters
+        .iter()
+        .map(|param| {
+            (
+                param.name.clone(),
+                json!({
+                    "type": param.param_type,
+                    "description": param.description
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
 
     let function_json = json!({
         "type": "function",
@@ -326,7 +347,11 @@ impl ToolDesc {
         if !model_supports_array_param_type(model) {
             for param in &self.parameters {
                 if param.param_type == "array" {
-                    tracing::warn!("Tool {} has array parameter, but model {} does not support it", self.name, model);
+                    tracing::warn!(
+                        "Tool {} has array parameter, but model {} does not support it",
+                        self.name,
+                        model
+                    );
                     return false;
                 }
             }

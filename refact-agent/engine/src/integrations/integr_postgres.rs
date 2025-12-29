@@ -8,7 +8,9 @@ use tokio::sync::RwLock as ARwLock;
 use async_trait::async_trait;
 
 use crate::global_context::GlobalContext;
-use crate::integrations::integr_abstract::{IntegrationTrait, IntegrationCommon, IntegrationConfirmation};
+use crate::integrations::integr_abstract::{
+    IntegrationTrait, IntegrationCommon, IntegrationConfirmation,
+};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::ContextEnum;
 use crate::call_validation::{ChatContent, ChatMessage, ChatUsage};
@@ -18,7 +20,6 @@ use crate::postprocessing::pp_row_limiter::RowLimiter;
 use crate::postprocessing::pp_command_output::OutputFilter;
 
 use super::process_io_utils::AnsiStrippable;
-
 
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
 pub struct SettingsPostgres {
@@ -33,21 +34,28 @@ pub struct SettingsPostgres {
 
 #[derive(Default)]
 pub struct ToolPostgres {
-    pub common:  IntegrationCommon,
+    pub common: IntegrationCommon,
     pub settings_postgres: SettingsPostgres,
     pub config_path: String,
 }
 
 #[async_trait]
 impl IntegrationTrait for ToolPostgres {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-    async fn integr_settings_apply(&mut self, _gcx: Arc<ARwLock<GlobalContext>>, config_path: String, value: &serde_json::Value) -> Result<(), serde_json::Error> {
-      self.settings_postgres = serde_json::from_value(value.clone())?;
-      self.common = serde_json::from_value(value.clone())?;
-      self.config_path = config_path;
-      Ok(())
-  }
+    async fn integr_settings_apply(
+        &mut self,
+        _gcx: Arc<ARwLock<GlobalContext>>,
+        config_path: String,
+        value: &serde_json::Value,
+    ) -> Result<(), serde_json::Error> {
+        self.settings_postgres = serde_json::from_value(value.clone())?;
+        self.common = serde_json::from_value(value.clone())?;
+        self.config_path = config_path;
+        Ok(())
+    }
 
     fn integr_settings_as_json(&self) -> Value {
         serde_json::to_value(&self.settings_postgres).unwrap()
@@ -57,7 +65,10 @@ impl IntegrationTrait for ToolPostgres {
         self.common.clone()
     }
 
-    async fn integr_tools(&self, _integr_name: &str) -> Vec<Box<dyn crate::tools::tools_description::Tool + Send>> {
+    async fn integr_tools(
+        &self,
+        _integr_name: &str,
+    ) -> Vec<Box<dyn crate::tools::tools_description::Tool + Send>> {
         vec![Box::new(ToolPostgres {
             common: self.common.clone(),
             settings_postgres: self.settings_postgres.clone(),
@@ -65,8 +76,7 @@ impl IntegrationTrait for ToolPostgres {
         })]
     }
 
-    fn integr_schema(&self) -> &str
-    {
+    fn integr_schema(&self) -> &str {
         POSTGRES_INTEGRATION_SCHEMA
     }
 }
@@ -93,11 +103,20 @@ impl ToolPostgres {
             .arg(query)
             .stdin(std::process::Stdio::null())
             .output();
-        if let Ok(output) = tokio::time::timeout(tokio::time::Duration::from_secs(QUERY_TIMEOUT_SECS), output_future).await {
+        if let Ok(output) = tokio::time::timeout(
+            tokio::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
+            output_future,
+        )
+        .await
+        {
             if output.is_err() {
                 let err_text = format!("{}", output.unwrap_err());
                 tracing::error!("psql didn't work:\n{}\n{}", query, err_text);
-                return Err(format!("{}, psql failed:\n{}", go_to_configuration_message("postgres"), err_text));
+                return Err(format!(
+                    "{}, psql failed:\n{}",
+                    go_to_configuration_message("postgres"),
+                    err_text
+                ));
             }
             let output = output.unwrap();
             if output.status.success() {
@@ -109,18 +128,27 @@ impl ToolPostgres {
                 let limiter = RowLimiter::new(MAX_ROWS, MAX_CELL_CHARS);
                 let limited_stderr = limiter.limit_text_rows(&stderr_string);
                 tracing::error!("psql didn't work:\n{}\n{}", query, limited_stderr);
-                Err(format!("{}, psql failed:\n{}", go_to_configuration_message("postgres"), limited_stderr))
+                Err(format!(
+                    "{}, psql failed:\n{}",
+                    go_to_configuration_message("postgres"),
+                    limited_stderr
+                ))
             }
         } else {
             tracing::error!("psql timed out:\n{}", query);
-            Err(format!("⚠️ psql timed out after {}s. 💡 Add LIMIT to query or check connection", QUERY_TIMEOUT_SECS))
+            Err(format!(
+                "⚠️ psql timed out after {}s. 💡 Add LIMIT to query or check connection",
+                QUERY_TIMEOUT_SECS
+            ))
         }
     }
 }
 
 #[async_trait]
 impl Tool for ToolPostgres {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -190,7 +218,9 @@ impl Tool for ToolPostgres {
     fn usage(&mut self) -> &mut Option<ChatUsage> {
         static mut DEFAULT_USAGE: Option<ChatUsage> = None;
         #[allow(static_mut_refs)]
-        unsafe { &mut DEFAULT_USAGE }
+        unsafe {
+            &mut DEFAULT_USAGE
+        }
     }
 
     fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {

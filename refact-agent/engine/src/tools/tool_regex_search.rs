@@ -11,7 +11,6 @@ use tokio::sync::Mutex as AMutex;
 use tokio::sync::RwLock as ARwLock;
 use tracing::info;
 
-
 use crate::at_commands::at_commands::{vec_context_file_to_context_tools, AtCommandsContext};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
 use crate::postprocessing::pp_command_output::OutputFilter;
@@ -30,14 +29,15 @@ async fn search_single_file(
     file_path: String,
     regex: &Regex,
 ) -> Vec<ContextFile> {
-    let file_content = match get_file_text_from_memory_or_disk(gcx.clone(), &PathBuf::from(&file_path)).await {
-        Ok(content) => content.to_string(),
-        Err(_) => return Vec::new(),
-    };
+    let file_content =
+        match get_file_text_from_memory_or_disk(gcx.clone(), &PathBuf::from(&file_path)).await {
+            Ok(content) => content.to_string(),
+            Err(_) => return Vec::new(),
+        };
 
     let lines: Vec<&str> = file_content.lines().collect();
     let mut file_results = Vec::new();
-    
+
     for (line_idx, line) in lines.iter().enumerate() {
         if regex.is_match(line) {
             let match_line = line_idx + 1;
@@ -56,7 +56,7 @@ async fn search_single_file(
             });
         }
     }
-    
+
     file_results
 }
 
@@ -101,15 +101,18 @@ async fn smart_compress_results(
 ) -> String {
     const MAX_OUTPUT_SIZE: usize = 4 * 1024;
     const MAX_MATCHES_PER_FILE: usize = 25;
-    
+
     let total_matches = search_results.len();
     let total_files = file_results.len();
-    
+
     let mut content = format!("Regex search results for pattern '{}':\n\n", pattern);
-    content.push_str(&format!("Found {} matches across {} files\n\n", total_matches, total_files));
-    
+    content.push_str(&format!(
+        "Found {} matches across {} files\n\n",
+        total_matches, total_files
+    ));
+
     let mut file_paths: Vec<String> = file_results.keys().cloned().collect();
-    
+
     file_paths.sort_by(|a, b| {
         let a_depth = path_depth(a);
         let b_depth = path_depth(b);
@@ -119,31 +122,36 @@ async fn smart_compress_results(
             a_depth.cmp(&b_depth)
         }
     });
-    
+
     let mut used_files = HashSet::new();
     let mut estimated_size = content.len();
     let short_paths = shortify_paths(gcx.clone(), &file_paths).await;
-    
+
     for file_path in file_paths.iter() {
         if used_files.contains(file_path) {
             continue;
         }
         let idx = file_paths.iter().position(|p| p == file_path);
-        let short_path = idx
-            .and_then(|i| short_paths.get(i))
-            .unwrap_or(file_path);
+        let short_path = idx.and_then(|i| short_paths.get(i)).unwrap_or(file_path);
         let file_matches = file_results.get(file_path).unwrap();
         let file_header = format!("{}: ({} matches)\n", short_path, file_matches.len());
         estimated_size += file_header.len();
         content.push_str(&file_header);
         let matches_to_show = std::cmp::min(file_matches.len(), MAX_MATCHES_PER_FILE);
-        for file_match in file_matches.iter().take(matches_to_show).sorted_by_key(|m| m.line1) {
+        for file_match in file_matches
+            .iter()
+            .take(matches_to_show)
+            .sorted_by_key(|m| m.line1)
+        {
             let match_line = format!("    line {}\n", file_match.line1);
             estimated_size += match_line.len();
             content.push_str(&match_line);
         }
         if file_matches.len() > MAX_MATCHES_PER_FILE {
-            let summary = format!("    ... and {} more matches in this file\n", file_matches.len() - MAX_MATCHES_PER_FILE);
+            let summary = format!(
+                "    ... and {} more matches in this file\n",
+                file_matches.len() - MAX_MATCHES_PER_FILE
+            );
             estimated_size += summary.len();
             content.push_str(&summary);
         }
@@ -162,16 +170,23 @@ async fn smart_compress_results(
         ));
     }
     if estimated_size > MAX_OUTPUT_SIZE {
-        info!("Compressing `search_pattern` output: estimated {} bytes (exceeds 4KB limit)", estimated_size);
-        content.push_str("\n⚠️ Output compressed due to size. 💡 Use cat('file:line') to see specific matches\n");
+        info!(
+            "Compressing `search_pattern` output: estimated {} bytes (exceeds 4KB limit)",
+            estimated_size
+        );
+        content.push_str(
+            "\n⚠️ Output compressed due to size. 💡 Use cat('file:line') to see specific matches\n",
+        );
     }
     content
 }
 
 #[async_trait]
 impl Tool for ToolRegexSearch {
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
             name: "search_pattern".to_string(),
@@ -198,7 +213,7 @@ impl Tool for ToolRegexSearch {
             parameters_required: vec!["pattern".to_string(), "scope".to_string()],
         }
     }
-    
+
     async fn tool_execute(
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
@@ -208,15 +223,19 @@ impl Tool for ToolRegexSearch {
         let pattern = match args.get("pattern") {
             Some(Value::String(s)) => s.clone(),
             Some(v) => return Err(format!("argument `pattern` is not a string: {:?}", v)),
-            None => return Err("Missing argument `pattern` in the `search_pattern()` call.".to_string())
+            None => {
+                return Err("Missing argument `pattern` in the `search_pattern()` call.".to_string())
+            }
         };
-        
+
         let scope = match args.get("scope") {
             Some(Value::String(s)) => s.clone(),
             Some(v) => return Err(format!("argument `scope` is not a string: {:?}", v)),
-            None => return Err("Missing argument `scope` in the search_pattern() call.".to_string())
+            None => {
+                return Err("Missing argument `scope` in the search_pattern() call.".to_string())
+            }
         };
-        
+
         let ccx_lock = ccx.lock().await;
         let gcx = ccx_lock.global_context.clone();
         drop(ccx_lock);
@@ -227,7 +246,7 @@ impl Tool for ToolRegexSearch {
 
         let mut all_content = String::new();
         let mut all_search_results = Vec::new();
-        
+
         // 1. Path matches
         let regex = match Regex::new(&pattern) {
             Ok(r) => r,
@@ -265,7 +284,7 @@ impl Tool for ToolRegexSearch {
                         skip_pp: false,
                     };
                     all_search_results.push(cf);
-                },
+                }
                 Err(_) => {
                     tracing::warn!("Failed to read file '{}'. Skipping...", path);
                 }
@@ -280,13 +299,17 @@ impl Tool for ToolRegexSearch {
         } else {
             let mut file_results: HashMap<String, Vec<&ContextFile>> = HashMap::new();
             search_results.iter().for_each(|rec| {
-                file_results.entry(rec.file_name.clone()).or_insert(vec![]).push(rec)
+                file_results
+                    .entry(rec.file_name.clone())
+                    .or_insert(vec![])
+                    .push(rec)
             });
-            let pattern_content = smart_compress_results(&search_results, &file_results, gcx.clone(), &pattern).await;
+            let pattern_content =
+                smart_compress_results(&search_results, &file_results, gcx.clone(), &pattern).await;
             all_content.push_str(&pattern_content);
             all_search_results.extend(search_results);
         }
-        
+
         if all_search_results.is_empty() {
             return Err("⚠️ No matches found for pattern or path. 💡 Try broader scope ('workspace'), simpler pattern, or use (?i) for case-insensitive".to_string());
         }

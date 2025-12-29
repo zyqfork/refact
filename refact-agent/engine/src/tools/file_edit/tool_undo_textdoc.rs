@@ -7,7 +7,9 @@ use crate::tools::file_edit::auxiliary::{
     convert_edit_to_diffchunks, parse_path_for_update, sync_documents_ast,
 };
 use crate::tools::file_edit::undo_history::{get_undo_history, UndoEntry};
-use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{
+    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -56,12 +58,17 @@ pub async fn tool_undo_text_doc_exec(
     };
 
     if entries.is_empty() {
-        return Err(format!("⚠️ No undo history for {:?}. 💡 Only edits from this session can be undone", a.path));
+        return Err(format!(
+            "⚠️ No undo history for {:?}. 💡 Only edits from this session can be undone",
+            a.path
+        ));
     }
     if a.steps > entries.len() {
         return Err(format!(
             "⚠️ Only {} undo steps available, requested {}. 💡 Use steps:{}",
-            entries.len(), a.steps, entries.len()
+            entries.len(),
+            a.steps,
+            entries.len()
         ));
     }
 
@@ -72,8 +79,7 @@ pub async fn tool_undo_text_doc_exec(
         .map_err(|e| format!("⚠️ Failed to read {:?}: {}", a.path, e))?;
 
     if target_content.is_empty() {
-        fs::remove_file(&a.path)
-            .map_err(|e| format!("⚠️ Failed to delete {:?}: {}", a.path, e))?;
+        fs::remove_file(&a.path).map_err(|e| format!("⚠️ Failed to delete {:?}: {}", a.path, e))?;
     } else {
         fs::write(&a.path, target_content)
             .map_err(|e| format!("⚠️ Failed to write {:?}: {}", a.path, e))?;
@@ -86,13 +92,25 @@ pub async fn tool_undo_text_doc_exec(
         }
     }
 
-    gcx.write().await.documents_state.memory_document_map.remove(&a.path);
+    gcx.write()
+        .await
+        .documents_state
+        .memory_document_map
+        .remove(&a.path);
 
     let summary = if target_content.is_empty() {
-        format!("✅ Undid {} step(s), deleted {:?}", a.steps, a.path.file_name().unwrap_or_default())
+        format!(
+            "✅ Undid {} step(s), deleted {:?}",
+            a.steps,
+            a.path.file_name().unwrap_or_default()
+        )
     } else {
         sync_documents_ast(gcx.clone(), &a.path).await?;
-        format!("✅ Undid {} step(s) on {:?}", a.steps, a.path.file_name().unwrap_or_default())
+        format!(
+            "✅ Undid {} step(s) on {:?}",
+            a.steps,
+            a.path.file_name().unwrap_or_default()
+        )
     };
 
     let chunks = convert_edit_to_diffchunks(a.path.clone(), &current_content, target_content)?;
@@ -101,7 +119,9 @@ pub async fn tool_undo_text_doc_exec(
 
 #[async_trait]
 impl Tool for ToolUndoTextDoc {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn tool_execute(
         &mut self,
@@ -111,13 +131,16 @@ impl Tool for ToolUndoTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
         let (_, _, chunks, _summary) = tool_undo_text_doc_exec(gcx, args).await?;
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "diff".to_string(),
-            content: ChatContent::SimpleText(json!(chunks).to_string()),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "diff".to_string(),
+                content: ChatContent::SimpleText(json!(chunks).to_string()),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     async fn match_against_confirm_deny(
@@ -166,7 +189,8 @@ impl Tool for ToolUndoTextDoc {
             },
             agentic: false,
             experimental: false,
-            description: "Undo recent file edits from this session. Reverts to previous version.".to_string(),
+            description: "Undo recent file edits from this session. Reverts to previous version."
+                .to_string(),
             parameters: vec![
                 ToolParam {
                     name: "path".to_string(),

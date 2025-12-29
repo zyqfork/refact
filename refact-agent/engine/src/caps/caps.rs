@@ -10,8 +10,10 @@ use tracing::{info, warn};
 use crate::custom_error::MapErrToString;
 use crate::global_context::CommandLine;
 use crate::global_context::GlobalContext;
-use crate::caps::providers::{add_models_to_caps, read_providers_d, resolve_provider_api_key,
-    post_process_provider, CapsProvider};
+use crate::caps::providers::{
+    add_models_to_caps, read_providers_d, resolve_provider_api_key, post_process_provider,
+    CapsProvider,
+};
 use crate::caps::self_hosted::SelfHostedCaps;
 
 pub const CAPS_FILENAME: &str = "refact-caps";
@@ -56,7 +58,9 @@ pub struct BaseModelRecord {
     pub user_configured: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 pub trait HasBaseModelRecord {
     fn base(&self) -> &BaseModelRecord;
@@ -91,11 +95,17 @@ pub struct ChatModelRecord {
     pub default_temperature: Option<f32>,
 }
 
-pub fn default_chat_scratchpad() -> String { "PASSTHROUGH".to_string() }
+pub fn default_chat_scratchpad() -> String {
+    "PASSTHROUGH".to_string()
+}
 
 impl HasBaseModelRecord for ChatModelRecord {
-    fn base(&self) -> &BaseModelRecord { &self.base }
-    fn base_mut(&mut self) -> &mut BaseModelRecord { &mut self.base }
+    fn base(&self) -> &BaseModelRecord {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut BaseModelRecord {
+        &mut self.base
+    }
 }
 
 #[derive(Debug, Serialize, Clone, Deserialize, Default)]
@@ -123,8 +133,10 @@ pub enum CompletionModelFamily {
 
 impl CompletionModelFamily {
     pub fn to_string(self) -> String {
-        serde_json::to_value(self).ok()
-            .and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default()
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default()
     }
 
     pub fn all_variants() -> Vec<CompletionModelFamily> {
@@ -136,16 +148,24 @@ impl CompletionModelFamily {
     }
 }
 
-pub fn default_completion_scratchpad() -> String { "REPLACE_PASSTHROUGH".to_string() }
+pub fn default_completion_scratchpad() -> String {
+    "REPLACE_PASSTHROUGH".to_string()
+}
 
-pub fn default_completion_scratchpad_patch() -> serde_json::Value { serde_json::json!({
-    "context_format": "chat",
-    "rag_ratio": 0.5
-}) }
+pub fn default_completion_scratchpad_patch() -> serde_json::Value {
+    serde_json::json!({
+        "context_format": "chat",
+        "rag_ratio": 0.5
+    })
+}
 
 impl HasBaseModelRecord for CompletionModelRecord {
-    fn base(&self) -> &BaseModelRecord { &self.base }
-    fn base_mut(&mut self) -> &mut BaseModelRecord { &mut self.base }
+    fn base(&self) -> &BaseModelRecord {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut BaseModelRecord {
+        &mut self.base
+    }
 }
 
 #[derive(Debug, Serialize, Clone, Default, PartialEq)]
@@ -158,25 +178,34 @@ pub struct EmbeddingModelRecord {
     pub embedding_batch: usize,
 }
 
-pub fn default_rejection_threshold() -> f32 { 0.63 }
+pub fn default_rejection_threshold() -> f32 {
+    0.63
+}
 
-pub fn default_embedding_batch() -> usize { 64 }
+pub fn default_embedding_batch() -> usize {
+    64
+}
 
 impl HasBaseModelRecord for EmbeddingModelRecord {
-    fn base(&self) -> &BaseModelRecord { &self.base }
-    fn base_mut(&mut self) -> &mut BaseModelRecord { &mut self.base }
+    fn base(&self) -> &BaseModelRecord {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut BaseModelRecord {
+        &mut self.base
+    }
 }
 
 impl EmbeddingModelRecord {
     pub fn is_configured(&self) -> bool {
-        !self.base.name.is_empty() && (self.embedding_size > 0 || self.embedding_batch > 0 || self.base.n_ctx > 0)
+        !self.base.name.is_empty()
+            && (self.embedding_size > 0 || self.embedding_batch > 0 || self.base.n_ctx > 0)
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CapsMetadata {
     pub pricing: serde_json::Value,
-    pub features: Vec<String>
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -200,16 +229,17 @@ pub struct CodeAssistantCaps {
     pub defaults: DefaultModels,
 
     #[serde(default)]
-    pub caps_version: i64,  // need to reload if it increases on server, that happens when server configuration changes
+    pub caps_version: i64, // need to reload if it increases on server, that happens when server configuration changes
 
     #[serde(default)]
-    pub customization: String,  // on self-hosting server, allows to customize yaml_configs & friends for all engineers
+    pub customization: String, // on self-hosting server, allows to customize yaml_configs & friends for all engineers
 
     #[serde(default = "default_hf_tokenizer_template")]
-    pub hf_tokenizer_template: String,  // template for HuggingFace tokenizer URLs
+    pub hf_tokenizer_template: String, // template for HuggingFace tokenizer URLs
 
-    #[serde(default)]  // Need for metadata from cloud, e.g. pricing for models; used only in chat-js
-    pub metadata: CapsMetadata
+    #[serde(default)]
+    // Need for metadata from cloud, e.g. pricing for models; used only in chat-js
+    pub metadata: CapsMetadata,
 }
 
 fn default_telemetry_retrieve_my_own() -> String {
@@ -224,14 +254,28 @@ fn default_telemetry_basic_dest() -> String {
     "https://www.smallcloud.ai/v1/telemetry-basic".to_string()
 }
 
-pub fn normalize_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+pub fn normalize_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
     let s: String = String::deserialize(deserializer)?;
-    Ok(s.chars().map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect())
+    Ok(s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DefaultModels {
-    #[serde(default, alias = "code_completion_default_model", alias = "completion_model")]
+    #[serde(
+        default,
+        alias = "code_completion_default_model",
+        alias = "completion_model"
+    )]
     pub completion_default_model: String,
     #[serde(default, alias = "code_chat_default_model", alias = "chat_model")]
     pub chat_default_model: String,
@@ -281,8 +325,14 @@ pub async fn load_caps_value_from_url(
             .map_err(|_| "failed to parse address url".to_string())?;
 
         vec![
-            base_url.join(&CAPS_FILENAME).map_err(|_| "failed to join caps URL".to_string())?.to_string(),
-            base_url.join(&CAPS_FILENAME_FALLBACK).map_err(|_| "failed to join fallback caps URL".to_string())?.to_string(),
+            base_url
+                .join(&CAPS_FILENAME)
+                .map_err(|_| "failed to join caps URL".to_string())?
+                .to_string(),
+            base_url
+                .join(&CAPS_FILENAME_FALLBACK)
+                .map_err(|_| "failed to join fallback caps URL".to_string())?
+                .to_string(),
         ]
     };
 
@@ -290,8 +340,18 @@ pub async fn load_caps_value_from_url(
     let mut headers = reqwest::header::HeaderMap::new();
 
     if !cmdline.api_key.is_empty() {
-        headers.insert(reqwest::header::AUTHORIZATION, reqwest::header::HeaderValue::from_str(&format!("Bearer {}", cmdline.api_key)).unwrap());
-        headers.insert(reqwest::header::USER_AGENT, reqwest::header::HeaderValue::from_str(&format!("refact-lsp {}", crate::version::build::PKG_VERSION)).unwrap());
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", cmdline.api_key)).unwrap(),
+        );
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_str(&format!(
+                "refact-lsp {}",
+                crate::version::build::PKG_VERSION
+            ))
+            .unwrap(),
+        );
     }
 
     let mut last_status = 0;
@@ -299,7 +359,8 @@ pub async fn load_caps_value_from_url(
 
     for url in &caps_urls {
         info!("fetching caps from {}", url);
-        let response = http_client.get(url)
+        let response = http_client
+            .get(url)
             .headers(headers.clone())
             .send()
             .await
@@ -312,7 +373,10 @@ pub async fn load_caps_value_from_url(
                 return Ok((json_value, url.clone()));
             }
             last_response_json = Some(json_value.clone());
-            warn!("status={}; server responded with:\n{}", last_status, json_value);
+            warn!(
+                "status={}; server responded with:\n{}",
+                last_status, json_value
+            );
         }
     }
 
@@ -331,27 +395,37 @@ pub async fn load_caps(
 ) -> Result<Arc<CodeAssistantCaps>, String> {
     let (config_dir, cmdline_api_key, experimental) = {
         let gcx_locked = gcx.read().await;
-        (gcx_locked.config_dir.clone(), gcx_locked.cmdline.api_key.clone(), gcx_locked.cmdline.experimental)
+        (
+            gcx_locked.config_dir.clone(),
+            gcx_locked.cmdline.api_key.clone(),
+            gcx_locked.cmdline.experimental,
+        )
     };
 
     let (caps_value, caps_url) = load_caps_value_from_url(cmdline, gcx).await?;
 
-    let (mut caps, server_providers) = match serde_json::from_value::<SelfHostedCaps>(caps_value.clone()) {
-        Ok(self_hosted_caps) => (self_hosted_caps.into_caps(&caps_url, &cmdline_api_key)?, Vec::new()),
-        Err(_) => {
-            let caps = serde_json::from_value::<CodeAssistantCaps>(caps_value.clone())
-                .map_err_with_prefix("Failed to parse caps:")?;
-            let mut server_provider = serde_json::from_value::<CapsProvider>(caps_value)
-                .map_err_with_prefix("Failed to parse caps provider:")?;
-            resolve_relative_urls(&mut server_provider, &caps_url)?;
-            (caps, vec![server_provider])
-        }
-    };
+    let (mut caps, server_providers) =
+        match serde_json::from_value::<SelfHostedCaps>(caps_value.clone()) {
+            Ok(self_hosted_caps) => (
+                self_hosted_caps.into_caps(&caps_url, &cmdline_api_key)?,
+                Vec::new(),
+            ),
+            Err(_) => {
+                let caps = serde_json::from_value::<CodeAssistantCaps>(caps_value.clone())
+                    .map_err_with_prefix("Failed to parse caps:")?;
+                let mut server_provider = serde_json::from_value::<CapsProvider>(caps_value)
+                    .map_err_with_prefix("Failed to parse caps provider:")?;
+                resolve_relative_urls(&mut server_provider, &caps_url)?;
+                (caps, vec![server_provider])
+            }
+        };
 
     caps.telemetry_basic_dest = relative_to_full_url(&caps_url, &caps.telemetry_basic_dest)?;
-    caps.telemetry_basic_retrieve_my_own = relative_to_full_url(&caps_url, &caps.telemetry_basic_retrieve_my_own)?;
+    caps.telemetry_basic_retrieve_my_own =
+        relative_to_full_url(&caps_url, &caps.telemetry_basic_retrieve_my_own)?;
 
-    let (mut providers, error_log) = read_providers_d(server_providers, &config_dir, experimental).await;
+    let (mut providers, error_log) =
+        read_providers_d(server_providers, &config_dir, experimental).await;
     providers.retain(|p| p.enabled);
     for e in error_log {
         tracing::error!("{e}");
@@ -376,18 +450,16 @@ pub fn strip_model_from_finetune(model: &str) -> String {
     model.split(":").next().unwrap().to_string()
 }
 
-pub fn relative_to_full_url(
-    caps_url: &str,
-    maybe_relative_url: &str,
-) -> Result<String, String> {
+pub fn relative_to_full_url(caps_url: &str, maybe_relative_url: &str) -> Result<String, String> {
     if maybe_relative_url.starts_with("http") {
         Ok(maybe_relative_url.to_string())
     } else if maybe_relative_url.is_empty() {
         Ok("".to_string())
     } else {
-        let base_url = Url::parse(caps_url)
-            .map_err(|_| format!("failed to parse caps url: {}", caps_url))?;
-        let joined_url = base_url.join(maybe_relative_url)
+        let base_url =
+            Url::parse(caps_url).map_err(|_| format!("failed to parse caps url: {}", caps_url))?;
+        let joined_url = base_url
+            .join(maybe_relative_url)
             .map_err(|_| format!("failed to join url: {}", maybe_relative_url))?;
         Ok(joined_url.to_string())
     }
@@ -397,9 +469,15 @@ pub fn resolve_model<'a, T>(
     models: &'a IndexMap<String, Arc<T>>,
     model_id: &str,
 ) -> Result<Arc<T>, String> {
-    models.get(model_id).or_else(
-        || models.get(&strip_model_from_finetune(model_id))
-    ).cloned().ok_or(format!("Model '{}' not found. Server has the following models: {:?}", model_id, models.keys()))
+    models
+        .get(model_id)
+        .or_else(|| models.get(&strip_model_from_finetune(model_id)))
+        .cloned()
+        .ok_or(format!(
+            "Model '{}' not found. Server has the following models: {:?}",
+            model_id,
+            models.keys()
+        ))
 }
 
 pub fn resolve_chat_model<'a>(
@@ -428,10 +506,14 @@ pub fn resolve_completion_model<'a>(
     match resolve_model(&caps.completion_models, model_id) {
         Ok(model) => Ok(model),
         Err(first_err) if try_refact_fallbacks => {
-            if let Ok(model) = resolve_model(&caps.completion_models, &format!("refact/{model_id}")) {
+            if let Ok(model) = resolve_model(&caps.completion_models, &format!("refact/{model_id}"))
+            {
                 return Ok(model);
             }
-            if let Ok(model) = resolve_model(&caps.completion_models, &format!("refact_self_hosted/{model_id}")) {
+            if let Ok(model) = resolve_model(
+                &caps.completion_models,
+                &format!("refact_self_hosted/{model_id}"),
+            ) {
                 return Ok(model);
             }
             Err(first_err)

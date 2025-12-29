@@ -17,13 +17,17 @@ use super::system_context::{
 };
 use crate::call_validation::{ChatMessage, ChatContent, ChatMode};
 
-
 pub async fn get_default_system_prompt(
     gcx: Arc<ARwLock<GlobalContext>>,
     chat_mode: ChatMode,
 ) -> String {
     let mut error_log = Vec::new();
-    let tconfig = crate::yaml_configs::customization_loader::load_customization(gcx.clone(), true, &mut error_log).await;
+    let tconfig = crate::yaml_configs::customization_loader::load_customization(
+        gcx.clone(),
+        true,
+        &mut error_log,
+    )
+    .await;
     for e in error_log.iter() {
         tracing::error!("{e}");
     }
@@ -34,22 +38,27 @@ pub async fn get_default_system_prompt(
         ChatMode::CONFIGURE => "configurator",
         ChatMode::PROJECT_SUMMARY => "project_summary",
     };
-    let system_prompt = tconfig.system_prompts.get(prompt_key).map_or_else(|| {
-        tracing::error!("cannot find system prompt `{}`", prompt_key);
-        String::new()
-    }, |x| x.text.clone());
+    let system_prompt = tconfig.system_prompts.get(prompt_key).map_or_else(
+        || {
+            tracing::error!("cannot find system prompt `{}`", prompt_key);
+            String::new()
+        },
+        |x| x.text.clone(),
+    );
     system_prompt
 }
 
-async fn _workspace_info(
-    workspace_dirs: &[String],
-    active_file_path: &Option<PathBuf>,
-) -> String
-{
+async fn _workspace_info(workspace_dirs: &[String], active_file_path: &Option<PathBuf>) -> String {
     async fn get_vcs_info(detect_vcs_at: &PathBuf) -> String {
         let mut info = String::new();
-        if let Some((vcs_path, vcs_type)) = crate::files_in_workspace::detect_vcs_for_a_file_path(detect_vcs_at).await {
-            info.push_str(&format!("\nThe project is under {} version control, located at:\n{}", vcs_type, vcs_path.display()));
+        if let Some((vcs_path, vcs_type)) =
+            crate::files_in_workspace::detect_vcs_for_a_file_path(detect_vcs_at).await
+        {
+            info.push_str(&format!(
+                "\nThe project is under {} version control, located at:\n{}",
+                vcs_type,
+                vcs_path.display()
+            ));
         } else {
             info.push_str("\nThere's no version control detected, complain to user if they want to use anything git/hg/svn/etc.");
         }
@@ -57,13 +66,21 @@ async fn _workspace_info(
     }
     let mut info = String::new();
     if !workspace_dirs.is_empty() {
-        info.push_str(&format!("The current IDE workspace has these project directories:\n{}", workspace_dirs.join("\n")));
+        info.push_str(&format!(
+            "The current IDE workspace has these project directories:\n{}",
+            workspace_dirs.join("\n")
+        ));
     }
-    let detect_vcs_at_option = active_file_path.clone().or_else(|| workspace_dirs.get(0).map(PathBuf::from));
+    let detect_vcs_at_option = active_file_path
+        .clone()
+        .or_else(|| workspace_dirs.get(0).map(PathBuf::from));
     if let Some(detect_vcs_at) = detect_vcs_at_option {
         let vcs_info = get_vcs_info(&detect_vcs_at).await;
         if let Some(active_file) = active_file_path {
-            info.push_str(&format!("\n\nThe active IDE file is:\n{}", active_file.display()));
+            info.push_str(&format!(
+                "\n\nThe active IDE file is:\n{}",
+                active_file.display()
+            ));
         } else {
             info.push_str("\n\nThere is no active file currently open in the IDE.");
         }
@@ -74,10 +91,14 @@ async fn _workspace_info(
     info
 }
 
-pub async fn dig_for_project_summarization_file(gcx: Arc<ARwLock<GlobalContext>>) -> (bool, Option<String>) {
+pub async fn dig_for_project_summarization_file(
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> (bool, Option<String>) {
     match crate::files_correction::get_active_project_path(gcx.clone()).await {
         Some(active_project_path) => {
-            let summary_path = active_project_path.join(".refact").join("project_summary.yaml");
+            let summary_path = active_project_path
+                .join(".refact")
+                .join("project_summary.yaml");
             if !summary_path.exists() {
                 (false, Some(summary_path.to_string_lossy().to_string()))
             } else {
@@ -91,9 +112,7 @@ pub async fn dig_for_project_summarization_file(gcx: Arc<ARwLock<GlobalContext>>
     }
 }
 
-async fn _read_project_summary(
-    summary_path: String,
-) -> Option<String> {
+async fn _read_project_summary(summary_path: String) -> Option<String> {
     match fs::read_to_string(summary_path) {
         Ok(content) => {
             if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
@@ -113,7 +132,7 @@ async fn _read_project_summary(
                 tracing::error!("Failed to parse project summary YAML file.");
                 None
             }
-        },
+        }
         Err(e) => {
             tracing::error!("Failed to read project summary file: {}", e);
             None
@@ -128,11 +147,17 @@ pub async fn system_prompt_add_extra_instructions(
     chat_meta: &call_validation::ChatMeta,
 ) -> String {
     let include_project_info = chat_meta.include_project_info;
-    async fn workspace_files_info(gcx: &Arc<ARwLock<GlobalContext>>) -> (Vec<String>, Option<PathBuf>) {
+    async fn workspace_files_info(
+        gcx: &Arc<ARwLock<GlobalContext>>,
+    ) -> (Vec<String>, Option<PathBuf>) {
         let gcx_locked = gcx.read().await;
         let documents_state = &gcx_locked.documents_state;
         let dirs_locked = documents_state.workspace_folders.lock().unwrap();
-        let workspace_dirs = dirs_locked.clone().into_iter().map(|x| x.to_string_lossy().to_string()).collect();
+        let workspace_dirs = dirs_locked
+            .clone()
+            .into_iter()
+            .map(|x| x.to_string_lossy().to_string())
+            .collect();
         let active_file_path = documents_state.active_file_path.clone();
         (workspace_dirs, active_file_path)
     }
@@ -217,17 +242,21 @@ pub async fn system_prompt_add_extra_instructions(
     if system_prompt.contains("%KNOWLEDGE_INSTRUCTIONS%") {
         if include_project_info {
             let cfg = crate::yaml_configs::customization_loader::load_customization_compiled_in();
-            let knowledge_instructions = cfg.get("KNOWLEDGE_INSTRUCTIONS_META")
-                .map(|x| x.as_str().unwrap_or("").to_string()).unwrap_or("".to_string());
-            system_prompt = system_prompt.replace("%KNOWLEDGE_INSTRUCTIONS%", &knowledge_instructions);
+            let knowledge_instructions = cfg
+                .get("KNOWLEDGE_INSTRUCTIONS_META")
+                .map(|x| x.as_str().unwrap_or("").to_string())
+                .unwrap_or("".to_string());
+            system_prompt =
+                system_prompt.replace("%KNOWLEDGE_INSTRUCTIONS%", &knowledge_instructions);
         } else {
             system_prompt = system_prompt.replace("%KNOWLEDGE_INSTRUCTIONS%", "");
         }
     }
-    
+
     if system_prompt.contains("%PROJECT_SUMMARY%") {
         if include_project_info {
-            let (exists, summary_path_option) = dig_for_project_summarization_file(gcx.clone()).await;
+            let (exists, summary_path_option) =
+                dig_for_project_summarization_file(gcx.clone()).await;
             if exists {
                 if let Some(summary_path) = summary_path_option {
                     if let Some(project_info) = _read_project_summary(summary_path).await {
@@ -245,25 +274,28 @@ pub async fn system_prompt_add_extra_instructions(
     }
 
     if system_prompt.contains("%EXPLORE_FILE_EDIT_INSTRUCTIONS%") {
-        let replacement = if tool_names.contains("create_textdoc") || tool_names.contains("update_textdoc") {
-            "- Then use `*_textdoc()` tools to make changes.\n"
-        } else {
-            ""
-        };
+        let replacement =
+            if tool_names.contains("create_textdoc") || tool_names.contains("update_textdoc") {
+                "- Then use `*_textdoc()` tools to make changes.\n"
+            } else {
+                ""
+            };
 
         system_prompt = system_prompt.replace("%EXPLORE_FILE_EDIT_INSTRUCTIONS%", replacement);
     }
 
     if system_prompt.contains("%AGENT_EXPLORATION_INSTRUCTIONS%") {
         let cfg = crate::yaml_configs::customization_loader::load_customization_compiled_in();
-        let replacement = cfg.get("AGENT_EXPLORATION_INSTRUCTIONS")
+        let replacement = cfg
+            .get("AGENT_EXPLORATION_INSTRUCTIONS")
             .and_then(|x| x.as_str())
             .unwrap_or("- Call available tools to find relevant files.\n");
         system_prompt = system_prompt.replace("%AGENT_EXPLORATION_INSTRUCTIONS%", replacement);
     }
 
     if system_prompt.contains("%AGENT_EXECUTION_INSTRUCTIONS%") {
-        let has_edit_tools = tool_names.contains("create_textdoc") || tool_names.contains("update_textdoc");
+        let has_edit_tools =
+            tool_names.contains("create_textdoc") || tool_names.contains("update_textdoc");
         let replacement = if has_edit_tools {
             let cfg = crate::yaml_configs::customization_loader::load_customization_compiled_in();
             cfg.get("AGENT_EXECUTION_INSTRUCTIONS")
@@ -271,12 +303,13 @@ pub async fn system_prompt_add_extra_instructions(
                 .unwrap_or("")
                 .to_string()
         } else {
-"  - Propose the changes to the user
+            "  - Propose the changes to the user
     - the suspected root cause
     - the exact files/functions to modify or create
     - the new or updated tests to add
     - the expected outcome and success criteria
-".to_string()
+"
+            .to_string()
         };
         system_prompt = system_prompt.replace("%AGENT_EXECUTION_INSTRUCTIONS%", &replacement);
     }
@@ -296,19 +329,29 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
         return messages;
     }
 
-    let have_system = messages.first().map(|m| m.role == "system").unwrap_or(false);
-    let have_project_context = messages.iter().any(|m|
-        m.role == "context_file" && m.tool_call_id == PROJECT_CONTEXT_MARKER
-    );
+    let have_system = messages
+        .first()
+        .map(|m| m.role == "system")
+        .unwrap_or(false);
+    let have_project_context = messages
+        .iter()
+        .any(|m| m.role == "context_file" && m.tool_call_id == PROJECT_CONTEXT_MARKER);
 
     let is_inside_container = gcx.read().await.cmdline.inside_container;
     if chat_meta.chat_remote && !is_inside_container {
-        messages = match prepend_system_prompt_and_maybe_more_initial_messages_from_remote(gcx.clone(), &messages, chat_meta, stream_back_to_user).await {
+        messages = match prepend_system_prompt_and_maybe_more_initial_messages_from_remote(
+            gcx.clone(),
+            &messages,
+            chat_meta,
+            stream_back_to_user,
+        )
+        .await
+        {
             Ok(messages_from_remote) => messages_from_remote,
             Err(e) => {
                 tracing::error!("prepend_the_right_system_prompt_and_maybe_more_initial_messages_from_remote: {}", e);
                 messages
-            },
+            }
         };
         return messages;
     }
@@ -321,7 +364,8 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
                     get_default_system_prompt(gcx.clone(), chat_meta.chat_mode.clone()).await,
                     tool_names,
                     chat_meta,
-                ).await;
+                )
+                .await;
                 let msg = ChatMessage {
                     role: "system".to_string(),
                     content: ChatContent::SimpleText(system_message_content),
@@ -329,38 +373,44 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
                 };
                 stream_back_to_user.push_in_json(serde_json::json!(msg));
                 messages.insert(0, msg);
-            },
+            }
             ChatMode::CONFIGURE => {
                 crate::integrations::config_chat::mix_config_messages(
                     gcx.clone(),
                     &chat_meta,
                     &mut messages,
                     stream_back_to_user,
-                ).await;
-            },
+                )
+                .await;
+            }
             ChatMode::PROJECT_SUMMARY => {
                 crate::integrations::project_summary_chat::mix_project_summary_messages(
                     gcx.clone(),
                     &chat_meta,
                     &mut messages,
                     stream_back_to_user,
-                ).await;
-            },
+                )
+                .await;
+            }
         }
     }
 
     if chat_meta.include_project_info && !have_project_context {
         match gather_and_inject_system_context(&gcx, &mut messages, stream_back_to_user).await {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => {
                 tracing::warn!("Failed to gather system context: {}", e);
-            },
+            }
         }
     } else if !chat_meta.include_project_info {
         tracing::info!("Skipping project/system context injection (include_project_info=false)");
     }
 
-    tracing::info!("\n\nSYSTEM PROMPT MIXER chat_mode={:?}\n{:#?}", chat_meta.chat_mode, messages);
+    tracing::info!(
+        "\n\nSYSTEM PROMPT MIXER chat_mode={:?}\n{:#?}",
+        chat_meta.chat_mode,
+        messages
+    );
     messages
 }
 
@@ -383,7 +433,11 @@ async fn gather_and_inject_system_context(
                     tracing::info!(
                         "Injected {} instruction files before first user message: {:?}",
                         context.instruction_files.len(),
-                        context.instruction_files.iter().map(|f| &f.file_name).collect::<Vec<_>>()
+                        context
+                            .instruction_files
+                            .iter()
+                            .map(|f| &f.file_name)
+                            .collect::<Vec<_>>()
                     );
                 }
             }
@@ -397,7 +451,11 @@ async fn gather_and_inject_system_context(
         tracing::info!(
             "Detected {} environments: {:?}",
             context.detected_environments.len(),
-            context.detected_environments.iter().map(|e| &e.env_type).collect::<Vec<_>>()
+            context
+                .detected_environments
+                .iter()
+                .map(|e| &e.env_type)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -415,8 +473,10 @@ pub async fn prepend_system_prompt_and_maybe_more_initial_messages_from_remote(
         chat_meta: chat_meta.clone(),
     };
 
-    let port = docker_container_get_host_lsp_port_to_connect(gcx.clone(), &chat_meta.chat_id).await?;
-    let url = format!("http://localhost:{port}/v1/prepend-system-prompt-and-maybe-more-initial-messages");
+    let port =
+        docker_container_get_host_lsp_port_to_connect(gcx.clone(), &chat_meta.chat_id).await?;
+    let url =
+        format!("http://localhost:{port}/v1/prepend-system-prompt-and-maybe-more-initial-messages");
     let response: PrependSystemPromptResponse = http_post_json(&url, &post).await?;
 
     for msg in response.messages_to_stream_back {

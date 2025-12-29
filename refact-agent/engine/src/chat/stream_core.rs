@@ -6,7 +6,6 @@ use reqwest_eventsource::Event;
 use serde_json::json;
 use tokio::sync::RwLock as ARwLock;
 
-
 use crate::call_validation::{ChatMeta, ChatUsage, SamplingParameters};
 use crate::caps::BaseModelRecord;
 use crate::global_context::GlobalContext;
@@ -57,7 +56,10 @@ pub async fn run_llm_stream<C: StreamCollector>(
 ) -> Result<Vec<ChoiceFinal>, String> {
     let (client, slowdown_arc) = {
         let gcx_locked = gcx.read().await;
-        (gcx_locked.http_client.clone(), gcx_locked.http_client_slowdown.clone())
+        (
+            gcx_locked.http_client.clone(),
+            gcx_locked.http_client_slowdown.clone(),
+        )
     };
 
     let _ = slowdown_arc.acquire().await;
@@ -67,15 +69,19 @@ pub async fn run_llm_stream<C: StreamCollector>(
         sampling.n = Some(n);
     }
 
-    let mut event_source = crate::forward_to_openai_endpoint::forward_to_openai_style_endpoint_streaming(
-        &params.model_rec,
-        &params.prompt,
-        &client,
-        &sampling,
-        params.meta,
-    ).await.map_err(|e| format!("Failed to connect to LLM: {}", e))?;
+    let mut event_source =
+        crate::forward_to_openai_endpoint::forward_to_openai_style_endpoint_streaming(
+            &params.model_rec,
+            &params.prompt,
+            &client,
+            &sampling,
+            params.meta,
+        )
+        .await
+        .map_err(|e| format!("Failed to connect to LLM: {}", e))?;
 
-    let mut accumulators: Vec<ChoiceAccumulator> = (0..n).map(|_| ChoiceAccumulator::default()).collect();
+    let mut accumulators: Vec<ChoiceAccumulator> =
+        (0..n).map(|_| ChoiceAccumulator::default()).collect();
 
     let stream_started_at = Instant::now();
     let mut last_event_at = Instant::now();
@@ -139,7 +145,8 @@ pub async fn run_llm_stream<C: StreamCollector>(
                 };
 
                 for choice in choices {
-                    let choice_idx = choice.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                    let choice_idx =
+                        choice.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                     if choice_idx >= accumulators.len() {
                         accumulators.resize_with(choice_idx + 1, ChoiceAccumulator::default);
                     }
@@ -167,24 +174,30 @@ pub async fn run_llm_stream<C: StreamCollector>(
         }
     }
 
-    let results: Vec<ChoiceFinal> = accumulators.into_iter().enumerate().map(|(idx, acc)| {
-        let finish_reason = match acc.finish_reason {
-            Some(FinishReason::Stop) | Some(FinishReason::ScratchpadStop) => Some("stop".to_string()),
-            Some(FinishReason::Length) => Some("length".to_string()),
-            _ => None,
-        };
-        collector.on_finish(idx, finish_reason.clone());
-        ChoiceFinal {
-            content: acc.content,
-            reasoning: acc.reasoning,
-            thinking_blocks: acc.thinking_blocks,
-            tool_calls_raw: acc.tool_calls,
-            citations: acc.citations,
-            extra: acc.extra,
-            finish_reason,
-            usage: acc.usage,
-        }
-    }).collect();
+    let results: Vec<ChoiceFinal> = accumulators
+        .into_iter()
+        .enumerate()
+        .map(|(idx, acc)| {
+            let finish_reason = match acc.finish_reason {
+                Some(FinishReason::Stop) | Some(FinishReason::ScratchpadStop) => {
+                    Some("stop".to_string())
+                }
+                Some(FinishReason::Length) => Some("length".to_string()),
+                _ => None,
+            };
+            collector.on_finish(idx, finish_reason.clone());
+            ChoiceFinal {
+                content: acc.content,
+                reasoning: acc.reasoning,
+                thinking_blocks: acc.thinking_blocks,
+                tool_calls_raw: acc.tool_calls,
+                citations: acc.citations,
+                extra: acc.extra,
+                finish_reason,
+                usage: acc.usage,
+            }
+        })
+        .collect();
 
     Ok(results)
 }
@@ -201,20 +214,28 @@ struct ChoiceAccumulator {
     usage: Option<ChatUsage>,
 }
 
-fn process_delta(acc: &mut ChoiceAccumulator, delta: &serde_json::Value, json: &serde_json::Value) -> Vec<DeltaOp> {
+fn process_delta(
+    acc: &mut ChoiceAccumulator,
+    delta: &serde_json::Value,
+    json: &serde_json::Value,
+) -> Vec<DeltaOp> {
     let mut ops = Vec::new();
 
     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
         if !content.is_empty() {
             acc.content.push_str(content);
-            ops.push(DeltaOp::AppendContent { text: content.to_string() });
+            ops.push(DeltaOp::AppendContent {
+                text: content.to_string(),
+            });
         }
     }
 
     if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
         if !reasoning.is_empty() {
             acc.reasoning.push_str(reasoning);
-            ops.push(DeltaOp::AppendReasoning { text: reasoning.to_string() });
+            ops.push(DeltaOp::AppendReasoning {
+                text: reasoning.to_string(),
+            });
         }
     }
 
@@ -223,17 +244,26 @@ fn process_delta(acc: &mut ChoiceAccumulator, delta: &serde_json::Value, json: &
             merge_tool_call(&mut acc.tool_calls, tc.clone());
         }
         if !acc.tool_calls.is_empty() {
-            ops.push(DeltaOp::SetToolCalls { tool_calls: acc.tool_calls.clone() });
+            ops.push(DeltaOp::SetToolCalls {
+                tool_calls: acc.tool_calls.clone(),
+            });
         }
     }
 
-    let thinking_blocks_raw = delta.get("thinking_blocks").and_then(|tb| tb.as_array())
-        .or_else(|| delta.get("provider_specific_fields")
-            .and_then(|psf| psf.get("thinking_blocks"))
-            .and_then(|tb| tb.as_array()))
-        .or_else(|| json.get("provider_specific_fields")
-            .and_then(|psf| psf.get("thinking_blocks"))
-            .and_then(|tb| tb.as_array()));
+    let thinking_blocks_raw = delta
+        .get("thinking_blocks")
+        .and_then(|tb| tb.as_array())
+        .or_else(|| {
+            delta
+                .get("provider_specific_fields")
+                .and_then(|psf| psf.get("thinking_blocks"))
+                .and_then(|tb| tb.as_array())
+        })
+        .or_else(|| {
+            json.get("provider_specific_fields")
+                .and_then(|psf| psf.get("thinking_blocks"))
+                .and_then(|tb| tb.as_array())
+        });
 
     if let Some(thinking) = thinking_blocks_raw {
         let normalized: Vec<serde_json::Value> = thinking.iter().map(|block| {
@@ -253,10 +283,18 @@ fn process_delta(acc: &mut ChoiceAccumulator, delta: &serde_json::Value, json: &
         ops.push(DeltaOp::SetThinkingBlocks { blocks: normalized });
     }
 
-    for source in [json.get("provider_specific_fields"), delta.get("provider_specific_fields")] {
-        if let Some(citation) = source.and_then(|psf| psf.get("citation")).filter(|c| !c.is_null()) {
+    for source in [
+        json.get("provider_specific_fields"),
+        delta.get("provider_specific_fields"),
+    ] {
+        if let Some(citation) = source
+            .and_then(|psf| psf.get("citation"))
+            .filter(|c| !c.is_null())
+        {
             acc.citations.push(citation.clone());
-            ops.push(DeltaOp::AddCitation { citation: citation.clone() });
+            ops.push(DeltaOp::AddCitation {
+                citation: citation.clone(),
+            });
         }
     }
 
@@ -277,18 +315,26 @@ fn process_delta(acc: &mut ChoiceAccumulator, delta: &serde_json::Value, json: &
             }
         }
     }
-    if let Some(psf) = json.get("provider_specific_fields").filter(|p| !p.is_null()) {
+    if let Some(psf) = json
+        .get("provider_specific_fields")
+        .filter(|p| !p.is_null())
+    {
         if acc.extra.get("provider_specific_fields") != Some(psf) {
-            acc.extra.insert("provider_specific_fields".to_string(), psf.clone());
+            acc.extra
+                .insert("provider_specific_fields".to_string(), psf.clone());
             changed_extra.insert("provider_specific_fields".to_string(), psf.clone());
         }
     }
     if !changed_extra.is_empty() {
-        ops.push(DeltaOp::MergeExtra { extra: changed_extra });
+        ops.push(DeltaOp::MergeExtra {
+            extra: changed_extra,
+        });
     }
 
     if let Some(usage) = json.get("usage").filter(|u| !u.is_null()) {
-        ops.push(DeltaOp::SetUsage { usage: usage.clone() });
+        ops.push(DeltaOp::SetUsage {
+            usage: usage.clone(),
+        });
     }
 
     ops
@@ -296,12 +342,21 @@ fn process_delta(acc: &mut ChoiceAccumulator, delta: &serde_json::Value, json: &
 
 pub fn normalize_tool_call(tc: &serde_json::Value) -> Option<crate::call_validation::ChatToolCall> {
     let function = tc.get("function")?;
-    let name = function.get("name").and_then(|n| n.as_str()).filter(|s| !s.is_empty())?;
+    let name = function
+        .get("name")
+        .and_then(|n| n.as_str())
+        .filter(|s| !s.is_empty())?;
 
-    let id = tc.get("id")
+    let id = tc
+        .get("id")
         .and_then(|i| i.as_str())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()));
+        .unwrap_or_else(|| {
+            format!(
+                "call_{}",
+                uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()
+            )
+        });
 
     let arguments = match function.get("arguments") {
         Some(serde_json::Value::String(s)) => s.clone(),
@@ -309,7 +364,8 @@ pub fn normalize_tool_call(tc: &serde_json::Value) -> Option<crate::call_validat
         _ => String::new(),
     };
 
-    let tool_type = tc.get("type")
+    let tool_type = tc
+        .get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("function")
         .to_string();

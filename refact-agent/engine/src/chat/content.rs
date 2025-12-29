@@ -6,45 +6,65 @@ use crate::scratchpads::scratchpad_utils::parse_image_b64_from_image_url_openai;
 
 const MAX_IMAGES_PER_MESSAGE: usize = 5;
 
-pub fn validate_content_with_attachments(content: &serde_json::Value, attachments: &[serde_json::Value]) -> Result<ChatContent, String> {
+pub fn validate_content_with_attachments(
+    content: &serde_json::Value,
+    attachments: &[serde_json::Value],
+) -> Result<ChatContent, String> {
     let mut elements: Vec<MultimodalElement> = Vec::new();
     let mut image_count = 0;
 
     if let Some(s) = content.as_str() {
         if !s.is_empty() {
-            elements.push(MultimodalElement::new("text".to_string(), s.to_string())
-                .map_err(|e| format!("Invalid text content: {}", e))?);
+            elements.push(
+                MultimodalElement::new("text".to_string(), s.to_string())
+                    .map_err(|e| format!("Invalid text content: {}", e))?,
+            );
         }
     } else if let Some(arr) = content.as_array() {
         if arr.is_empty() {
             return Err("Content array is empty".to_string());
         }
         for (idx, item) in arr.iter().enumerate() {
-            let item_type = item.get("type").and_then(|t| t.as_str())
+            let item_type = item
+                .get("type")
+                .and_then(|t| t.as_str())
                 .ok_or_else(|| format!("Content element {} missing 'type' field", idx))?;
             match item_type {
                 "text" => {
-                    let text = item.get("text").and_then(|t| t.as_str())
+                    let text = item
+                        .get("text")
+                        .and_then(|t| t.as_str())
                         .ok_or_else(|| format!("Content element {} missing 'text' field", idx))?;
-                    elements.push(MultimodalElement::new("text".to_string(), text.to_string())
-                        .map_err(|e| format!("Invalid text content at {}: {}", idx, e))?);
+                    elements.push(
+                        MultimodalElement::new("text".to_string(), text.to_string())
+                            .map_err(|e| format!("Invalid text content at {}: {}", idx, e))?,
+                    );
                 }
                 "image_url" => {
                     image_count += 1;
                     if image_count > MAX_IMAGES_PER_MESSAGE {
-                        return Err(format!("Too many images: max {} allowed", MAX_IMAGES_PER_MESSAGE));
+                        return Err(format!(
+                            "Too many images: max {} allowed",
+                            MAX_IMAGES_PER_MESSAGE
+                        ));
                     }
-                    let url = item.get("image_url")
+                    let url = item
+                        .get("image_url")
                         .and_then(|u| u.get("url"))
                         .and_then(|u| u.as_str())
                         .ok_or_else(|| format!("Content element {} missing image_url.url", idx))?;
                     let (image_type, _, image_content) = parse_image_b64_from_image_url_openai(url)
                         .ok_or_else(|| format!("Invalid image URL format at element {}", idx))?;
-                    elements.push(MultimodalElement::new(image_type, image_content)
-                        .map_err(|e| format!("Invalid image at {}: {}", idx, e))?);
+                    elements.push(
+                        MultimodalElement::new(image_type, image_content)
+                            .map_err(|e| format!("Invalid image at {}: {}", idx, e))?,
+                    );
                 }
                 other => {
-                    return Err(format!("Unknown content type '{}' at element {}", other, idx));
+                    return Err(format!(
+                        "Unknown content type '{}' at element {}",
+                        other, idx
+                    ));
                 }
             }
         }
@@ -53,18 +73,24 @@ pub fn validate_content_with_attachments(content: &serde_json::Value, attachment
     }
 
     for (idx, attachment) in attachments.iter().enumerate() {
-        let url = attachment.get("image_url")
+        let url = attachment
+            .get("image_url")
             .and_then(|u| u.get("url"))
             .and_then(|u| u.as_str())
             .ok_or_else(|| format!("Attachment {} missing image_url.url", idx))?;
         image_count += 1;
         if image_count > MAX_IMAGES_PER_MESSAGE {
-            return Err(format!("Too many images: max {} allowed", MAX_IMAGES_PER_MESSAGE));
+            return Err(format!(
+                "Too many images: max {} allowed",
+                MAX_IMAGES_PER_MESSAGE
+            ));
         }
         let (image_type, _, image_content) = parse_image_b64_from_image_url_openai(url)
             .ok_or_else(|| format!("Invalid attachment image URL at {}", idx))?;
-        elements.push(MultimodalElement::new(image_type, image_content)
-            .map_err(|e| format!("Invalid attachment image at {}: {}", idx, e))?);
+        elements.push(
+            MultimodalElement::new(image_type, image_content)
+                .map_err(|e| format!("Invalid attachment image at {}: {}", idx, e))?,
+        );
     }
 
     if elements.is_empty() {
@@ -76,7 +102,10 @@ pub fn validate_content_with_attachments(content: &serde_json::Value, attachment
     }
 }
 
-pub fn parse_content_with_attachments(content: &serde_json::Value, attachments: &[serde_json::Value]) -> ChatContent {
+pub fn parse_content_with_attachments(
+    content: &serde_json::Value,
+    attachments: &[serde_json::Value],
+) -> ChatContent {
     let base_content = parse_content_from_value(content);
 
     if attachments.is_empty() {
@@ -92,8 +121,13 @@ pub fn parse_content_with_attachments(content: &serde_json::Value, attachments: 
     };
 
     for attachment in attachments {
-        if let Some(url) = attachment.get("image_url").and_then(|u| u.get("url")).and_then(|u| u.as_str()) {
-            if let Some((image_type, _, image_content)) = parse_image_b64_from_image_url_openai(url) {
+        if let Some(url) = attachment
+            .get("image_url")
+            .and_then(|u| u.get("url"))
+            .and_then(|u| u.as_str())
+        {
+            if let Some((image_type, _, image_content)) = parse_image_b64_from_image_url_openai(url)
+            {
                 if let Ok(el) = MultimodalElement::new(image_type, image_content) {
                     elements.push(el);
                 }
@@ -122,14 +156,21 @@ fn parse_content_from_value(content: &serde_json::Value) -> ChatContent {
             match item_type {
                 "text" => {
                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                        if let Ok(el) = MultimodalElement::new("text".to_string(), text.to_string()) {
+                        if let Ok(el) = MultimodalElement::new("text".to_string(), text.to_string())
+                        {
                             elements.push(el);
                         }
                     }
                 }
                 "image_url" => {
-                    if let Some(url) = item.get("image_url").and_then(|u| u.get("url")).and_then(|u| u.as_str()) {
-                        if let Some((image_type, _, image_content)) = parse_image_b64_from_image_url_openai(url) {
+                    if let Some(url) = item
+                        .get("image_url")
+                        .and_then(|u| u.get("url"))
+                        .and_then(|u| u.as_str())
+                    {
+                        if let Some((image_type, _, image_content)) =
+                            parse_image_b64_from_image_url_openai(url)
+                        {
                             if let Ok(el) = MultimodalElement::new(image_type, image_content) {
                                 elements.push(el);
                             }
@@ -137,7 +178,10 @@ fn parse_content_from_value(content: &serde_json::Value) -> ChatContent {
                     }
                 }
                 _ => {
-                    warn!("Unknown content type '{}' in message, preserving as text", item_type);
+                    warn!(
+                        "Unknown content type '{}' in message, preserving as text",
+                        item_type
+                    );
                     if let Ok(el) = MultimodalElement::new("text".to_string(), item.to_string()) {
                         elements.push(el);
                     }

@@ -109,14 +109,17 @@ pub async fn get_trajectories_dir(gcx: Arc<ARwLock<GlobalContext>>) -> Result<Pa
 }
 
 pub async fn get_all_trajectories_dirs(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<PathBuf> {
-    get_project_dirs(gcx).await
+    get_project_dirs(gcx)
+        .await
         .into_iter()
         .map(|p| p.join(".refact").join("trajectories"))
         .filter(|p| p.exists())
         .collect()
 }
 
-async fn get_trajectories_dir_from_weak(gcx_weak: &Weak<ARwLock<GlobalContext>>) -> Option<PathBuf> {
+async fn get_trajectories_dir_from_weak(
+    gcx_weak: &Weak<ARwLock<GlobalContext>>,
+) -> Option<PathBuf> {
     let gcx = gcx_weak.upgrade()?;
     get_trajectories_dir(gcx).await.ok()
 }
@@ -138,38 +141,79 @@ pub async fn load_trajectory_for_chat(
     chat_id: &str,
 ) -> Option<LoadedTrajectory> {
     let traj_dirs = get_all_trajectories_dirs(gcx).await;
-    let traj_path = traj_dirs.iter()
+    let traj_path = traj_dirs
+        .iter()
         .map(|dir| dir.join(format!("{}.json", chat_id)))
         .find(|p| p.exists())?;
 
     let content = tokio::fs::read_to_string(&traj_path).await.ok()?;
     let t: serde_json::Value = serde_json::from_str(&content).ok()?;
 
-    let mut messages: Vec<ChatMessage> = t.get("messages")
+    let mut messages: Vec<ChatMessage> = t
+        .get("messages")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
     fix_tool_call_indexes(&mut messages);
 
     let thread = ThreadParams {
         id: chat_id.to_string(),
-        title: t.get("title").and_then(|v| v.as_str()).unwrap_or("New Chat").to_string(),
-        model: t.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        mode: t.get("mode").and_then(|v| v.as_str()).unwrap_or("AGENT").to_string(),
-        tool_use: t.get("tool_use").and_then(|v| v.as_str()).unwrap_or("agent").to_string(),
-        boost_reasoning: t.get("boost_reasoning").and_then(|v| v.as_bool()).unwrap_or(false),
-        context_tokens_cap: t.get("context_tokens_cap").and_then(|v| v.as_u64()).map(|n| n as usize),
-        include_project_info: t.get("include_project_info").and_then(|v| v.as_bool()).unwrap_or(true),
-        checkpoints_enabled: t.get("checkpoints_enabled").and_then(|v| v.as_bool()).unwrap_or(true),
-        use_compression: t.get("use_compression").and_then(|v| v.as_bool()).unwrap_or(true),
-        is_title_generated: t.get("isTitleGenerated").and_then(|v| v.as_bool()).unwrap_or(false),
+        title: t
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("New Chat")
+            .to_string(),
+        model: t
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        mode: t
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("AGENT")
+            .to_string(),
+        tool_use: t
+            .get("tool_use")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent")
+            .to_string(),
+        boost_reasoning: t
+            .get("boost_reasoning")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        context_tokens_cap: t
+            .get("context_tokens_cap")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
+        include_project_info: t
+            .get("include_project_info")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        checkpoints_enabled: t
+            .get("checkpoints_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        use_compression: t
+            .get("use_compression")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        is_title_generated: t
+            .get("isTitleGenerated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
 
-    let created_at = t.get("created_at")
+    let created_at = t
+        .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap_or(&chrono::Utc::now().to_rfc3339())
         .to_string();
 
-    Some(LoadedTrajectory { messages, thread, created_at })
+    Some(LoadedTrajectory {
+        messages,
+        thread,
+        created_at,
+    })
 }
 
 pub async fn save_trajectory_snapshot(
@@ -181,13 +225,16 @@ pub async fn save_trajectory_snapshot(
     }
 
     let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
-    tokio::fs::create_dir_all(&trajectories_dir).await
+    tokio::fs::create_dir_all(&trajectories_dir)
+        .await
         .map_err(|e| format!("Failed to create trajectories dir: {}", e))?;
 
     let file_path = trajectories_dir.join(format!("{}.json", snapshot.chat_id));
     let now = chrono::Utc::now().to_rfc3339();
 
-    let messages_json: Vec<serde_json::Value> = snapshot.messages.iter()
+    let messages_json: Vec<serde_json::Value> = snapshot
+        .messages
+        .iter()
         .map(|m| serde_json::to_value(m).unwrap_or_default())
         .collect();
 
@@ -210,15 +257,23 @@ pub async fn save_trajectory_snapshot(
     let tmp_path = file_path.with_extension("json.tmp");
     let json_str = serde_json::to_string_pretty(&trajectory)
         .map_err(|e| format!("Failed to serialize trajectory: {}", e))?;
-    tokio::fs::write(&tmp_path, &json_str).await
+    tokio::fs::write(&tmp_path, &json_str)
+        .await
         .map_err(|e| format!("Failed to write trajectory: {}", e))?;
-    tokio::fs::rename(&tmp_path, &file_path).await
+    tokio::fs::rename(&tmp_path, &file_path)
+        .await
         .map_err(|e| format!("Failed to rename trajectory: {}", e))?;
 
-    info!("Saved trajectory for chat {} ({} messages)", snapshot.chat_id, snapshot.messages.len());
+    info!(
+        "Saved trajectory for chat {} ({} messages)",
+        snapshot.chat_id,
+        snapshot.messages.len()
+    );
 
     if let Some(vecdb) = gcx.read().await.vec_db.lock().await.as_ref() {
-        vecdb.vectorizer_enqueue_files(&vec![file_path.to_string_lossy().to_string()], false).await;
+        vecdb
+            .vectorizer_enqueue_files(&vec![file_path.to_string_lossy().to_string()], false)
+            .await;
     }
 
     if let Some(tx) = &gcx.read().await.trajectory_events_tx {
@@ -234,7 +289,7 @@ pub async fn save_trajectory_snapshot(
     let should_generate_title = is_placeholder_title(&snapshot.title)
         && !snapshot.is_title_generated
         && !snapshot.messages.is_empty();
-    
+
     if should_generate_title {
         let _ = spawn_title_generation_task(
             gcx.clone(),
@@ -275,10 +330,18 @@ pub async fn maybe_save_trajectory(
     }
 }
 
-pub async fn check_external_reload_pending(gcx: Arc<ARwLock<GlobalContext>>, session_arc: Arc<AMutex<ChatSession>>) {
+pub async fn check_external_reload_pending(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    session_arc: Arc<AMutex<ChatSession>>,
+) {
     let (chat_id, should_reload) = {
         let session = session_arc.lock().await;
-        (session.chat_id.clone(), session.external_reload_pending && session.runtime.state == SessionState::Idle && !session.trajectory_dirty)
+        (
+            session.chat_id.clone(),
+            session.external_reload_pending
+                && session.runtime.state == SessionState::Idle
+                && !session.trajectory_dirty,
+        )
     };
     if !should_reload {
         return;
@@ -297,7 +360,11 @@ pub async fn check_external_reload_pending(gcx: Arc<ARwLock<GlobalContext>>, ses
     }
 }
 
-async fn process_trajectory_change(gcx: Arc<ARwLock<GlobalContext>>, chat_id: &str, is_remove: bool) {
+async fn process_trajectory_change(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    chat_id: &str,
+    is_remove: bool,
+) {
     if is_remove {
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let _ = tx.send(TrajectoryEvent {
@@ -308,7 +375,8 @@ async fn process_trajectory_change(gcx: Arc<ARwLock<GlobalContext>>, chat_id: &s
             });
         }
     } else {
-        let (updated_at, title) = load_trajectory_for_chat(gcx.clone(), chat_id).await
+        let (updated_at, title) = load_trajectory_for_chat(gcx.clone(), chat_id)
+            .await
             .map(|t| (Some(chrono::Utc::now().to_rfc3339()), Some(t.thread.title)))
             .unwrap_or((None, None));
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
@@ -327,7 +395,9 @@ async fn process_trajectory_change(gcx: Arc<ARwLock<GlobalContext>>, chat_id: &s
         sessions_read.get(chat_id).cloned()
     };
 
-    let Some(session_arc) = session_arc else { return };
+    let Some(session_arc) = session_arc else {
+        return;
+    };
 
     let can_reload = {
         let session = session_arc.lock().await;
@@ -344,7 +414,10 @@ async fn process_trajectory_change(gcx: Arc<ARwLock<GlobalContext>>, chat_id: &s
         let mut session = session_arc.lock().await;
         info!("Trajectory file removed externally for {}", chat_id);
         session.messages.clear();
-        session.thread = ThreadParams { id: chat_id.to_string(), ..Default::default() };
+        session.thread = ThreadParams {
+            id: chat_id.to_string(),
+            ..Default::default()
+        };
         let snapshot = session.snapshot();
         session.emit(snapshot);
         return;
@@ -389,9 +462,9 @@ pub fn start_trajectory_watcher(gcx: Arc<ARwLock<GlobalContext>>) {
             if let Ok(event) = res {
                 let dominated = matches!(
                     event.kind,
-                    notify::EventKind::Create(_) |
-                    notify::EventKind::Modify(_) |
-                    notify::EventKind::Remove(_)
+                    notify::EventKind::Create(_)
+                        | notify::EventKind::Modify(_)
+                        | notify::EventKind::Remove(_)
                 );
                 if !dominated {
                     return;
@@ -426,9 +499,13 @@ pub fn start_trajectory_watcher(gcx: Arc<ARwLock<GlobalContext>>) {
                 return;
             }
         }
-        info!("Trajectory watcher started for {}", trajectories_dir.display());
+        info!(
+            "Trajectory watcher started for {}",
+            trajectories_dir.display()
+        );
 
-        let mut pending: std::collections::HashMap<String, (Instant, bool)> = std::collections::HashMap::new();
+        let mut pending: std::collections::HashMap<String, (Instant, bool)> =
+            std::collections::HashMap::new();
         let debounce_ms = 200;
 
         loop {
@@ -455,7 +532,8 @@ pub fn start_trajectory_watcher(gcx: Arc<ARwLock<GlobalContext>>) {
             }
 
             let now = Instant::now();
-            let ready: Vec<_> = pending.iter()
+            let ready: Vec<_> = pending
+                .iter()
                 .filter(|(_, (t, _))| now.duration_since(*t).as_millis() >= debounce_ms)
                 .map(|(k, v)| (k.clone(), v.1))
                 .collect();
@@ -472,7 +550,10 @@ pub fn start_trajectory_watcher(gcx: Arc<ARwLock<GlobalContext>>) {
 
 fn validate_trajectory_id(id: &str) -> Result<(), ScratchError> {
     if id.contains('/') || id.contains('\\') || id.contains("..") || id.contains('\0') {
-        return Err(ScratchError::new(StatusCode::BAD_REQUEST, "Invalid trajectory id".to_string()));
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid trajectory id".to_string(),
+        ));
     }
     Ok(())
 }
@@ -480,8 +561,12 @@ fn validate_trajectory_id(id: &str) -> Result<(), ScratchError> {
 async fn atomic_write_json(path: &PathBuf, data: &impl Serialize) -> Result<(), String> {
     let tmp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, &json).await.map_err(|e| e.to_string())?;
-    fs::rename(&tmp_path, path).await.map_err(|e| e.to_string())?;
+    fs::write(&tmp_path, &json)
+        .await
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, path)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -528,16 +613,21 @@ fn build_title_generation_context(messages: &[serde_json::Value]) -> String {
     let max_chars_per_message = 500;
 
     for (i, msg) in messages.iter().take(max_messages).enumerate() {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+        let role = msg
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("unknown");
         if role == "tool" || role == "context_file" || role == "cd_instruction" {
             continue;
         }
         let content_text = if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
             content.to_string()
         } else if let Some(content_arr) = msg.get("content").and_then(|c| c.as_array()) {
-            content_arr.iter()
+            content_arr
+                .iter()
                 .filter_map(|item| {
-                    item.get("text").and_then(|t| t.as_str())
+                    item.get("text")
+                        .and_then(|t| t.as_str())
                         .or_else(|| item.get("m_content").and_then(|t| t.as_str()))
                 })
                 .collect::<Vec<_>>()
@@ -598,17 +688,23 @@ async fn generate_title_llm(
     if context.trim().is_empty() {
         return None;
     }
-    let prompt = format!("Chat conversation:\n{}\n\n{}", context, TITLE_GENERATION_PROMPT);
-    let ccx = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        2048,
-        5,
-        false,
-        vec![],
-        "title-generation".to_string(),
-        false,
-        model_id.clone(),
-    ).await));
+    let prompt = format!(
+        "Chat conversation:\n{}\n\n{}",
+        context, TITLE_GENERATION_PROMPT
+    );
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            2048,
+            5,
+            false,
+            vec![],
+            "title-generation".to_string(),
+            false,
+            model_id.clone(),
+        )
+        .await,
+    ));
     let chat_messages = vec![ChatMessage::new("user".to_string(), prompt)];
     match subchat_single(
         ccx,
@@ -625,7 +721,9 @@ async fn generate_title_llm(
         None,
         None,
         None,
-    ).await {
+    )
+    .await
+    {
         Ok(results) => {
             if let Some(messages) = results.first() {
                 if let Some(last_msg) = messages.last() {
@@ -656,19 +754,17 @@ fn spawn_title_generation_task(
         let generated_title = generate_title_llm(gcx.clone(), &messages).await;
         let title = match generated_title {
             Some(t) => t,
-            None => {
-                match extract_first_user_message(&messages) {
-                    Some(first_msg) => {
-                        let truncated: String = first_msg.chars().take(60).collect();
-                        if truncated.len() < first_msg.len() {
-                            format!("{}...", truncated.trim_end())
-                        } else {
-                            truncated
-                        }
+            None => match extract_first_user_message(&messages) {
+                Some(first_msg) => {
+                    let truncated: String = first_msg.chars().take(60).collect();
+                    if truncated.len() < first_msg.len() {
+                        format!("{}...", truncated.trim_end())
+                    } else {
+                        truncated
                     }
-                    None => return,
                 }
-            }
+                None => return,
+            },
         };
         let sessions = gcx.read().await.chat_sessions.clone();
         let maybe_session_arc = {
@@ -702,7 +798,9 @@ fn spawn_title_generation_task(
                 return;
             }
         };
-        let already_generated = data.extra.get("isTitleGenerated")
+        let already_generated = data
+            .extra
+            .get("isTitleGenerated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         if already_generated {
@@ -712,7 +810,8 @@ fn spawn_title_generation_task(
         let now = chrono::Utc::now().to_rfc3339();
         data.title = title.clone();
         data.updated_at = now.clone();
-        data.extra.insert("isTitleGenerated".to_string(), serde_json::json!(true));
+        data.extra
+            .insert("isTitleGenerated".to_string(), serde_json::json!(true));
         if let Err(e) = atomic_write_json(&file_path, &data).await {
             warn!("Failed to write trajectory with generated title: {}", e);
             return;
@@ -733,14 +832,19 @@ fn spawn_title_generation_task(
 pub async fn handle_v1_trajectories_list(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
 ) -> Result<Response<Body>, ScratchError> {
-    let trajectories_dir = get_trajectories_dir(gcx).await
+    let trajectories_dir = get_trajectories_dir(gcx)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let mut result: Vec<TrajectoryMeta> = Vec::new();
     if trajectories_dir.exists() {
-        let mut entries = fs::read_dir(&trajectories_dir).await
+        let mut entries = fs::read_dir(&trajectories_dir)
+            .await
             .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        while let Some(entry) = entries.next_entry().await
-            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
@@ -773,13 +877,18 @@ pub async fn handle_v1_trajectories_get(
     Path(id): Path<String>,
 ) -> Result<Response<Body>, ScratchError> {
     validate_trajectory_id(&id)?;
-    let trajectories_dir = get_trajectories_dir(gcx).await
+    let trajectories_dir = get_trajectories_dir(gcx)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let file_path = trajectories_dir.join(format!("{}.json", id));
     if !file_path.exists() {
-        return Err(ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string()));
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            "Trajectory not found".to_string(),
+        ));
     }
-    let content = fs::read_to_string(&file_path).await
+    let content = fs::read_to_string(&file_path)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -797,27 +906,42 @@ pub async fn handle_v1_trajectories_save(
     let data: TrajectoryData = serde_json::from_slice(&body_bytes)
         .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?;
     if data.id != id {
-        return Err(ScratchError::new(StatusCode::BAD_REQUEST, "ID mismatch".to_string()));
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            "ID mismatch".to_string(),
+        ));
     }
-    let trajectories_dir = get_trajectories_dir(gcx.clone()).await
+    let trajectories_dir = get_trajectories_dir(gcx.clone())
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    fs::create_dir_all(&trajectories_dir).await
+    fs::create_dir_all(&trajectories_dir)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let file_path = trajectories_dir.join(format!("{}.json", id));
     let is_new = !file_path.exists();
-    let is_title_generated = data.extra.get("isTitleGenerated")
+    let is_title_generated = data
+        .extra
+        .get("isTitleGenerated")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let should_generate_title = is_placeholder_title(&data.title)
-        && !is_title_generated
-        && !data.messages.is_empty();
-    atomic_write_json(&file_path, &data).await
+    let should_generate_title =
+        is_placeholder_title(&data.title) && !is_title_generated && !data.messages.is_empty();
+    atomic_write_json(&file_path, &data)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let event = TrajectoryEvent {
-        event_type: if is_new { "created".to_string() } else { "updated".to_string() },
+        event_type: if is_new {
+            "created".to_string()
+        } else {
+            "updated".to_string()
+        },
         id: id.clone(),
         updated_at: Some(data.updated_at.clone()),
-        title: if is_new { Some(data.title.clone()) } else { None },
+        title: if is_new {
+            Some(data.title.clone())
+        } else {
+            None
+        },
     };
     if let Some(tx) = &gcx.read().await.trajectory_events_tx {
         let _ = tx.send(event);
@@ -842,13 +966,18 @@ pub async fn handle_v1_trajectories_delete(
     Path(id): Path<String>,
 ) -> Result<Response<Body>, ScratchError> {
     validate_trajectory_id(&id)?;
-    let trajectories_dir = get_trajectories_dir(gcx.clone()).await
+    let trajectories_dir = get_trajectories_dir(gcx.clone())
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let file_path = trajectories_dir.join(format!("{}.json", id));
     if !file_path.exists() {
-        return Err(ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string()));
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            "Trajectory not found".to_string(),
+        ));
     }
-    fs::remove_file(&file_path).await
+    fs::remove_file(&file_path)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let event = TrajectoryEvent {
         event_type: "deleted".to_string(),
@@ -873,10 +1002,12 @@ pub async fn handle_v1_trajectories_subscribe(
         let gcx_locked = gcx.read().await;
         match &gcx_locked.trajectory_events_tx {
             Some(tx) => tx.subscribe(),
-            None => return Err(ScratchError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Trajectory events not available".to_string()
-            )),
+            None => {
+                return Err(ScratchError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Trajectory events not available".to_string(),
+                ))
+            }
         }
     };
     let stream = async_stream::stream! {
@@ -980,13 +1111,19 @@ mod tests {
     #[test]
     fn test_clean_generated_title_collapses_whitespace() {
         assert_eq!(clean_generated_title("Hello   World"), "Hello World");
-        assert_eq!(clean_generated_title("  Multiple   Spaces  "), "Multiple Spaces");
+        assert_eq!(
+            clean_generated_title("  Multiple   Spaces  "),
+            "Multiple Spaces"
+        );
     }
 
     #[test]
     fn test_clean_generated_title_removes_newlines() {
         assert_eq!(clean_generated_title("Hello\nWorld"), "Hello World");
-        assert_eq!(clean_generated_title("Line1\nLine2\nLine3"), "Line1 Line2 Line3");
+        assert_eq!(
+            clean_generated_title("Line1\nLine2\nLine3"),
+            "Line1 Line2 Line3"
+        );
     }
 
     #[test]
@@ -1017,9 +1154,8 @@ mod tests {
 
     #[test]
     fn test_extract_first_user_message_array_content_text() {
-        let messages = vec![
-            json!({"role": "user", "content": [{"type": "text", "text": "Array text"}]}),
-        ];
+        let messages =
+            vec![json!({"role": "user", "content": [{"type": "text", "text": "Array text"}]})];
         let result = extract_first_user_message(&messages);
         assert_eq!(result, Some("Array text".to_string()));
     }
@@ -1046,9 +1182,7 @@ mod tests {
     #[test]
     fn test_extract_first_user_message_truncates() {
         let long_message = "A".repeat(300);
-        let messages = vec![
-            json!({"role": "user", "content": long_message}),
-        ];
+        let messages = vec![json!({"role": "user", "content": long_message})];
         let result = extract_first_user_message(&messages);
         assert!(result.is_some());
         assert!(result.unwrap().len() <= 200);
@@ -1102,9 +1236,7 @@ mod tests {
     #[test]
     fn test_build_title_generation_context_truncates_long_messages() {
         let long_content = "A".repeat(1000);
-        let messages = vec![
-            json!({"role": "user", "content": long_content}),
-        ];
+        let messages = vec![json!({"role": "user", "content": long_content})];
         let context = build_title_generation_context(&messages);
         assert!(context.len() < 600);
     }
@@ -1112,26 +1244,30 @@ mod tests {
     #[test]
     fn test_fix_tool_call_indexes_sets_missing() {
         use crate::call_validation::{ChatToolCall, ChatToolFunction};
-        let mut messages = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                tool_calls: Some(vec![
-                    ChatToolCall {
-                        id: "call_1".to_string(),
-                        index: None,
-                        function: ChatToolFunction { name: "test".to_string(), arguments: "{}".to_string() },
-                        tool_type: "function".to_string(),
+        let mut messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            tool_calls: Some(vec![
+                ChatToolCall {
+                    id: "call_1".to_string(),
+                    index: None,
+                    function: ChatToolFunction {
+                        name: "test".to_string(),
+                        arguments: "{}".to_string(),
                     },
-                    ChatToolCall {
-                        id: "call_2".to_string(),
-                        index: None,
-                        function: ChatToolFunction { name: "test2".to_string(), arguments: "{}".to_string() },
-                        tool_type: "function".to_string(),
+                    tool_type: "function".to_string(),
+                },
+                ChatToolCall {
+                    id: "call_2".to_string(),
+                    index: None,
+                    function: ChatToolFunction {
+                        name: "test2".to_string(),
+                        arguments: "{}".to_string(),
                     },
-                ]),
-                ..Default::default()
-            },
-        ];
+                    tool_type: "function".to_string(),
+                },
+            ]),
+            ..Default::default()
+        }];
         fix_tool_call_indexes(&mut messages);
         let tool_calls = messages[0].tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls[0].index, Some(0));
@@ -1141,20 +1277,19 @@ mod tests {
     #[test]
     fn test_fix_tool_call_indexes_preserves_existing() {
         use crate::call_validation::{ChatToolCall, ChatToolFunction};
-        let mut messages = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                tool_calls: Some(vec![
-                    ChatToolCall {
-                        id: "call_1".to_string(),
-                        index: Some(5),
-                        function: ChatToolFunction { name: "test".to_string(), arguments: "{}".to_string() },
-                        tool_type: "function".to_string(),
-                    },
-                ]),
-                ..Default::default()
-            },
-        ];
+        let mut messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call_1".to_string(),
+                index: Some(5),
+                function: ChatToolFunction {
+                    name: "test".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                tool_type: "function".to_string(),
+            }]),
+            ..Default::default()
+        }];
         fix_tool_call_indexes(&mut messages);
         let tool_calls = messages[0].tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls[0].index, Some(5));

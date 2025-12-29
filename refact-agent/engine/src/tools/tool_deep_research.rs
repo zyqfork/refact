@@ -5,7 +5,9 @@ use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
 use crate::subchat::subchat_single;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult};
+use crate::tools::tools_description::{
+    Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
+};
 use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
@@ -108,7 +110,8 @@ async fn execute_deep_research(
         Some(usage_collector),
         Some(tool_call_id.clone()),
         Some(format!("{log_prefix}-deep-research")),
-    ).await;
+    )
+    .await;
 
     cancel_token.cancel();
 
@@ -122,7 +125,9 @@ async fn execute_deep_research(
 
 #[async_trait]
 impl Tool for ToolDeepResearch {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -150,17 +155,26 @@ impl Tool for ToolDeepResearch {
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
         tool_call_id: &String,
-        args: &HashMap<String, Value>
+        args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let research_query = match args.get("research_query") {
             Some(Value::String(s)) => s.clone(),
-            Some(v) => return Err(format!("argument `research_query` is not a string: {:?}", v)),
-            None => return Err("Missing argument `research_query`".to_string())
+            Some(v) => {
+                return Err(format!(
+                    "argument `research_query` is not a string: {:?}",
+                    v
+                ))
+            }
+            None => return Err("Missing argument `research_query`".to_string()),
         };
 
-        let mut usage_collector = ChatUsage { ..Default::default() };
+        let mut usage_collector = ChatUsage {
+            ..Default::default()
+        };
         let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let subchat_params: SubchatParameters = crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "deep_research").await?;
+        let subchat_params: SubchatParameters =
+            crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "deep_research")
+                .await?;
 
         let ccx_subchat = {
             let ccx_lock = ccx.lock().await;
@@ -173,7 +187,8 @@ impl Tool for ToolDeepResearch {
                 ccx_lock.chat_id.clone(),
                 ccx_lock.should_execute_remotely,
                 ccx_lock.current_model.clone(),
-            ).await;
+            )
+            .await;
             t.subchat_tx = ccx_lock.subchat_tx.clone();
             t.subchat_rx = ccx_lock.subchat_rx.clone();
             Arc::new(AMutex::new(t))
@@ -187,9 +202,13 @@ impl Tool for ToolDeepResearch {
             &mut usage_collector,
             tool_call_id,
             &log_prefix,
-        ).await?;
+        )
+        .await?;
 
-        let research_content = format!("# Deep Research Report\n\n{}", research_result.content.content_text_only());
+        let research_content = format!(
+            "# Deep Research Report\n\n{}",
+            research_result.content.content_text_only()
+        );
         tracing::info!("Deep research completed");
 
         let title = if research_query.len() > 80 {
@@ -203,16 +222,20 @@ impl Tool for ToolDeepResearch {
             base_kind: "research".to_string(),
             base_title: Some(title),
         };
-        let memory_note = match memories_add_enriched(ccx.clone(), &research_content, enrichment_params).await {
-            Ok(path) => {
-                tracing::info!("Created enriched memory from deep research: {:?}", path);
-                format!("\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`", path.display())
-            },
-            Err(e) => {
-                tracing::warn!("Failed to create enriched memory from deep research: {}", e);
-                String::new()
-            }
-        };
+        let memory_note =
+            match memories_add_enriched(ccx.clone(), &research_content, enrichment_params).await {
+                Ok(path) => {
+                    tracing::info!("Created enriched memory from deep research: {:?}", path);
+                    format!(
+                        "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
+                        path.display()
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create enriched memory from deep research: {}", e);
+                    String::new()
+                }
+            };
         let final_message = format!("{}{}", research_content, memory_note);
 
         let mut results = vec![];
@@ -222,7 +245,9 @@ impl Tool for ToolDeepResearch {
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             usage: Some(usage_collector),
-            output_filter: Some(crate::postprocessing::pp_command_output::OutputFilter::no_limits()),
+            output_filter: Some(
+                crate::postprocessing::pp_command_output::OutputFilter::no_limits(),
+            ),
             ..Default::default()
         }));
 
@@ -243,7 +268,8 @@ impl Tool for ToolDeepResearch {
             _ => return Ok("".to_string()),
         };
         let truncated_query = if query.len() > 100 {
-            let end = query.char_indices()
+            let end = query
+                .char_indices()
                 .take_while(|(i, _)| *i < 100)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
@@ -267,9 +293,10 @@ impl Tool for ToolDeepResearch {
         ccx: Arc<AMutex<AtCommandsContext>>,
         args: &HashMap<String, Value>,
     ) -> Result<MatchConfirmDeny, String> {
-        let command_to_match = self.command_to_match_against_confirm_deny(ccx.clone(), &args).await.map_err(|e| {
-            format!("Error getting tool command to match: {}", e)
-        })?;
+        let command_to_match = self
+            .command_to_match_against_confirm_deny(ccx.clone(), &args)
+            .await
+            .map_err(|e| format!("Error getting tool command to match: {}", e))?;
         Ok(MatchConfirmDeny {
             result: MatchConfirmDenyResult::CONFIRMATION,
             command: command_to_match,

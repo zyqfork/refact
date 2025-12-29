@@ -8,7 +8,9 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, normalize_line_endings,
     parse_path_for_create, parse_string_arg, restore_line_endings, sync_documents_ast, write_file,
 };
-use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{
+    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -29,7 +31,9 @@ async fn parse_args(
     let path = parse_path_for_create(gcx.clone(), args, privacy).await?;
 
     let has_crlf = if path.exists() {
-        let existing = get_file_text_from_memory_or_disk(gcx, &path).await.unwrap_or_default();
+        let existing = get_file_text_from_memory_or_disk(gcx, &path)
+            .await
+            .unwrap_or_default();
         existing.contains("\r\n")
     } else {
         false
@@ -56,7 +60,11 @@ pub async fn tool_create_text_doc_exec(
     sync_documents_ast(gcx.clone(), &path).await?;
     let chunks = convert_edit_to_diffchunks(path.clone(), &before, &after)?;
     let summary = if before.is_empty() {
-        format!("✅ Created {:?}: {} lines", path.file_name().unwrap_or_default(), after.lines().count())
+        format!(
+            "✅ Created {:?}: {} lines",
+            path.file_name().unwrap_or_default(),
+            after.lines().count()
+        )
     } else {
         edit_result_summary(&before, &after, &path)
     };
@@ -65,7 +73,9 @@ pub async fn tool_create_text_doc_exec(
 
 #[async_trait]
 impl Tool for ToolCreateTextDoc {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn tool_execute(
         &mut self,
@@ -75,13 +85,16 @@ impl Tool for ToolCreateTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
         let (_, _, chunks, _summary) = tool_create_text_doc_exec(gcx, args, false).await?;
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "diff".to_string(),
-            content: ChatContent::SimpleText(json!(chunks).to_string()),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "diff".to_string(),
+                content: ChatContent::SimpleText(json!(chunks).to_string()),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     async fn match_against_confirm_deny(

@@ -1,7 +1,10 @@
 use crate::ast::ast_indexer_thread::{ast_indexer_block_until_finished, ast_indexer_enqueue_files};
 use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_or_a_good_error};
 use crate::call_validation::DiffChunk;
-use crate::files_correction::{canonicalize_normalized_path, check_if_its_inside_a_workspace_or_config, correct_to_nearest_dir_path, get_project_dirs, preprocess_path_for_normalization};
+use crate::files_correction::{
+    canonicalize_normalized_path, check_if_its_inside_a_workspace_or_config,
+    correct_to_nearest_dir_path, get_project_dirs, preprocess_path_for_normalization,
+};
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::GlobalContext;
 use crate::privacy::{check_file_privacy, FilePrivacyLevel, PrivacySettings};
@@ -28,13 +31,27 @@ pub async fn parse_path_for_update(
         &candidates,
         &get_project_dirs(gcx.clone()).await,
         false,
-    ).await.map(|f| canonicalize_normalized_path(PathBuf::from(f)))?;
+    )
+    .await
+    .map(|f| canonicalize_normalized_path(PathBuf::from(f)))?;
 
-    if check_file_privacy(privacy_settings, &path, &FilePrivacyLevel::AllowToSendAnywhere).is_err() {
-        return Err(format!("⚠️ Cannot update {:?} (blocked by privacy). 💡 Choose file in allowed directory", path));
+    if check_file_privacy(
+        privacy_settings,
+        &path,
+        &FilePrivacyLevel::AllowToSendAnywhere,
+    )
+    .is_err()
+    {
+        return Err(format!(
+            "⚠️ Cannot update {:?} (blocked by privacy). 💡 Choose file in allowed directory",
+            path
+        ));
     }
     if !path.exists() {
-        return Err(format!("⚠️ File {:?} not found. 💡 Use create_textdoc() for new files", path));
+        return Err(format!(
+            "⚠️ File {:?} not found. 💡 Use create_textdoc() for new files",
+            path
+        ));
     }
     Ok(path)
 }
@@ -47,8 +64,14 @@ pub async fn parse_path_for_create(
     let s = parse_string_arg(args, "path", "Provide absolute path for new file")?;
     let raw_path = PathBuf::from(preprocess_path_for_normalization(s.trim().to_string()));
 
-    let filename = raw_path.file_name()
-        .ok_or_else(|| format!("⚠️ Path '{}' has no filename. 💡 Include filename: /path/to/file.ext", s.trim()))?
+    let filename = raw_path
+        .file_name()
+        .ok_or_else(|| {
+            format!(
+                "⚠️ Path '{}' has no filename. 💡 Include filename: /path/to/file.ext",
+                s.trim()
+            )
+        })?
         .to_string_lossy()
         .to_string();
 
@@ -62,10 +85,14 @@ pub async fn parse_path_for_create(
                 &candidates,
                 &get_project_dirs(gcx.clone()).await,
                 true,
-            ).await?;
+            )
+            .await?;
             canonicalize_normalized_path(PathBuf::from(parent_dir).join(&filename))
         } else {
-            return Err(format!("⚠️ Path '{}' is not absolute. 💡 Use full path like /project/src/file.ext", s.trim()));
+            return Err(format!(
+                "⚠️ Path '{}' is not absolute. 💡 Use full path like /project/src/file.ext",
+                s.trim()
+            ));
         }
     } else {
         let path = canonicalize_normalized_path(raw_path);
@@ -73,13 +100,26 @@ pub async fn parse_path_for_create(
         path
     };
 
-    if check_file_privacy(privacy_settings, &path, &FilePrivacyLevel::AllowToSendAnywhere).is_err() {
-        return Err(format!("⚠️ Cannot create {:?} (blocked by privacy). 💡 Choose path in allowed directory", path));
+    if check_file_privacy(
+        privacy_settings,
+        &path,
+        &FilePrivacyLevel::AllowToSendAnywhere,
+    )
+    .is_err()
+    {
+        return Err(format!(
+            "⚠️ Cannot create {:?} (blocked by privacy). 💡 Choose path in allowed directory",
+            path
+        ));
     }
     Ok(path)
 }
 
-pub fn parse_string_arg(args: &HashMap<String, Value>, name: &str, hint: &str) -> Result<String, String> {
+pub fn parse_string_arg(
+    args: &HashMap<String, Value>,
+    name: &str,
+    hint: &str,
+) -> Result<String, String> {
     match args.get(name) {
         Some(Value::String(s)) => Ok(s.clone()),
         Some(v) => Err(format!("⚠️ '{}' must be a string, got: {:?}", name, v)),
@@ -87,7 +127,11 @@ pub fn parse_string_arg(args: &HashMap<String, Value>, name: &str, hint: &str) -
     }
 }
 
-pub fn parse_bool_arg(args: &HashMap<String, Value>, name: &str, default: bool) -> Result<bool, String> {
+pub fn parse_bool_arg(
+    args: &HashMap<String, Value>,
+    name: &str,
+    default: bool,
+) -> Result<bool, String> {
     match args.get(name) {
         Some(Value::Bool(b)) => Ok(*b),
         Some(Value::String(s)) => match s.to_lowercase().as_str() {
@@ -128,10 +172,11 @@ pub fn convert_edit_to_diffchunks(
     let mut current_chunk_is_plus = Vec::new();
     let mut diff_chunks = Vec::new();
 
-    let flush_changes = |lines_remove: &Vec<String>, 
-                        lines_add: &Vec<String>, 
-                        line_nums: &Vec<usize>,
-                        is_plus: &Vec<bool>| -> Option<DiffChunk> {
+    let flush_changes = |lines_remove: &Vec<String>,
+                         lines_add: &Vec<String>,
+                         line_nums: &Vec<usize>,
+                         is_plus: &Vec<bool>|
+     -> Option<DiffChunk> {
         if lines_remove.is_empty() && lines_add.is_empty() {
             return None;
         }
@@ -139,20 +184,12 @@ pub fn convert_edit_to_diffchunks(
         let lines_remove = lines_remove.join("");
         let lines_add = lines_add.join("");
 
-        let line1 = line_nums.iter()
-            .min()
-            .map(|&x| x + 1)
-            .unwrap_or(1);
+        let line1 = line_nums.iter().min().map(|&x| x + 1).unwrap_or(1);
 
-        let line2 = line_nums.iter()
+        let line2 = line_nums
+            .iter()
             .zip(is_plus.iter())
-            .map(|(&num, &is_plus)| {
-                if is_plus {
-                    num + 1
-                } else {
-                    num + 2
-                }
-            })
+            .map(|(&num, &is_plus)| if is_plus { num + 1 } else { num + 2 })
             .max()
             .unwrap_or(1);
 
@@ -247,7 +284,12 @@ pub async fn sync_documents_ast(
     Ok(())
 }
 
-pub async fn write_file(gcx: Arc<ARwLock<GlobalContext>>, path: &PathBuf, file_text: &String, dry: bool) -> Result<(String, String), String> {
+pub async fn write_file(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    path: &PathBuf,
+    file_text: &String,
+    dry: bool,
+) -> Result<(String, String), String> {
     use crate::tools::file_edit::undo_history::record_before_edit;
 
     let parent = path.parent().ok_or(format!(
@@ -278,7 +320,11 @@ pub async fn write_file(gcx: Arc<ARwLock<GlobalContext>>, path: &PathBuf, file_t
             warn!("{err}");
             err
         })?;
-        gcx.write().await.documents_state.memory_document_map.remove(path);
+        gcx.write()
+            .await
+            .documents_state
+            .memory_document_map
+            .remove(path);
     }
 
     Ok((before_text, file_text.to_string()))
@@ -366,7 +412,9 @@ pub async fn str_replace_anchored(
     dry: bool,
 ) -> Result<(String, String), String> {
     if anchor1.is_empty() {
-        return Err("⚠️ Anchor cannot be empty. 💡 Provide unique text to locate edit position".to_string());
+        return Err(
+            "⚠️ Anchor cannot be empty. 💡 Provide unique text to locate edit position".to_string(),
+        );
     }
     let file_content = get_file_text_from_memory_or_disk(gcx.clone(), path).await?;
     let has_crlf = file_content.contains("\r\n");
@@ -397,7 +445,13 @@ pub async fn str_replace_anchored(
     Ok((file_content, new_file_content))
 }
 
-fn replace_between_anchors(content: &str, before: &str, after: &str, replacement: &str, multiple: bool) -> Result<String, String> {
+fn replace_between_anchors(
+    content: &str,
+    before: &str,
+    after: &str,
+    replacement: &str,
+    multiple: bool,
+) -> Result<String, String> {
     let before_positions: Vec<usize> = content.match_indices(before).map(|(i, _)| i).collect();
     if before_positions.is_empty() {
         return Err("⚠️ anchor_before not found. 💡 Use cat() to verify text exists".to_string());
@@ -412,11 +466,20 @@ fn replace_between_anchors(content: &str, before: &str, after: &str, replacement
     }
 
     if pairs.is_empty() {
-        return Err("⚠️ anchor_after not found after anchor_before. 💡 Check anchor order".to_string());
+        return Err(
+            "⚠️ anchor_after not found after anchor_before. 💡 Check anchor order".to_string(),
+        );
     }
     if !multiple && pairs.len() > 1 {
-        let lines: Vec<usize> = pairs.iter().map(|(i, _)| content[..*i].lines().count() + 1).collect();
-        return Err(format!("⚠️ {} anchor pairs at lines {:?}. 💡 Use more specific anchors, or set multiple:true", pairs.len(), lines));
+        let lines: Vec<usize> = pairs
+            .iter()
+            .map(|(i, _)| content[..*i].lines().count() + 1)
+            .collect();
+        return Err(format!(
+            "⚠️ {} anchor pairs at lines {:?}. 💡 Use more specific anchors, or set multiple:true",
+            pairs.len(),
+            lines
+        ));
     }
 
     pairs.sort_by_key(|(start, _)| *start);
@@ -437,18 +500,33 @@ fn replace_between_anchors(content: &str, before: &str, after: &str, replacement
     for (b_start, a_start) in pairs.into_iter().rev() {
         let b_end = b_start + before.len();
         let a_end = a_start + after.len();
-        result = format!("{}{}{}{}", &result[..b_end], replacement, after, &result[a_end..]);
+        result = format!(
+            "{}{}{}{}",
+            &result[..b_end],
+            replacement,
+            after,
+            &result[a_end..]
+        );
     }
     Ok(result)
 }
 
-fn insert_at_anchor(content: &str, anchor: &str, insert: &str, multiple: bool, after: bool) -> Result<String, String> {
+fn insert_at_anchor(
+    content: &str,
+    anchor: &str,
+    insert: &str,
+    multiple: bool,
+    after: bool,
+) -> Result<String, String> {
     let positions: Vec<usize> = content.match_indices(anchor).map(|(i, _)| i).collect();
     if positions.is_empty() {
         return Err("⚠️ Anchor not found. 💡 Use cat() to verify text exists".to_string());
     }
     if !multiple && positions.len() > 1 {
-        let lines: Vec<usize> = positions.iter().map(|i| content[..*i].lines().count() + 1).collect();
+        let lines: Vec<usize> = positions
+            .iter()
+            .map(|i| content[..*i].lines().count() + 1)
+            .collect();
         return Err(format!("⚠️ {} anchor occurrences at lines {:?}. 💡 Use more specific anchor, or set multiple:true", positions.len(), lines));
     }
 
@@ -484,7 +562,10 @@ pub fn parse_line_ranges(ranges_str: &str, total_lines: usize) -> Result<Vec<Lin
                 1
             } else {
                 start_str.parse::<usize>().map_err(|_| {
-                    format!("⚠️ Invalid start '{}' in '{}'. 💡 Use numbers like '10:20'", start_str, part)
+                    format!(
+                        "⚠️ Invalid start '{}' in '{}'. 💡 Use numbers like '10:20'",
+                        start_str, part
+                    )
                 })?
             };
 
@@ -492,16 +573,25 @@ pub fn parse_line_ranges(ranges_str: &str, total_lines: usize) -> Result<Vec<Lin
                 total_lines
             } else {
                 end_str.parse::<usize>().map_err(|_| {
-                    format!("⚠️ Invalid end '{}' in '{}'. 💡 Use numbers like '10:20'", end_str, part)
+                    format!(
+                        "⚠️ Invalid end '{}' in '{}'. 💡 Use numbers like '10:20'",
+                        end_str, part
+                    )
                 })?
             };
 
             LineRange { start, end }
         } else {
             let line = part.parse::<usize>().map_err(|_| {
-                format!("⚠️ Invalid line '{}'. 💡 Use number like '10' or range '10:20'", part)
+                format!(
+                    "⚠️ Invalid line '{}'. 💡 Use number like '10' or range '10:20'",
+                    part
+                )
             })?;
-            LineRange { start: line, end: line }
+            LineRange {
+                start: line,
+                end: line,
+            }
         };
 
         if range.start == 0 {
@@ -571,10 +661,15 @@ pub async fn str_replace_lines(
         }
         let start_idx = range.start - 1;
         let end_idx = range.end;
-        let new_lines: Vec<String> = normalized_new_content.lines().map(|s| s.to_string()).collect();
+        let new_lines: Vec<String> = normalized_new_content
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
         lines.splice(start_idx..end_idx, new_lines);
     } else {
-        let content_parts: Vec<&str> = normalized_new_content.split("---RANGE_SEPARATOR---").collect();
+        let content_parts: Vec<&str> = normalized_new_content
+            .split("---RANGE_SEPARATOR---")
+            .collect();
 
         if content_parts.len() != ranges.len() {
             return Err(format!(
@@ -590,12 +685,17 @@ pub async fn str_replace_lines(
             if range.end > lines.len() {
                 return Err(format!(
                     "⚠️ Range {}:{} exceeds current length ({} lines). 💡 Check ranges",
-                    range.start, range.end, lines.len()
+                    range.start,
+                    range.end,
+                    lines.len()
                 ));
             }
             let start_idx = range.start - 1;
             let end_idx = range.end;
-            let new_lines: Vec<String> = content_parts[orig_idx].lines().map(|s| s.to_string()).collect();
+            let new_lines: Vec<String> = content_parts[orig_idx]
+                .lines()
+                .map(|s| s.to_string())
+                .collect();
             lines.splice(start_idx..end_idx, new_lines);
         }
     }
@@ -643,7 +743,8 @@ pub async fn str_replace_regex(
         }
     }
     if !multiple && occurrences > 1 {
-        let lines: Vec<usize> = matches.iter()
+        let lines: Vec<usize> = matches
+            .iter()
             .map(|m| normalized_content[..m.start()].lines().count() + 1)
             .collect();
         return Err(format!(
@@ -653,9 +754,13 @@ pub async fn str_replace_regex(
     }
 
     let new_content = if multiple {
-        pattern.replace_all(&normalized_content, normalized_replacement.as_str()).to_string()
+        pattern
+            .replace_all(&normalized_content, normalized_replacement.as_str())
+            .to_string()
     } else {
-        pattern.replace(&normalized_content, normalized_replacement.as_str()).to_string()
+        pattern
+            .replace(&normalized_content, normalized_replacement.as_str())
+            .to_string()
     };
     let new_file_content = restore_line_endings(&new_content, has_crlf);
     write_file(gcx.clone(), path, &new_file_content, dry).await?;
@@ -785,7 +890,12 @@ mod tests {
     fn test_convert_edit_to_diffchunks_add() {
         let before = "";
         let after = "line1\nline2\n";
-        let chunks = convert_edit_to_diffchunks(PathBuf::from("test.txt"), &before.to_string(), &after.to_string()).unwrap();
+        let chunks = convert_edit_to_diffchunks(
+            PathBuf::from("test.txt"),
+            &before.to_string(),
+            &after.to_string(),
+        )
+        .unwrap();
         assert!(!chunks.is_empty());
     }
 
@@ -793,7 +903,12 @@ mod tests {
     fn test_convert_edit_to_diffchunks_modify() {
         let before = "line1\nold\nline3\n";
         let after = "line1\nnew\nline3\n";
-        let chunks = convert_edit_to_diffchunks(PathBuf::from("test.txt"), &before.to_string(), &after.to_string()).unwrap();
+        let chunks = convert_edit_to_diffchunks(
+            PathBuf::from("test.txt"),
+            &before.to_string(),
+            &after.to_string(),
+        )
+        .unwrap();
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].lines_remove.contains("old"));
         assert!(chunks[0].lines_add.contains("new"));

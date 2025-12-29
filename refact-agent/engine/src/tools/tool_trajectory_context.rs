@@ -16,7 +16,9 @@ pub struct ToolTrajectoryContext {
 
 #[async_trait]
 impl Tool for ToolTrajectoryContext {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -28,7 +30,9 @@ impl Tool for ToolTrajectoryContext {
             },
             agentic: false,
             experimental: false,
-            description: "Get more context from a specific trajectory around given message indices.".to_string(),
+            description:
+                "Get more context from a specific trajectory around given message indices."
+                    .to_string(),
             parameters: vec![
                 ToolParam {
                     name: "trajectory_id".to_string(),
@@ -48,10 +52,15 @@ impl Tool for ToolTrajectoryContext {
                 ToolParam {
                     name: "expand_by".to_string(),
                     param_type: "string".to_string(),
-                    description: "Number of messages to include before/after (default: 3).".to_string(),
+                    description: "Number of messages to include before/after (default: 3)."
+                        .to_string(),
                 },
             ],
-            parameters_required: vec!["trajectory_id".to_string(), "message_start".to_string(), "message_end".to_string()],
+            parameters_required: vec![
+                "trajectory_id".to_string(),
+                "message_start".to_string(),
+                "message_end".to_string(),
+            ],
         }
     }
 
@@ -61,25 +70,45 @@ impl Tool for ToolTrajectoryContext {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let trajectory_id = match args.get("trajectory_id") {
-            Some(Value::String(s)) => s.clone(),
-            _ => return Err("⚠️ Missing trajectory_id. 💡 Check .refact/trajectories/ for available IDs".to_string())
-        };
+        let trajectory_id =
+            match args.get("trajectory_id") {
+                Some(Value::String(s)) => s.clone(),
+                _ => return Err(
+                    "⚠️ Missing trajectory_id. 💡 Check .refact/trajectories/ for available IDs"
+                        .to_string(),
+                ),
+            };
 
         let msg_start: usize = match args.get("message_start") {
-            Some(Value::String(s)) => s.parse().map_err(|_| "⚠️ message_start must be a number. 💡 Use 0 for first message")?,
-            Some(Value::Number(n)) => n.as_u64().ok_or("⚠️ message_start must be a positive number")? as usize,
-            _ => return Err("⚠️ Missing message_start. 💡 Use 0 for first message".to_string())
+            Some(Value::String(s)) => s
+                .parse()
+                .map_err(|_| "⚠️ message_start must be a number. 💡 Use 0 for first message")?,
+            Some(Value::Number(n)) => {
+                n.as_u64()
+                    .ok_or("⚠️ message_start must be a positive number")? as usize
+            }
+            _ => return Err("⚠️ Missing message_start. 💡 Use 0 for first message".to_string()),
         };
 
         let msg_end: usize = match args.get("message_end") {
             Some(Value::String(s)) => s.parse().map_err(|_| "⚠️ message_end must be a number")?,
-            Some(Value::Number(n)) => n.as_u64().ok_or("⚠️ message_end must be a positive number")? as usize,
-            _ => return Err("⚠️ Missing message_end. 💡 Use knowledge() to find relevant message ranges".to_string())
+            Some(Value::Number(n)) => {
+                n.as_u64()
+                    .ok_or("⚠️ message_end must be a positive number")? as usize
+            }
+            _ => {
+                return Err(
+                    "⚠️ Missing message_end. 💡 Use knowledge() to find relevant message ranges"
+                        .to_string(),
+                )
+            }
         };
 
         if msg_start > msg_end {
-            return Err(format!("⚠️ message_start ({}) > message_end ({}). 💡 Swap values or adjust range", msg_start, msg_end));
+            return Err(format!(
+                "⚠️ message_start ({}) > message_end ({}). 💡 Swap values or adjust range",
+                msg_start, msg_end
+            ));
         }
 
         let expand_by: usize = match args.get("expand_by") {
@@ -95,13 +124,15 @@ impl Tool for ToolTrajectoryContext {
             .find(|p| p.exists())
             .ok_or(format!("⚠️ Trajectory '{}' not found. 💡 Check .refact/trajectories/ or use knowledge() to search", trajectory_id))?;
 
-        let content = fs::read_to_string(&traj_path).await
+        let content = fs::read_to_string(&traj_path)
+            .await
             .map_err(|e| format!("Failed to read trajectory: {}", e))?;
 
         let trajectory: Value = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse trajectory: {}", e))?;
 
-        let messages = trajectory.get("messages")
+        let messages = trajectory
+            .get("messages")
             .and_then(|v| v.as_array())
             .ok_or("⚠️ No messages in trajectory. 💡 This trajectory may be empty or corrupted")?;
 
@@ -110,10 +141,18 @@ impl Tool for ToolTrajectoryContext {
         }
 
         if msg_start >= messages.len() {
-            return Err(format!("⚠️ message_start ({}) >= total messages ({}). 💡 Use range 0-{}", msg_start, messages.len(), messages.len().saturating_sub(1)));
+            return Err(format!(
+                "⚠️ message_start ({}) >= total messages ({}). 💡 Use range 0-{}",
+                msg_start,
+                messages.len(),
+                messages.len().saturating_sub(1)
+            ));
         }
 
-        let title = trajectory.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+        let title = trajectory
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Untitled");
         let actual_start = msg_start.saturating_sub(expand_by);
         let actual_end = (msg_end + expand_by).min(messages.len().saturating_sub(1));
 
@@ -121,7 +160,10 @@ impl Tool for ToolTrajectoryContext {
         output.push_str("╭──────────────────────────────────────╮\n");
         output.push_str(&format!("│ 📁 {}│\n", pad_right(&trajectory_id, 36)));
         output.push_str(&format!("│ 📌 {}│\n", pad_right(title, 36)));
-        output.push_str(&format!("│ 📍 Messages {}-{} (requested {}-{}) │\n", actual_start, actual_end, msg_start, msg_end));
+        output.push_str(&format!(
+            "│ 📍 Messages {}-{} (requested {}-{}) │\n",
+            actual_start, actual_end, msg_start, msg_end
+        ));
         output.push_str("╰──────────────────────────────────────╯\n\n");
 
         for (i, msg) in messages.iter().enumerate() {
@@ -129,7 +171,10 @@ impl Tool for ToolTrajectoryContext {
                 continue;
             }
 
-            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             if role == "context_file" || role == "cd_instruction" || role == "system" {
                 continue;
             }
@@ -148,21 +193,34 @@ impl Tool for ToolTrajectoryContext {
             };
 
             if is_highlighted {
-                output.push_str(&format!("┏━ {} [{}] {} ━━━━━━━━━━━━━━━━━━━━━━━\n", role_icon, i, role.to_uppercase()));
+                output.push_str(&format!(
+                    "┏━ {} [{}] {} ━━━━━━━━━━━━━━━━━━━━━━━\n",
+                    role_icon,
+                    i,
+                    role.to_uppercase()
+                ));
             } else {
-                output.push_str(&format!("┌─ {} [{}] {} ─────────────────────────\n", role_icon, i, role.to_uppercase()));
+                output.push_str(&format!(
+                    "┌─ {} [{}] {} ─────────────────────────\n",
+                    role_icon,
+                    i,
+                    role.to_uppercase()
+                ));
             }
             output.push_str(&content_text);
             output.push_str("\n\n");
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(output),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(output),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {
@@ -185,9 +243,11 @@ fn extract_content(msg: &Value) -> String {
     }
 
     if let Some(content_arr) = msg.get("content").and_then(|c| c.as_array()) {
-        return content_arr.iter()
+        return content_arr
+            .iter()
             .filter_map(|item| {
-                item.get("text").and_then(|t| t.as_str())
+                item.get("text")
+                    .and_then(|t| t.as_str())
                     .or_else(|| item.get("m_content").and_then(|t| t.as_str()))
             })
             .collect::<Vec<_>>()
@@ -195,8 +255,13 @@ fn extract_content(msg: &Value) -> String {
     }
 
     if let Some(tool_calls) = msg.get("tool_calls").and_then(|tc| tc.as_array()) {
-        return tool_calls.iter()
-            .filter_map(|tc| tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()))
+        return tool_calls
+            .iter()
+            .filter_map(|tc| {
+                tc.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
             .map(|s| format!("[tool: {}]", s))
             .collect::<Vec<_>>()
             .join(" ");

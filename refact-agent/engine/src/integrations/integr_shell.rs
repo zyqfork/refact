@@ -21,14 +21,17 @@ use crate::files_correction::get_project_dirs;
 use crate::files_correction::preprocess_path_for_normalization;
 use crate::files_correction::CommandSimplifiedDirExt;
 use crate::global_context::GlobalContext;
-use crate::tools::tools_description::{ToolParam, Tool, ToolDesc, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult};
+use crate::tools::tools_description::{
+    ToolParam, Tool, ToolDesc, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
+};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::postprocessing::pp_command_output::{OutputFilter, parse_output_filter_args, output_mini_postprocessing};
+use crate::postprocessing::pp_command_output::{
+    OutputFilter, parse_output_filter_args, output_mini_postprocessing,
+};
 use crate::postprocessing::pp_capture_buffer::{CaptureBuffer, KeepStrategy};
 use crate::integrations::integr_abstract::{IntegrationCommon, IntegrationTrait};
 use crate::custom_error::YamlError;
 use crate::tools::tools_description::{command_should_be_denied, command_should_be_confirmed_by_user};
-
 
 #[derive(Deserialize, Serialize, Clone, Default)]
 pub struct SettingsShell {
@@ -47,14 +50,20 @@ pub struct ToolShell {
 
 #[async_trait]
 impl IntegrationTrait for ToolShell {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-    fn integr_schema(&self) -> &str
-    {
+    fn integr_schema(&self) -> &str {
         SHELL_INTEGRATION_SCHEMA
     }
 
-    async fn integr_settings_apply(&mut self, _gcx: Arc<ARwLock<GlobalContext>>, config_path: String, value: &serde_json::Value) -> Result<(), serde_json::Error> {
+    async fn integr_settings_apply(
+        &mut self,
+        _gcx: Arc<ARwLock<GlobalContext>>,
+        config_path: String,
+        value: &serde_json::Value,
+    ) -> Result<(), serde_json::Error> {
         self.cfg = serde_json::from_value(value.clone())?;
         self.common = serde_json::from_value(value.clone())?;
         self.config_path = config_path;
@@ -69,7 +78,10 @@ impl IntegrationTrait for ToolShell {
         self.common.clone()
     }
 
-    async fn integr_tools(&self, _integr_name: &str) -> Vec<Box<dyn crate::tools::tools_description::Tool + Send>> {
+    async fn integr_tools(
+        &self,
+        _integr_name: &str,
+    ) -> Vec<Box<dyn crate::tools::tools_description::Tool + Send>> {
         vec![Box::new(ToolShell {
             common: self.common.clone(),
             cfg: self.cfg.clone(),
@@ -80,7 +92,9 @@ impl IntegrationTrait for ToolShell {
 
 #[async_trait]
 impl Tool for ToolShell {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn tool_execute(
         &mut self,
@@ -92,11 +106,18 @@ impl Tool for ToolShell {
             let ccx_lock = ccx.lock().await;
             (ccx_lock.global_context.clone(), ccx_lock.subchat_tx.clone())
         };
-        let (command, workdir_maybe, custom_filter, timeout_override) = parse_args_with_filter(gcx.clone(), args, &self.cfg.output_filter).await?;
-        let timeout = timeout_override.unwrap_or_else(|| self.cfg.timeout.parse::<u64>().unwrap_or(10));
+        let (command, workdir_maybe, custom_filter, timeout_override) =
+            parse_args_with_filter(gcx.clone(), args, &self.cfg.output_filter).await?;
+        let timeout =
+            timeout_override.unwrap_or_else(|| self.cfg.timeout.parse::<u64>().unwrap_or(10));
 
         let mut error_log = Vec::<YamlError>::new();
-        let env_variables = crate::integrations::setting_up_integrations::get_vars_for_replacements(gcx.clone(), &mut error_log).await;
+        let env_variables =
+            crate::integrations::setting_up_integrations::get_vars_for_replacements(
+                gcx.clone(),
+                &mut error_log,
+            )
+            .await;
 
         let output_filter = custom_filter.unwrap_or_else(|| self.cfg.output_filter.clone());
 
@@ -108,13 +129,18 @@ impl Tool for ToolShell {
             gcx.clone(),
             &subchat_tx,
             tool_call_id,
-        ).await?;
+        )
+        .await?;
 
         let filtered_stdout = output_mini_postprocessing(&output_filter, &result.stdout);
         let filtered_stderr = output_mini_postprocessing(&output_filter, &result.stderr);
 
-        let mut out = crate::integrations::integr_cmdline::format_output(&filtered_stdout, &filtered_stderr);
-        out.push_str(&format!("The command was running {:.3}s, finished with exit code {}\n", result.duration_secs, result.exit_code));
+        let mut out =
+            crate::integrations::integr_cmdline::format_output(&filtered_stdout, &filtered_stderr);
+        out.push_str(&format!(
+            "The command was running {:.3}s, finished with exit code {}\n",
+            result.duration_secs, result.exit_code
+        ));
 
         let msg = vec![ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
@@ -180,11 +206,12 @@ impl Tool for ToolShell {
     async fn match_against_confirm_deny(
         &self,
         ccx: Arc<AMutex<AtCommandsContext>>,
-        args: &HashMap<String, Value>
+        args: &HashMap<String, Value>,
     ) -> Result<MatchConfirmDeny, String> {
-        let command_to_match = self.command_to_match_against_confirm_deny(ccx.clone(), &args).await.map_err(|e| {
-            format!("Error getting tool command to match: {}", e)
-        })?;
+        let command_to_match = self
+            .command_to_match_against_confirm_deny(ccx.clone(), &args)
+            .await
+            .map_err(|e| format!("Error getting tool command to match: {}", e))?;
         if command_to_match.is_empty() {
             return Err("Empty command to match".to_string());
         }
@@ -198,7 +225,8 @@ impl Tool for ToolShell {
                 });
             }
 
-            let (needs_confirmation, confirmation_rule) = command_should_be_confirmed_by_user(&command_to_match, &rules.ask_user);
+            let (needs_confirmation, confirmation_rule) =
+                command_should_be_confirmed_by_user(&command_to_match, &rules.ask_user);
             if needs_confirmation {
                 return Ok(MatchConfirmDeny {
                     result: MatchConfirmDenyResult::CONFIRMATION,
@@ -362,8 +390,16 @@ pub async fn execute_shell_command_with_streaming(
     subchat_tx: &Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
     tool_call_id: &str,
 ) -> Result<ShellStreamResult, String> {
-    let shell = if cfg!(target_os = "windows") { "powershell.exe" } else { "sh" };
-    let shell_arg = if cfg!(target_os = "windows") { "-Command" } else { "-c" };
+    let shell = if cfg!(target_os = "windows") {
+        "powershell.exe"
+    } else {
+        "sh"
+    };
+    let shell_arg = if cfg!(target_os = "windows") {
+        "-Command"
+    } else {
+        "-c"
+    };
     let mut cmd = Command::new(shell);
 
     if let Some(workdir) = workdir_maybe {
@@ -382,17 +418,28 @@ pub async fn execute_shell_command_with_streaming(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    tracing::info!("SHELL: running command directory {:?}\n{:?}", workdir_maybe, command);
+    tracing::info!(
+        "SHELL: running command directory {:?}\n{:?}",
+        workdir_maybe,
+        command
+    );
 
-    send_streaming_update(subchat_tx, tool_call_id, &format!("🔧 Running: {}", command));
+    send_streaming_update(
+        subchat_tx,
+        tool_call_id,
+        &format!("🔧 Running: {}", command),
+    );
 
     let t0 = tokio::time::Instant::now();
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn command: {}", e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn command: {}", e))?;
 
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
-    let output_collector: Arc<AMutex<OutputCollector>> = Arc::new(AMutex::new(OutputCollector::new()));
+    let output_collector: Arc<AMutex<OutputCollector>> =
+        Arc::new(AMutex::new(OutputCollector::new()));
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
     spawn_output_streaming_task(
@@ -418,13 +465,19 @@ pub async fn execute_shell_command_with_streaming(
         Ok(Err(e)) => return Err(format!("Failed to wait for command: {}", e)),
         Err(_) => {
             let _ = child.kill().await;
-            return Err(format!("Command '{}' timed out after {} seconds", command, timeout));
+            return Err(format!(
+                "Command '{}' timed out after {} seconds",
+                command, timeout
+            ));
         }
     };
 
     let (stdout_str, stderr_str) = {
         let mut collector = output_collector.lock().await;
-        (collector.stdout.take_result(), collector.stderr.take_result())
+        (
+            collector.stdout.take_result(),
+            collector.stderr.take_result(),
+        )
     };
 
     let exit_code = exit_status.code().unwrap_or_default();
@@ -432,7 +485,11 @@ pub async fn execute_shell_command_with_streaming(
     send_streaming_update(
         subchat_tx,
         tool_call_id,
-        &format!("✅ Finished (exit code: {}, {:.1}s)", exit_code, duration.as_secs_f64())
+        &format!(
+            "✅ Finished (exit code: {}, {:.1}s)",
+            exit_code,
+            duration.as_secs_f64()
+        ),
     );
 
     Ok(ShellStreamResult {
@@ -443,12 +500,20 @@ pub async fn execute_shell_command_with_streaming(
     })
 }
 
-async fn parse_args(gcx: Arc<ARwLock<GlobalContext>>, args: &HashMap<String, Value>) -> Result<(String, Option<PathBuf>), String> {
-    let (command, workdir, _, _) = parse_args_with_filter(gcx, args, &OutputFilter::default()).await?;
+async fn parse_args(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    args: &HashMap<String, Value>,
+) -> Result<(String, Option<PathBuf>), String> {
+    let (command, workdir, _, _) =
+        parse_args_with_filter(gcx, args, &OutputFilter::default()).await?;
     Ok((command, workdir))
 }
 
-async fn parse_args_with_filter(gcx: Arc<ARwLock<GlobalContext>>, args: &HashMap<String, Value>, config_filter: &OutputFilter) -> Result<(String, Option<PathBuf>, Option<OutputFilter>, Option<u64>), String> {
+async fn parse_args_with_filter(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    args: &HashMap<String, Value>,
+    config_filter: &OutputFilter,
+) -> Result<(String, Option<PathBuf>, Option<OutputFilter>, Option<u64>), String> {
     let command = match args.get("command") {
         Some(Value::String(s)) => {
             if s.is_empty() {
@@ -456,9 +521,9 @@ async fn parse_args_with_filter(gcx: Arc<ARwLock<GlobalContext>>, args: &HashMap
             } else {
                 s.clone()
             }
-        },
+        }
         Some(v) => return Err(format!("argument `command` is not a string: {:?}", v)),
-        None => return Err("Missing argument `command`".to_string())
+        None => return Err("Missing argument `command`".to_string()),
     };
 
     let workdir = match args.get("workdir") {
@@ -468,26 +533,31 @@ async fn parse_args_with_filter(gcx: Arc<ARwLock<GlobalContext>>, args: &HashMap
             } else {
                 Some(resolve_shell_workdir(gcx.clone(), s).await?)
             }
-        },
+        }
         Some(v) => return Err(format!("argument `workdir` is not a string: {:?}", v)),
-        None => None
+        None => None,
     };
 
-    let has_filter_override = args.get("output_filter").is_some() || args.get("output_limit").is_some();
+    let has_filter_override =
+        args.get("output_filter").is_some() || args.get("output_limit").is_some();
     let custom_filter = if has_filter_override {
         Some(parse_output_filter_args(args, config_filter))
     } else {
         None
     };
 
-    let timeout_override = args.get("timeout")
+    let timeout_override = args
+        .get("timeout")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<u64>().ok());
 
     Ok((command, workdir, custom_filter, timeout_override))
 }
 
-async fn resolve_shell_workdir(gcx: Arc<ARwLock<GlobalContext>>, raw_path: &str) -> Result<PathBuf, String> {
+async fn resolve_shell_workdir(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
     let path_str = preprocess_path_for_normalization(raw_path.to_string());
     let path = PathBuf::from(&path_str);
 
@@ -499,7 +569,14 @@ async fn resolve_shell_workdir(gcx: Arc<ARwLock<GlobalContext>>, raw_path: &str)
         let project_dirs = get_project_dirs(gcx.clone()).await;
         let candidates = correct_to_nearest_dir_path(gcx.clone(), &path_str, false, 3).await;
         canonical_path(
-            return_one_candidate_or_a_good_error(gcx.clone(), &path_str, &candidates, &project_dirs, true).await?
+            return_one_candidate_or_a_good_error(
+                gcx.clone(),
+                &path_str,
+                &candidates,
+                &project_dirs,
+                true,
+            )
+            .await?,
         )
     };
     if !workdir.exists() {

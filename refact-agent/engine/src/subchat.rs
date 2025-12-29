@@ -8,14 +8,18 @@ use crate::caps::resolve_chat_model;
 use crate::tools::tools_description::ToolDesc;
 use crate::tools::tools_list::get_available_tools;
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ChatContent, ChatMeta, ChatMode, ChatToolCall, SamplingParameters, ChatMessage, ChatUsage, ReasoningEffort};
+use crate::call_validation::{
+    ChatContent, ChatMeta, ChatMode, ChatToolCall, SamplingParameters, ChatMessage, ChatUsage,
+    ReasoningEffort,
+};
 use crate::global_context::try_load_caps_quickly_if_not_present;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::chat::prepare::{prepare_chat_passthrough, ChatPrepareOptions};
-use crate::chat::stream_core::{run_llm_stream, StreamRunParams, NoopCollector, ChoiceFinal, normalize_tool_call};
+use crate::chat::stream_core::{
+    run_llm_stream, StreamRunParams, NoopCollector, ChoiceFinal, normalize_tool_call,
+};
 use crate::chat::tools::{execute_tools, ExecuteToolsOptions};
 use crate::chat::types::ThreadParams;
-
 
 const MAX_NEW_TOKENS: usize = 4096;
 
@@ -87,10 +91,13 @@ async fn execute_pending_tool_calls(
         &thread,
         ChatMode::AGENT,
         ExecuteToolsOptions::default(),
-    ).await;
+    )
+    .await;
 
     for tc in &tool_calls {
-        let answered = denied_msgs.iter().chain(tool_results.iter())
+        let answered = denied_msgs
+            .iter()
+            .chain(tool_results.iter())
             .any(|m| m.tool_call_id == tc.id);
         if !answered {
             tool_results.push(ChatMessage {
@@ -126,7 +133,8 @@ async fn subchat_stream(
         ccx_locked.global_context.clone()
     };
 
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0).await
+    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
+        .await
         .map_err(|e| format!("no caps: {:?}", e))?;
     let model_rec = resolve_chat_model(caps, model_id)?;
 
@@ -175,7 +183,8 @@ async fn subchat_stream(
         &mut parameters,
         &options,
         &None,
-    ).await?;
+    )
+    .await?;
 
     let t1 = std::time::Instant::now();
 
@@ -183,19 +192,29 @@ async fn subchat_stream(
         prompt: prepared.prompt,
         model_rec: model_rec.base.clone(),
         sampling: parameters,
-        meta: if model_rec.base.support_metadata { Some(meta) } else { None },
+        meta: if model_rec.base.support_metadata {
+            Some(meta)
+        } else {
+            None
+        },
         abort_flag: None,
     };
 
     let mut collector = NoopCollector;
     let results = run_llm_stream(gcx.clone(), params, n, &mut collector).await?;
 
-    info!("stream generation took {:?}ms", t1.elapsed().as_millis() as i32);
+    info!(
+        "stream generation took {:?}ms",
+        t1.elapsed().as_millis() as i32
+    );
 
     convert_results_to_messages(results, messages)
 }
 
-fn convert_results_to_messages(results: Vec<ChoiceFinal>, original_messages: Vec<ChatMessage>) -> Result<Vec<Vec<ChatMessage>>, String> {
+fn convert_results_to_messages(
+    results: Vec<ChoiceFinal>,
+    original_messages: Vec<ChatMessage>,
+) -> Result<Vec<Vec<ChatMessage>>, String> {
     if results.is_empty() {
         return Ok(vec![original_messages]);
     }
@@ -205,18 +224,32 @@ fn convert_results_to_messages(results: Vec<ChoiceFinal>, original_messages: Vec
         let tool_calls: Option<Vec<_>> = if result.tool_calls_raw.is_empty() {
             None
         } else {
-            let parsed: Vec<_> = result.tool_calls_raw.iter()
+            let parsed: Vec<_> = result
+                .tool_calls_raw
+                .iter()
                 .filter_map(|tc| normalize_tool_call(tc))
                 .collect();
-            if parsed.is_empty() { None } else { Some(parsed) }
+            if parsed.is_empty() {
+                None
+            } else {
+                Some(parsed)
+            }
         };
 
         let msg = ChatMessage {
             role: "assistant".to_string(),
             content: ChatContent::SimpleText(result.content),
             tool_calls,
-            reasoning_content: if result.reasoning.is_empty() { None } else { Some(result.reasoning) },
-            thinking_blocks: if result.thinking_blocks.is_empty() { None } else { Some(result.thinking_blocks) },
+            reasoning_content: if result.reasoning.is_empty() {
+                None
+            } else {
+                Some(result.reasoning)
+            },
+            thinking_blocks: if result.thinking_blocks.is_empty() {
+                None
+            } else {
+                Some(result.thinking_blocks)
+            },
             usage: result.usage,
             ..Default::default()
         };
@@ -228,8 +261,6 @@ fn convert_results_to_messages(results: Vec<ChoiceFinal>, original_messages: Vec
 
     Ok(all_choices)
 }
-
-
 
 fn update_usage_from_messages(usage: &mut ChatUsage, messages: &Vec<Vec<ChatMessage>>) {
     // even if n_choices > 1, usage is identical in each Vec<ChatMessage>, so we could take the first one
@@ -268,29 +299,41 @@ pub async fn subchat_single(
     info!("tools_subset {:?}", tools_subset);
 
     let tools_desclist: Vec<ToolDesc> = {
-        let tools_turned_on_by_cmdline = get_available_tools(gcx.clone()).await.iter().map(|tool| {
-            tool.tool_description()
-        }).collect::<Vec<_>>();
+        let tools_turned_on_by_cmdline = get_available_tools(gcx.clone())
+            .await
+            .iter()
+            .map(|tool| tool.tool_description())
+            .collect::<Vec<_>>();
 
-        info!("tools_turned_on_by_cmdline {:?}", tools_turned_on_by_cmdline.iter().map(|tool| {
-            &tool.name
-        }).collect::<Vec<_>>());
+        info!(
+            "tools_turned_on_by_cmdline {:?}",
+            tools_turned_on_by_cmdline
+                .iter()
+                .map(|tool| { &tool.name })
+                .collect::<Vec<_>>()
+        );
 
         match tools_subset {
-            Some(ref tools_subset) => {
-                tools_turned_on_by_cmdline.into_iter().filter(|tool| {
-                    tools_subset.contains(&tool.name)
-                }).collect()
-            }
+            Some(ref tools_subset) => tools_turned_on_by_cmdline
+                .into_iter()
+                .filter(|tool| tools_subset.contains(&tool.name))
+                .collect(),
             None => tools_turned_on_by_cmdline,
         }
     };
 
-    info!("tools_on_intersection {:?}", tools_desclist.iter().map(|tool| {
-        &tool.name
-    }).collect::<Vec<_>>());
+    info!(
+        "tools_on_intersection {:?}",
+        tools_desclist
+            .iter()
+            .map(|tool| { &tool.name })
+            .collect::<Vec<_>>()
+    );
 
-    let tools = tools_desclist.into_iter().filter(|x| x.is_supported_by(model_id)).collect::<Vec<_>>();
+    let tools = tools_desclist
+        .into_iter()
+        .filter(|x| x.is_supported_by(model_id))
+        .collect::<Vec<_>>();
 
     let max_new_tokens = max_new_tokens.unwrap_or(MAX_NEW_TOKENS);
 
@@ -305,7 +348,8 @@ pub async fn subchat_single(
         n,
         reasoning_effort,
         only_deterministic_messages,
-    ).await?;
+    )
+    .await?;
 
     if let Some(usage_collector) = usage_collector_mb {
         update_usage_from_messages(usage_collector, &results);
@@ -347,7 +391,9 @@ pub async fn subchat(
     prepend_system_prompt: Option<bool>,
 ) -> Result<Vec<Vec<ChatMessage>>, String> {
     let mut messages = messages.clone();
-    let mut usage_collector = ChatUsage { ..Default::default() };
+    let mut usage_collector = ChatUsage {
+        ..Default::default()
+    };
     let mut tx_chatid_mb = tx_chatid_mb.clone();
     // for attempt in attempt_n
     {
@@ -385,16 +431,26 @@ pub async fn subchat(
                 Some(&mut usage_collector),
                 tx_toolid_mb.clone(),
                 tx_chatid_mb.clone(),
-            ).await?[0].clone();
+            )
+            .await?[0]
+                .clone();
             messages = execute_pending_tool_calls(
-                ccx.clone(), model_id, messages, &tools_subset,
-                tx_toolid_mb.clone(), tx_chatid_mb.clone()
-            ).await?;
+                ccx.clone(),
+                model_id,
+                messages,
+                &tools_subset,
+                tx_toolid_mb.clone(),
+                tx_chatid_mb.clone(),
+            )
+            .await?;
             let last_message = messages.last().unwrap();
             let mut content = format!("🤖:\n{}", &last_message.content.content_text_only());
             if let Some(tool_calls) = &last_message.tool_calls {
                 if let Some(tool_call) = tool_calls.get(0) {
-                    content = format!("{}\n{}({})", content, tool_call.function.name, tool_call.function.arguments);
+                    content = format!(
+                        "{}\n{}({})",
+                        content, tool_call.function.name, tool_call.function.arguments
+                    );
                 }
             }
             let tx_chatid = format!("{step_n}/{wrap_up_depth}: {content}");
@@ -405,10 +461,18 @@ pub async fn subchat(
         // result => session
     }
     messages = execute_pending_tool_calls(
-        ccx.clone(), model_id, messages, &tools_subset,
-        tx_toolid_mb.clone(), tx_chatid_mb.clone()
-    ).await?;
-    messages.push(ChatMessage::new("user".to_string(), wrap_up_prompt.to_string()));
+        ccx.clone(),
+        model_id,
+        messages,
+        &tools_subset,
+        tx_toolid_mb.clone(),
+        tx_chatid_mb.clone(),
+    )
+    .await?;
+    messages.push(ChatMessage::new(
+        "user".to_string(),
+        wrap_up_prompt.to_string(),
+    ));
     let choices = subchat_single(
         ccx.clone(),
         model_id,
@@ -424,7 +488,8 @@ pub async fn subchat(
         Some(&mut usage_collector),
         tx_toolid_mb.clone(),
         tx_chatid_mb.clone(),
-    ).await?;
+    )
+    .await?;
     // if let Some(last_message) = messages.last_mut() {
     //     last_message.usage = Some(usage_collector);
     // }

@@ -9,17 +9,20 @@ use serde_json::Value;
 use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ChatMessage, ChatMeta, ChatMode, ChatToolCall, PostprocessSettings, SubchatParameters};
+use crate::call_validation::{
+    ChatMessage, ChatMeta, ChatMode, ChatToolCall, PostprocessSettings, SubchatParameters,
+};
 use crate::chat::tools::{execute_tools, ExecuteToolsOptions};
 use crate::chat::types::ThreadParams;
 use crate::http::http_post_json;
 use crate::indexing_utils::wait_for_indexing_if_needed;
 use crate::integrations::docker::docker_container_manager::docker_container_get_host_lsp_port_to_connect;
-use crate::tools::tools_description::{set_tool_config, MatchConfirmDenyResult, ToolConfig, ToolDesc, ToolGroupCategory, ToolSource};
+use crate::tools::tools_description::{
+    set_tool_config, MatchConfirmDenyResult, ToolConfig, ToolDesc, ToolGroupCategory, ToolSource,
+};
 use crate::tools::tools_list::{get_available_tool_groups, get_available_tools};
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
-
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ToolsPermissionCheckPost {
@@ -84,26 +87,33 @@ pub async fn handle_v1_get_tools(
 ) -> Json<Vec<ToolGroupResponse>> {
     let tool_groups = get_available_tool_groups(gcx.clone()).await;
 
-    let tool_groups: Vec<ToolGroupResponse> = tool_groups.into_iter().filter_map(|tool_group| {
-        if tool_group.tools.is_empty() {
-            return None;
-        }
-
-        let tools: Vec<ToolResponse> = tool_group.tools.into_iter().map(|tool| {
-            let spec = tool.tool_description();
-            ToolResponse {
-                spec,
-                enabled: tool.config().unwrap_or_default().enabled,
+    let tool_groups: Vec<ToolGroupResponse> = tool_groups
+        .into_iter()
+        .filter_map(|tool_group| {
+            if tool_group.tools.is_empty() {
+                return None;
             }
-        }).collect();
 
-        Some(ToolGroupResponse {
-            name: tool_group.name,
-            description: tool_group.description,
-            category: tool_group.category,
-            tools,
+            let tools: Vec<ToolResponse> = tool_group
+                .tools
+                .into_iter()
+                .map(|tool| {
+                    let spec = tool.tool_description();
+                    ToolResponse {
+                        spec,
+                        enabled: tool.config().unwrap_or_default().enabled,
+                    }
+                })
+                .collect();
+
+            Some(ToolGroupResponse {
+                name: tool_group.name,
+                description: tool_group.description,
+                category: tool_group.category,
+                tools,
+            })
         })
-    }).collect();
+        .collect();
 
     Json(tool_groups)
 }
@@ -129,22 +139,32 @@ pub async fn handle_v1_post_tools(
     body_bytes: hyper::body::Bytes,
 ) -> Result<Json<ToolPostResponse>, ScratchError> {
     let tools = serde_json::from_slice::<ToolPostReq>(&body_bytes)
-        .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("JSON problem: {}", e)))?
+        .map_err(|e| {
+            ScratchError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("JSON problem: {}", e),
+            )
+        })?
         .tools;
 
     for tool in tools {
         set_tool_config(
-            tool.source.config_path, 
+            tool.source.config_path,
             tool.name,
             ToolConfig {
                 enabled: tool.enabled,
-            }
-        ).await.map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Error setting tool config: {}", e)))?;
+            },
+        )
+        .await
+        .map_err(|e| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error setting tool config: {}", e),
+            )
+        })?;
     }
 
-    Ok(Json(ToolPostResponse {
-        success: true,
-    }))
+    Ok(Json(ToolPostResponse { success: true }))
 }
 
 pub async fn handle_v1_tools_check_if_confirmation_needed(
@@ -155,7 +175,8 @@ pub async fn handle_v1_tools_check_if_confirmation_needed(
         let body = serde_json::json!({
             "pause": pause,
             "pause_reasons": pause_reasons
-        }).to_string();
+        })
+        .to_string();
         Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
@@ -163,40 +184,51 @@ pub async fn handle_v1_tools_check_if_confirmation_needed(
             .unwrap()
     }
 
-
-    let post = serde_json::from_slice::<ToolsPermissionCheckPost>(&body_bytes)
-        .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("JSON problem: {}", e)))?;
+    let post = serde_json::from_slice::<ToolsPermissionCheckPost>(&body_bytes).map_err(|e| {
+        ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("JSON problem: {}", e),
+        )
+    })?;
 
     let is_inside_container = gcx.read().await.cmdline.inside_container;
     if post.meta.chat_remote && !is_inside_container {
-        let port = docker_container_get_host_lsp_port_to_connect(gcx.clone(), &post.meta.chat_id).await
+        let port = docker_container_get_host_lsp_port_to_connect(gcx.clone(), &post.meta.chat_id)
+            .await
             .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         let url = format!("http://localhost:{port}/v1/tools-check-if-confirmation-needed");
-        let response: serde_json::Value = http_post_json( &url, &post).await
+        let response: serde_json::Value = http_post_json(&url, &post)
+            .await
             .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         return Ok(Response::builder()
-           .status(StatusCode::OK)
-          .header("Content-Type", "application/json")
-          .body(Body::from(serde_json::to_string(&response).unwrap()))
-          .unwrap());
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_string(&response).unwrap()))
+            .unwrap());
     }
 
-    let ccx = Arc::new(AMutex::new(AtCommandsContext::new(
-        gcx.clone(),
-        1000,
-        1,
-        false,
-        post.messages.clone(),
-        "".to_string(),
-        false,
-        "".to_string(),
-    ).await)); // used only for should_confirm
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            1000,
+            1,
+            false,
+            post.messages.clone(),
+            "".to_string(),
+            false,
+            "".to_string(),
+        )
+        .await,
+    )); // used only for should_confirm
 
-    let all_tools = get_available_tools(gcx.clone()).await.into_iter()
+    let all_tools = get_available_tools(gcx.clone())
+        .await
+        .into_iter()
         .map(|tool| {
             let spec = tool.tool_description();
             (spec.name, tool)
-        }).collect::<IndexMap<_, _>>();
+        })
+        .collect::<IndexMap<_, _>>();
 
     let mut result_messages = vec![];
     for tool_call in &post.tool_calls {
@@ -210,20 +242,22 @@ pub async fn handle_v1_tools_check_if_confirmation_needed(
             }
         };
 
-        let args = match serde_json::from_str::<HashMap<String, Value>>(&tool_call.function.arguments) {
-            Ok(args) => args,
-            Err(e) => {
-                return Ok(reply(false, &vec![
-                    PauseReason {
-                        reason_type: PauseReasonType::Denial,
-                        command: tool_call.function.name.clone(),
-                        rule: format!("tool parsing problem: {}", e),
-                        tool_call_id: tool_call.id.clone(),
-                        integr_config_path: tool.has_config_path(),
-                    }
-                ]));
-            }
-        };
+        let args =
+            match serde_json::from_str::<HashMap<String, Value>>(&tool_call.function.arguments) {
+                Ok(args) => args,
+                Err(e) => {
+                    return Ok(reply(
+                        false,
+                        &vec![PauseReason {
+                            reason_type: PauseReasonType::Denial,
+                            command: tool_call.function.name.clone(),
+                            rule: format!("tool parsing problem: {}", e),
+                            tool_call_id: tool_call.id.clone(),
+                            integr_config_path: tool.has_config_path(),
+                        }],
+                    ));
+                }
+            };
 
         let should_confirm = match tool.match_against_confirm_deny(ccx.clone(), &args).await {
             Ok(should_confirm) => should_confirm,
@@ -244,7 +278,7 @@ pub async fn handle_v1_tools_check_if_confirmation_needed(
                     tool_call_id: tool_call.id.clone(),
                     integr_config_path: tool.has_config_path(),
                 });
-            },
+            }
             MatchConfirmDenyResult::CONFIRMATION => {
                 result_messages.push(PauseReason {
                     reason_type: PauseReasonType::Confirmation,
@@ -253,8 +287,8 @@ pub async fn handle_v1_tools_check_if_confirmation_needed(
                     tool_call_id: tool_call.id.clone(),
                     integr_config_path: tool.has_config_path(),
                 });
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -267,10 +301,17 @@ pub async fn handle_v1_tools_execute(
 ) -> Result<Response<Body>, ScratchError> {
     wait_for_indexing_if_needed(gcx.clone()).await;
 
-    let tools_execute_post = serde_json::from_slice::<ToolsExecutePost>(&body_bytes)
-      .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("JSON problem: {}", e)))?;
+    let tools_execute_post =
+        serde_json::from_slice::<ToolsExecutePost>(&body_bytes).map_err(|e| {
+            ScratchError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("JSON problem: {}", e),
+            )
+        })?;
 
-    let tool_calls: Vec<ChatToolCall> = tools_execute_post.messages.last()
+    let tool_calls: Vec<ChatToolCall> = tools_execute_post
+        .messages
+        .last()
         .and_then(|m| m.tool_calls.clone())
         .unwrap_or_default();
 
@@ -279,8 +320,12 @@ pub async fn handle_v1_tools_execute(
             messages: vec![],
             tools_ran: false,
         };
-        let response_json = serde_json::to_string(&response)
-            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Response JSON problem: {}", e)))?;
+        let response_json = serde_json::to_string(&response).map_err(|e| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Response JSON problem: {}", e),
+            )
+        })?;
         return Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
@@ -307,15 +352,20 @@ pub async fn handle_v1_tools_execute(
         &thread,
         ChatMode::AGENT,
         options,
-    ).await;
+    )
+    .await;
 
     let response = ToolExecuteResponse {
         messages,
         tools_ran,
     };
 
-    let response_json = serde_json::to_string(&response)
-        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Response JSON problem: {}", e)))?;
+    let response_json = serde_json::to_string(&response).map_err(|e| {
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Response JSON problem: {}", e),
+        )
+    })?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
