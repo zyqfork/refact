@@ -8,15 +8,106 @@ use crate::caps::resolve_chat_model;
 use crate::tools::tools_description::ToolDesc;
 use crate::tools::tools_list::get_available_tools;
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ChatContent, ChatMeta, ChatMode, SamplingParameters, ChatMessage, ChatUsage, ReasoningEffort};
+use crate::call_validation::{ChatContent, ChatMeta, ChatMode, ChatToolCall, SamplingParameters, ChatMessage, ChatUsage, ReasoningEffort};
 use crate::global_context::try_load_caps_quickly_if_not_present;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::chat::prepare::{prepare_chat_passthrough, ChatPrepareOptions};
 use crate::chat::stream_core::{run_llm_stream, StreamRunParams, NoopCollector, ChoiceFinal, normalize_tool_call};
+use crate::chat::tools::{execute_tools, ExecuteToolsOptions};
+use crate::chat::types::ThreadParams;
 
 
 const MAX_NEW_TOKENS: usize = 4096;
 
+async fn execute_pending_tool_calls(
+    ccx: Arc<AMutex<AtCommandsContext>>,
+    model_id: &str,
+    mut messages: Vec<ChatMessage>,
+    tools_subset: &[String],
+    tx_toolid_mb: Option<String>,
+    tx_chatid_mb: Option<String>,
+) -> Result<Vec<ChatMessage>, String> {
+    let gcx = ccx.lock().await.global_context.clone();
+    let last = match messages.last() {
+        Some(m) => m,
+        None => return Ok(messages),
+    };
+    let tool_calls = match &last.tool_calls {
+        Some(tc) if !tc.is_empty() => tc.clone(),
+        _ => return Ok(messages),
+    };
+
+    let allow_all = tools_subset.is_empty();
+    let mut allowed: Vec<ChatToolCall> = vec![];
+    let mut denied_msgs: Vec<ChatMessage> = vec![];
+
+    for tc in tool_calls.iter() {
+        if !allow_all && !tools_subset.contains(&tc.function.name) {
+            denied_msgs.push(ChatMessage {
+                message_id: Uuid::new_v4().to_string(),
+                role: "tool".to_string(),
+                tool_call_id: tc.id.clone(),
+                tool_failed: Some(true),
+                content: ChatContent::SimpleText(format!(
+                    "Tool '{}' not allowed in this subchat",
+                    tc.function.name
+                )),
+                ..Default::default()
+            });
+        } else {
+            allowed.push(tc.clone());
+        }
+    }
+
+    let thread = ThreadParams {
+        id: format!("subchat-{}", Uuid::new_v4()),
+        model: model_id.to_string(),
+        ..Default::default()
+    };
+
+    if let (Some(tx_toolid), Some(tx_chatid)) = (&tx_toolid_mb, &tx_chatid_mb) {
+        let subchat_tx = ccx.lock().await.subchat_tx.clone();
+        for tc in &allowed {
+            let tool_msg = json!({
+                "tool_call_id": tx_toolid,
+                "subchat_id": format!("{}/tool:{}", tx_chatid, tc.function.name),
+                "tool_call": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments
+                }
+            });
+            let _ = subchat_tx.lock().await.send(tool_msg);
+        }
+    }
+
+    let (mut tool_results, _) = execute_tools(
+        gcx.clone(),
+        &allowed,
+        &messages,
+        &thread,
+        ChatMode::AGENT,
+        ExecuteToolsOptions::default(),
+    ).await;
+
+    for tc in &tool_calls {
+        let answered = denied_msgs.iter().chain(tool_results.iter())
+            .any(|m| m.tool_call_id == tc.id);
+        if !answered {
+            tool_results.push(ChatMessage {
+                message_id: Uuid::new_v4().to_string(),
+                role: "tool".to_string(),
+                tool_call_id: tc.id.clone(),
+                tool_failed: Some(false),
+                content: ChatContent::SimpleText("Tool executed with no output.".to_string()),
+                ..Default::default()
+            });
+        }
+    }
+
+    messages.extend(denied_msgs);
+    messages.extend(tool_results);
+    Ok(messages)
+}
 
 async fn subchat_stream(
     ccx: Arc<AMutex<AtCommandsContext>>,
@@ -295,6 +386,10 @@ pub async fn subchat(
                 tx_toolid_mb.clone(),
                 tx_chatid_mb.clone(),
             ).await?[0].clone();
+            messages = execute_pending_tool_calls(
+                ccx.clone(), model_id, messages, &tools_subset,
+                tx_toolid_mb.clone(), tx_chatid_mb.clone()
+            ).await?;
             let last_message = messages.last().unwrap();
             let mut content = format!("🤖:\n{}", &last_message.content.content_text_only());
             if let Some(tool_calls) = &last_message.tool_calls {
@@ -309,34 +404,17 @@ pub async fn subchat(
         }
         // result => session
     }
-    let last_message = messages.last().unwrap();
-    if let Some(tool_calls) = &last_message.tool_calls {
-        if !tool_calls.is_empty() {
-            messages = subchat_single(
-                ccx.clone(),
-                model_id,
-                messages,
-                Some(vec![]),
-                Some("none".to_string()),
-                true,   // <-- only runs tool calls
-                temperature,
-                None,
-                1,
-                reasoning_effort.clone(),
-                prepend_system_prompt.unwrap_or(false),
-                Some(&mut usage_collector),
-                tx_toolid_mb.clone(),
-                tx_chatid_mb.clone(),
-            ).await?[0].clone();
-        }
-    }
+    messages = execute_pending_tool_calls(
+        ccx.clone(), model_id, messages, &tools_subset,
+        tx_toolid_mb.clone(), tx_chatid_mb.clone()
+    ).await?;
     messages.push(ChatMessage::new("user".to_string(), wrap_up_prompt.to_string()));
     let choices = subchat_single(
         ccx.clone(),
         model_id,
         messages,
-        Some(tools_subset.clone()),
-        Some("auto".to_string()),
+        Some(vec![]),
+        Some("none".to_string()),
         false,
         temperature,
         None,
@@ -347,30 +425,6 @@ pub async fn subchat(
         tx_toolid_mb.clone(),
         tx_chatid_mb.clone(),
     ).await?;
-    for messages in choices.iter() {
-        let last_message = messages.last().unwrap();
-        if let Some(tool_calls) = &last_message.tool_calls {
-            if !tool_calls.is_empty() {
-                _ = subchat_single(
-                    ccx.clone(),
-                    model_id,
-                    messages.clone(),
-                    Some(vec![]),
-                    Some("none".to_string()),
-                    true,   // <-- only runs tool calls
-                    temperature,
-                    None,
-                    1,
-                    reasoning_effort.clone(),
-                    prepend_system_prompt.unwrap_or(false),
-                    Some(&mut usage_collector),
-                    tx_toolid_mb.clone(),
-                    tx_chatid_mb.clone(),
-                ).await?[0].clone();
-            }
-        }
-
-    }
     // if let Some(last_message) = messages.last_mut() {
     //     last_message.usage = Some(usage_collector);
     // }
