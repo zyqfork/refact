@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { selectThread } from "../features/Chat/Thread/selectors";
 import { useAppSelector } from "./useAppSelector";
 import { ChatMessages, knowledgeApi } from "../services/refact";
-import { newChatAction } from "../events";
+import { newChatWithInitialMessages } from "../features/Chat/Thread/actions";
 import { useAppDispatch } from "./useAppDispatch";
 import { setError } from "../features/Errors/errorsSlice";
 import { setIsWaitingForResponse } from "../features/Chat";
@@ -38,7 +38,13 @@ export function useCompressChat() {
         result.data.trajectory;
       const messages: ChatMessages = [{ role: "user", content }];
 
-      dispatch(newChatAction({ messages, title: `🗜️ ${thread.title}` }));
+      void dispatch(
+        newChatWithInitialMessages({
+          messages,
+          title: `🗜️ ${thread.title}`,
+          priority: true,
+        }),
+      );
     }
   }, [dispatch, submit, thread]);
 
