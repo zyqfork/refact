@@ -166,6 +166,12 @@ pub fn apply_setparams_patch(
             changed = true;
         }
     }
+    if let Some(auto_patch) = patch.get("automatic_patch").and_then(|v| v.as_bool()) {
+        if thread.automatic_patch != auto_patch {
+            thread.automatic_patch = auto_patch;
+            changed = true;
+        }
+    }
 
     let mut sanitized_patch = patch.clone();
     if let Some(obj) = sanitized_patch.as_object_mut() {
@@ -741,6 +747,15 @@ mod tests {
         let (changed, _) = apply_setparams_patch(&mut thread, &patch);
         assert!(changed);
         assert!(!thread.checkpoints_enabled);
+    }
+
+    #[test]
+    fn test_apply_setparams_automatic_patch() {
+        let mut thread = ThreadParams::default();
+        let patch = json!({"automatic_patch": true});
+        let (changed, _) = apply_setparams_patch(&mut thread, &patch);
+        assert!(changed);
+        assert!(thread.automatic_patch);
     }
 
     #[test]

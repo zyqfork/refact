@@ -79,6 +79,8 @@ pub struct TrajectorySnapshot {
     pub context_tokens_cap: Option<usize>,
     pub include_project_info: bool,
     pub is_title_generated: bool,
+    pub use_compression: bool,
+    pub automatic_patch: bool,
     pub version: u64,
 }
 
@@ -97,6 +99,8 @@ impl TrajectorySnapshot {
             context_tokens_cap: session.thread.context_tokens_cap,
             include_project_info: session.thread.include_project_info,
             is_title_generated: session.thread.is_title_generated,
+            use_compression: session.thread.use_compression,
+            automatic_patch: session.thread.automatic_patch,
             version: session.trajectory_version,
         }
     }
@@ -201,6 +205,10 @@ pub async fn load_trajectory_for_chat(
             .get("isTitleGenerated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        automatic_patch: t
+            .get("automatic_patch")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
 
     let created_at = t
@@ -252,6 +260,8 @@ pub async fn save_trajectory_snapshot(
         "context_tokens_cap": snapshot.context_tokens_cap,
         "include_project_info": snapshot.include_project_info,
         "isTitleGenerated": snapshot.is_title_generated,
+        "use_compression": snapshot.use_compression,
+        "automatic_patch": snapshot.automatic_patch,
     });
 
     let tmp_path = file_path.with_extension("json.tmp");
@@ -1330,6 +1340,7 @@ mod tests {
                 checkpoints_enabled: true,
                 use_compression: true,
                 is_title_generated: true,
+                automatic_patch: false,
             },
             messages: vec![ChatMessage::new("user".to_string(), "Hello".to_string())],
             runtime: super::super::types::RuntimeState::default(),

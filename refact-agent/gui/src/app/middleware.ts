@@ -26,8 +26,8 @@ import {
   setChatMode,
   setChatModel,
   setUseCompression,
+  setAutomaticPatch,
 } from "../features/Chat/Thread";
-import { PATCH_LIKE_FUNCTIONS } from "../components/ChatForm/constants";
 import { statisticsApi } from "../services/refact/statistics";
 import { integrationsApi } from "../services/refact/integrations";
 import { dockerApi } from "../services/refact/docker";
@@ -497,49 +497,6 @@ startListening({
 });
 
 startListening({
-  actionCreator: applyChatEvent,
-  effect: async (action, listenerApi) => {
-    const event = action.payload;
-    if (event.type !== "pause_required") return;
-
-    const state = listenerApi.getState();
-    const chatId = event.chat_id;
-    const thread = state.chat.threads[chatId]?.thread;
-
-    if (!thread?.automatic_patch) return;
-
-    const reasons = event.reasons as {
-      type: string;
-      command: string;
-      tool_call_id: string;
-    }[];
-
-    const allPatchLike = reasons.every(
-      (r) =>
-        r.type === "confirmation" && PATCH_LIKE_FUNCTIONS.includes(r.command),
-    );
-
-    if (!allPatchLike) return;
-
-    const port = state.config.lspPort;
-    const apiKey = state.config.apiKey;
-
-    if (!port) return;
-
-    try {
-      const { respondToToolConfirmations } = await import(
-        "../services/refact/chatCommands"
-      );
-      const decisions = reasons.map((r) => ({
-        tool_call_id: r.tool_call_id,
-        accepted: true,
-      }));
-      await respondToToolConfirmations(chatId, decisions, port, apiKey ?? undefined);
-    } catch { /* ignore */ }
-  },
-});
-
-startListening({
   actionCreator: saveTitle,
   effect: async (action, listenerApi) => {
     const state = listenerApi.getState();
@@ -621,6 +578,28 @@ startListening({
     } catch {
       // Silently ignore - backend may not support this command
     }
+  },
+});
+
+startListening({
+  actionCreator: setAutomaticPatch,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+
+    if (!port || !chatId) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { automatic_patch: action.payload.value },
+      });
+    } catch { /* ignore */ }
   },
 });
 

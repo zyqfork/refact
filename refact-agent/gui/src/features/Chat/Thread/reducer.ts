@@ -612,6 +612,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
           include_project_info: event.thread.include_project_info,
           checkpoints_enabled: event.thread.checkpoints_enabled,
           isTitleGenerated: event.thread.is_title_generated,
+          automatic_patch: event.thread.automatic_patch ?? false,
           new_chat_suggested: { wasSuggested: false },
         };
 
@@ -691,6 +692,11 @@ export const chatReducer = createReducer(initialState, (builder) => {
           typeof params.is_title_generated === "boolean"
         )
           rt.thread.isTitleGenerated = params.is_title_generated;
+        if (
+          "automatic_patch" in params &&
+          typeof params.automatic_patch === "boolean"
+        )
+          rt.thread.automatic_patch = params.automatic_patch;
         break;
       }
 

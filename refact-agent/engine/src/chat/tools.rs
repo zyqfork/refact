@@ -47,6 +47,23 @@ fn is_server_executed_tool(tool_call_id: &str) -> bool {
     tool_call_id.starts_with("srvtoolu_")
 }
 
+const PATCH_LIKE_TOOLS: &[&str] = &[
+    "patch",
+    "text_edit",
+    "create_textdoc",
+    "update_textdoc",
+    "replace_textdoc",
+    "update_textdoc_regex",
+    "update_textdoc_by_lines",
+    "update_textdoc_anchored",
+    "apply_patch",
+    "undo_textdoc",
+];
+
+fn is_patch_like_tool(command: &str) -> bool {
+    PATCH_LIKE_TOOLS.contains(&command)
+}
+
 fn spawn_subchat_bridge(
     ccx: Arc<AMutex<AtCommandsContext>>,
     session_arc: Arc<AMutex<ChatSession>>,
@@ -155,6 +172,26 @@ mod tests {
         assert!(!is_server_executed_tool("srvtoolu"));
         assert!(!is_server_executed_tool("SRVTOOLU_abc"));
     }
+
+    #[test]
+    fn test_is_patch_like_tool() {
+        assert!(is_patch_like_tool("patch"));
+        assert!(is_patch_like_tool("text_edit"));
+        assert!(is_patch_like_tool("create_textdoc"));
+        assert!(is_patch_like_tool("update_textdoc"));
+        assert!(is_patch_like_tool("update_textdoc_regex"));
+        assert!(is_patch_like_tool("update_textdoc_by_lines"));
+        assert!(is_patch_like_tool("undo_textdoc"));
+    }
+
+    #[test]
+    fn test_is_not_patch_like_tool() {
+        assert!(!is_patch_like_tool("shell"));
+        assert!(!is_patch_like_tool("cat"));
+        assert!(!is_patch_like_tool("search"));
+        assert!(!is_patch_like_tool(""));
+        assert!(!is_patch_like_tool("PATCH"));
+    }
 }
 
 pub async fn process_tool_calls_once(
@@ -211,9 +248,13 @@ pub async fn process_tool_calls_once(
     }
 
     if !confirmations.is_empty() {
-        let mut session = session_arc.lock().await;
-        session.set_paused_with_reasons(confirmations);
-        return ToolStepOutcome::Paused;
+        let dominated_by_patch = thread.automatic_patch
+            && confirmations.iter().all(|c| is_patch_like_tool(&c.command));
+        if !dominated_by_patch {
+            let mut session = session_arc.lock().await;
+            session.set_paused_with_reasons(confirmations);
+            return ToolStepOutcome::Paused;
+        }
     }
 
     let tools_to_execute: Vec<_> = tool_calls

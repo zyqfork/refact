@@ -19,6 +19,8 @@ export type ThreadParams = {
   include_project_info: boolean;
   checkpoints_enabled: boolean;
   is_title_generated: boolean;
+  use_compression?: boolean;
+  automatic_patch?: boolean;
 };
 
 export type PauseReason = {
