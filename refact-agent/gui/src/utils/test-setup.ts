@@ -16,13 +16,14 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 
   // Mock localStorage for tests
+  const storage = new Map<string, string>();
   const localStorageMock: Storage = {
-    getItem: vi.fn(() => null),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-    clear: vi.fn(),
-    key: vi.fn(() => null),
-    length: 0,
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value); },
+    removeItem: (key: string) => { storage.delete(key); },
+    clear: () => { storage.clear(); },
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() { return storage.size; },
   };
   global.localStorage = localStorageMock;
 });

@@ -76,6 +76,8 @@ export type ChatThreadRuntime = {
   send_immediately: boolean;
   attached_images: ImageFile[];
   confirmation: ThreadConfirmation;
+  /** Whether the initial snapshot has been received from the backend */
+  snapshot_received: boolean;
 };
 
 export type Chat = {

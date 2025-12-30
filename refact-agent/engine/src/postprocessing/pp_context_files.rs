@@ -23,6 +23,7 @@ pub const DEBUG: usize = 0; // 0 nothing, 1 summary "N lines in K files => X tok
 pub struct PPFile {
     pub symbols_sorted_by_path_len: Vec<Arc<AstDefinition>>,
     pub file_content: String,
+    pub file_rev: Option<String>,
     pub cpath: String,
     pub cpath_symmetry_breaker: f32,
     pub shorter_path: String,
@@ -485,7 +486,7 @@ async fn pp_limit_and_merge(
             file_content: out.clone(),
             line1: out_line1.min(total_lines).max(1),
             line2: out_line2.min(total_lines).max(1),
-            file_rev: None,
+            file_rev: file_ref.file_rev.clone(),
             symbols: vec![],
             gradient_type: -1,
             usefulness: 0.0,

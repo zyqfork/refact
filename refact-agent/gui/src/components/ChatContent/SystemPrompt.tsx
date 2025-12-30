@@ -15,10 +15,11 @@ export const SystemPrompt: React.FC<{
     <Container>
       <Collapsible.Root open={open} onOpenChange={setOpen}>
         <Collapsible.Trigger asChild>
-          <Flex gap="2" align="center" py="2" style={{ cursor: "pointer" }}>
-            <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>
-              📋 System prompt
-            </Text>
+          <Flex gap="2" align="end" py="1" style={{ cursor: "pointer" }}>
+            <Flex gap="2" align="start" style={{ flex: 1 }}>
+              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>📋</Text>
+              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>System prompt</Text>
+            </Flex>
             <Chevron open={open} />
           </Flex>
         </Collapsible.Trigger>

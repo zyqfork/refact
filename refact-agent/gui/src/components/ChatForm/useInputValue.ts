@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect } from "react";
 import { useAppDispatch, useAppSelector, useChatActions } from "../../hooks";
 import { selectPages, change, ChatPage } from "../../features/Pages/pagesSlice";
 import { setInputValue, addInputValue } from "./actions";
 import { debugRefact } from "../../debugConfig";
+import { useDraftMessage } from "../../hooks/useDraftMessage";
 
 export function useInputValue(
   uncheckCheckboxes: () => void,
@@ -12,8 +13,8 @@ export function useInputValue(
   boolean,
   React.Dispatch<React.SetStateAction<boolean>>,
 ] {
-  const [value, setValue] = useState<string>("");
-  const [isSendImmediately, setIsSendImmediately] = useState<boolean>(false);
+  const { value, setValue } = useDraftMessage();
+  const [isSendImmediately, setIsSendImmediately] = React.useState<boolean>(false);
   const { submit } = useChatActions();
   const dispatch = useAppDispatch();
   const pages = useAppSelector(selectPages);

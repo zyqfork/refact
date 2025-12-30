@@ -11,6 +11,7 @@ import {
   isToolUse,
 } from "./types";
 import { v4 as uuidv4 } from "uuid";
+import { getLastThreadParams } from "../../../utils/threadStorage";
 import {
   setToolUse,
   enableSend,
@@ -54,7 +55,6 @@ import {
   applyChatEvent,
 } from "./actions";
 import { applyDeltaOps } from "../../../services/refact/chatSubscription";
-import { postProcessMessagesAfterStreaming } from "./utils";
 import {
   AssistantMessage,
   ChatMessages,
@@ -63,7 +63,6 @@ import {
   isDiffMessage,
   isToolCallMessage,
   isToolMessage,
-  isUserMessage,
   ToolCall,
   ToolConfirmationPauseReason,
   ToolMessage,
@@ -117,6 +116,7 @@ const createThreadRuntime = (
         confirmationStatus: true,
       },
     },
+    snapshot_received: false,
   };
 };
 
@@ -223,16 +223,24 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
   builder.addCase(newChatAction, (state, action) => {
     const currentRt = getCurrentRuntime(state);
+    const lastParams = getLastThreadParams();
+    
     const mode = getThreadMode({
-      tool_use: state.tool_use,
-      maybeMode: currentRt?.thread.mode,
+      tool_use: lastParams.tool_use || state.tool_use,
+      maybeMode: currentRt?.thread.mode || lastParams.mode,
     });
-    const newRuntime = createThreadRuntime(state.tool_use, null, mode);
+    const newRuntime = createThreadRuntime(
+      lastParams.tool_use || state.tool_use,
+      null,
+      mode,
+    );
 
-    if (currentRt) {
-      newRuntime.thread.model = currentRt.thread.model;
-      newRuntime.thread.boost_reasoning = currentRt.thread.boost_reasoning;
-    }
+    newRuntime.thread.model = lastParams.model || currentRt?.thread.model || "";
+    newRuntime.thread.boost_reasoning = lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
+    newRuntime.thread.automatic_patch = lastParams.automatic_patch ?? currentRt?.thread.automatic_patch ?? false;
+    newRuntime.thread.increase_max_tokens = lastParams.increase_max_tokens ?? currentRt?.thread.increase_max_tokens ?? false;
+    newRuntime.thread.include_project_info = lastParams.include_project_info ?? currentRt?.thread.include_project_info ?? true;
+    newRuntime.thread.context_tokens_cap = lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
 
     if (action.payload?.title) {
       newRuntime.thread.title = action.payload.title;
@@ -324,6 +332,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
       }
       state.current_thread_id = action.payload.id;
       existingRt.thread.read = true;
+      existingRt.snapshot_received = false;
       return;
     }
 
@@ -333,10 +342,13 @@ export const chatReducer = createReducer(initialState, (builder) => {
         : "AGENT";
     const newRuntime: ChatThreadRuntime = {
       thread: {
-        new_chat_suggested: { wasSuggested: false },
-        ...action.payload,
-        mode,
+        id: action.payload.id,
+        messages: [],
+        model: action.payload.model ?? "",
+        title: action.payload.title,
         tool_use: action.payload.tool_use ?? state.tool_use,
+        mode,
+        new_chat_suggested: { wasSuggested: false },
         read: true,
       },
       streaming: false,
@@ -354,23 +366,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
           confirmationStatus: true,
         },
       },
+      snapshot_received: false,
     };
-    newRuntime.thread.messages = postProcessMessagesAfterStreaming(
-      newRuntime.thread.messages,
-    );
-
-    const lastUserMessage = action.payload.messages.reduce<
-      import("../../../services/refact/types").UserMessage | null
-    >((acc, cur) => (isUserMessage(cur) ? cur : acc), null);
-    if (
-      lastUserMessage?.compression_strength &&
-      lastUserMessage.compression_strength !== "absent"
-    ) {
-      newRuntime.thread.new_chat_suggested = {
-        wasRejectedByUser: false,
-        wasSuggested: true,
-      };
-    }
 
     state.threads[action.payload.id] = newRuntime;
     if (!state.open_thread_ids.includes(action.payload.id)) {
@@ -388,6 +385,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
       }
       state.current_thread_id = id;
       existingRt.thread.read = true;
+      existingRt.snapshot_received = false;
     }
   });
 
@@ -636,6 +634,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
             status:
               existingRuntime?.confirmation.status ?? defaultConfirmationStatus,
           },
+          snapshot_received: true,
         };
 
         state.threads[chat_id] = newRt;

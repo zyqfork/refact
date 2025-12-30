@@ -463,6 +463,7 @@ export const CHAT_CONFIG_THREAD: Chat = {
         pause_reasons: [],
         status: { wasInteracted: false, confirmationStatus: true },
       },
+      snapshot_received: true,
     },
   },
   max_new_tokens: 4096,

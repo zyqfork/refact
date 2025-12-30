@@ -61,6 +61,7 @@ const Template: React.FC<{
             pause_reasons: [],
             status: { wasInteracted: false, confirmationStatus: true },
           },
+          snapshot_received: true,
         },
       },
       max_new_tokens: 4096,

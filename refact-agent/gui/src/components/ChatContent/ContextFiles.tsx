@@ -210,10 +210,11 @@ export const ContextFiles: React.FC<{
     <Container>
       <Collapsible.Root open={open} onOpenChange={setOpen}>
         <Collapsible.Trigger asChild>
-          <Flex gap="2" align="start" py="2" style={{ cursor: "pointer" }}>
-            <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>
-              {icon} {label}
-            </Text>
+          <Flex gap="2" align="end" py="1" style={{ cursor: "pointer" }}>
+            <Flex gap="2" align="start" style={{ flex: 1 }}>
+              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>{icon}</Text>
+              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>{label}</Text>
+            </Flex>
             <Chevron open={open} />
           </Flex>
         </Collapsible.Trigger>

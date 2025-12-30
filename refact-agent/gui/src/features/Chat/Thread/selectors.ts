@@ -122,6 +122,12 @@ export const selectIsStreaming = (state: RootState) =>
 export const selectIsStreamingById = (state: RootState, chatId: string) =>
   state.chat.threads[chatId]?.streaming ?? false;
 
+export const selectSnapshotReceived = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.snapshot_received ?? false;
+
+export const selectSnapshotReceivedById = (state: RootState, chatId: string) =>
+  state.chat.threads[chatId]?.snapshot_received ?? false;
+
 export const selectPreventSend = (state: RootState) =>
   state.chat.threads[state.chat.current_thread_id]?.prevent_send ?? false;
 

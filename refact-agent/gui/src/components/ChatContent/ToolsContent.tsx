@@ -299,6 +299,71 @@ function processToolCalls(
   // TODO: handle knowledge differently.
   // memories are split in content with 🗃️019957b6ff
 
+  if (head.function.name === "cat") {
+    const elem = <CatTool key={`cat-tool-${processed.length}`} toolCall={head} />;
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "tree") {
+    const elem = <TreeTool key={`tree-tool-${processed.length}`} toolCall={head} />;
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "search_pattern") {
+    const elem = <SearchPatternTool key={`search-pattern-tool-${processed.length}`} toolCall={head} />;
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "search_semantic") {
+    const elem = <SearchSemanticTool key={`search-semantic-tool-${processed.length}`} toolCall={head} />;
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "search_symbol_definition") {
+    const elem = <SearchSymbolTool key={`search-symbol-tool-${processed.length}`} toolCall={head} />;
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "shell") {
+    const elem = (
+      <ShellTool
+        key={`shell-tool-${processed.length}`}
+        toolCall={head}
+      />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "subagent") {
+    const elem = (
+      <SubagentTool
+        key={`subagent-tool-${processed.length}`}
+        toolCall={head}
+      />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "strategic_planning") {
+    const elem = (
+      <StrategicPlanningTool
+        key={`strategic-planning-tool-${processed.length}`}
+        toolCall={head}
+      />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "deep_research") {
+    const elem = (
+      <DeepResearchTool
+        key={`deep-research-tool-${processed.length}`}
+        toolCall={head}
+      />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
   if (result && head.function.name === "knowledge") {
     const elem = (
       <Knowledge key={`knowledge-tool-${processed.length}`} toolCall={head} />
@@ -1131,3 +1196,542 @@ function splitTrajectories(text: string): ParsedTrajectory[] {
     };
   });
 }
+
+interface CatArgs {
+  paths?: string;
+}
+
+const CatTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<CatArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as CatArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  const paths = args.paths?.split(",").map((p) => p.trim()).filter(Boolean) ?? [];
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">📄</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">
+                  {paths.length === 1 ? truncatePath(paths[0], 60) : `${paths.length} files`}
+                </Text>
+                {paths.length > 1 && (
+                  <Text weight="light" size="1" color="gray">
+                    {paths.slice(0, 3).map((p) => truncatePath(p, 25)).join(", ")}{paths.length > 3 ? ", …" : ""}
+                  </Text>
+                )}
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface TreeArgs {
+  path?: string;
+  use_ast?: boolean;
+  max_files?: number;
+}
+
+const TreeTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<TreeArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as TreeArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  const meta = [
+    args.use_ast && "with AST",
+    args.max_files && `max ${args.max_files}`,
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">📂</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">{args.path ? truncatePath(args.path, 50) : "project root"}</Text>
+                {meta && <Text weight="light" size="1" color="gray">{meta}</Text>}
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface SearchPatternArgs {
+  pattern?: string;
+  scope?: string;
+}
+
+const SearchPatternTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<SearchPatternArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as SearchPatternArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">🔍</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1" style={{ fontFamily: "var(--code-font-family)" }}>
+                  /{args.pattern}/
+                </Text>
+                {args.scope && args.scope !== "workspace" && (
+                  <Text weight="light" size="1" color="gray">in {args.scope}</Text>
+                )}
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface SearchSemanticArgs {
+  queries?: string;
+  scope?: string;
+}
+
+const SearchSemanticTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<SearchSemanticArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as SearchSemanticArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">🔍</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">&quot;{args.queries}&quot;</Text>
+                {args.scope && args.scope !== "workspace" && (
+                  <Text weight="light" size="1" color="gray">in {args.scope}</Text>
+                )}
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface SearchSymbolArgs {
+  symbols?: string;
+}
+
+const SearchSymbolTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<SearchSymbolArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as SearchSymbolArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  const symbols = args.symbols?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">🔍</Text>
+              <Text weight="light" size="1" style={{ fontFamily: "var(--code-font-family)" }}>
+                {symbols.map((s) => `${s}()`).join(", ")}
+              </Text>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface ShellArgs {
+  command?: string;
+  workdir?: string;
+  timeout?: string;
+}
+
+const ShellTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<ShellArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as ShellArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  const command = args.command ?? toolCall.function.arguments;
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">⚙️</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">$ {command}</Text>
+                {args.workdir && <Text weight="light" size="1" color="gray">in {args.workdir}</Text>}
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface SubagentArgs {
+  task?: string;
+  expected_result?: string;
+  tools?: string;
+  max_steps?: string;
+}
+
+const SubagentTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<SubagentArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as SubagentArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  const subchatLog: string[] = toolCall.subchat_log ?? [];
+  const currentStep = subchatLog.slice(-1)[0];
+
+  const parseStep = (entry: string): { step: string; lines: string[] } | null => {
+    const match = entry.match(/^(\d+\/\d+): ([\s\S]+)$/);
+    if (!match) return null;
+    const [, step, content] = match;
+    return { step, lines: content.split("\n").filter((l) => l.trim()) };
+  };
+
+  const meta = [
+    args.tools && `tools: ${args.tools}`,
+    args.max_steps && `max: ${args.max_steps}`,
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex
+            gap="2"
+            align="end"
+            onClick={() => setOpen((prev) => !prev)}
+            ref={ref}
+          >
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">🤖</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">{args.task}</Text>
+                {meta && <Text weight="light" size="1" color="gray">{meta}</Text>}
+                {currentStep && (() => {
+                  const parsed = parseStep(currentStep);
+                  if (!parsed) return null;
+                  return (
+                    <Flex direction="column" gap="1">
+                      <Text weight="light" size="1">{parsed.step}:</Text>
+                      {parsed.lines.map((line, i) => (
+                        <Text key={i} weight="light" size="1" ml="3">🔨 {line}</Text>
+                      ))}
+                    </Flex>
+                  );
+                })()}
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface StrategicPlanningArgs {
+  important_paths?: string;
+}
+
+const StrategicPlanningTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<StrategicPlanningArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as StrategicPlanningArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const paths = useMemo(() => {
+    if (!args.important_paths) return [];
+    return args.important_paths.split(",").map((p) => p.trim()).filter(Boolean);
+  }, [args.important_paths]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex
+            gap="2"
+            align="end"
+            onClick={() => setOpen((prev) => !prev)}
+            ref={ref}
+          >
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">🎯</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">Strategic Planning</Text>
+                <Text weight="light" size="1" color="gray">{paths.length} files: {paths.slice(0, 3).map(p => truncatePath(p, 20)).join(", ")}{paths.length > 3 ? ", …" : ""}</Text>
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};
+
+interface DeepResearchArgs {
+  research_query?: string;
+}
+
+const DeepResearchTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const args = useMemo<DeepResearchArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as DeepResearchArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  return (
+    <Container py="1">
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger asChild>
+          <Flex
+            gap="2"
+            align="end"
+            onClick={() => setOpen((prev) => !prev)}
+            ref={ref}
+          >
+            <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
+              <Text weight="light" size="1">🔬</Text>
+              <Flex gap="1" align="start" direction="column">
+                <Text weight="light" size="1">Deep Research</Text>
+                <Text weight="light" size="1" color="gray" style={{ fontStyle: "italic" }}>
+                  {args.research_query}
+                </Text>
+              </Flex>
+            </Flex>
+            <Chevron open={open} />
+          </Flex>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          {maybeResult?.content && typeof maybeResult.content === "string" && (
+            <Result onClose={handleHide}>{maybeResult.content}</Result>
+          )}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Container>
+  );
+};

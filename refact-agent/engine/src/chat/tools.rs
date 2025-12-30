@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
+use tokio::sync::{Mutex as AMutex, RwLock as ARwLock, Semaphore};
 use tracing::info;
 use uuid::Uuid;
+use futures::future::join_all;
 
 use indexmap::IndexMap;
 
@@ -474,87 +475,113 @@ async fn execute_tools_inner(
     options: ExecuteToolsOptions,
     messages: &[ChatMessage],
 ) -> (Vec<ChatMessage>, bool) {
-    let mut all_tools =
+    const MAX_PARALLEL: usize = 16;
+
+    let all_tools: IndexMap<String, Arc<AMutex<Box<dyn crate::tools::tools_description::Tool + Send>>>> =
         crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
             .await
             .into_iter()
             .map(|tool| {
                 let spec = tool.tool_description();
-                (spec.name, tool)
+                (spec.name, Arc::new(AMutex::new(tool)))
             })
-            .collect::<indexmap::IndexMap<_, _>>();
+            .collect();
 
-    let mut tool_messages: Vec<ChatMessage> = Vec::new();
-    let mut context_files: Vec<ContextFile> = Vec::new();
+    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL));
 
-    for tool_call in tool_calls {
-        let tool = match all_tools.get_mut(&tool_call.function.name) {
-            Some(t) => t,
-            None => {
-                tool_messages.push(ChatMessage {
-                    message_id: Uuid::new_v4().to_string(),
-                    role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!(
-                        "Error: tool '{}' not found",
-                        tool_call.function.name
-                    )),
-                    tool_call_id: tool_call.id.clone(),
-                    tool_failed: Some(true),
-                    ..Default::default()
-                });
-                continue;
-            }
-        };
+    let futures: Vec<_> = tool_calls
+        .iter()
+        .enumerate()
+        .map(|(idx, tool_call)| {
+            let ccx = ccx.clone();
+            let semaphore = semaphore.clone();
+            let all_tools = all_tools.clone();
+            let tool_call = tool_call.clone();
 
-        let args: std::collections::HashMap<String, serde_json::Value> =
-            match serde_json::from_str(&tool_call.function.arguments) {
-                Ok(a) => a,
-                Err(e) => {
-                    tool_messages.push(ChatMessage {
-                        message_id: Uuid::new_v4().to_string(),
-                        role: "tool".to_string(),
-                        content: ChatContent::SimpleText(format!("Error parsing arguments: {}", e)),
-                        tool_call_id: tool_call.id.clone(),
-                        tool_failed: Some(true),
-                        ..Default::default()
-                    });
-                    continue;
-                }
-            };
+            async move {
+                let _permit = semaphore.acquire().await.unwrap();
 
-        info!("Executing tool: {}({:?})", tool_call.function.name, args);
+                let tool_arc = match all_tools.get(&tool_call.function.name) {
+                    Some(t) => t.clone(),
+                    None => {
+                        return (idx, vec![ChatMessage {
+                            message_id: Uuid::new_v4().to_string(),
+                            role: "tool".to_string(),
+                            content: ChatContent::SimpleText(format!(
+                                "Error: tool '{}' not found",
+                                tool_call.function.name
+                            )),
+                            tool_call_id: tool_call.id.clone(),
+                            tool_failed: Some(true),
+                            ..Default::default()
+                        }], vec![]);
+                    }
+                };
 
-        match tool.tool_execute(ccx.clone(), &tool_call.id, &args).await {
-            Ok((_corrections, results)) => {
-                for result in results {
-                    match result {
-                        crate::call_validation::ContextEnum::ChatMessage(mut msg) => {
-                            if msg.message_id.is_empty() {
-                                msg.message_id = Uuid::new_v4().to_string();
-                            }
-                            if msg.tool_failed.is_none() {
-                                msg.tool_failed = Some(false);
-                            }
-                            tool_messages.push(msg);
+                let args: std::collections::HashMap<String, serde_json::Value> =
+                    match serde_json::from_str(&tool_call.function.arguments) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            return (idx, vec![ChatMessage {
+                                message_id: Uuid::new_v4().to_string(),
+                                role: "tool".to_string(),
+                                content: ChatContent::SimpleText(format!("Error parsing arguments: {}", e)),
+                                tool_call_id: tool_call.id.clone(),
+                                tool_failed: Some(true),
+                                ..Default::default()
+                            }], vec![]);
                         }
-                        crate::call_validation::ContextEnum::ContextFile(cf) => {
-                            context_files.push(cf);
+                    };
+
+                info!("Executing tool: {}({:?})", tool_call.function.name, args);
+
+                let mut tool = tool_arc.lock().await;
+                match tool.tool_execute(ccx, &tool_call.id, &args).await {
+                    Ok((_corrections, results)) => {
+                        let mut msgs = Vec::new();
+                        let mut files = Vec::new();
+                        for result in results {
+                            match result {
+                                crate::call_validation::ContextEnum::ChatMessage(mut msg) => {
+                                    if msg.message_id.is_empty() {
+                                        msg.message_id = Uuid::new_v4().to_string();
+                                    }
+                                    if msg.tool_failed.is_none() {
+                                        msg.tool_failed = Some(false);
+                                    }
+                                    msgs.push(msg);
+                                }
+                                crate::call_validation::ContextEnum::ContextFile(cf) => {
+                                    files.push(cf);
+                                }
+                            }
                         }
+                        (idx, msgs, files)
+                    }
+                    Err(e) => {
+                        info!("Tool execution failed: {}: {}", tool_call.function.name, e);
+                        (idx, vec![ChatMessage {
+                            message_id: Uuid::new_v4().to_string(),
+                            role: "tool".to_string(),
+                            content: ChatContent::SimpleText(format!("Error: {}", e)),
+                            tool_call_id: tool_call.id.clone(),
+                            tool_failed: Some(true),
+                            ..Default::default()
+                        }], vec![])
                     }
                 }
             }
-            Err(e) => {
-                info!("Tool execution failed: {}: {}", tool_call.function.name, e);
-                tool_messages.push(ChatMessage {
-                    message_id: Uuid::new_v4().to_string(),
-                    role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!("Error: {}", e)),
-                    tool_call_id: tool_call.id.clone(),
-                    tool_failed: Some(true),
-                    ..Default::default()
-                });
-            }
-        }
+        })
+        .collect();
+
+    let mut results: Vec<_> = join_all(futures).await;
+    results.sort_by_key(|(idx, _, _)| *idx);
+
+    let mut tool_messages: Vec<ChatMessage> = Vec::new();
+    let mut context_files: Vec<ContextFile> = Vec::new();
+    for (_, msgs, files) in results {
+        tool_messages.extend(msgs);
+        context_files.extend(files);
     }
 
     let pp_settings = options.postprocess_settings.unwrap_or_default();
@@ -621,106 +648,10 @@ pub async fn execute_tools(
     {
         let mut ccx_locked = ccx.lock().await;
         ccx_locked.tokens_for_rag = (n_ctx / 2).max(4096);
-        if let Some(params) = options.subchat_tool_parameters {
+        if let Some(params) = options.subchat_tool_parameters.clone() {
             ccx_locked.subchat_tool_parameters = params;
         }
     }
 
-    let mut all_tools =
-        crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
-            .await
-            .into_iter()
-            .map(|tool| {
-                let spec = tool.tool_description();
-                (spec.name, tool)
-            })
-            .collect::<indexmap::IndexMap<_, _>>();
-
-    let mut tool_messages: Vec<ChatMessage> = Vec::new();
-    let mut context_files: Vec<ContextFile> = Vec::new();
-
-    for tool_call in tool_calls {
-        let tool = match all_tools.get_mut(&tool_call.function.name) {
-            Some(t) => t,
-            None => {
-                tool_messages.push(ChatMessage {
-                    message_id: Uuid::new_v4().to_string(),
-                    role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!(
-                        "Error: tool '{}' not found",
-                        tool_call.function.name
-                    )),
-                    tool_call_id: tool_call.id.clone(),
-                    tool_failed: Some(true),
-                    ..Default::default()
-                });
-                continue;
-            }
-        };
-
-        let args: std::collections::HashMap<String, serde_json::Value> =
-            match serde_json::from_str(&tool_call.function.arguments) {
-                Ok(a) => a,
-                Err(e) => {
-                    tool_messages.push(ChatMessage {
-                        message_id: Uuid::new_v4().to_string(),
-                        role: "tool".to_string(),
-                        content: ChatContent::SimpleText(format!("Error parsing arguments: {}", e)),
-                        tool_call_id: tool_call.id.clone(),
-                        tool_failed: Some(true),
-                        ..Default::default()
-                    });
-                    continue;
-                }
-            };
-
-        info!("Executing tool: {}({:?})", tool_call.function.name, args);
-
-        match tool.tool_execute(ccx.clone(), &tool_call.id, &args).await {
-            Ok((_corrections, results)) => {
-                for result in results {
-                    match result {
-                        crate::call_validation::ContextEnum::ChatMessage(mut msg) => {
-                            if msg.message_id.is_empty() {
-                                msg.message_id = Uuid::new_v4().to_string();
-                            }
-                            if msg.tool_failed.is_none() {
-                                msg.tool_failed = Some(false);
-                            }
-                            tool_messages.push(msg);
-                        }
-                        crate::call_validation::ContextEnum::ContextFile(cf) => {
-                            context_files.push(cf);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                info!("Tool execution failed: {}: {}", tool_call.function.name, e);
-                tool_messages.push(ChatMessage {
-                    message_id: Uuid::new_v4().to_string(),
-                    role: "tool".to_string(),
-                    content: ChatContent::SimpleText(format!("Error: {}", e)),
-                    tool_call_id: tool_call.id.clone(),
-                    tool_failed: Some(true),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    let pp_settings = options.postprocess_settings.unwrap_or_default();
-
-    let results = postprocess_tool_results(
-        gcx,
-        None,
-        tool_messages,
-        context_files,
-        budget,
-        pp_settings,
-        messages,
-    )
-    .await;
-
-    (results, true)
+    execute_tools_inner(gcx, ccx, tool_calls, chat_mode, budget, options, messages).await
 }

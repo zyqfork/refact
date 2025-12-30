@@ -75,6 +75,7 @@ const MockedStore: React.FC<{
             pause_reasons: [],
             status: { wasInteracted: false, confirmationStatus: true },
           },
+          snapshot_received: true,
         },
       },
       tool_use: "agent",

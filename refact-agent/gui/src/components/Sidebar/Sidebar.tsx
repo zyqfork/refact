@@ -7,7 +7,7 @@ import {
   deleteChatById,
 } from "../../features/History/historySlice";
 import { push } from "../../features/Pages/pagesSlice";
-import { restoreChatFromBackend } from "../../features/Chat/Thread";
+import { restoreChat } from "../../features/Chat/Thread";
 import { FeatureMenu } from "../../features/Config/FeatureMenu";
 
 import { ErrorCallout } from "../Callout";
@@ -46,10 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
 
   const onHistoryItemClick = useCallback(
     (thread: ChatHistoryItem) => {
-      // Fetch fresh data from backend before restoring
-      void dispatch(
-        restoreChatFromBackend({ id: thread.id, fallback: thread }),
-      );
+      dispatch(restoreChat(thread));
       dispatch(push({ name: "chat" }));
     },
     [dispatch],

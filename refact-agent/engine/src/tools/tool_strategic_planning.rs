@@ -41,13 +41,13 @@ Also make a couple of alternative ways to solve the problem, if the initial solu
 static GUARDRAILS_PROMPT: &str = r#"💿 Now confirm the plan with the user"#;
 
 static ENTERTAINMENT_MESSAGES: &[&str] = &[
-    "🧠 Strategic planning in progress...",
-    "📋 Analyzing the problem and context...",
-    "🔍 Reviewing relevant files...",
-    "💡 Formulating solution approaches...",
-    "📝 Drafting the strategic plan...",
-    "⏳ Still working... Almost there!",
-    "🔄 Refining the solution...",
+    "1/7: 🧠 Strategic planning in progress...",
+    "2/7: 📋 Analyzing the problem and context...",
+    "3/7: 🔍 Reviewing relevant files...",
+    "4/7: 💡 Formulating solution approaches...",
+    "5/7: 📝 Drafting the strategic plan...",
+    "6/7: ⏳ Still working... Almost there!",
+    "7/7: 🔄 Refining the solution...",
 ];
 
 async fn send_entertainment_message(

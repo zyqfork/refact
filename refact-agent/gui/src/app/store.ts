@@ -1,5 +1,6 @@
 import { combineSlices, configureStore } from "@reduxjs/toolkit";
 import { storage } from "./storage";
+import { pruneStaleDraftMessages } from "../utils/threadStorage";
 import {
   FLUSH,
   PAUSE,
@@ -188,6 +189,9 @@ export function setUpStore(preloadedState?: Partial<RootState>) {
 
   return store;
 }
+
+pruneStaleDraftMessages();
+
 export const store = setUpStore();
 export type Store = typeof store;
 

@@ -27,7 +27,11 @@ import {
   setChatModel,
   setUseCompression,
   setAutomaticPatch,
+  setIncreaseMaxTokens,
+  setAreFollowUpsEnabled,
+  setSystemPrompt,
 } from "../features/Chat/Thread";
+import { saveLastThreadParams } from "../utils/threadStorage";
 import { statisticsApi } from "../services/refact/statistics";
 import { integrationsApi } from "../services/refact/integrations";
 import { dockerApi } from "../services/refact/docker";
@@ -766,3 +770,41 @@ startListening({
     } catch { /* ignore */ }
   },
 });
+
+startListening({
+  matcher: isAnyOf(
+    setChatModel,
+    setToolUse,
+    setBoostReasoning,
+    setAutomaticPatch,
+    setIncreaseMaxTokens,
+    setIncludeProjectInfo,
+    setContextTokensCap,
+    setEnabledCheckpoints,
+    setAreFollowUpsEnabled,
+    setUseCompression,
+    setChatMode,
+    setSystemPrompt,
+  ),
+  effect: (_action, listenerApi) => {
+    const state = listenerApi.getState();
+    const runtime = state.chat.threads[state.chat.current_thread_id];
+    if (!runtime) return;
+
+    saveLastThreadParams({
+      model: runtime.thread.model,
+      tool_use: runtime.thread.tool_use,
+      mode: runtime.thread.mode,
+      boost_reasoning: runtime.thread.boost_reasoning,
+      automatic_patch: runtime.thread.automatic_patch,
+      increase_max_tokens: runtime.thread.increase_max_tokens,
+      include_project_info: runtime.thread.include_project_info,
+      context_tokens_cap: runtime.thread.context_tokens_cap,
+      system_prompt: state.chat.system_prompt,
+      checkpoints_enabled: state.chat.checkpoints_enabled,
+      follow_ups_enabled: state.chat.follow_ups_enabled,
+      use_compression: state.chat.use_compression,
+    });
+  },
+});
+

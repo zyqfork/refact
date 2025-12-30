@@ -27,6 +27,7 @@ import {
   selectIsWaiting,
   selectMessages,
   selectQueuedItems,
+  selectSnapshotReceived,
   selectThread,
 } from "../../features/Chat/Thread/selectors";
 import { takeWhile } from "../../utils";
@@ -43,6 +44,7 @@ import {
 } from "../../features/Chat";
 
 import { LogoAnimation } from "../LogoAnimation/LogoAnimation.tsx";
+import { ChatLoading } from "./ChatLoading";
 
 export type ChatContentProps = {
   onRetry: (index: number, question: UserMessage["content"]) => void;
@@ -58,6 +60,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
   const messages = useAppSelector(selectMessages);
   const queuedItems = useAppSelector(selectQueuedItems);
   const isStreaming = useAppSelector(selectIsStreaming);
+  const snapshotReceived = useAppSelector(selectSnapshotReceived);
   const thread = useAppSelector(selectThread);
 
   const isConfig = thread !== null && thread.mode === "CONFIGURE";
@@ -120,12 +123,13 @@ export const ChatContent: React.FC<ChatContentProps> = ({
         p="2"
         gap="1"
       >
-        {messages.length === 0 && (
+        {!snapshotReceived && <ChatLoading />}
+        {snapshotReceived && messages.length === 0 && (
           <Container>
             <PlaceHolderText />
           </Container>
         )}
-        {renderMessages(messages, onRetryWrapper, isWaiting)}
+        {snapshotReceived && renderMessages(messages, onRetryWrapper, isWaiting)}
         <Container>
           <UncommittedChangesWarning />
         </Container>

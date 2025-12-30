@@ -199,6 +199,10 @@ fn merge_overlapping_ranges(mut files: Vec<ContextFile>) -> Vec<ContextFile> {
     result
 }
 
+fn has_truncation_markers(content: &str) -> bool {
+    content.contains("...") || content.contains("⋮") || content.contains("omitted")
+}
+
 fn find_coverage_in_history(cf: &ContextFile, messages: &[ChatMessage]) -> Option<(usize, String)> {
     let cf_canonical = canonical_path(&cf.file_name);
     let cf_start = if cf.line1 == 0 { 1 } else { cf.line1 };
@@ -213,13 +217,20 @@ fn find_coverage_in_history(cf: &ContextFile, messages: &[ChatMessage]) -> Optio
                 if canonical_path(&existing.file_name) != cf_canonical {
                     continue;
                 }
+                let same_rev = matches!(
+                    (&cf.file_rev, &existing.file_rev),
+                    (Some(a), Some(b)) if a == b
+                );
+                if !same_rev {
+                    continue;
+                }
+                if has_truncation_markers(&existing.file_content) {
+                    continue;
+                }
                 let ex_start = if existing.line1 == 0 { 1 } else { existing.line1 };
                 let ex_end = if existing.line2 == 0 { usize::MAX } else { existing.line2 };
                 if ex_start <= cf_start && ex_end >= cf_end {
-                    match (&cf.file_rev, &existing.file_rev) {
-                        (Some(cf_rev), Some(ex_rev)) if cf_rev != ex_rev => continue,
-                        _ => return Some((idx, msg.tool_call_id.clone())),
-                    }
+                    return Some((idx, msg.tool_call_id.clone()));
                 }
             }
         }
@@ -409,16 +420,21 @@ fn find_duplicate_in_history(
                 if canonical_path(&existing.file_name) != cf_canonical {
                     continue;
                 }
+                let same_rev = matches!(
+                    (&cf.file_rev, &existing.file_rev),
+                    (Some(a), Some(b)) if a == b
+                );
+                if !same_rev {
+                    continue;
+                }
+                if has_truncation_markers(&existing.file_content) {
+                    continue;
+                }
                 let ex_start = if existing.line1 == 0 { 1 } else { existing.line1 };
                 let ex_end = if existing.line2 == 0 { usize::MAX } else { existing.line2 };
                 if ex_start <= cf_start && ex_end >= cf_end {
-                    match (&cf.file_rev, &existing.file_rev) {
-                        (Some(cf_rev), Some(ex_rev)) if cf_rev != ex_rev => continue,
-                        _ => {
-                            let tool_name = find_tool_name_for_context(messages, idx);
-                            return Some((idx, tool_name));
-                        }
-                    }
+                    let tool_name = find_tool_name_for_context(messages, idx);
+                    return Some((idx, tool_name));
                 }
             }
         }
@@ -525,12 +541,16 @@ mod tests {
     use crate::call_validation::{ChatToolCall, ChatToolFunction};
 
     fn make_context_file(name: &str, line1: usize, line2: usize) -> ContextFile {
+        make_context_file_with_rev(name, line1, line2, Some("test_rev".to_string()))
+    }
+
+    fn make_context_file_with_rev(name: &str, line1: usize, line2: usize, file_rev: Option<String>) -> ContextFile {
         ContextFile {
             file_name: name.to_string(),
             file_content: String::new(),
             line1,
             line2,
-            file_rev: None,
+            file_rev,
             symbols: vec![],
             gradient_type: -1,
             usefulness: 0.0,

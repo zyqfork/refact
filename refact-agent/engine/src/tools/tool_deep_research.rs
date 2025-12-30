@@ -26,15 +26,15 @@ static RESEARCHER_PROMPT: &str = r#"Do:
 Be analytical, avoid generalities, and ensure that each section supports data-backed reasoning that could inform technical decisions or implementation strategies."#;
 
 static ENTERTAINMENT_MESSAGES: &[&str] = &[
-    "🔬 Deep research in progress... This may take up to 30 minutes, please be patient!",
-    "🌐 Browsing the web and gathering relevant sources...",
-    "📚 Reading through documentation and articles...",
-    "🔍 Cross-referencing information from multiple sources...",
-    "🧠 Analyzing and synthesizing the findings...",
-    "📊 Organizing data and preparing insights...",
-    "✍️ Composing comprehensive report with citations...",
-    "⏳ Still working... Almost there!",
-    "🔄 Continuing deep research... Thank you for your patience!",
+    "1/9: 🔬 Deep research in progress... This may take up to 30 minutes, please be patient!",
+    "2/9: 🌐 Browsing the web and gathering relevant sources...",
+    "3/9: 📚 Reading through documentation and articles...",
+    "4/9: 🔍 Cross-referencing information from multiple sources...",
+    "5/9: 🧠 Analyzing and synthesizing the findings...",
+    "6/9: 📊 Organizing data and preparing insights...",
+    "7/9: ✍️ Composing comprehensive report with citations...",
+    "8/9: ⏳ Still working... Almost there!",
+    "9/9: 🔄 Continuing deep research... Thank you for your patience!",
 ];
 
 async fn send_entertainment_message(

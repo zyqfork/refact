@@ -6,6 +6,7 @@ use tracing::{info, warn};
 use tokio::sync::RwLock as ARwLock;
 use std::hash::{Hash, Hasher};
 
+use crate::ast::chunk_utils::official_text_hashing_function;
 use crate::ast::treesitter::parsers::get_ast_parser_by_filename;
 use crate::call_validation::{ContextFile, PostprocessSettings};
 use crate::global_context::GlobalContext;
@@ -185,8 +186,8 @@ pub async fn pp_ast_markup_files(
         let mut symbols_sorted_by_path_len = defs.clone();
         symbols_sorted_by_path_len.sort_by_key(|s| s.path().len());
         result.push(Arc::new(PPFile {
-            // doesn't matter what size the output vector is
             symbols_sorted_by_path_len,
+            file_rev: Some(official_text_hashing_function(&text)),
             file_content: text,
             cpath: cpath,
             cpath_symmetry_breaker,
@@ -218,6 +219,7 @@ pub async fn pp_load_files_without_ast(
         };
         result.push(Arc::new(PPFile {
             symbols_sorted_by_path_len: vec![],
+            file_rev: Some(official_text_hashing_function(&text)),
             file_content: text,
             cpath: cpath,
             cpath_symmetry_breaker,
