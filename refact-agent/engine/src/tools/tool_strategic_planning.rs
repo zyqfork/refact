@@ -4,6 +4,7 @@ use std::string::ToString;
 use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AMutex;
+use tokio::sync::RwLock as ARwLock;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use crate::subchat::subchat_single;
@@ -22,8 +23,9 @@ use crate::files_correction::{
     canonicalize_normalized_path, get_project_dirs, preprocess_path_for_normalization,
 };
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
-use crate::global_context::try_load_caps_quickly_if_not_present;
+use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
 use crate::postprocessing::pp_context_files::postprocess_context_files;
+use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tokens::count_text_tokens_with_fallback;
 use crate::memories::{memories_add_enriched, EnrichmentParams};
 
@@ -240,6 +242,200 @@ async fn _execute_subchat_iteration(
     Ok((session, reply))
 }
 
+async fn execute_strategic_planning(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
+    subchat_params: SubchatParameters,
+    important_paths: Vec<PathBuf>,
+    external_messages: Vec<ChatMessage>,
+    tool_call_id: String,
+    log_prefix: String,
+) -> Result<(String, ChatUsage), String> {
+    let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
+    let mut usage_collector = ChatUsage::default();
+
+    send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone());
+
+    let ccx_for_prompt = {
+        let ccx_lock = ccx_subchat.lock().await;
+        Arc::new(AMutex::new(AtCommandsContext::new(
+            ccx_lock.global_context.clone(),
+            subchat_params.subchat_n_ctx,
+            0,
+            false,
+            external_messages.clone(),
+            ccx_lock.chat_id.clone(),
+            ccx_lock.should_execute_remotely,
+            ccx_lock.current_model.clone(),
+            ccx_lock.task_meta.clone(), None,
+        ).await))
+    };
+
+    let prompt = _make_prompt(
+        ccx_for_prompt,
+        &subchat_params,
+        &SOLVER_PROMPT.to_string(),
+        &important_paths,
+        &external_messages,
+    )
+    .await?;
+    let history: Vec<ChatMessage> = vec![ChatMessage::new("user".to_string(), prompt)];
+
+    tracing::info!("FIRST ITERATION: Get the initial solution");
+    let result = _execute_subchat_iteration(
+        ccx_subchat.clone(),
+        &subchat_params,
+        history.clone(),
+        subchat_params.subchat_max_new_tokens / 3,
+        &mut usage_collector,
+        &tool_call_id,
+        "get-initial-solution",
+        &log_prefix,
+    )
+    .await;
+
+    cancel_token.cancel();
+
+    let (_, initial_solution) = result?;
+    let solution_content = format!(
+        "# Solution\n{}",
+        initial_solution.content.content_text_only()
+    );
+    tracing::info!(
+        "strategic planning response (combined):\n{}",
+        solution_content
+    );
+
+    let filenames: Vec<String> = important_paths
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    let enrichment_params = EnrichmentParams {
+        base_tags: vec!["planning".to_string(), "strategic".to_string()],
+        base_filenames: filenames,
+        base_kind: "decision".to_string(),
+        base_title: Some("Strategic Plan".to_string()),
+    };
+
+    let ccx_for_memory = {
+        let ccx_lock = ccx_subchat.lock().await;
+        Arc::new(AMutex::new(AtCommandsContext::new(
+            gcx.clone(),
+            subchat_params.subchat_n_ctx,
+            0,
+            false,
+            vec![],
+            ccx_lock.chat_id.clone(),
+            ccx_lock.should_execute_remotely,
+            ccx_lock.current_model.clone(),
+            ccx_lock.task_meta.clone(), None,
+        ).await))
+    };
+
+    let memory_note = match memories_add_enriched(ccx_for_memory, &solution_content, enrichment_params).await {
+        Ok(path) => {
+            tracing::info!(
+                "Created enriched memory from strategic planning: {:?}",
+                path
+            );
+            format!(
+                "\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`",
+                path.display()
+            )
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to create enriched memory from strategic planning: {}",
+                e
+            );
+            String::new()
+        }
+    };
+    let final_message = format!("{}{}", solution_content, memory_note);
+
+    Ok((final_message, usage_collector))
+}
+
+fn spawn_strategic_planning_background(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
+    subchat_params: SubchatParameters,
+    important_paths: Vec<PathBuf>,
+    external_messages: Vec<ChatMessage>,
+    tool_call_id: String,
+    log_prefix: String,
+) {
+    tokio::spawn(async move {
+        let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
+
+        match execute_strategic_planning(
+            gcx,
+            ccx_subchat,
+            subchat_params,
+            important_paths,
+            external_messages,
+            tool_call_id.clone(),
+            log_prefix,
+        ).await {
+            Ok((final_message, usage_collector)) => {
+                let result_msg = ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(final_message),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    usage: Some(usage_collector),
+                    output_filter: Some(OutputFilter::no_limits()),
+                    ..Default::default()
+                };
+
+                let guardrails_msg = ChatMessage {
+                    role: "cd_instruction".to_string(),
+                    content: ChatContent::SimpleText(GUARDRAILS_PROMPT.to_string()),
+                    ..Default::default()
+                };
+
+                let completion_msg = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "strategic-planning-complete",
+                    "add_message": result_msg,
+                    "finished": true
+                });
+                if let Err(e) = subchat_tx.lock().await.send(completion_msg) {
+                    tracing::error!("Failed to send strategic planning completion: {}", e);
+                }
+
+                let guardrails_notification = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "strategic-planning-guardrails",
+                    "add_message": guardrails_msg,
+                });
+                let _ = subchat_tx.lock().await.send(guardrails_notification);
+            }
+            Err(e) => {
+                tracing::error!("Strategic planning failed: {}", e);
+                let error_msg = ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(format!("❌ Strategic planning failed: {}", e)),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    ..Default::default()
+                };
+                let error_notification = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "strategic-planning-error",
+                    "add_message": error_msg,
+                    "finished": true
+                });
+                if let Err(send_err) = subchat_tx.lock().await.send(error_notification) {
+                    tracing::error!("Failed to send strategic planning error notification: {}", send_err);
+                }
+            }
+        }
+    });
+}
+
 #[async_trait]
 impl Tool for ToolStrategicPlanning {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -307,9 +503,7 @@ impl Tool for ToolStrategicPlanning {
             Some(v) => return Err(format!("argument `paths` is not a string: {:?}", v)),
             None => return Err("Missing argument `paths`".to_string()),
         };
-        let mut usage_collector = ChatUsage {
-            ..Default::default()
-        };
+
         let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let subchat_params: SubchatParameters =
             crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "strategic_planning")
@@ -318,7 +512,7 @@ impl Tool for ToolStrategicPlanning {
             let ccx_lock = ccx.lock().await;
             ccx_lock.messages.clone()
         };
-        let (ccx_subchat, subchat_tx) = {
+        let ccx_subchat = {
             let ccx_lock = ccx.lock().await;
             let mut t = AtCommandsContext::new(
                 ccx_lock.global_context.clone(),
@@ -334,99 +528,49 @@ impl Tool for ToolStrategicPlanning {
             .await;
             t.subchat_tx = ccx_lock.subchat_tx.clone();
             t.subchat_rx = ccx_lock.subchat_rx.clone();
-            let tx = ccx_lock.subchat_tx.clone();
-            (Arc::new(AMutex::new(t)), tx)
+            Arc::new(AMutex::new(t))
         };
 
-        send_entertainment_message(&subchat_tx, tool_call_id, 0).await;
-        let cancel_token = tokio_util::sync::CancellationToken::new();
-        spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone());
+        tracing::info!("Starting strategic planning (background) for {} files", important_paths.len());
 
-        let prompt = _make_prompt(
-            ccx.clone(),
-            &subchat_params,
-            &SOLVER_PROMPT.to_string(),
-            &important_paths,
-            &external_messages,
-        )
-        .await?;
-        let history: Vec<ChatMessage> = vec![ChatMessage::new("user".to_string(), prompt)];
-        tracing::info!("FIRST ITERATION: Get the initial solution");
-        let result = _execute_subchat_iteration(
-            ccx_subchat.clone(),
-            &subchat_params,
-            history.clone(),
-            subchat_params.subchat_max_new_tokens / 3,
-            &mut usage_collector,
-            tool_call_id,
-            "get-initial-solution",
-            &log_prefix,
-        )
-        .await;
-
-        cancel_token.cancel();
-
-        let (_, initial_solution) = result?;
-        let solution_content = format!(
-            "# Solution\n{}",
-            initial_solution.content.content_text_only()
-        );
-        tracing::info!(
-            "strategic planning response (combined):\n{}",
-            solution_content
+        spawn_strategic_planning_background(
+            gcx,
+            ccx_subchat,
+            subchat_params,
+            important_paths.clone(),
+            external_messages,
+            tool_call_id.clone(),
+            log_prefix,
         );
 
-        let filenames: Vec<String> = important_paths
+        let files_list = important_paths
             .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-        let enrichment_params = EnrichmentParams {
-            base_tags: vec!["planning".to_string(), "strategic".to_string()],
-            base_filenames: filenames,
-            base_kind: "decision".to_string(),
-            base_title: Some("Strategic Plan".to_string()),
+            .take(5)
+            .map(|p| format!("- {}", p.file_name().unwrap_or_default().to_string_lossy()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let files_note = if important_paths.len() > 5 {
+            format!("{}\n- ... and {} more", files_list, important_paths.len() - 5)
+        } else {
+            files_list
         };
-        let memory_note =
-            match memories_add_enriched(ccx.clone(), &solution_content, enrichment_params).await {
-                Ok(path) => {
-                    tracing::info!(
-                        "Created enriched memory from strategic planning: {:?}",
-                        path
-                    );
-                    format!(
-                        "\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`",
-                        path.display()
-                    )
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to create enriched memory from strategic planning: {}",
-                        e
-                    );
-                    String::new()
-                }
-            };
-        let final_message = format!("{}{}", solution_content, memory_note);
 
-        let mut results = vec![];
-        results.push(ContextEnum::ChatMessage(ChatMessage {
+        let starting_message = format!(
+            "🧠 **Strategic Planning Started**\n\n\
+            **Analyzing {} files:**\n{}\n\n\
+            ⏳ This may take several minutes. Progress updates will appear below.\n\n\
+            _The planning is running in the background. You can continue with other tasks._",
+            important_paths.len(),
+            files_note
+        );
+
+        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
-            content: ChatContent::SimpleText(final_message),
+            content: ChatContent::SimpleText(starting_message),
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
-            usage: Some(usage_collector),
-            output_filter: Some(
-                crate::postprocessing::pp_command_output::OutputFilter::no_limits(),
-            ),
             ..Default::default()
-        }));
-        results.push(ContextEnum::ChatMessage(ChatMessage {
-            role: "cd_instruction".to_string(),
-            content: ChatContent::SimpleText(GUARDRAILS_PROMPT.to_string()),
-            ..Default::default()
-        }));
-
-        Ok((false, results))
+        })]))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

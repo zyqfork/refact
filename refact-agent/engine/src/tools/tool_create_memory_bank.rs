@@ -6,7 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::Local;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     },
     call_validation::{
         ChatContent, ChatMessage, ChatUsage, ContextEnum, ContextFile, PostprocessSettings,
+        SubchatParameters,
     },
     files_correction::{get_project_dirs, paths_from_anywhere},
     files_in_workspace::{get_file_text_from_memory_or_disk, ls_files},
@@ -397,6 +398,186 @@ impl ToolCreateMemoryBank {
     }
 }
 
+async fn execute_memory_bank_exploration(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
+    params: SubchatParameters,
+    tool_call_id: String,
+) -> Result<(String, ChatUsage), String> {
+    let mut state = ExplorationState::new(gcx.clone()).await?;
+    let mut step = 0;
+    let mut usage_collector = ChatUsage::default();
+    let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
+
+    let total_dirs = state.to_explore.len();
+
+    while state.has_unexplored_targets() && step < MAX_EXPLORATION_STEPS {
+        step += 1;
+        let log_prefix = Local::now().format("%Y%m%d-%H%M%S").to_string();
+        if let Some(target) = state.get_next_target() {
+            tracing::info!(
+                target = "memory_bank",
+                step = step,
+                max_steps = MAX_EXPLORATION_STEPS,
+                directory = target.target_name,
+                "Starting directory exploration"
+            );
+
+            let progress_msg = json!({
+                "tool_call_id": tool_call_id,
+                "subchat_id": format!("memory-bank-progress-{}/{}", step, total_dirs),
+                "add_message": {
+                    "role": "assistant",
+                    "content": format!("📁 Exploring directory {}/{}: {}", step, total_dirs, target.target_name)
+                }
+            });
+            let _ = subchat_tx.lock().await.send(progress_msg);
+
+            let file_context = read_and_compress_directory(
+                gcx.clone(),
+                target.target_name.clone(),
+                params.subchat_tokens_for_rag,
+                params.subchat_model.clone(),
+            )
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    "Failed to read/compress files for {}: {}",
+                    target.target_name,
+                    e
+                );
+                e
+            })
+            .ok();
+
+            let step_msg = ChatMessage::new(
+                "user".to_string(),
+                ToolCreateMemoryBank::build_step_prompt(&state, &target, file_context.as_ref()),
+            );
+
+            let subchat_result = subchat(
+                ccx_subchat.clone(),
+                params.subchat_model.as_str(),
+                vec![step_msg],
+                vec!["knowledge".to_string(), "create_knowledge".to_string()],
+                8,
+                params.subchat_max_new_tokens,
+                MB_EXPERT_WRAP_UP,
+                1,
+                None,
+                None,
+                Some(tool_call_id.clone()),
+                Some(format!(
+                    "{log_prefix}-memory-bank-dir-{}",
+                    target.target_name.replace("/", "_")
+                )),
+                Some(false),
+            )
+            .await?[0]
+                .clone();
+
+            if let Some(last_msg) = subchat_result.last() {
+                crate::tools::tools_execute::update_usage_from_message(
+                    &mut usage_collector,
+                    last_msg,
+                );
+                tracing::info!(
+                    target = "memory_bank",
+                    directory = target.target_name,
+                    prompt_tokens = usage_collector.prompt_tokens,
+                    completion_tokens = usage_collector.completion_tokens,
+                    total_tokens = usage_collector.total_tokens,
+                    "Updated token usage"
+                );
+            }
+
+            state.mark_explored(target.clone());
+            let remaining = state.to_explore.len();
+            let explored = state.explored.len();
+            tracing::info!(
+                target = "memory_bank",
+                directory = target.target_name,
+                remaining_dirs = remaining,
+                explored_dirs = explored,
+                total_dirs = remaining + explored,
+                progress = format!("{}/{}", explored, remaining + explored),
+                "Completed directory exploration"
+            );
+        } else {
+            break;
+        }
+    }
+
+    let summary = format!(
+        "Memory bank creation completed. Steps: {}, {}. Total directories: {}. Usage: {} prompt tokens, {} completion tokens",
+        step,
+        state.get_exploration_summary(),
+        state.explored.len() + state.to_explore.len(),
+        usage_collector.prompt_tokens,
+        usage_collector.completion_tokens,
+    );
+
+    Ok((summary, usage_collector))
+}
+
+fn spawn_memory_bank_background(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
+    params: SubchatParameters,
+    tool_call_id: String,
+) {
+    tokio::spawn(async move {
+        let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
+
+        match execute_memory_bank_exploration(
+            gcx,
+            ccx_subchat,
+            params,
+            tool_call_id.clone(),
+        ).await {
+            Ok((summary, usage_collector)) => {
+                let result_msg = ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(format!("✅ {}", summary)),
+                    usage: Some(usage_collector),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    ..Default::default()
+                };
+
+                let completion_msg = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "memory-bank-complete",
+                    "add_message": result_msg,
+                    "finished": true
+                });
+                if let Err(e) = subchat_tx.lock().await.send(completion_msg) {
+                    tracing::error!("Failed to send memory bank completion: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Memory bank creation failed: {}", e);
+                let error_msg = ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(format!("❌ Memory bank creation failed: {}", e)),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    ..Default::default()
+                };
+                let error_notification = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "memory-bank-error",
+                    "add_message": error_msg,
+                    "finished": true
+                });
+                if let Err(send_err) = subchat_tx.lock().await.send(error_notification) {
+                    tracing::error!("Failed to send memory bank error notification: {}", send_err);
+                }
+            }
+        }
+    });
+}
+
 #[async_trait]
 impl Tool for ToolCreateMemoryBank {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -410,7 +591,7 @@ impl Tool for ToolCreateMemoryBank {
         _args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let gcx = ccx.lock().await.global_context.clone();
-        let params =
+        let params: SubchatParameters =
             crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "create_memory_bank")
                 .await?;
 
@@ -433,114 +614,33 @@ impl Tool for ToolCreateMemoryBank {
             Arc::new(AMutex::new(ctx))
         };
 
-        let mut state = ExplorationState::new(gcx.clone()).await?;
-        let mut final_results = Vec::new();
-        let mut step = 0;
-        let mut usage_collector = ChatUsage::default();
+        let state = ExplorationState::new(gcx.clone()).await?;
+        let total_dirs = state.to_explore.len() + state.explored.len();
 
-        while state.has_unexplored_targets() && step < MAX_EXPLORATION_STEPS {
-            step += 1;
-            let log_prefix = Local::now().format("%Y%m%d-%H%M%S").to_string();
-            if let Some(target) = state.get_next_target() {
-                tracing::info!(
-                    target = "memory_bank",
-                    step = step,
-                    max_steps = MAX_EXPLORATION_STEPS,
-                    directory = target.target_name,
-                    "Starting directory exploration"
-                );
-                let file_context = read_and_compress_directory(
-                    gcx.clone(),
-                    target.target_name.clone(),
-                    params.subchat_tokens_for_rag,
-                    params.subchat_model.clone(),
-                )
-                .await
-                .map_err(|e| {
-                    tracing::warn!(
-                        "Failed to read/compress files for {}: {}",
-                        target.target_name,
-                        e
-                    );
-                    e
-                })
-                .ok();
+        tracing::info!("Starting memory bank creation (background) for {} directories", total_dirs);
 
-                let step_msg = ChatMessage::new(
-                    "user".to_string(),
-                    Self::build_step_prompt(&state, &target, file_context.as_ref()),
-                );
+        spawn_memory_bank_background(
+            gcx,
+            ccx_subchat,
+            params,
+            tool_call_id.clone(),
+        );
 
-                let subchat_result = subchat(
-                    ccx_subchat.clone(),
-                    params.subchat_model.as_str(),
-                    vec![step_msg],
-                    vec!["knowledge".to_string(), "create_knowledge".to_string()],
-                    8,
-                    params.subchat_max_new_tokens,
-                    MB_EXPERT_WRAP_UP,
-                    1,
-                    None,
-                    None,
-                    Some(tool_call_id.clone()),
-                    Some(format!(
-                        "{log_prefix}-memory-bank-dir-{}",
-                        target.target_name.replace("/", "_")
-                    )),
-                    Some(false),
-                )
-                .await?[0]
-                    .clone();
+        let starting_message = format!(
+            "🗃️ **Memory Bank Creation Started**\n\n\
+            **Directories to explore:** {}\n\n\
+            ⏳ This may take a while depending on project size. Progress updates will appear below.\n\n\
+            _The exploration is running in the background. You can continue with other tasks._",
+            total_dirs
+        );
 
-                // Update usage from subchat result
-                if let Some(last_msg) = subchat_result.last() {
-                    crate::tools::tools_execute::update_usage_from_message(
-                        &mut usage_collector,
-                        last_msg,
-                    );
-                    tracing::info!(
-                        target = "memory_bank",
-                        directory = target.target_name,
-                        prompt_tokens = usage_collector.prompt_tokens,
-                        completion_tokens = usage_collector.completion_tokens,
-                        total_tokens = usage_collector.total_tokens,
-                        "Updated token usage"
-                    );
-                }
-
-                state.mark_explored(target.clone());
-                let total = state.to_explore.len() + state.explored.len();
-                tracing::info!(
-                    target = "memory_bank",
-                    directory = target.target_name,
-                    remaining_dirs = state.to_explore.len(),
-                    explored_dirs = state.explored.len(),
-                    total_dirs = total,
-                    progress = format!("{}/{}", state.to_explore.len(), total),
-                    "Completed directory exploration"
-                );
-            } else {
-                break;
-            }
-        }
-
-        final_results.push(ContextEnum::ChatMessage(ChatMessage {
+        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
-            content: ChatContent::SimpleText(format!(
-                "Memory bank creation completed. Steps: {}, {}. Total directories: {}. Usage: {} prompt tokens, {} completion tokens",
-                step,
-                state.get_exploration_summary(),
-                state.explored.len() + state.to_explore.len(),
-                usage_collector.prompt_tokens,
-                usage_collector.completion_tokens,
-            )),
-            usage: Some(usage_collector),
+            content: ChatContent::SimpleText(starting_message),
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             ..Default::default()
-        }));
-
-        Ok((false, final_results))
+        })]))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

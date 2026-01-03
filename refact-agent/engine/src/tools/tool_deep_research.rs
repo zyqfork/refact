@@ -12,6 +12,7 @@ use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum, S
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::memories::{memories_add_enriched, EnrichmentParams};
+use crate::postprocessing::pp_command_output::OutputFilter;
 
 pub struct ToolDeepResearch {
     pub config_path: String,
@@ -81,22 +82,22 @@ fn spawn_entertainment_task(
 
 async fn execute_deep_research(
     ccx_subchat: Arc<AMutex<AtCommandsContext>>,
-    subchat_params: &SubchatParameters,
-    research_query: &str,
-    usage_collector: &mut ChatUsage,
-    tool_call_id: &String,
-    log_prefix: &str,
-) -> Result<ChatMessage, String> {
+    subchat_params: SubchatParameters,
+    research_query: String,
+    tool_call_id: String,
+    log_prefix: String,
+) -> Result<(ChatMessage, ChatUsage), String> {
     let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
+    let mut usage_collector = ChatUsage::default();
 
-    send_entertainment_message(&subchat_tx, tool_call_id, 0).await;
+    send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
     spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone());
 
     let messages = vec![
         ChatMessage::new("user".to_string(), RESEARCHER_PROMPT.to_string()),
-        ChatMessage::new("user".to_string(), research_query.to_string()),
+        ChatMessage::new("user".to_string(), research_query),
     ];
 
     let result = subchat_single(
@@ -111,7 +112,7 @@ async fn execute_deep_research(
         1,
         subchat_params.subchat_reasoning_effort.clone(),
         false,
-        Some(usage_collector),
+        Some(&mut usage_collector),
         Some(tool_call_id.clone()),
         Some(format!("{log_prefix}-deep-research")),
     )
@@ -122,9 +123,103 @@ async fn execute_deep_research(
     let choices = result?;
     let session = choices.into_iter().next().unwrap();
     let reply = session.last().unwrap().clone();
-    crate::tools::tools_execute::update_usage_from_message(usage_collector, &reply);
+    crate::tools::tools_execute::update_usage_from_message(&mut usage_collector, &reply);
 
-    Ok(reply)
+    Ok((reply, usage_collector))
+}
+
+fn spawn_deep_research_background(
+    ccx: Arc<AMutex<AtCommandsContext>>,
+    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
+    subchat_params: SubchatParameters,
+    research_query: String,
+    tool_call_id: String,
+    log_prefix: String,
+) {
+    tokio::spawn(async move {
+        let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
+
+        match execute_deep_research(
+            ccx_subchat,
+            subchat_params,
+            research_query.clone(),
+            tool_call_id.clone(),
+            log_prefix,
+        ).await {
+            Ok((research_result, usage_collector)) => {
+                let research_content = format!(
+                    "# Deep Research Report\n\n{}",
+                    research_result.content.content_text_only()
+                );
+                tracing::info!("Deep research completed");
+
+                let title = if research_query.len() > 80 {
+                    format!("{}...", &research_query[..80])
+                } else {
+                    research_query.clone()
+                };
+                let enrichment_params = EnrichmentParams {
+                    base_tags: vec!["research".to_string(), "deep-research".to_string()],
+                    base_filenames: vec![],
+                    base_kind: "research".to_string(),
+                    base_title: Some(title),
+                };
+                let memory_note = match memories_add_enriched(ccx.clone(), &research_content, enrichment_params).await {
+                    Ok(path) => {
+                        tracing::info!("Created enriched memory from deep research: {:?}", path);
+                        format!(
+                            "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
+                            path.display()
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to create enriched memory from deep research: {}", e);
+                        String::new()
+                    }
+                };
+                let final_message = format!("{}{}", research_content, memory_note);
+
+                let result_msg = ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(final_message),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    usage: Some(usage_collector),
+                    output_filter: Some(OutputFilter::no_limits()),
+                    ..Default::default()
+                };
+
+                let completion_msg = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "deep-research-complete",
+                    "add_message": result_msg,
+                    "finished": true
+                });
+                if let Err(e) = subchat_tx.lock().await.send(completion_msg) {
+                    tracing::error!("Failed to send deep research completion: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Deep research failed: {}", e);
+                let error_msg = ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(format!("❌ Deep research failed: {}", e)),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    ..Default::default()
+                };
+                let error_notification = json!({
+                    "tool_call_id": tool_call_id,
+                    "subchat_id": "deep-research-error",
+                    "add_message": error_msg,
+                    "finished": true
+                });
+                if let Err(send_err) = subchat_tx.lock().await.send(error_notification) {
+                    tracing::error!("Failed to send deep research error notification: {}", send_err);
+                }
+            }
+        }
+    });
 }
 
 #[async_trait]
@@ -172,9 +267,6 @@ impl Tool for ToolDeepResearch {
             None => return Err("Missing argument `research_query`".to_string()),
         };
 
-        let mut usage_collector = ChatUsage {
-            ..Default::default()
-        };
         let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let subchat_params: SubchatParameters =
             crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "deep_research")
@@ -199,64 +291,38 @@ impl Tool for ToolDeepResearch {
             Arc::new(AMutex::new(t))
         };
 
-        tracing::info!("Starting deep research for query: {}", research_query);
-        let research_result = execute_deep_research(
-            ccx_subchat.clone(),
-            &subchat_params,
-            &research_query,
-            &mut usage_collector,
-            tool_call_id,
-            &log_prefix,
-        )
-        .await?;
+        tracing::info!("Starting deep research (background) for query: {}", research_query);
 
-        let research_content = format!(
-            "# Deep Research Report\n\n{}",
-            research_result.content.content_text_only()
+        spawn_deep_research_background(
+            ccx.clone(),
+            ccx_subchat,
+            subchat_params,
+            research_query.clone(),
+            tool_call_id.clone(),
+            log_prefix,
         );
-        tracing::info!("Deep research completed");
 
-        let title = if research_query.len() > 80 {
-            format!("{}...", &research_query[..80])
+        let truncated_query = if research_query.len() > 100 {
+            format!("{}...", &research_query[..100])
         } else {
-            research_query.clone()
+            research_query
         };
-        let enrichment_params = EnrichmentParams {
-            base_tags: vec!["research".to_string(), "deep-research".to_string()],
-            base_filenames: vec![],
-            base_kind: "research".to_string(),
-            base_title: Some(title),
-        };
-        let memory_note =
-            match memories_add_enriched(ccx.clone(), &research_content, enrichment_params).await {
-                Ok(path) => {
-                    tracing::info!("Created enriched memory from deep research: {:?}", path);
-                    format!(
-                        "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
-                        path.display()
-                    )
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create enriched memory from deep research: {}", e);
-                    String::new()
-                }
-            };
-        let final_message = format!("{}{}", research_content, memory_note);
 
-        let mut results = vec![];
-        results.push(ContextEnum::ChatMessage(ChatMessage {
+        let starting_message = format!(
+            "🔬 **Deep Research Started**\n\n\
+            **Query:** {}\n\n\
+            ⏳ This may take up to 30 minutes. Progress updates will appear below.\n\n\
+            _The research is running in the background. You can continue with other tasks._",
+            truncated_query
+        );
+
+        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
-            content: ChatContent::SimpleText(final_message),
+            content: ChatContent::SimpleText(starting_message),
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
-            usage: Some(usage_collector),
-            output_filter: Some(
-                crate::postprocessing::pp_command_output::OutputFilter::no_limits(),
-            ),
             ..Default::default()
-        }));
-
-        Ok((false, results))
+        })]))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {
