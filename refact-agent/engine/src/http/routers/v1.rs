@@ -77,6 +77,10 @@ use crate::http::routers::v1::tasks::{
     handle_set_planner_instructions, handle_get_ready_cards, handle_update_task_status,
     handle_update_task_meta, handle_list_task_trajectories, handle_create_planner_chat,
 };
+use crate::http::routers::v1::trajectory_ops::{
+    handle_transform_preview, handle_transform_apply,
+    handle_handoff_preview, handle_handoff_apply,
+};
 
 mod ast;
 pub mod at_commands;
@@ -104,6 +108,7 @@ pub mod sync_files;
 pub mod system_prompt;
 pub mod telemetry_chat;
 pub mod telemetry_network;
+mod trajectory_ops;
 mod v1_integrations;
 pub mod vecdb;
 pub mod voice;
@@ -247,7 +252,11 @@ pub fn make_v1_router() -> Router {
         .route("/tasks/:task_id/planner-instructions", get(handle_get_planner_instructions))
         .route("/tasks/:task_id/planner-instructions", put(handle_set_planner_instructions))
         .route("/tasks/:task_id/trajectories/:role", get(handle_list_task_trajectories))
-        .route("/tasks/:task_id/planner-chats", post(handle_create_planner_chat));
+        .route("/tasks/:task_id/planner-chats", post(handle_create_planner_chat))
+        .route("/chats/:chat_id/trajectory/transform/preview", post(handle_transform_preview))
+        .route("/chats/:chat_id/trajectory/transform/apply", post(handle_transform_apply))
+        .route("/chats/:chat_id/trajectory/handoff/preview", post(handle_handoff_preview))
+        .route("/chats/:chat_id/trajectory/handoff/apply", post(handle_handoff_apply));
 
     builder
         .layer(axum::middleware::from_fn(telemetry_middleware))

@@ -252,7 +252,7 @@ fn process_compression_stage(
     Ok((occupied_tokens, tokens_limit, budget_reached))
 }
 
-fn remove_invalid_tool_calls_and_tool_calls_results(messages: &mut Vec<ChatMessage>) {
+pub(crate) fn remove_invalid_tool_calls_and_tool_calls_results(messages: &mut Vec<ChatMessage>) {
     let tool_call_ids: HashSet<_> = messages
         .iter()
         .filter(|m| !m.tool_call_id.is_empty())
