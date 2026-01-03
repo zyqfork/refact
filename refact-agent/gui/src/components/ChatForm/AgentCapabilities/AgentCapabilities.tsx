@@ -13,6 +13,7 @@ import {
 } from "@radix-ui/themes";
 import { UsageCounter } from "../../UsageCounter";
 import { useUsageCounter } from "../../UsageCounter/useUsageCounter";
+import { TrajectoryButton } from "../../Trajectory";
 import {
   AgentRollbackSwitch,
   ApplyPatchSwitch,
@@ -120,9 +121,10 @@ export const AgentCapabilities = () => {
         </HoverCard.Root>
       </Flex>
       {shouldShowUsage && (
-        <Box>
+        <Flex align="center" gap="1">
           <UsageCounter />
-        </Box>
+          <TrajectoryButton />
+        </Flex>
       )}
     </Flex>
   );

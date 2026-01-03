@@ -38,6 +38,11 @@ export const COMPRESS_MESSAGES_URL = "/v1/trajectory-compress";
 
 export const SET_ACTIVE_GROUP_ID = "/v1/set-active-group-id";
 
+export const TRAJECTORY_TRANSFORM_PREVIEW_URL = "/v1/chats/{chat_id}/trajectory/transform/preview";
+export const TRAJECTORY_TRANSFORM_APPLY_URL = "/v1/chats/{chat_id}/trajectory/transform/apply";
+export const TRAJECTORY_HANDOFF_PREVIEW_URL = "/v1/chats/{chat_id}/trajectory/handoff/preview";
+export const TRAJECTORY_HANDOFF_APPLY_URL = "/v1/chats/{chat_id}/trajectory/handoff/apply";
+
 // Providers & Models
 export const CONFIGURED_PROVIDERS_URL = "/v1/providers";
 export const PROVIDER_TEMPLATES_URL = "/v1/provider-templates";

@@ -27,6 +27,7 @@ import {
   modelsApi,
   teamsApi,
   trajectoriesApi,
+  trajectoryApi,
   tasksApi,
 } from "../services/refact";
 import { smallCloudApi } from "../services/smallcloud";
@@ -98,6 +99,7 @@ const rootReducer = combineSlices(
     [providersApi.reducerPath]: providersApi.reducer,
     [modelsApi.reducerPath]: modelsApi.reducer,
     [trajectoriesApi.reducerPath]: trajectoriesApi.reducer,
+    [trajectoryApi.reducerPath]: trajectoryApi.reducer,
     [tasksApi.reducerPath]: tasksApi.reducer,
   },
   historySlice,
@@ -183,6 +185,7 @@ export function setUpStore(preloadedState?: Partial<RootState>) {
             modelsApi.middleware,
             teamsApi.middleware,
             trajectoriesApi.middleware,
+            trajectoryApi.middleware,
             tasksApi.middleware,
           )
           .prepend(historyMiddleware.middleware)

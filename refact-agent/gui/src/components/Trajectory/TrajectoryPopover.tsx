@@ -1,0 +1,245 @@
+import React from "react";
+import {
+  Box,
+  Button,
+  Checkbox,
+  Flex,
+  Popover,
+  Spinner,
+  Tabs,
+  Text,
+} from "@radix-ui/themes";
+import { useTrajectoryOps } from "../../hooks/useTrajectoryOps";
+import styles from "./TrajectoryPopover.module.css";
+
+type TrajectoryPopoverProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+};
+
+export const TrajectoryPopover: React.FC<TrajectoryPopoverProps> = ({
+  open,
+  onOpenChange,
+  children,
+}) => {
+  const {
+    activeTab,
+    setActiveTab,
+    transformOptions,
+    handoffOptions,
+    transformPreview,
+    handoffPreview,
+    isPreviewingTransform,
+    isApplyingTransform,
+    isPreviewingHandoff,
+    isApplyingHandoff,
+    handlePreviewTransform,
+    handleApplyTransform,
+    handlePreviewHandoff,
+    handleApplyHandoff,
+    clearPreviews,
+    updateTransformOption,
+    updateHandoffOption,
+  } = useTrajectoryOps();
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value as "compress" | "handoff");
+    clearPreviews();
+  };
+
+  const handleApplyTransformClick = async () => {
+    const success = await handleApplyTransform();
+    if (success) {
+      onOpenChange(false);
+    }
+  };
+
+  const handleApplyHandoffClick = async () => {
+    const success = await handleApplyHandoff();
+    if (success) {
+      onOpenChange(false);
+    }
+  };
+
+  return (
+    <Popover.Root open={open} onOpenChange={onOpenChange}>
+      <Popover.Trigger>{children}</Popover.Trigger>
+      <Popover.Content
+        side="top"
+        align="end"
+        sideOffset={8}
+        className={styles.popoverContent}
+      >
+        <Tabs.Root value={activeTab} onValueChange={handleTabChange}>
+          <Tabs.List className={styles.tabsList}>
+            <Tabs.Trigger value="compress" className={styles.tabsTrigger}>
+              Compress
+            </Tabs.Trigger>
+            <Tabs.Trigger value="handoff" className={styles.tabsTrigger}>
+              Handoff
+            </Tabs.Trigger>
+          </Tabs.List>
+
+          <Tabs.Content value="compress">
+            <Box className={styles.optionsSection}>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Checkbox
+                    checked={transformOptions.compress_attachments}
+                    onCheckedChange={(checked) =>
+                      updateTransformOption("compress_attachments", checked === true)
+                    }
+                  />
+                  Compress attachments
+                </Flex>
+              </Text>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Checkbox
+                    checked={transformOptions.compress_tool_results}
+                    onCheckedChange={(checked) =>
+                      updateTransformOption("compress_tool_results", checked === true)
+                    }
+                  />
+                  Compress tool results
+                </Flex>
+              </Text>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Checkbox
+                    checked={transformOptions.summarize_conversation}
+                    onCheckedChange={(checked) =>
+                      updateTransformOption("summarize_conversation", checked === true)
+                    }
+                  />
+                  Summarize conversation
+                </Flex>
+              </Text>
+            </Box>
+
+            {transformPreview && (
+              <Box className={styles.previewSection}>
+                <Flex className={styles.previewStats}>
+                  <Text size="1" color="gray">
+                    Before: {transformPreview.before_tokens} tokens
+                  </Text>
+                  <Text size="1" color="gray">
+                    After: {transformPreview.after_tokens} tokens
+                  </Text>
+                </Flex>
+                <Text size="2" weight="medium">
+                  ~{transformPreview.estimated_reduction_percent}% reduction
+                </Text>
+                {transformPreview.actions.length > 0 && (
+                  <ul className={styles.actionsList}>
+                    {transformPreview.actions.map((action, idx) => (
+                      <li key={idx} className={styles.actionsListItem}>
+                        {action}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Box>
+            )}
+
+            <Flex className={styles.buttonRow}>
+              <Button
+                variant="soft"
+                onClick={handlePreviewTransform}
+                disabled={isPreviewingTransform}
+              >
+                {isPreviewingTransform ? <Spinner size="1" /> : "Preview"}
+              </Button>
+              <Button
+                onClick={handleApplyTransformClick}
+                disabled={!transformPreview || isApplyingTransform}
+              >
+                {isApplyingTransform ? <Spinner size="1" /> : "Apply"}
+              </Button>
+            </Flex>
+          </Tabs.Content>
+
+          <Tabs.Content value="handoff">
+            <Box className={styles.optionsSection}>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Checkbox
+                    checked={handoffOptions.include_summary}
+                    onCheckedChange={(checked) =>
+                      updateHandoffOption("include_summary", checked === true)
+                    }
+                  />
+                  Include summary
+                </Flex>
+              </Text>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Checkbox
+                    checked={handoffOptions.include_key_files}
+                    onCheckedChange={(checked) =>
+                      updateHandoffOption("include_key_files", checked === true)
+                    }
+                  />
+                  Include key files
+                </Flex>
+              </Text>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Checkbox
+                    checked={handoffOptions.include_recent_context}
+                    onCheckedChange={(checked) =>
+                      updateHandoffOption("include_recent_context", checked === true)
+                    }
+                  />
+                  Include recent context
+                </Flex>
+              </Text>
+            </Box>
+
+            {handoffPreview && (
+              <Box className={styles.previewSection}>
+                <Text size="2" weight="medium" mb="1">
+                  {handoffPreview.new_chat_title}
+                </Text>
+                <Text size="1" color="gray" mb="2">
+                  ~{handoffPreview.estimated_tokens} tokens
+                </Text>
+                {handoffPreview.key_files.length > 0 && (
+                  <>
+                    <Text size="1" color="gray">
+                      Key files:
+                    </Text>
+                    <ul className={styles.actionsList}>
+                      {handoffPreview.key_files.slice(0, 5).map((file, idx) => (
+                        <li key={idx} className={styles.actionsListItem}>
+                          {file}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </Box>
+            )}
+
+            <Flex className={styles.buttonRow}>
+              <Button
+                variant="soft"
+                onClick={handlePreviewHandoff}
+                disabled={isPreviewingHandoff}
+              >
+                {isPreviewingHandoff ? <Spinner size="1" /> : "Preview"}
+              </Button>
+              <Button
+                onClick={handleApplyHandoffClick}
+                disabled={!handoffPreview || isApplyingHandoff}
+              >
+                {isApplyingHandoff ? <Spinner size="1" /> : "Create"}
+              </Button>
+            </Flex>
+          </Tabs.Content>
+        </Tabs.Root>
+      </Popover.Content>
+    </Popover.Root>
+  );
+};
