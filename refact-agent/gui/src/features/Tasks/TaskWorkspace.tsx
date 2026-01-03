@@ -1,6 +1,7 @@
 import React, { useCallback, useState, useEffect } from "react";
 import { Flex, Box, Text, Button, Heading, Badge, Card } from "@radix-ui/themes";
-import { ArrowLeftIcon, PlusIcon, PersonIcon, Cross2Icon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, PlusIcon, PersonIcon, Cross2Icon, ChevronDownIcon } from "@radix-ui/react-icons";
+import { AgentStatusDot } from "./AgentStatusDot";
 import { ScrollArea } from "../../components/ScrollArea";
 import { useAppDispatch, useAppSelector } from "../../hooks";
 import { pop } from "../Pages/pagesSlice";
@@ -126,7 +127,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ cards, activeChat, onSelectAg
   const total = completedAgents.length + failedAgents.length + activeAgents.length;
   const done = completedAgents.length;
 
-  const renderAgentItem = (card: BoardCard, icon: string, color: "blue" | "green" | "red") => {
+  const renderAgentItem = (card: BoardCard, status: "doing" | "done" | "failed") => {
     const isActive = activeChat?.type === "agent" && activeChat.cardId === card.id;
     return (
       <Box
@@ -135,7 +136,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ cards, activeChat, onSelectAg
         onClick={() => card.agent_chat_id && onSelectAgent(card.id, card.agent_chat_id)}
         style={{ background: isActive ? "var(--accent-4)" : undefined }}
       >
-        <Badge size="1" color={color}>{icon}</Badge>
+        <AgentStatusDot status={status} size="medium" />
         <Text size="1" style={{ flex: 1 }}>{card.title}</Text>
       </Box>
     );
@@ -155,9 +156,9 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ cards, activeChat, onSelectAg
             {activeAgents.length === 0 && completedAgents.length === 0 && failedAgents.length === 0 && (
               <Text size="1" color="gray">No agents yet</Text>
             )}
-            {activeAgents.map(card => renderAgentItem(card, "🔄", "blue"))}
-            {completedAgents.map(card => renderAgentItem(card, "✅", "green"))}
-            {failedAgents.map(card => renderAgentItem(card, "❌", "red"))}
+            {activeAgents.map(card => renderAgentItem(card, "doing"))}
+            {completedAgents.map(card => renderAgentItem(card, "done"))}
+            {failedAgents.map(card => renderAgentItem(card, "failed"))}
           </Flex>
         </ScrollArea>
       </Box>
@@ -271,6 +272,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const activeChat = useAppSelector((state) => selectTaskActiveChat(state, taskId));
   const [selectedCard, setSelectedCard] = useState<BoardCard | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const plannersRestoredRef = React.useRef(false);
   const prevTaskStatusRef = React.useRef<string | undefined>(undefined);
 
@@ -446,6 +448,10 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     return false;
   }, [board, taskId, dispatch]);
 
+  const handleToggleChatExpanded = useCallback(() => {
+    setChatExpanded((prev) => !prev);
+  }, []);
+
   const handleModelChange = useCallback((model: string) => {
     void updateTaskMeta({ taskId, defaultAgentModel: model });
   }, [taskId, updateTaskMeta]);
@@ -469,7 +475,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     : task.base_branch ?? "(unknown)";
 
   return (
-    <Box className={styles.taskWorkspace}>
+    <Box className={`${styles.taskWorkspace} ${chatExpanded ? styles.expanded : ""}`}>
       <Flex className={styles.taskHeader} justify="between" align="center">
         <Flex align="center" gap="3">
           <Button variant="ghost" size="1" onClick={handleBack}>
@@ -487,11 +493,13 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         </Text>
       </Flex>
 
-      <Box className={styles.boardSection}>
-        <KanbanBoard board={board} onCardClick={handleCardClick} />
-      </Box>
+      {!chatExpanded && (
+        <>
+          <Box className={styles.boardSection}>
+            <KanbanBoard board={board} onCardClick={handleCardClick} />
+          </Box>
 
-      <Flex className={styles.panelsSection}>
+          <Flex className={styles.panelsSection}>
         <PlannerPanel
           taskId={taskId}
           plannerChats={plannerChats}
@@ -510,7 +518,16 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
       </Flex>
 
       <Box className={styles.chatSection}>
-        <Flex className={styles.chatHeader} align="center" gap="2" px="3" py="2">
+        <Flex
+          className={styles.chatHeader}
+          align="center"
+          gap="2"
+          px="3"
+          py="2"
+          onClick={handleToggleChatExpanded}
+          style={{ cursor: "pointer" }}
+        >
+          <ChevronDownIcon className={`${styles.chevron} ${chatExpanded ? styles.chevronExpanded : ""}`} />
           <PersonIcon />
           <Text size="2" weight="medium">{chatLabel}</Text>
         </Flex>
