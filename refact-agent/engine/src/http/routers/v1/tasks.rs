@@ -315,3 +315,31 @@ pub async fn handle_list_task_trajectories(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(ids))
 }
+
+pub async fn handle_create_planner_chat(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(task_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let _ = storage::load_task_meta(gcx.clone(), &task_id).await
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+
+    let existing = storage::list_task_trajectories(gcx.clone(), &task_id, "planner", None).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let max_num = existing
+        .iter()
+        .filter_map(|id| {
+            id.strip_prefix(&format!("planner-{}-", task_id))
+                .and_then(|s| s.parse::<u32>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+
+    let new_num = max_num + 1;
+    let chat_id = format!("planner-{}-{}", task_id, new_num);
+
+    crate::chat::trajectories::save_initial_planner_trajectory(gcx, &task_id, &chat_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(json!({"chat_id": chat_id})))
+}

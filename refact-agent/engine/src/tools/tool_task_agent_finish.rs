@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 use chrono::Utc;
+use uuid::Uuid;
 
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
 use crate::tasks::types::StatusUpdate;
-use crate::chat::get_or_create_session_with_trajectory;
+use crate::chat::{get_or_create_session_with_trajectory, process_command_queue};
+use crate::chat::types::{ChatCommand, CommandRequest};
 
 async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>) -> Result<String, String> {
     let ccx_lock = ccx.lock().await;
@@ -89,7 +92,7 @@ impl Tool for ToolTaskAgentFinish {
         let report_clone = report.clone();
         let success_clone = success;
 
-        let (_board, (card_title, agent_branch, all_finished)) = storage::update_board_atomic(
+        let (board, (card_title, _agent_branch, all_finished)) = storage::update_board_atomic(
             gcx.clone(),
             &task_id,
             move |board| {
@@ -136,54 +139,111 @@ impl Tool for ToolTaskAgentFinish {
         storage::update_task_stats(gcx.clone(), &task_id).await?;
 
         let result_message = if success {
-            format!(
-                "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nThe planner will be notified of completion.",
-                card_title, report
-            )
+            if all_finished {
+                format!(
+                    "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nAll agents have completed. Planner notified.",
+                    card_title, report
+                )
+            } else {
+                format!(
+                    "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nPlanner will be notified when all agents complete.",
+                    card_title, report
+                )
+            }
         } else {
-            format!(
-                "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nThe planner will be notified of the failure.",
-                card_title, report
-            )
+            if all_finished {
+                format!(
+                    "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nAll agents have completed. Planner notified.",
+                    card_title, report
+                )
+            } else {
+                format!(
+                    "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nPlanner will be notified when all agents complete.",
+                    card_title, report
+                )
+            }
         };
 
-        let report_preview: String = report.chars().take(100).collect();
         tracing::info!(
             "Agent finished card {} ({}): {}",
             card_id,
             if success { "success" } else { "failed" },
-            report_preview
-        );
-
-        let status_str = if success { "success" } else { "failed" };
-        let branch_str = agent_branch.as_deref().unwrap_or("(no branch)");
-
-        let mut planner_message = format!(
-            "Agent finished card {}:\n**Card:** {}\n**Status:** {}\n**Branch:** {}\n**Report:** {}",
-            card_id, card_title, status_str, branch_str, report_preview
+            report.chars().take(100).collect::<String>()
         );
 
         if all_finished {
-            planner_message.push_str(
-                "\n\n✅ **All agents have completed.** Run `task_check_agents` or `task_board_get` to review results."
-            );
-        }
+            let mut done_cards = Vec::new();
+            let mut failed_cards = Vec::new();
 
-        let sessions = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked.chat_sessions.clone()
-        };
+            for card in &board.cards {
+                if card.column == "done" {
+                    let branch_info = card.agent_branch.as_deref().unwrap_or("no branch");
+                    let report_preview: String = card.final_report
+                        .as_deref()
+                        .unwrap_or("")
+                        .chars()
+                        .take(100)
+                        .collect();
+                    done_cards.push(format!("- **{}**: {} (branch: {})\n  Report: {}", 
+                        card.id, card.title, branch_info, report_preview));
+                } else if card.column == "failed" {
+                    let report_preview: String = card.final_report
+                        .as_deref()
+                        .unwrap_or("")
+                        .chars()
+                        .take(100)
+                        .collect();
+                    failed_cards.push(format!("- **{}**: {}\n  Reason: {}", 
+                        card.id, card.title, report_preview));
+                }
+            }
 
-        let planner_chat_id = storage::get_planner_chat_id(gcx.clone(), &task_id).await?;
-        let planner_session = get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id).await;
+            let mut planner_message = String::from("✅ **All agents have completed!**\n\n");
+            
+            if !done_cards.is_empty() {
+                planner_message.push_str(&format!("**Completed ({}):**\n{}\n\n", 
+                    done_cards.len(), done_cards.join("\n")));
+            }
+            
+            if !failed_cards.is_empty() {
+                planner_message.push_str(&format!("**Failed ({}):**\n{}\n\n", 
+                    failed_cards.len(), failed_cards.join("\n")));
+            }
+            
+            planner_message.push_str("Run `task_board_get` to review full results and decide next steps.");
 
-        {
-            let mut session = planner_session.lock().await;
-            session.add_message(ChatMessage {
-                role: "system".to_string(),
-                content: ChatContent::SimpleText(planner_message),
-                ..Default::default()
-            });
+            let sessions = {
+                let gcx_locked = gcx.read().await;
+                gcx_locked.chat_sessions.clone()
+            };
+
+            let planner_chat_id = storage::get_planner_chat_id(gcx.clone(), &task_id).await?;
+            let planner_session = get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id).await;
+
+            let request = CommandRequest {
+                client_request_id: format!("task-all-finished-{}", Uuid::new_v4()),
+                priority: true,
+                command: ChatCommand::UserMessage {
+                    content: serde_json::Value::String(planner_message),
+                    attachments: vec![],
+                },
+            };
+
+            let processor_flag = {
+                let mut session = planner_session.lock().await;
+                session.command_queue.push_back(request);
+                session.emit_queue_update();
+                session.queue_notify.notify_one();
+                session.queue_processor_running.clone()
+            };
+
+            if !processor_flag.swap(true, Ordering::SeqCst) {
+                tokio::spawn(process_command_queue(
+                    gcx.clone(),
+                    planner_session.clone(),
+                    processor_flag,
+                ));
+            }
         }
 
         Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {

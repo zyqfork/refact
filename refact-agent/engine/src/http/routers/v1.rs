@@ -75,7 +75,7 @@ use crate::http::routers::v1::tasks::{
     handle_list_tasks, handle_create_task, handle_get_task, handle_delete_task,
     handle_get_board, handle_patch_board, handle_get_planner_instructions,
     handle_set_planner_instructions, handle_get_ready_cards, handle_update_task_status,
-    handle_update_task_meta, handle_list_task_trajectories,
+    handle_update_task_meta, handle_list_task_trajectories, handle_create_planner_chat,
 };
 
 mod ast;
@@ -246,7 +246,8 @@ pub fn make_v1_router() -> Router {
         .route("/tasks/:task_id/board/ready", get(handle_get_ready_cards))
         .route("/tasks/:task_id/planner-instructions", get(handle_get_planner_instructions))
         .route("/tasks/:task_id/planner-instructions", put(handle_set_planner_instructions))
-        .route("/tasks/:task_id/trajectories/:role", get(handle_list_task_trajectories));
+        .route("/tasks/:task_id/trajectories/:role", get(handle_list_task_trajectories))
+        .route("/tasks/:task_id/planner-chats", post(handle_create_planner_chat));
 
     builder
         .layer(axum::middleware::from_fn(telemetry_middleware))

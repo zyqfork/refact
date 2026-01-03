@@ -198,51 +198,51 @@ pub async fn run_llm_generation(
             )
             .await;
 
-        let first_user_idx_in_new = messages_with_preamble
+        let first_conv_idx_in_new = messages_with_preamble
             .iter()
-            .position(|m| m.role == "user")
+            .position(|m| m.role == "user" || m.role == "assistant")
             .unwrap_or(messages_with_preamble.len());
 
-        if first_user_idx_in_new > 0 {
+        if first_conv_idx_in_new > 0 {
             let mut session = session_arc.lock().await;
-            let first_user_idx_in_session = session
+            let first_conv_idx_in_session = session
                 .messages
                 .iter()
-                .position(|m| m.role == "user")
-                .unwrap_or(0);
+                .position(|m| m.role == "user" || m.role == "assistant")
+                .unwrap_or(session.messages.len());
 
-            for (i, msg) in messages_with_preamble
-                .iter()
-                .take(first_user_idx_in_new)
-                .enumerate()
-            {
-                if session
-                    .messages
-                    .iter()
-                    .any(|m| m.role == msg.role && m.role == "system")
-                    && msg.role == "system"
-                {
+            let mut inserted = 0;
+            for msg in messages_with_preamble.iter().take(first_conv_idx_in_new) {
+                if msg.role == "assistant" {
                     continue;
                 }
-                if session.messages.iter().any(|m| m.role == "cd_instruction")
-                    && msg.role == "cd_instruction"
-                {
+                if msg.role == "system" && session.messages.iter().any(|m| m.role == "system") {
+                    continue;
+                }
+                if msg.role == "cd_instruction" && session.messages.iter().any(|m| m.role == "cd_instruction") {
+                    continue;
+                }
+                if msg.role == "context_file" && session.messages.iter().any(|m| {
+                    m.role == "context_file" && m.tool_call_id == msg.tool_call_id
+                }) {
                     continue;
                 }
                 let mut msg_with_id = msg.clone();
                 if msg_with_id.message_id.is_empty() {
                     msg_with_id.message_id = Uuid::new_v4().to_string();
                 }
-                session
-                    .messages
-                    .insert(first_user_idx_in_session + i, msg_with_id.clone());
+                let insert_idx = first_conv_idx_in_session + inserted;
+                session.messages.insert(insert_idx, msg_with_id.clone());
                 session.emit(ChatEvent::MessageAdded {
                     message: msg_with_id,
-                    index: first_user_idx_in_session + i,
+                    index: insert_idx,
                 });
+                inserted += 1;
             }
-            session.increment_version();
-            info!("Saved preamble messages to session before first user message");
+            if inserted > 0 {
+                session.increment_version();
+                info!("Saved {} preamble messages to session", inserted);
+            }
         }
         messages = messages_with_preamble;
     }

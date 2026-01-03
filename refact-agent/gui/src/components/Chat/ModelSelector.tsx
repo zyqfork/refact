@@ -23,7 +23,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   showLabel = true,
   compact = true,
 }) => {
-  const isControlled = value !== undefined && onValueChange !== undefined;
+  const isControlled = onValueChange !== undefined || value !== undefined;
   const capsForToolUse = useCapsForToolUse();
   const { data: caps } = useGetCapsQuery(undefined);
 
@@ -47,7 +47,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const defaultModel = capsData?.chat_default_model ?? "";
   const effectiveValue = isControlled ? (value || defaultModel) : capsForToolUse.currentModel;
-  const handleChange = isControlled ? onValueChange : capsForToolUse.setCapModel;
+  const handleChange = isControlled
+    ? (model: string) => onValueChange?.(model)
+    : capsForToolUse.setCapModel;
   const currentModelName = effectiveValue.replace(/^refact\//, "");
 
   if (!capsData || groupedModels.length === 0) {

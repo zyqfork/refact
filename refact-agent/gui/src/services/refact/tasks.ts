@@ -222,6 +222,19 @@ export const tasksApi = createApi({
       },
     }),
 
+    createPlannerChat: builder.mutation<{ chat_id: string }, string>({
+      queryFn: async (taskId, api, _opts, baseQuery) => {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/tasks/${taskId}/planner-chats`,
+          method: "POST",
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as { chat_id: string } };
+      },
+    }),
+
     updateTaskMeta: builder.mutation<TaskMeta, { taskId: string; baseBranch?: string; baseCommit?: string; defaultAgentModel?: string }>({
       queryFn: async ({ taskId, baseBranch, baseCommit, defaultAgentModel }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
@@ -256,4 +269,5 @@ export const {
   useGetOrchestratorInstructionsQuery,
   useSetOrchestratorInstructionsMutation,
   useListTaskTrajectoriesQuery,
+  useCreatePlannerChatMutation,
 } = tasksApi;

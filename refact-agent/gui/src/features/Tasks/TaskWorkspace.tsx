@@ -10,6 +10,7 @@ import {
   useGetBoardQuery,
   useListTaskTrajectoriesQuery,
   useUpdateTaskMetaMutation,
+  useCreatePlannerChatMutation,
   BoardCard,
 } from "../../services/refact/tasks";
 import { ModelSelector } from "../../components/Chat/ModelSelector";
@@ -19,7 +20,6 @@ import { selectConfig } from "../Config/configSlice";
 import { createChatWithId, switchToThread } from "../Chat/Thread";
 import { openTask, addPlannerChat, removePlannerChat, selectOpenTasksFromRoot, setTaskActiveChat, selectTaskActiveChat } from "./tasksSlice";
 import { selectThreadById } from "../Chat/Thread";
-import { updateChatParams } from "../../services/refact/chatCommands";
 import { InternalLinkProvider, parseRefactLink } from "../../contexts/InternalLinkContext";
 
 type ActiveChat =
@@ -264,13 +264,13 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   });
   const { data: savedPlanners } = useListTaskTrajectoriesQuery({ taskId, role: "planner" });
   const [updateTaskMeta] = useUpdateTaskMetaMutation();
+  const [createPlannerChat, { isLoading: isCreatingPlanner }] = useCreatePlannerChatMutation();
   const openTasks = useAppSelector(selectOpenTasksFromRoot);
   const currentTaskUI = openTasks.find((t) => t.id === taskId);
   const plannerChats = currentTaskUI?.plannerChats ?? [];
   const activeChat = useAppSelector((state) => selectTaskActiveChat(state, taskId));
   const [selectedCard, setSelectedCard] = useState<BoardCard | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
-  const plannerCountRef = React.useRef(plannerChats.length);
   const plannersRestoredRef = React.useRef(false);
   const prevTaskStatusRef = React.useRef<string | undefined>(undefined);
 
@@ -296,17 +296,8 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         taskMeta: { task_id: taskId, role: "planner" },
       }));
       dispatch(addPlannerChat({ taskId, chatId }));
-
-      const match = chatId.match(/-(\d+)$/);
-      if (match) {
-        const num = parseInt(match[1], 10);
-        if (num > plannerCountRef.current) {
-          plannerCountRef.current = num;
-        }
-      }
     }
 
-    // Auto-select first planner if none active
     if (savedPlanners.length > 0 && !activeChat) {
       const firstPlanner = savedPlanners[0];
       dispatch(setTaskActiveChat({ taskId, activeChat: { type: "planner", chatId: firstPlanner } }));
@@ -368,24 +359,24 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     setSelectedCard(card);
   }, []);
 
-  const handleNewPlanner = useCallback(() => {
-    plannerCountRef.current += 1;
-    const newChatId = `planner-${taskId}-${plannerCountRef.current}`;
-    dispatch(createChatWithId({
-      id: newChatId,
-      title: "",
-      isTaskChat: true,
-      mode: "TASK_PLANNER",
-      taskMeta: { task_id: taskId, role: "planner" },
-    }));
-    dispatch(addPlannerChat({ taskId, chatId: newChatId }));
-    dispatch(setTaskActiveChat({ taskId, activeChat: { type: "planner", chatId: newChatId } }));
-    void updateChatParams(
-      newChatId,
-      { mode: "TASK_PLANNER", task_meta: { task_id: taskId, role: "planner" } },
-      config.lspPort,
-    );
-  }, [dispatch, taskId, config.lspPort]);
+  const handleNewPlanner = useCallback(async () => {
+    if (isCreatingPlanner) return;
+    try {
+      const result = await createPlannerChat(taskId).unwrap();
+      const newChatId = result.chat_id;
+      dispatch(createChatWithId({
+        id: newChatId,
+        title: "",
+        isTaskChat: true,
+        mode: "TASK_PLANNER",
+        taskMeta: { task_id: taskId, role: "planner" },
+      }));
+      dispatch(addPlannerChat({ taskId, chatId: newChatId }));
+      dispatch(setTaskActiveChat({ taskId, activeChat: { type: "planner", chatId: newChatId } }));
+    } catch (e) {
+      console.error("Failed to create planner chat:", e);
+    }
+  }, [dispatch, taskId, createPlannerChat, isCreatingPlanner]);
 
   const handleRemovePlanner = useCallback((chatId: string) => {
     dispatch(removePlannerChat({ taskId, chatId }));

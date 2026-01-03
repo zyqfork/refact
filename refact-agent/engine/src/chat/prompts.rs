@@ -427,22 +427,24 @@ async fn gather_and_inject_system_context(
     if !context.instruction_files.is_empty() {
         match create_instruction_files_message(&context.instruction_files).await {
             Ok(instr_msg) => {
-                let first_user_pos = messages.iter().position(|m| m.role == "user");
+                let insert_pos = messages
+                    .iter()
+                    .position(|m| m.role == "user" || m.role == "assistant")
+                    .unwrap_or(messages.len());
 
-                if let Some(pos) = first_user_pos {
-                    stream_back_to_user.push_in_json(serde_json::json!(instr_msg));
-                    messages.insert(pos, instr_msg);
+                stream_back_to_user.push_in_json(serde_json::json!(instr_msg));
+                messages.insert(insert_pos, instr_msg);
 
-                    tracing::info!(
-                        "Injected {} instruction files before first user message: {:?}",
-                        context.instruction_files.len(),
-                        context
-                            .instruction_files
-                            .iter()
-                            .map(|f| &f.file_name)
-                            .collect::<Vec<_>>()
-                    );
-                }
+                tracing::info!(
+                    "Injected {} instruction files at position {}: {:?}",
+                    context.instruction_files.len(),
+                    insert_pos,
+                    context
+                        .instruction_files
+                        .iter()
+                        .map(|f| &f.file_name)
+                        .collect::<Vec<_>>()
+                );
             }
             Err(e) => {
                 tracing::warn!("Failed to create instruction files message: {}", e);
@@ -452,17 +454,19 @@ async fn gather_and_inject_system_context(
 
     if !context.memories.is_empty() {
         if let Some(memories_msg) = create_memories_message(&context.memories) {
-            let first_user_pos = messages.iter().position(|m| m.role == "user");
+            let insert_pos = messages
+                .iter()
+                .position(|m| m.role == "user" || m.role == "assistant")
+                .unwrap_or(messages.len());
 
-            if let Some(pos) = first_user_pos {
-                stream_back_to_user.push_in_json(serde_json::json!(memories_msg));
-                messages.insert(pos, memories_msg);
+            stream_back_to_user.push_in_json(serde_json::json!(memories_msg));
+            messages.insert(insert_pos, memories_msg);
 
-                tracing::info!(
-                    "Injected {} memories before first user message",
-                    context.memories.len()
-                );
-            }
+            tracing::info!(
+                "Injected {} memories at position {}",
+                context.memories.len(),
+                insert_pos
+            );
         }
     }
 

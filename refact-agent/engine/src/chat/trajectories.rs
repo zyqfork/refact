@@ -11,6 +11,7 @@ use tokio::sync::{Mutex as AMutex, RwLock as ARwLock, broadcast};
 use tokio::fs;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent};
@@ -200,6 +201,11 @@ pub async fn load_trajectory_for_chat(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
     fix_tool_call_indexes(&mut messages);
+    for msg in &mut messages {
+        if msg.message_id.is_empty() {
+            msg.message_id = Uuid::new_v4().to_string();
+        }
+    }
 
     let task_meta: Option<super::types::TaskMeta> = t
         .get("task_meta")
@@ -302,7 +308,7 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
 
     let now = chrono::Utc::now().to_rfc3339();
     let greeting_msg = ChatMessage {
-        message_id: String::new(),
+        message_id: Uuid::new_v4().to_string(),
         role: "assistant".to_string(),
         content: ChatContent::SimpleText(greeting.to_string()),
         finish_reason: Some("stop".to_string()),
