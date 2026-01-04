@@ -32,15 +32,16 @@ use super::types::*;
 use super::trajectories::maybe_save_trajectory;
 
 async fn get_effective_n_ctx(gcx: Arc<ARwLock<GlobalContext>>, thread: &ThreadParams) -> usize {
-    if let Some(cap) = thread.context_tokens_cap {
-        return cap;
-    }
-    match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
+    let model_n_ctx = match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
         Ok(caps) => match crate::caps::resolve_chat_model(caps, &thread.model) {
             Ok(model_rec) => model_rec.base.n_ctx,
-            Err(_) => 128000,
+            Err(_) => 32000,
         },
-        Err(_) => 128000,
+        Err(_) => 32000,
+    };
+    match thread.context_tokens_cap {
+        Some(cap) if cap > 0 => cap.min(model_n_ctx),
+        _ => model_n_ctx,
     }
 }
 
@@ -94,11 +95,6 @@ fn spawn_subchat_bridge(
                     let subchat_id = value.get("subchat_id").and_then(|v| v.as_str());
 
                     if let (Some(tool_call_id), Some(subchat_id)) = (tool_call_id, subchat_id) {
-                        if subchat_id == "1337" {
-                            info!("spawn_subchat_bridge: skipping 1337 message");
-                            continue;
-                        }
-
                         info!("spawn_subchat_bridge: emitting SubchatUpdate for tool_call_id={}, subchat_id={}", tool_call_id, subchat_id);
 
                         let mut attached_files: Vec<String> = value

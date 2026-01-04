@@ -219,9 +219,10 @@ pub async fn process_command_queue(
             let is_busy = state == SessionState::Generating
                 || state == SessionState::ExecutingTools;
 
+            let notify = session.queue_notify.clone();
+            let waiter = notify.notified();
+
             if is_busy {
-                let notify = session.queue_notify.clone();
-                let waiter = notify.notified();
                 drop(session);
                 waiter.await;
                 continue;
@@ -233,8 +234,6 @@ pub async fn process_command_queue(
                     session.emit_queue_update();
                     cmd
                 } else {
-                    let notify = session.queue_notify.clone();
-                    let waiter = notify.notified();
                     drop(session);
                     waiter.await;
                     continue;
@@ -245,14 +244,11 @@ pub async fn process_command_queue(
                     session.emit_queue_update();
                     cmd
                 } else {
-                    let notify = session.queue_notify.clone();
-                    let waiter = notify.notified();
                     drop(session);
                     waiter.await;
                     continue;
                 }
             } else if session.command_queue.is_empty() {
-                let notify = session.queue_notify.clone();
                 let closed = session.closed;
                 drop(session);
 
@@ -267,9 +263,9 @@ pub async fn process_command_queue(
                     return;
                 }
                 if session.command_queue.is_empty() {
-                    let waiter = notify.notified();
+                    let waiter2 = notify.notified();
                     drop(session);
-                    waiter.await;
+                    waiter2.await;
                     continue;
                 }
                 drop(session);

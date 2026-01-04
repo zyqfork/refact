@@ -21,8 +21,6 @@ use super::prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messa
 use super::stream_core::{run_llm_stream, StreamRunParams, StreamCollector, normalize_tool_call};
 use super::queue::inject_priority_messages_if_any;
 
-pub const MAX_AGENT_CYCLES: usize = 50;
-
 pub fn parse_chat_mode(mode: &str) -> ChatMode {
     match mode.to_uppercase().as_str() {
         "AGENT" => ChatMode::AGENT,
@@ -30,7 +28,7 @@ pub fn parse_chat_mode(mode: &str) -> ChatMode {
         "EXPLORE" => ChatMode::EXPLORE,
         "CONFIGURE" => ChatMode::CONFIGURE,
         "PROJECT_SUMMARY" => ChatMode::PROJECT_SUMMARY,
-        "TASK_PLANNER" | "TASK_ORCHESTRATOR" => ChatMode::TASK_PLANNER,
+        "TASK_PLANNER" => ChatMode::TASK_PLANNER,
         "TASK_AGENT" => ChatMode::TASK_AGENT,
         _ => ChatMode::AGENT,
     }
@@ -41,12 +39,8 @@ pub fn start_generation(
     session_arc: Arc<AMutex<ChatSession>>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
-        for cycle in 0..MAX_AGENT_CYCLES {
-            let (messages, thread, chat_id) = {
+             let (messages, thread, chat_id) = {
                 let session = session_arc.lock().await;
-                if session.abort_flag.load(Ordering::SeqCst) {
-                    break;
-                }
                 (
                     session.messages.clone(),
                     session.thread.clone(),
@@ -106,12 +100,7 @@ pub fn start_generation(
                 }
                 ToolStepOutcome::Paused => break,
                 ToolStepOutcome::Continue => {
-                    if inject_priority_messages_if_any(gcx.clone(), session_arc.clone()).await {
-                        // Priority messages injected, continue generation
-                    }
-                    if cycle == MAX_AGENT_CYCLES - 1 {
-                        warn!("Agent reached max cycles ({}), stopping", MAX_AGENT_CYCLES);
-                    }
+                    inject_priority_messages_if_any(gcx.clone(), session_arc.clone()).await;
                 }
             }
         }
@@ -143,15 +132,15 @@ pub async fn run_llm_generation(
             .map(|tool| tool.tool_description())
             .collect();
 
-        if thread.tool_use.contains(',') {
+        if thread.tool_use.is_empty() || thread.tool_use == "agent" {
+            all_tools
+        } else {
             let allowed: std::collections::HashSet<String> = thread.tool_use
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
             all_tools.into_iter().filter(|t| allowed.contains(&t.name)).collect()
-        } else {
-            all_tools
         }
     };
 
@@ -411,34 +400,37 @@ async fn run_streaming_generation(
     };
 
     struct SessionCollector {
-        session_arc: Arc<AMutex<ChatSession>>,
+        pending_ops: Vec<Vec<DeltaOp>>,
+        pending_usage: Option<ChatUsage>,
     }
 
     impl StreamCollector for SessionCollector {
         fn on_delta_ops(&mut self, _choice_idx: usize, ops: Vec<DeltaOp>) {
-            let session_arc = self.session_arc.clone();
-            tokio::spawn(async move {
-                let mut session = session_arc.lock().await;
-                session.emit_stream_delta(ops);
-            });
+            self.pending_ops.push(ops);
         }
 
         fn on_usage(&mut self, usage: &ChatUsage) {
-            let session_arc = self.session_arc.clone();
-            let usage = usage.clone();
-            tokio::spawn(async move {
-                let mut session = session_arc.lock().await;
-                session.draft_usage = Some(usage);
-            });
+            self.pending_usage = Some(usage.clone());
         }
 
         fn on_finish(&mut self, _choice_idx: usize, _finish_reason: Option<String>) {}
     }
 
     let mut collector = SessionCollector {
-        session_arc: session_arc.clone(),
+        pending_ops: Vec::new(),
+        pending_usage: None,
     };
     let results = run_llm_stream(gcx.clone(), params, 1, &mut collector).await?;
+
+    {
+        let mut session = session_arc.lock().await;
+        for ops in collector.pending_ops {
+            session.emit_stream_delta(ops);
+        }
+        if let Some(usage) = collector.pending_usage {
+            session.draft_usage = Some(usage);
+        }
+    }
 
     let result = results.into_iter().next().unwrap_or_default();
 

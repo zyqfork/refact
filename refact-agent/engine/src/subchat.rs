@@ -44,6 +44,7 @@ pub struct SubchatConfig {
 }
 
 impl SubchatConfig {
+    #[allow(dead_code)]
     pub fn stateless() -> Self {
         Self {
             max_steps: 10,
@@ -52,6 +53,7 @@ impl SubchatConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stateful(parent_id: Option<String>) -> Self {
         Self {
             max_steps: 10,
@@ -67,6 +69,7 @@ impl SubchatConfig {
 pub struct SubchatResult {
     pub messages: Vec<ChatMessage>,
     pub usage: ChatUsage,
+    #[allow(dead_code)]
     pub chat_id: Option<String>,
 }
 
@@ -135,11 +138,8 @@ async fn run_subchat_stateless(
 
         current_messages = results.into_iter().next().unwrap_or(current_messages);
 
-        let last = current_messages.last();
-        if let Some(m) = last {
-            if m.role == "assistant" && m.tool_calls.is_none() {
-                break;
-            }
+        if has_final_answer(&current_messages) {
+            break;
         }
     }
 
@@ -231,6 +231,7 @@ async fn run_subchat_stateful(
     let start = tokio::time::Instant::now();
     let mut saw_work = false;
     let mut tool_phases = 0usize;
+    let mut prev_state = SessionState::Idle;
 
     loop {
         if start.elapsed() > timeout {
@@ -244,12 +245,13 @@ async fn run_subchat_stateful(
                         saw_work = true;
                     }
                     ChatEvent::RuntimeUpdated { state, queue_size, error, .. } => {
-                        if state == SessionState::ExecutingTools {
+                        if state == SessionState::ExecutingTools && prev_state != SessionState::ExecutingTools {
                             tool_phases += 1;
                             if tool_phases > config.max_steps {
                                 return Err(format!("Subchat {} exceeded max_steps ({})", chat_id, config.max_steps));
                             }
                         }
+                        prev_state = state;
                         if state != SessionState::Idle || queue_size > 0 {
                             saw_work = true;
                         }
@@ -285,6 +287,13 @@ async fn run_subchat_stateful(
             }
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 saw_work = true;
+                let session = session_arc.lock().await;
+                let state = session.runtime.state;
+                let queue_size = session.command_queue.len();
+                if state == SessionState::Idle && queue_size == 0 && has_final_answer(&session.messages) {
+                    info!("Subchat {} completed (detected after lag)", chat_id);
+                    break;
+                }
             }
             Err(broadcast::error::RecvError::Closed) => {
                 return Err(format!("Subchat {} event channel closed unexpectedly", chat_id));
@@ -299,6 +308,7 @@ async fn run_subchat_stateful(
             .fold(ChatUsage::default(), |mut acc, u| {
                 acc.prompt_tokens += u.prompt_tokens;
                 acc.completion_tokens += u.completion_tokens;
+                acc.total_tokens += u.total_tokens;
                 acc
             });
         (session.messages.clone(), total_usage)
@@ -379,12 +389,11 @@ async fn execute_pending_tool_calls(
         _ => return Ok(messages),
     };
 
-    let allow_all = tools_subset.is_empty();
     let mut allowed: Vec<ChatToolCall> = vec![];
     let mut denied_msgs: Vec<ChatMessage> = vec![];
 
     for tc in tool_calls.iter() {
-        if !allow_all && !tools_subset.contains(&tc.function.name) {
+        if !tools_subset.is_empty() && !tools_subset.contains(&tc.function.name) {
             denied_msgs.push(ChatMessage {
                 message_id: Uuid::new_v4().to_string(),
                 role: "tool".to_string(),
@@ -468,9 +477,9 @@ async fn subchat_stream(
     reasoning_effort: Option<ReasoningEffort>,
     only_deterministic_messages: bool,
 ) -> Result<Vec<Vec<ChatMessage>>, String> {
-    let gcx = {
+    let (gcx, effective_n_ctx) = {
         let ccx_locked = ccx.lock().await;
-        ccx_locked.global_context.clone()
+        (ccx_locked.global_context.clone(), ccx_locked.n_ctx)
     };
 
     let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
@@ -481,12 +490,14 @@ async fn subchat_stream(
     let tokenizer_arc = crate::tokens::cached_tokenizer(gcx.clone(), &model_rec.base).await?;
     let t = HasTokenizerAndEot::new(tokenizer_arc);
 
+    let capped_n_ctx = effective_n_ctx.min(model_rec.base.n_ctx);
+
     let meta = ChatMeta {
         chat_id: Uuid::new_v4().to_string(),
         chat_mode: ChatMode::AGENT,
         chat_remote: false,
         current_config_file: String::new(),
-        context_tokens_cap: Some(model_rec.base.n_ctx),
+        context_tokens_cap: Some(capped_n_ctx),
         include_project_info: true,
         request_attempt_id: Uuid::new_v4().to_string(),
     };
@@ -738,12 +749,11 @@ pub async fn subchat(
         // keep session
         let mut step_n = 0;
         loop {
-            let last_message = messages.last().unwrap();
-            if last_message.role == "assistant" && last_message.tool_calls.is_none() {
-                // don't have tool calls, exit the loop unconditionally, model thinks it has finished the work
+            if has_final_answer(&messages) {
                 break;
             }
-            if last_message.role == "assistant" && last_message.tool_calls.is_some() {
+            let last_message = messages.last().unwrap();
+            if last_message.role == "assistant" && last_message.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) {
                 // have tool calls, let's see if we need to wrap up or not
                 if step_n >= wrap_up_depth {
                     break;

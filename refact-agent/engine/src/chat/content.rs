@@ -21,9 +21,6 @@ pub fn validate_content_with_attachments(
             );
         }
     } else if let Some(arr) = content.as_array() {
-        if arr.is_empty() {
-            return Err("Content array is empty".to_string());
-        }
         for (idx, item) in arr.iter().enumerate() {
             let item_type = item
                 .get("type")
@@ -202,11 +199,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_validate_content_empty_array_error() {
+    fn test_validate_content_empty_array_returns_empty() {
         let content = json!([]);
         let result = validate_content_with_attachments(&content, &[]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty"));
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ChatContent::SimpleText(s) => assert!(s.is_empty()),
+            _ => panic!("Expected empty SimpleText"),
+        }
     }
 
     #[test]

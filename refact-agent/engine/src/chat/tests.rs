@@ -1180,15 +1180,6 @@ mod tests {
     }
 
     #[test]
-    fn test_max_agent_cycles_constant() {
-        use crate::chat::generation::MAX_AGENT_CYCLES;
-
-        assert!(MAX_AGENT_CYCLES > 0);
-        assert!(MAX_AGENT_CYCLES <= 100);
-        assert_eq!(MAX_AGENT_CYCLES, 50);
-    }
-
-    #[test]
     fn test_iterative_loop_simulation() {
         use crate::chat::tools::ToolStepOutcome;
 

@@ -74,6 +74,7 @@ fn recalculate_token_limits(
     (occupied_tokens, tokens_limit)
 }
 
+#[allow(dead_code)]
 fn compress_message_at_index(
     t: &HasTokenizerAndEot,
     mutable_messages: &mut Vec<ChatMessage>,
@@ -181,6 +182,7 @@ fn compress_message_at_index(
     Ok(token_counts[index])
 }
 
+#[allow(dead_code)]
 fn process_compression_stage(
     t: &HasTokenizerAndEot,
     mutable_messages: &mut Vec<ChatMessage>,

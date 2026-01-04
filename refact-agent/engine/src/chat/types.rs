@@ -373,8 +373,8 @@ fn extract_preview(content: &serde_json::Value) -> String {
     } else {
         String::new()
     };
-    if text.len() > MAX_PREVIEW {
-        format!("{}…", &text[..MAX_PREVIEW])
+    if text.chars().count() > MAX_PREVIEW {
+        format!("{}…", text.chars().take(MAX_PREVIEW).collect::<String>())
     } else {
         text
     }

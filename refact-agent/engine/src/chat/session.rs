@@ -238,6 +238,7 @@ impl ChatSession {
             warn!("Attempted to start stream while already executing tools or draft exists");
             return None;
         }
+        self.abort_flag.store(false, Ordering::SeqCst);
         let message_id = Uuid::new_v4().to_string();
         self.draft_message = Some(ChatMessage {
             message_id: message_id.clone(),
