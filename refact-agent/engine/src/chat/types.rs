@@ -7,13 +7,14 @@ use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
 use crate::call_validation::{ChatMessage, ChatUsage};
+use super::config::{limits, timeouts, presentation};
 
-pub const MAX_QUEUE_SIZE: usize = 100;
-pub const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
-pub const SESSION_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-pub const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-pub const STREAM_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-pub const STREAM_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(2);
+pub fn max_queue_size() -> usize { limits().max_queue_size }
+pub fn session_idle_timeout() -> std::time::Duration { timeouts().session_idle }
+pub fn session_cleanup_interval() -> std::time::Duration { timeouts().session_cleanup_interval }
+pub fn stream_idle_timeout() -> std::time::Duration { timeouts().stream_idle }
+pub fn stream_total_timeout() -> std::time::Duration { timeouts().stream_total }
+pub fn stream_heartbeat() -> std::time::Duration { timeouts().stream_heartbeat }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -357,7 +358,7 @@ impl CommandRequest {
 }
 
 fn extract_preview(content: &serde_json::Value) -> String {
-    const MAX_PREVIEW: usize = 120;
+    let max_preview = presentation().preview_chars;
     let text = if let Some(s) = content.as_str() {
         s.to_string()
     } else if let Some(arr) = content.as_array() {
@@ -373,8 +374,8 @@ fn extract_preview(content: &serde_json::Value) -> String {
     } else {
         String::new()
     };
-    if text.chars().count() > MAX_PREVIEW {
-        format!("{}…", text.chars().take(MAX_PREVIEW).collect::<String>())
+    if text.chars().count() > max_preview {
+        format!("{}…", text.chars().take(max_preview).collect::<String>())
     } else {
         text
     }

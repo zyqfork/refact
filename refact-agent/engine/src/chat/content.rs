@@ -3,8 +3,7 @@ use tracing::warn;
 use crate::call_validation::ChatContent;
 use crate::scratchpads::multimodality::MultimodalElement;
 use crate::scratchpads::scratchpad_utils::parse_image_b64_from_image_url_openai;
-
-const MAX_IMAGES_PER_MESSAGE: usize = 5;
+use super::config::limits;
 
 pub fn validate_content_with_attachments(
     content: &serde_json::Value,
@@ -39,10 +38,10 @@ pub fn validate_content_with_attachments(
                 }
                 "image_url" => {
                     image_count += 1;
-                    if image_count > MAX_IMAGES_PER_MESSAGE {
+                    if image_count > limits().max_images_per_message {
                         return Err(format!(
                             "Too many images: max {} allowed",
-                            MAX_IMAGES_PER_MESSAGE
+                            limits().max_images_per_message
                         ));
                     }
                     let url = item
@@ -76,10 +75,10 @@ pub fn validate_content_with_attachments(
             .and_then(|u| u.as_str())
             .ok_or_else(|| format!("Attachment {} missing image_url.url", idx))?;
         image_count += 1;
-        if image_count > MAX_IMAGES_PER_MESSAGE {
+        if image_count > limits().max_images_per_message {
             return Err(format!(
                 "Too many images: max {} allowed",
-                MAX_IMAGES_PER_MESSAGE
+                limits().max_images_per_message
             ));
         }
         let (image_type, _, image_content) = parse_image_b64_from_image_url_openai(url)

@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::Local;
+
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
 
@@ -16,13 +16,12 @@ use crate::{
     },
     call_validation::{
         ChatContent, ChatMessage, ChatUsage, ContextEnum, ContextFile, PostprocessSettings,
-        SubchatParameters,
     },
     files_correction::{get_project_dirs, paths_from_anywhere},
     files_in_workspace::{get_file_text_from_memory_or_disk, ls_files},
     global_context::GlobalContext,
     postprocessing::pp_context_files::postprocess_context_files,
-    subchat::subchat,
+    subchat::{run_subchat, resolve_subchat_config, resolve_subchat_model, WrapUpConfig},
     tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType},
 };
 use crate::caps::resolve_chat_model;
@@ -400,20 +399,20 @@ impl ToolCreateMemoryBank {
 
 async fn execute_memory_bank_exploration(
     gcx: Arc<ARwLock<GlobalContext>>,
-    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
-    params: SubchatParameters,
+    subchat_tx: Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
     tool_call_id: String,
 ) -> Result<(String, ChatUsage), String> {
     let mut state = ExplorationState::new(gcx.clone()).await?;
     let mut step = 0;
     let mut usage_collector = ChatUsage::default();
-    let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
 
     let total_dirs = state.to_explore.len();
 
+    let params = crate::subchat::resolve_subchat_params(gcx.clone(), "create_memory_bank").await?;
+    let model_id = resolve_subchat_model(gcx.clone(), &params).await?;
+
     while state.has_unexplored_targets() && step < MAX_EXPLORATION_STEPS {
         step += 1;
-        let log_prefix = Local::now().format("%Y%m%d-%H%M%S").to_string();
         if let Some(target) = state.get_next_target() {
             tracing::info!(
                 target = "memory_bank",
@@ -437,7 +436,7 @@ async fn execute_memory_bank_exploration(
                 gcx.clone(),
                 target.target_name.clone(),
                 params.subchat_tokens_for_rag,
-                params.subchat_model.clone(),
+                model_id.clone(),
             )
             .await
             .map_err(|e| {
@@ -455,28 +454,29 @@ async fn execute_memory_bank_exploration(
                 ToolCreateMemoryBank::build_step_prompt(&state, &target, file_context.as_ref()),
             );
 
-            let subchat_result = subchat(
-                ccx_subchat.clone(),
-                params.subchat_model.as_str(),
-                vec![step_msg],
-                vec!["knowledge".to_string(), "create_knowledge".to_string()],
-                8,
-                params.subchat_max_new_tokens,
-                MB_EXPERT_WRAP_UP,
-                1,
-                None,
-                None,
-                Some(tool_call_id.clone()),
-                Some(format!(
-                    "{log_prefix}-memory-bank-dir-{}",
-                    target.target_name.replace("/", "_")
-                )),
-                Some(false),
-            )
-            .await?[0]
-                .clone();
+            let wrap_up = WrapUpConfig {
+                depth: 8,
+                tokens_cnt: params.subchat_max_new_tokens,
+                prompt: MB_EXPERT_WRAP_UP.to_string(),
+            };
 
-            if let Some(last_msg) = subchat_result.last() {
+            let config = resolve_subchat_config(
+                gcx.clone(),
+                "create_memory_bank",
+                false,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["knowledge".to_string(), "create_knowledge".to_string()]),
+                8,
+                false,
+                Some(wrap_up),
+            ).await?;
+
+            let result = run_subchat(gcx.clone(), vec![step_msg], config).await?;
+
+            if let Some(last_msg) = result.messages.last() {
                 crate::tools::tools_execute::update_usage_from_message(
                     &mut usage_collector,
                     last_msg,
@@ -490,6 +490,10 @@ async fn execute_memory_bank_exploration(
                     "Updated token usage"
                 );
             }
+
+            usage_collector.prompt_tokens += result.usage.prompt_tokens;
+            usage_collector.completion_tokens += result.usage.completion_tokens;
+            usage_collector.total_tokens += result.usage.total_tokens;
 
             state.mark_explored(target.clone());
             let remaining = state.to_explore.len();
@@ -532,36 +536,16 @@ impl Tool for ToolCreateMemoryBank {
         tool_call_id: &String,
         _args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let gcx = ccx.lock().await.global_context.clone();
-        let params: SubchatParameters =
-            crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "create_memory_bank")
-                .await?;
-
-        let ccx_subchat = {
+        let (gcx, subchat_tx) = {
             let ccx_lock = ccx.lock().await;
-            let mut ctx = AtCommandsContext::new(
-                ccx_lock.global_context.clone(),
-                params.subchat_n_ctx,
-                25,
-                false,
-                ccx_lock.messages.clone(),
-                ccx_lock.chat_id.clone(),
-                ccx_lock.should_execute_remotely,
-                ccx_lock.current_model.clone(),
-                ccx_lock.task_meta.clone(), None,
-            )
-            .await;
-            ctx.subchat_tx = ccx_lock.subchat_tx.clone();
-            ctx.subchat_rx = ccx_lock.subchat_rx.clone();
-            Arc::new(AMutex::new(ctx))
+            (ccx_lock.global_context.clone(), ccx_lock.subchat_tx.clone())
         };
 
         tracing::info!("Starting memory bank creation");
 
         let (summary, usage_collector) = execute_memory_bank_exploration(
             gcx,
-            ccx_subchat,
-            params,
+            subchat_tx,
             tool_call_id.clone(),
         ).await?;
 

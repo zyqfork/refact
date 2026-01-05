@@ -18,8 +18,7 @@ use super::types::ThreadParams;
 use super::history_limit::fix_and_limit_messages_history;
 use super::prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messages;
 use super::openai_convert::convert_messages_to_openai_format;
-
-const MIN_BUDGET_TOKENS: usize = 1024;
+use super::config::tokens;
 
 pub struct PreparedChat {
     pub prompt: String,
@@ -65,14 +64,19 @@ pub async fn prepare_chat_passthrough(
         .map_err(|e| e.message)?;
     let model_record = resolve_chat_model(caps, model_id)?;
 
+    let model_n_ctx = if model_record.base.n_ctx > 0 {
+        model_record.base.n_ctx
+    } else {
+        tokens().default_n_ctx
+    };
     let effective_n_ctx = if let Some(cap) = meta.context_tokens_cap {
         if cap == 0 {
-            model_record.base.n_ctx
+            model_n_ctx
         } else {
-            cap.min(model_record.base.n_ctx)
+            cap.min(model_n_ctx)
         }
     } else {
-        model_record.base.n_ctx
+        model_n_ctx
     };
 
     // 2. Adapt sampling parameters for reasoning models BEFORE history limiting
@@ -219,8 +223,9 @@ fn adapt_sampling_for_reasoning_models(
             sampling_parameters.temperature = model_record.default_temperature;
         }
         "anthropic" => {
-            let budget_tokens = if sampling_parameters.max_new_tokens > MIN_BUDGET_TOKENS {
-                (sampling_parameters.max_new_tokens / 2).max(MIN_BUDGET_TOKENS)
+            let min_budget = tokens().min_budget_tokens;
+            let budget_tokens = if sampling_parameters.max_new_tokens > min_budget {
+                (sampling_parameters.max_new_tokens / 2).max(min_budget)
             } else {
                 0
             };
@@ -453,7 +458,7 @@ mod tests {
         let model = make_model_record(Some("anthropic"));
         adapt_sampling_for_reasoning_models(&mut params, &model);
         let thinking = params.thinking.unwrap();
-        assert_eq!(thinking["budget_tokens"], MIN_BUDGET_TOKENS);
+        assert_eq!(thinking["budget_tokens"], tokens().min_budget_tokens);
     }
 
     #[test]

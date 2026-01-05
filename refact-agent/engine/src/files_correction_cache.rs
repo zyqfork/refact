@@ -219,15 +219,6 @@ impl PathTrie {
         nodes
     }
 
-    #[allow(dead_code)]
-    fn count_matches(&self, path: &PathBuf) -> usize {
-        let mut counter = 0;
-        for (node, _) in self._search_for_nodes(path) {
-            counter += node.count;
-        }
-        counter
-    }
-
     pub fn find_matches(&self, path: &PathBuf) -> Vec<PathBuf> {
         let mut result = vec![];
         for (root_node, relative_path) in self._search_for_nodes(path) {
@@ -256,27 +247,6 @@ impl PathTrie {
             }
         }
         result
-    }
-
-    // Unique shortest possible postfix of the path
-    #[allow(dead_code)]
-    pub fn shortest_path(&self, path: &PathBuf) -> Option<PathBuf> {
-        let components: Vec<String> = path
-            .components()
-            .map(|comp| comp.as_os_str().to_string_lossy().to_string())
-            .collect();
-
-        for i in (0..components.len()).rev() {
-            let mut partial_path = PathBuf::new();
-            for j in i..components.len() {
-                partial_path.push(&components[j]);
-            }
-            let matches = self.find_matches(&partial_path);
-            if matches.len() == 1 {
-                return Some(partial_path);
-            }
-        }
-        None
     }
 
     // Short path postfix (relative to shortest root_path)

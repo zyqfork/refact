@@ -7,7 +7,7 @@ use tokio::sync::Mutex as AMutex;
 use tokio::sync::RwLock as ARwLock;
 use async_trait::async_trait;
 use axum::http::StatusCode;
-use crate::subchat::subchat_single;
+use crate::subchat::{run_subchat_once, resolve_subchat_params, resolve_subchat_model};
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
 };
@@ -104,17 +104,28 @@ async fn _make_prompt(
     let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
         .await
         .map_err(|x| x.message)?;
-    let model_rec = resolve_chat_model(caps, &subchat_params.subchat_model)?;
+    let model_id = resolve_subchat_model(gcx.clone(), subchat_params).await?;
+    let model_rec = resolve_chat_model(caps, &model_id)?;
     let tokenizer = crate::tokens::cached_tokenizer(gcx.clone(), &model_rec.base)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))
         .map_err(|x| x.message)?;
     let tokens_extra_budget =
         (subchat_params.subchat_n_ctx as f32 * TOKENS_EXTRA_BUDGET_PERCENT) as usize;
-    let mut tokens_budget: i64 = (subchat_params.subchat_n_ctx
-        - subchat_params.subchat_max_new_tokens
-        - subchat_params.subchat_tokens_for_rag
-        - tokens_extra_budget) as i64;
+    let required_tokens = subchat_params.subchat_max_new_tokens
+        + subchat_params.subchat_tokens_for_rag
+        + tokens_extra_budget;
+    if required_tokens >= subchat_params.subchat_n_ctx {
+        return Err(format!(
+            "Bad subchat budget for strategic_planning: max_new_tokens({}) + tokens_for_rag({}) + extra({}) = {} >= n_ctx({})",
+            subchat_params.subchat_max_new_tokens,
+            subchat_params.subchat_tokens_for_rag,
+            tokens_extra_budget,
+            required_tokens,
+            subchat_params.subchat_n_ctx
+        ));
+    }
+    let mut tokens_budget: i64 = (subchat_params.subchat_n_ctx - required_tokens) as i64;
     let final_message = problem_statement.to_string();
     tokens_budget -= count_text_tokens_with_fallback(tokenizer.clone(), &final_message) as i64;
     let mut context = "".to_string();
@@ -208,55 +219,31 @@ async fn _make_prompt(
 }
 
 async fn _execute_subchat_iteration(
-    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
-    subchat_params: &SubchatParameters,
+    gcx: Arc<ARwLock<GlobalContext>>,
     history: Vec<ChatMessage>,
-    iter_max_new_tokens: usize,
-    usage_collector: &mut ChatUsage,
-    tool_call_id: &String,
-    log_suffix: &str,
-    log_prefix: &str,
-) -> Result<(Vec<ChatMessage>, ChatMessage), String> {
-    let choices = subchat_single(
-        ccx_subchat.clone(),
-        subchat_params.subchat_model.as_str(),
-        history,
-        Some(vec![]),
-        None,
-        false,
-        subchat_params.subchat_temperature,
-        Some(iter_max_new_tokens),
-        1,
-        subchat_params.subchat_reasoning_effort.clone(),
-        false,
-        Some(usage_collector),
-        Some(tool_call_id.clone()),
-        Some(format!("{log_prefix}-strategic-planning-{log_suffix}")),
-    )
-    .await?;
+) -> Result<(Vec<ChatMessage>, ChatMessage, ChatUsage), String> {
+    let result = run_subchat_once(gcx, "strategic_planning", history).await?;
 
-    let session = choices.into_iter().next().unwrap();
-    let reply = session.last().unwrap().clone();
-    crate::tools::tools_execute::update_usage_from_message(usage_collector, &reply);
+    let reply = result.messages.last().cloned()
+        .ok_or("No response from strategic planning")?;
 
-    Ok((session, reply))
+    Ok((result.messages, reply, result.usage))
 }
 
 async fn execute_strategic_planning(
     gcx: Arc<ARwLock<GlobalContext>>,
     ccx_subchat: Arc<AMutex<AtCommandsContext>>,
-    subchat_params: SubchatParameters,
     important_paths: Vec<PathBuf>,
     external_messages: Vec<ChatMessage>,
     tool_call_id: String,
-    log_prefix: String,
 ) -> Result<(String, ChatUsage), String> {
     let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
-    let mut usage_collector = ChatUsage::default();
 
     send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
     let cancel_token = tokio_util::sync::CancellationToken::new();
     spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone());
+
+    let subchat_params = resolve_subchat_params(gcx.clone(), "strategic_planning").await?;
 
     let ccx_for_prompt = {
         let ccx_lock = ccx_subchat.lock().await;
@@ -284,21 +271,11 @@ async fn execute_strategic_planning(
     let history: Vec<ChatMessage> = vec![ChatMessage::new("user".to_string(), prompt)];
 
     tracing::info!("FIRST ITERATION: Get the initial solution");
-    let result = _execute_subchat_iteration(
-        ccx_subchat.clone(),
-        &subchat_params,
-        history.clone(),
-        subchat_params.subchat_max_new_tokens / 3,
-        &mut usage_collector,
-        &tool_call_id,
-        "get-initial-solution",
-        &log_prefix,
-    )
-    .await;
+    let result = _execute_subchat_iteration(gcx.clone(), history.clone()).await;
 
     cancel_token.cancel();
 
-    let (_, initial_solution) = result?;
+    let (_, initial_solution, usage_collector) = result?;
     let solution_content = format!(
         "# Solution\n{}",
         initial_solution.content.content_text_only()
@@ -319,22 +296,7 @@ async fn execute_strategic_planning(
         base_title: Some("Strategic Plan".to_string()),
     };
 
-    let ccx_for_memory = {
-        let ccx_lock = ccx_subchat.lock().await;
-        Arc::new(AMutex::new(AtCommandsContext::new(
-            gcx.clone(),
-            subchat_params.subchat_n_ctx,
-            0,
-            false,
-            vec![],
-            ccx_lock.chat_id.clone(),
-            ccx_lock.should_execute_remotely,
-            ccx_lock.current_model.clone(),
-            ccx_lock.task_meta.clone(), None,
-        ).await))
-    };
-
-    let memory_note = match memories_add_enriched(ccx_for_memory, &solution_content, enrichment_params).await {
+    let memory_note = match memories_add_enriched(ccx_subchat.clone(), &solution_content, enrichment_params).await {
         Ok(path) => {
             tracing::info!(
                 "Created enriched memory from strategic planning: {:?}",
@@ -434,43 +396,19 @@ impl Tool for ToolStrategicPlanning {
             return Err("No valid files resolved from `important_paths`. Please provide existing file paths.".to_string());
         }
 
-        let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let subchat_params: SubchatParameters =
-            crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "strategic_planning")
-                .await?;
         let external_messages = {
             let ccx_lock = ccx.lock().await;
             ccx_lock.messages.clone()
-        };
-        let ccx_subchat = {
-            let ccx_lock = ccx.lock().await;
-            let mut t = AtCommandsContext::new(
-                ccx_lock.global_context.clone(),
-                subchat_params.subchat_n_ctx,
-                0,
-                false,
-                ccx_lock.messages.clone(),
-                ccx_lock.chat_id.clone(),
-                ccx_lock.should_execute_remotely,
-                ccx_lock.current_model.clone(),
-                ccx_lock.task_meta.clone(), None,
-            )
-            .await;
-            t.subchat_tx = ccx_lock.subchat_tx.clone();
-            t.subchat_rx = ccx_lock.subchat_rx.clone();
-            Arc::new(AMutex::new(t))
         };
 
         tracing::info!("Starting strategic planning for {} files", important_paths.len());
 
         let (final_message, usage_collector) = execute_strategic_planning(
             gcx,
-            ccx_subchat,
-            subchat_params,
+            ccx.clone(),
             important_paths.clone(),
             external_messages,
             tool_call_id.clone(),
-            log_prefix,
         ).await?;
 
         Ok((false, vec![

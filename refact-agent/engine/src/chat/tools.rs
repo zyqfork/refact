@@ -30,14 +30,16 @@ pub enum ToolStepOutcome {
 
 use super::types::*;
 use super::trajectories::maybe_save_trajectory;
+use super::config::{limits, tokens};
 
 async fn get_effective_n_ctx(gcx: Arc<ARwLock<GlobalContext>>, thread: &ThreadParams) -> usize {
+    let default_n_ctx = tokens().default_n_ctx;
     let model_n_ctx = match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
         Ok(caps) => match crate::caps::resolve_chat_model(caps, &thread.model) {
-            Ok(model_rec) => model_rec.base.n_ctx,
-            Err(_) => 32000,
+            Ok(model_rec) if model_rec.base.n_ctx > 0 => model_rec.base.n_ctx,
+            _ => default_n_ctx,
         },
-        Err(_) => 32000,
+        Err(_) => default_n_ctx,
     };
     match thread.context_tokens_cap {
         Some(cap) if cap > 0 => cap.min(model_n_ctx),
@@ -495,7 +497,7 @@ async fn execute_tools_inner(
     options: ExecuteToolsOptions,
     messages: &[ChatMessage],
 ) -> (Vec<ChatMessage>, bool) {
-    const MAX_PARALLEL: usize = 16;
+    let max_parallel = limits().max_parallel_tools;
 
     let available_tool_names: std::collections::HashSet<String> =
         crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
@@ -504,7 +506,7 @@ async fn execute_tools_inner(
             .map(|tool| tool.tool_description().name)
             .collect();
 
-    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
 
     let futures: Vec<_> = tool_calls
         .iter()

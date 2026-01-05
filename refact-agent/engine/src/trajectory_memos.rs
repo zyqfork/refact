@@ -2,17 +2,15 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc, Duration};
 use serde_json::Value;
 use tokio::sync::RwLock as ARwLock;
-use tokio::sync::Mutex as AMutex;
 use tokio::fs;
 use tracing::{info, warn};
 use walkdir::WalkDir;
 
-use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::files_correction::get_project_dirs;
-use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
+use crate::global_context::GlobalContext;
 use crate::memories::{memories_add, create_frontmatter};
-use crate::subchat::subchat_single;
+use crate::subchat::run_subchat_once;
 
 const ABANDONED_THRESHOLD_HOURS: i64 = 2;
 const CHECK_INTERVAL_SECS: u64 = 300;
@@ -271,22 +269,6 @@ async fn extract_memos_and_meta(
     current_title: &str,
     is_title_generated: bool,
 ) -> Result<ExtractionResult, String> {
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
-        .await
-        .map_err(|e| e.message)?;
-
-    let model_id = if caps.defaults.chat_light_model.is_empty() {
-        caps.defaults.chat_default_model.clone()
-    } else {
-        caps.defaults.chat_light_model.clone()
-    };
-
-    let n_ctx = caps
-        .chat_models
-        .get(&model_id)
-        .map(|m| m.base.n_ctx)
-        .unwrap_or(4096);
-
     let title_hint = if is_title_generated {
         format!("\n\nNote: The current title \"{}\" was auto-generated. Please provide a better descriptive title.", current_title)
     } else {
@@ -299,47 +281,14 @@ async fn extract_memos_and_meta(
         ..Default::default()
     });
 
-    let ccx = Arc::new(AMutex::new(
-        AtCommandsContext::new(
-            gcx.clone(),
-            n_ctx,
-            1,
-            false,
-            messages.clone(),
-            "".to_string(),
-            false,
-            model_id.clone(),
-            None,
-            None,
-        )
-        .await,
-    ));
+    let result = run_subchat_once(gcx, "memo_extraction", messages)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let response = subchat_single(
-        ccx,
-        &model_id,
-        messages,
-        None,
-        None,
-        false,
-        Some(0.0),
-        None,
-        1,
-        None,
-        false,
-        None,
-        None,
-        None,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let response_text = response
-        .into_iter()
-        .flatten()
+    let response_text = result.messages
         .last()
-        .and_then(|m| match m.content {
-            ChatContent::SimpleText(t) => Some(t),
+        .and_then(|m| match &m.content {
+            ChatContent::SimpleText(t) => Some(t.clone()),
             _ => None,
         })
         .unwrap_or_default();

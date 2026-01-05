@@ -11,6 +11,8 @@ use crate::call_validation::{ChatContent, ChatMessage};
 use crate::global_context::GlobalContext;
 
 use super::types::*;
+use super::types::{session_idle_timeout, session_cleanup_interval};
+use super::config::limits;
 
 pub type SessionsMap = Arc<ARwLock<HashMap<String, Arc<AMutex<ChatSession>>>>>;
 
@@ -20,7 +22,7 @@ pub fn create_sessions_map() -> SessionsMap {
 
 impl ChatSession {
     pub fn new(chat_id: String) -> Self {
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(limits().event_channel_capacity);
         Self {
             chat_id: chat_id.clone(),
             thread: ThreadParams {
@@ -34,7 +36,7 @@ impl ChatSession {
             command_queue: VecDeque::new(),
             event_seq: 0,
             event_tx,
-            recent_request_ids: VecDeque::with_capacity(100),
+            recent_request_ids: VecDeque::with_capacity(limits().recent_request_ids_capacity),
             abort_flag: Arc::new(AtomicBool::new(false)),
             queue_processor_running: Arc::new(AtomicBool::new(false)),
             queue_notify: Arc::new(Notify::new()),
@@ -54,7 +56,7 @@ impl ChatSession {
         thread: ThreadParams,
         created_at: String,
     ) -> Self {
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(limits().event_channel_capacity);
         Self {
             chat_id,
             thread,
@@ -65,7 +67,7 @@ impl ChatSession {
             command_queue: VecDeque::new(),
             event_seq: 0,
             event_tx,
-            recent_request_ids: VecDeque::with_capacity(100),
+            recent_request_ids: VecDeque::with_capacity(limits().recent_request_ids_capacity),
             abort_flag: Arc::new(AtomicBool::new(false)),
             queue_processor_running: Arc::new(AtomicBool::new(false)),
             queue_notify: Arc::new(Notify::new()),
@@ -91,7 +93,7 @@ impl ChatSession {
     pub fn is_idle_for_cleanup(&self) -> bool {
         self.runtime.state == SessionState::Idle
             && self.command_queue.is_empty()
-            && self.last_activity.elapsed() > SESSION_IDLE_TIMEOUT
+            && self.last_activity.elapsed() > session_idle_timeout()
     }
 
     pub fn emit(&mut self, event: ChatEvent) {
@@ -489,7 +491,7 @@ pub async fn get_or_create_session_with_trajectory(
 
 pub fn start_session_cleanup_task(gcx: Arc<ARwLock<GlobalContext>>) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(SESSION_CLEANUP_INTERVAL);
+        let mut interval = tokio::time::interval(session_cleanup_interval());
         loop {
             interval.tick().await;
 

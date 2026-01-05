@@ -1,11 +1,10 @@
 use std::sync::Arc;
 use serde::Deserialize;
-use tokio::sync::{RwLock as ARwLock, Mutex as AMutex};
+use tokio::sync::RwLock as ARwLock;
 
 use crate::custom_error::MapErrToString;
 use crate::global_context::GlobalContext;
-use crate::at_commands::at_commands::AtCommandsContext;
-use crate::subchat::subchat_single;
+use crate::subchat::run_subchat_once;
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::json_utils;
 
@@ -75,53 +74,17 @@ fn _make_conversation(messages: &Vec<ChatMessage>) -> Vec<ChatMessage> {
 pub async fn generate_follow_up_message(
     messages: Vec<ChatMessage>,
     gcx: Arc<ARwLock<GlobalContext>>,
-    model_id: &str,
-    chat_id: &str,
+    _model_id: &str,
+    _chat_id: &str,
 ) -> Result<FollowUpResponse, String> {
-    let ccx = Arc::new(AMutex::new(
-        AtCommandsContext::new(
-            gcx.clone(),
-            32000,
-            1,
-            false,
-            messages.clone(),
-            chat_id.to_string(),
-            false,
-            model_id.to_string(),
-            None,
-            None,
-        )
-        .await,
-    ));
-    let updated_messages: Vec<Vec<ChatMessage>> = subchat_single(
-        ccx.clone(),
-        model_id,
-        _make_conversation(&messages),
-        Some(vec![]),
-        None,
-        false,
-        Some(0.0),
-        None,
-        1,
-        None,
-        true,
-        None,
-        None,
-        None,
-    )
-    .await?;
-    let response = updated_messages
-        .into_iter()
-        .next()
-        .map(|x| {
-            x.into_iter().last().map(|last_m| match last_m.content {
-                ChatContent::SimpleText(text) => Some(text),
-                ChatContent::Multimodal(_) => None,
-                ChatContent::ContextFiles(_) => None,
-            })
+    let result = run_subchat_once(gcx, "follow_up", _make_conversation(&messages)).await?;
+
+    let response = result.messages
+        .last()
+        .and_then(|last_m| match &last_m.content {
+            ChatContent::SimpleText(text) => Some(text.clone()),
+            _ => None,
         })
-        .flatten()
-        .flatten()
         .ok_or("No follow-up message was generated".to_string())?;
 
     tracing::info!("follow-up model says {:?}", response);

@@ -167,7 +167,7 @@ pub async fn handle_v1_chat_command(
         || (session.runtime.state == SessionState::WaitingIde
             && matches!(request.command, ChatCommand::IdeToolResult { .. }));
 
-    if session.command_queue.len() >= MAX_QUEUE_SIZE && !is_critical {
+    if session.command_queue.len() >= max_queue_size() && !is_critical {
         session.emit(ChatEvent::Ack {
             client_request_id: request.client_request_id,
             accepted: false,

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use axum::extract::Path;
 use axum::http::{Response, StatusCode};
 use axum::Extension;
@@ -13,14 +13,15 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::at_commands::at_commands::AtCommandsContext;
+
 use crate::call_validation::{ChatMessage, ChatContent};
 use crate::custom_error::ScratchError;
-use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
+use crate::global_context::GlobalContext;
 use crate::files_correction::get_project_dirs;
-use crate::subchat::subchat_single;
+use crate::subchat::run_subchat_once;
 
 use super::types::{ThreadParams, SessionState, ChatSession};
+use super::config::timeouts;
 
 const TITLE_GENERATION_PROMPT: &str = "Summarize this chat in 2-4 words. Prefer filenames, classes, entities, and avoid generic terms. Write only the title, nothing else.";
 
@@ -394,6 +395,38 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
     Ok(())
 }
 
+pub async fn save_trajectory_as(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    thread: &ThreadParams,
+    messages: &[ChatMessage],
+) {
+    if messages.is_empty() {
+        return;
+    }
+    let snapshot = TrajectorySnapshot {
+        chat_id: thread.id.clone(),
+        title: thread.title.clone(),
+        model: thread.model.clone(),
+        mode: thread.mode.clone(),
+        tool_use: thread.tool_use.clone(),
+        messages: messages.to_vec(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        boost_reasoning: thread.boost_reasoning,
+        checkpoints_enabled: thread.checkpoints_enabled,
+        context_tokens_cap: thread.context_tokens_cap,
+        include_project_info: thread.include_project_info,
+        is_title_generated: thread.is_title_generated,
+        automatic_patch: thread.automatic_patch,
+        version: 1,
+        task_meta: thread.task_meta.clone(),
+        parent_id: thread.parent_id.clone(),
+        link_type: thread.link_type.clone(),
+    };
+    if let Err(e) = save_trajectory_snapshot(gcx, snapshot).await {
+        warn!("Failed to save trajectory: {}", e);
+    }
+}
+
 pub async fn save_trajectory_snapshot(
     gcx: Arc<ARwLock<GlobalContext>>,
     snapshot: TrajectorySnapshot,
@@ -712,13 +745,13 @@ pub fn start_trajectory_watcher(gcx: Arc<ARwLock<GlobalContext>>) {
 
         let mut pending: std::collections::HashMap<String, (Instant, bool)> =
             std::collections::HashMap::new();
-        let debounce_ms = 200;
+        let debounce = timeouts().watcher_debounce;
 
         loop {
             let timeout = if pending.is_empty() {
-                Duration::from_secs(60)
+                timeouts().watcher_idle
             } else {
-                Duration::from_millis(50)
+                timeouts().watcher_poll
             };
 
             tokio::select! {
@@ -740,7 +773,7 @@ pub fn start_trajectory_watcher(gcx: Arc<ARwLock<GlobalContext>>) {
             let now = Instant::now();
             let ready: Vec<_> = pending
                 .iter()
-                .filter(|(_, (t, _))| now.duration_since(*t).as_millis() >= debounce_ms)
+                .filter(|(_, (t, _))| now.duration_since(*t) >= debounce)
                 .map(|(k, v)| (k.clone(), v.1))
                 .collect();
 
@@ -874,22 +907,6 @@ async fn generate_title_llm(
     gcx: Arc<ARwLock<GlobalContext>>,
     messages: &[serde_json::Value],
 ) -> Option<String> {
-    let caps = match try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
-        Ok(caps) => caps,
-        Err(e) => {
-            warn!("Failed to load caps for title generation: {:?}", e);
-            return None;
-        }
-    };
-    let model_id = if !caps.defaults.chat_light_model.is_empty() {
-        caps.defaults.chat_light_model.clone()
-    } else {
-        caps.defaults.chat_default_model.clone()
-    };
-    if model_id.is_empty() {
-        warn!("No model available for title generation");
-        return None;
-    }
     let context = build_title_generation_context(messages);
     if context.trim().is_empty() {
         return None;
@@ -898,49 +915,16 @@ async fn generate_title_llm(
         "Chat conversation:\n{}\n\n{}",
         context, TITLE_GENERATION_PROMPT
     );
-    let ccx = Arc::new(AMutex::new(
-        AtCommandsContext::new(
-            gcx.clone(),
-            2048,
-            5,
-            false,
-            vec![],
-            "title-generation".to_string(),
-            false,
-            model_id.clone(),
-            None,
-            None,
-        )
-        .await,
-    ));
     let chat_messages = vec![ChatMessage::new("user".to_string(), prompt)];
-    match subchat_single(
-        ccx,
-        &model_id,
-        chat_messages,
-        Some(vec![]),
-        Some("none".to_string()),
-        false,
-        Some(0.3),
-        Some(50),
-        1,
-        None,
-        false,
-        None,
-        None,
-        None,
-    )
-    .await
-    {
-        Ok(results) => {
-            if let Some(messages) = results.first() {
-                if let Some(last_msg) = messages.last() {
-                    let raw_title = last_msg.content.content_text_only();
-                    let cleaned = clean_generated_title(&raw_title);
-                    if !cleaned.is_empty() && cleaned.to_lowercase() != "new chat" {
-                        info!("Generated title: {}", cleaned);
-                        return Some(cleaned);
-                    }
+
+    match run_subchat_once(gcx, "title_generation", chat_messages).await {
+        Ok(result) => {
+            if let Some(last_msg) = result.messages.last() {
+                let raw_title = last_msg.content.content_text_only();
+                let cleaned = clean_generated_title(&raw_title);
+                if !cleaned.is_empty() && cleaned.to_lowercase() != "new chat" {
+                    info!("Generated title: {}", cleaned);
+                    return Some(cleaned);
                 }
             }
             None

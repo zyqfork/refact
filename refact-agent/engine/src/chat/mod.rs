@@ -1,3 +1,4 @@
+pub mod config;
 mod content;
 mod generation;
 mod handlers;

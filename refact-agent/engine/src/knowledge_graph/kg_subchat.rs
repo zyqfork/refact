@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as AMutex;
+use tokio::sync::RwLock as ARwLock;
 
-use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::ChatMessage;
-use crate::subchat::subchat_single;
+use crate::global_context::GlobalContext;
+use crate::subchat::run_subchat_once;
 
 use super::kg_structs::KnowledgeDoc;
 
@@ -93,8 +93,7 @@ Return JSON:
 Only deprecate with confidence >= 0.75. JSON only:"#;
 
 pub async fn enrich_knowledge_metadata(
-    ccx: Arc<AMutex<AtCommandsContext>>,
-    model_id: &str,
+    gcx: Arc<ARwLock<GlobalContext>>,
     content: &str,
     entities: &[String],
     candidate_files: &[String],
@@ -122,27 +121,10 @@ pub async fn enrich_knowledge_metadata(
 
     let messages = vec![ChatMessage::new("user".to_string(), prompt)];
 
-    let results = subchat_single(
-        ccx,
-        model_id,
-        messages,
-        Some(vec![]),
-        Some("none".to_string()),
-        false,
-        Some(0.0),
-        Some(1024),
-        1,
-        None,
-        false,
-        None,
-        None,
-        None,
-    )
-    .await?;
+    let result = run_subchat_once(gcx, "kg_enrich", messages).await?;
 
-    let response = results
-        .get(0)
-        .and_then(|msgs| msgs.last())
+    let response = result.messages
+        .last()
         .map(|m| m.content.content_text_only())
         .unwrap_or_default();
 
@@ -154,8 +136,7 @@ pub async fn enrich_knowledge_metadata(
 }
 
 pub async fn check_deprecation(
-    ccx: Arc<AMutex<AtCommandsContext>>,
-    model_id: &str,
+    gcx: Arc<ARwLock<GlobalContext>>,
     new_doc_title: &str,
     new_doc_tags: &[String],
     new_doc_files: &[String],
@@ -201,27 +182,10 @@ pub async fn check_deprecation(
 
     let messages = vec![ChatMessage::new("user".to_string(), prompt)];
 
-    let results = subchat_single(
-        ccx,
-        model_id,
-        messages,
-        Some(vec![]),
-        Some("none".to_string()),
-        false,
-        Some(0.0),
-        Some(1024),
-        1,
-        None,
-        false,
-        None,
-        None,
-        None,
-    )
-    .await?;
+    let result = run_subchat_once(gcx, "kg_deprecate", messages).await?;
 
-    let response = results
-        .get(0)
-        .and_then(|msgs| msgs.last())
+    let response = result.messages
+        .last()
         .map(|m| m.content.content_text_only())
         .unwrap_or_default();
 

@@ -14,7 +14,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
 use crate::files_correction::get_project_dirs;
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
-use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
+use crate::global_context::GlobalContext;
 use crate::knowledge_graph::kg_structs::KnowledgeFrontmatter;
 use crate::knowledge_graph::kg_subchat::{enrich_knowledge_metadata, check_deprecation};
 use crate::knowledge_graph::build_knowledge_graph;
@@ -649,15 +649,6 @@ pub async fn memories_add_enriched(
     let entities = extract_entities(content);
     let detected_paths = extract_file_paths(content);
 
-    let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
-        .await
-        .map_err(|e| format!("Failed to load caps: {}", e.message))?;
-    let light_model = if caps.defaults.chat_light_model.is_empty() {
-        caps.defaults.chat_default_model.clone()
-    } else {
-        caps.defaults.chat_light_model.clone()
-    };
-
     let kg = build_knowledge_graph(gcx.clone()).await;
 
     let candidate_files: Vec<String> = {
@@ -685,8 +676,7 @@ pub async fn memories_add_enriched(
         .collect();
 
     let enrichment = enrich_knowledge_metadata(
-        ccx.clone(),
-        &light_model,
+        gcx.clone(),
         content,
         &entities,
         &candidate_files,
@@ -780,8 +770,7 @@ pub async fn memories_add_enriched(
         let snippet: String = content.chars().take(500).collect();
 
         match check_deprecation(
-            ccx.clone(),
-            &light_model,
+            gcx.clone(),
             final_title.as_deref().unwrap_or("Untitled"),
             &final_tags,
             &final_filenames,

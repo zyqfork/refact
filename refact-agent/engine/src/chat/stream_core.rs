@@ -11,7 +11,7 @@ use crate::caps::BaseModelRecord;
 use crate::global_context::GlobalContext;
 use crate::scratchpad_abstract::FinishReason;
 
-use super::types::{DeltaOp, STREAM_HEARTBEAT, STREAM_IDLE_TIMEOUT, STREAM_TOTAL_TIMEOUT};
+use super::types::{DeltaOp, stream_heartbeat, stream_idle_timeout, stream_total_timeout};
 use super::openai_merge::merge_tool_call;
 
 pub struct StreamRunParams {
@@ -51,7 +51,6 @@ impl StreamCollector for NoopCollector {
 pub async fn run_llm_stream<C: StreamCollector>(
     gcx: Arc<ARwLock<GlobalContext>>,
     params: StreamRunParams,
-    n: usize,
     collector: &mut C,
 ) -> Result<Vec<ChoiceFinal>, String> {
     let (client, slowdown_arc) = {
@@ -65,9 +64,7 @@ pub async fn run_llm_stream<C: StreamCollector>(
     let _ = slowdown_arc.acquire().await;
 
     let mut sampling = params.sampling.clone();
-    if n > 1 {
-        sampling.n = Some(n);
-    }
+    sampling.n = Some(1);  // Always force n=1, multi-choice not supported
 
     let mut event_source =
         crate::forward_to_openai_endpoint::forward_to_openai_style_endpoint_streaming(
@@ -80,12 +77,11 @@ pub async fn run_llm_stream<C: StreamCollector>(
         .await
         .map_err(|e| format!("Failed to connect to LLM: {}", e))?;
 
-    let mut accumulators: Vec<ChoiceAccumulator> =
-        (0..n).map(|_| ChoiceAccumulator::default()).collect();
+    let mut accumulators: Vec<ChoiceAccumulator> = vec![ChoiceAccumulator::default()];
 
     let stream_started_at = Instant::now();
     let mut last_event_at = Instant::now();
-    let mut heartbeat = tokio::time::interval(STREAM_HEARTBEAT);
+    let mut heartbeat = tokio::time::interval(stream_heartbeat());
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
@@ -96,10 +92,10 @@ pub async fn run_llm_stream<C: StreamCollector>(
                         return Err("Aborted".to_string());
                     }
                 }
-                if stream_started_at.elapsed() > STREAM_TOTAL_TIMEOUT {
+                if stream_started_at.elapsed() > stream_total_timeout() {
                     return Err("LLM stream timeout".to_string());
                 }
-                if last_event_at.elapsed() > STREAM_IDLE_TIMEOUT {
+                if last_event_at.elapsed() > stream_idle_timeout() {
                     return Err("LLM stream stalled".to_string());
                 }
                 continue;

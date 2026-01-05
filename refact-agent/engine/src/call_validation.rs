@@ -238,13 +238,9 @@ pub struct SubchatParameters {
     #[serde(default)]
     pub subchat_model: String,
     pub subchat_n_ctx: usize,
-    #[serde(default)]
-    pub subchat_tokens_for_rag: usize,
-    #[serde(default)]
-    pub subchat_temperature: Option<f32>,
-    #[serde(default)]
     pub subchat_max_new_tokens: usize,
-    #[serde(default)]
+    pub subchat_temperature: f32,
+    pub subchat_tokens_for_rag: usize,
     pub subchat_reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -262,8 +258,6 @@ pub struct ChatPost {
     pub max_tokens: Option<usize>,
     #[serde(default)]
     pub increase_max_tokens: bool,
-    #[serde(default)]
-    pub n: Option<usize>,
     #[serde(default)]
     pub tool_choice: Option<String>,
     #[serde(default)]

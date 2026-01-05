@@ -10,6 +10,7 @@ use crate::at_commands::at_tree::TreeNode;
 use crate::call_validation::{ChatMessage, ChatContent, ContextFile};
 use crate::files_correction::{get_project_dirs, paths_from_anywhere};
 use crate::memories::{load_memories_by_tags, MemoRecord};
+use crate::chat::config::limits;
 
 pub const PROJECT_CONTEXT_MARKER: &str = "project_context";
 use crate::files_in_workspace::detect_vcs_for_a_file_path;
@@ -1518,8 +1519,8 @@ pub fn create_memories_message(memories: &[MemoRecord]) -> Option<ChatMessage> {
     })
 }
 
-const MAX_FILE_SIZE: usize = 40_000;
-const MAX_INCLUDED_FILES: usize = 15;
+fn max_file_size() -> usize { limits().max_file_size }
+fn max_included_files() -> usize { limits().max_included_files }
 
 pub async fn create_instruction_files_message(
     instruction_files: &[InstructionFile],
@@ -1528,7 +1529,7 @@ pub async fn create_instruction_files_message(
     let mut paths_only: Vec<String> = Vec::new();
 
     for (idx, instr_file) in instruction_files.iter().enumerate() {
-        if idx >= MAX_INCLUDED_FILES {
+        if idx >= max_included_files() {
             paths_only.push(instr_file.file_path.clone());
             continue;
         }
@@ -1550,15 +1551,14 @@ pub async fn create_instruction_files_message(
         };
 
         let content_len = content.len();
-        let (mut final_content, was_truncated) = if content_len > MAX_FILE_SIZE {
-            let truncated = content.chars().take(MAX_FILE_SIZE).collect::<String>();
+        let max_size = max_file_size();
+        let (mut final_content, was_truncated) = if content_len > max_size {
+            let truncated = content.chars().take(max_size).collect::<String>();
             (truncated, true)
         } else {
             (content, false)
         };
 
-        // Add notes about filtering/truncation inside the content, not the file_name
-        // This keeps file_name as the real path so "open file" works in UI
         if instr_file.processed_content.is_some() {
             final_content = format!("# Filtered content\n\n{}", final_content);
         }
@@ -1568,7 +1568,7 @@ pub async fn create_instruction_files_message(
                 "Truncated instruction file {} from {} to {} chars",
                 instr_file.file_path,
                 content_len,
-                MAX_FILE_SIZE
+                max_size
             );
         }
 
@@ -1588,7 +1588,7 @@ pub async fn create_instruction_files_message(
     if !paths_only.is_empty() {
         let paths_content = format!(
             "Additional instruction files (paths only, limit of {} full files reached):\n{}",
-            MAX_INCLUDED_FILES,
+            max_included_files(),
             paths_only
                 .iter()
                 .map(|p| format!("- {}", p))

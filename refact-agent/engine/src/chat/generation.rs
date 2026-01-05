@@ -20,6 +20,7 @@ use super::prepare::{prepare_chat_passthrough, ChatPrepareOptions};
 use super::prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messages;
 use super::stream_core::{run_llm_stream, StreamRunParams, StreamCollector, normalize_tool_call};
 use super::queue::inject_priority_messages_if_any;
+use super::config::tokens;
 
 pub fn parse_chat_mode(mode: &str) -> ChatMode {
     match mode.to_uppercase().as_str() {
@@ -39,7 +40,8 @@ pub fn start_generation(
     session_arc: Arc<AMutex<ChatSession>>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
-             let (messages, thread, chat_id) = {
+        loop {
+            let (messages, thread, chat_id) = {
                 let session = session_arc.lock().await;
                 (
                     session.messages.clone(),
@@ -151,7 +153,15 @@ pub async fn run_llm_generation(
         .map_err(|e| e.message)?;
     let model_rec = crate::caps::resolve_chat_model(caps, &thread.model)?;
 
-    let effective_n_ctx = thread.context_tokens_cap.unwrap_or(model_rec.base.n_ctx);
+    let model_n_ctx = if model_rec.base.n_ctx > 0 {
+        model_rec.base.n_ctx
+    } else {
+        tokens().default_n_ctx
+    };
+    let effective_n_ctx = match thread.context_tokens_cap {
+        Some(cap) if cap > 0 => cap.min(model_n_ctx),
+        _ => model_n_ctx,
+    };
     let tokenizer_arc = crate::tokens::cached_tokenizer(gcx.clone(), &model_rec.base).await?;
     let t = HasTokenizerAndEot::new(tokenizer_arc);
 
@@ -420,7 +430,7 @@ async fn run_streaming_generation(
         pending_ops: Vec::new(),
         pending_usage: None,
     };
-    let results = run_llm_stream(gcx.clone(), params, 1, &mut collector).await?;
+    let results = run_llm_stream(gcx.clone(), params, &mut collector).await?;
 
     {
         let mut session = session_arc.lock().await;

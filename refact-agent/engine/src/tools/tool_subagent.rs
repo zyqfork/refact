@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::subchat::{run_subchat, SubchatConfig};
+use crate::subchat::run_subchat;
 use crate::postprocessing::pp_command_output::OutputFilter;
 
 pub struct ToolSubagent {
@@ -146,14 +146,10 @@ impl Tool for ToolSubagent {
         };
         let max_steps = max_steps.min(50).max(1);
 
-        let subchat_params = crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "subagent").await?;
-
         let (gcx, parent_chat_id) = {
             let ccx_lock = ccx.lock().await;
             (ccx_lock.global_context.clone(), ccx_lock.chat_id.clone())
         };
-
-        let model = subchat_params.subchat_model.clone();
 
         let title = if task.len() > 60 {
             let end = task
@@ -166,6 +162,20 @@ impl Tool for ToolSubagent {
         } else {
             format!("Subagent: {}", task)
         };
+
+        let config = crate::subchat::resolve_subchat_config(
+            gcx.clone(),
+            "subagent",
+            true,
+            None,
+            Some(title),
+            Some(parent_chat_id),
+            Some("subagent".to_string()),
+            if tools.is_empty() { None } else { Some(tools.clone()) },
+            max_steps,
+            false,
+            None,
+        ).await?;
 
         let user_prompt = build_task_prompt(&task, &expected_result, &tools, max_steps);
 
@@ -182,25 +192,9 @@ impl Tool for ToolSubagent {
             },
         ];
 
-        let config = SubchatConfig {
-            tools: if tools.is_empty() { None } else { Some(tools) },
-            temperature: Some(subchat_params.subchat_temperature.unwrap_or(0.3)),
-            max_new_tokens: Some(subchat_params.subchat_max_new_tokens),
-            n_ctx: Some(subchat_params.subchat_n_ctx),
-            reasoning_effort: subchat_params.subchat_reasoning_effort.clone(),
-            prepend_system_prompt: false,
-            max_steps,
-            save_trajectory: true,
-            chat_id: None,
-            title: Some(title),
-            parent_id: Some(parent_chat_id),
-            link_type: Some("subagent".to_string()),
-            mode: "TASK_AGENT".to_string(),
-        };
+        tracing::info!("Starting subagent for task: {} (model: {})", task, config.model);
 
-        tracing::info!("Starting subagent for task: {} (model: {})", task, model);
-
-        let result = run_subchat(gcx, &model, messages, config).await?;
+        let result = run_subchat(gcx, messages, config).await?;
 
         let last_assistant = result.messages.iter().rev().find(|m| m.role == "assistant");
         let result_content = last_assistant

@@ -4,12 +4,14 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
-use crate::subchat::subchat_single;
+use crate::subchat::run_subchat_once;
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
 };
-use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters};
+use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
+use crate::global_context::GlobalContext;
+use tokio::sync::RwLock as ARwLock;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::memories::{memories_add_enriched, EnrichmentParams};
 use crate::postprocessing::pp_command_output::OutputFilter;
@@ -81,15 +83,11 @@ fn spawn_entertainment_task(
 }
 
 async fn execute_deep_research(
-    ccx_subchat: Arc<AMutex<AtCommandsContext>>,
-    subchat_params: SubchatParameters,
+    gcx: Arc<ARwLock<GlobalContext>>,
+    subchat_tx: Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
     research_query: String,
     tool_call_id: String,
-    log_prefix: String,
 ) -> Result<(ChatMessage, ChatUsage), String> {
-    let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
-    let mut usage_collector = ChatUsage::default();
-
     send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -100,32 +98,15 @@ async fn execute_deep_research(
         ChatMessage::new("user".to_string(), research_query),
     ];
 
-    let result = subchat_single(
-        ccx_subchat.clone(),
-        subchat_params.subchat_model.as_str(),
-        messages,
-        Some(vec![]),
-        None,
-        false,
-        subchat_params.subchat_temperature,
-        Some(subchat_params.subchat_max_new_tokens),
-        1,
-        subchat_params.subchat_reasoning_effort.clone(),
-        false,
-        Some(&mut usage_collector),
-        Some(tool_call_id.clone()),
-        Some(format!("{log_prefix}-deep-research")),
-    )
-    .await;
+    let result = run_subchat_once(gcx, "deep_research", messages).await;
 
     cancel_token.cancel();
 
-    let choices = result?;
-    let session = choices.into_iter().next().unwrap();
-    let reply = session.last().unwrap().clone();
-    crate::tools::tools_execute::update_usage_from_message(&mut usage_collector, &reply);
+    let subchat_result = result?;
+    let reply = subchat_result.messages.last().cloned()
+        .ok_or("No response from deep research")?;
 
-    Ok((reply, usage_collector))
+    Ok((reply, subchat_result.usage))
 }
 
 #[async_trait]
@@ -173,38 +154,18 @@ impl Tool for ToolDeepResearch {
             None => return Err("Missing argument `research_query`".to_string()),
         };
 
-        let log_prefix = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let subchat_params: SubchatParameters =
-            crate::tools::tools_execute::unwrap_subchat_params(ccx.clone(), "deep_research")
-                .await?;
-
-        let ccx_subchat = {
+        let (gcx, subchat_tx) = {
             let ccx_lock = ccx.lock().await;
-            let mut t = AtCommandsContext::new(
-                ccx_lock.global_context.clone(),
-                subchat_params.subchat_n_ctx,
-                0,
-                false,
-                vec![],
-                ccx_lock.chat_id.clone(),
-                ccx_lock.should_execute_remotely,
-                ccx_lock.current_model.clone(),
-                ccx_lock.task_meta.clone(), None,
-            )
-            .await;
-            t.subchat_tx = ccx_lock.subchat_tx.clone();
-            t.subchat_rx = ccx_lock.subchat_rx.clone();
-            Arc::new(AMutex::new(t))
+            (ccx_lock.global_context.clone(), ccx_lock.subchat_tx.clone())
         };
 
         tracing::info!("Starting deep research for query: {}", research_query);
 
         let (research_result, usage_collector) = execute_deep_research(
-            ccx_subchat,
-            subchat_params,
+            gcx,
+            subchat_tx,
             research_query.clone(),
             tool_call_id.clone(),
-            log_prefix,
         ).await?;
 
         let research_content = format!(

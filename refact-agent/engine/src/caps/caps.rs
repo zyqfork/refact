@@ -522,6 +522,7 @@ pub fn resolve_completion_model<'a>(
     }
 }
 
+#[allow(dead_code)]
 pub fn is_cloud_model(model_id: &str) -> bool {
     model_id.starts_with("refact/")
 }
