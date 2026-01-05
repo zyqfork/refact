@@ -12,6 +12,7 @@ export interface UseStreamingVoiceRecordingResult {
   error: string | null;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<string>;
+  cancelRecording: () => void;
 }
 
 function floatTo16BitPCM(samples: Float32Array): ArrayBuffer {
@@ -200,6 +201,38 @@ export function useStreamingVoiceRecording(): UseStreamingVoiceRecordingResult {
     return finalPromise;
   }, [isRecording, sendBufferedAudio]);
 
+  const cancelRecording = useCallback(() => {
+    if (!isRecording && !isFinishing) return;
+
+    setIsRecording(false);
+    setIsFinishing(false);
+    setTranscript("");
+
+    finalizeResolveRef.current = null;
+    finalizeRejectRef.current = null;
+
+    if (sendIntervalRef.current) {
+      clearInterval(sendIntervalRef.current);
+      sendIntervalRef.current = null;
+    }
+
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+
+    cleanupStream();
+    bufferRef.current = [];
+  }, [isRecording, isFinishing, cleanupStream]);
+
   useEffect(() => {
     return () => {
       unsubscribeRef.current?.();
@@ -219,6 +252,34 @@ export function useStreamingVoiceRecording(): UseStreamingVoiceRecordingResult {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+
+      const el = event.target as HTMLElement;
+      if (
+        el.tagName === "INPUT" ||
+        el.tagName === "TEXTAREA" ||
+        el.isContentEditable
+      ) {
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void stopRecording();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelRecording();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isRecording, stopRecording, cancelRecording]);
+
   return {
     isRecording,
     isFinishing,
@@ -226,5 +287,6 @@ export function useStreamingVoiceRecording(): UseStreamingVoiceRecordingResult {
     error,
     startRecording,
     stopRecording,
+    cancelRecording,
   };
 }

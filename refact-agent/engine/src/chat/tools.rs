@@ -204,18 +204,18 @@ pub async fn process_tool_calls_once(
     session_arc: Arc<AMutex<ChatSession>>,
     chat_mode: ChatMode,
 ) -> ToolStepOutcome {
-    let (tool_calls, messages, thread) = {
+    let (tool_calls, server_tool_calls, messages, thread) = {
         let session = session_arc.lock().await;
         let last_msg = session.messages.last();
         match last_msg {
             Some(m) if m.role == "assistant" && m.tool_calls.is_some() => {
                 let all_calls = m.tool_calls.clone().unwrap();
-                let client_calls: Vec<_> = all_calls
+                let (server_calls, client_calls): (Vec<_>, Vec<_>) = all_calls
                     .into_iter()
-                    .filter(|tc| !is_server_executed_tool(&tc.id))
-                    .collect();
+                    .partition(|tc| is_server_executed_tool(&tc.id));
                 (
                     client_calls,
+                    server_calls,
                     session.messages.clone(),
                     session.thread.clone(),
                 )
@@ -223,6 +223,35 @@ pub async fn process_tool_calls_once(
             _ => return ToolStepOutcome::NoToolCalls,
         }
     };
+
+    // Add synthetic tool results for server-executed tools (e.g., Anthropic's web_search).
+    // These tools are executed by the LLM provider and their results are embedded in the
+    // assistant's response as citations. However, the Anthropic API requires exactly one
+    // tool_result per tool_use, so we add placeholder results to satisfy this requirement.
+    // Without these, the LLM may regenerate similar responses because it sees tool_calls
+    // without corresponding results.
+    if !server_tool_calls.is_empty() {
+        let mut session = session_arc.lock().await;
+        for tc in &server_tool_calls {
+            // Check if a tool result already exists for this tool call
+            let result_exists = session.messages.iter().any(|m| {
+                m.role == "tool" && m.tool_call_id == tc.id
+            });
+            if !result_exists {
+                let tool_message = ChatMessage {
+                    message_id: Uuid::new_v4().to_string(),
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(
+                        format!("[Results from '{}' are included in the assistant's response above]", tc.function.name)
+                    ),
+                    tool_call_id: tc.id.clone(),
+                    tool_failed: Some(false),
+                    ..Default::default()
+                };
+                session.add_message(tool_message);
+            }
+        }
+    }
 
     if tool_calls.is_empty() {
         return ToolStepOutcome::NoToolCalls;

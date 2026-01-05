@@ -17,6 +17,7 @@ export interface UseVoiceInputResult {
   modelLoaded: boolean;
   liveTranscript: string;
   toggleRecording: () => Promise<string | null>;
+  cancelRecording: () => void;
 }
 
 export function useVoiceInput(
@@ -29,6 +30,7 @@ export function useVoiceInput(
     error: recordingError,
     startRecording,
     stopRecording,
+    cancelRecording,
   } = useStreamingVoiceRecording();
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<VoiceStatusResponse | null>(null);
@@ -101,5 +103,6 @@ export function useVoiceInput(
     modelLoaded: status?.model_loaded ?? false,
     liveTranscript: transcript,
     toggleRecording,
+    cancelRecording,
   };
 }
