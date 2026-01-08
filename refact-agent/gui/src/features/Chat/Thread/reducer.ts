@@ -235,7 +235,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
     newRuntime.thread.model = lastParams.model ?? currentRt?.thread.model ?? "";
     newRuntime.thread.boost_reasoning = lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
-    newRuntime.thread.automatic_patch = lastParams.automatic_patch ?? currentRt?.thread.automatic_patch ?? false;
+    newRuntime.thread.automatic_patch = false;
     newRuntime.thread.increase_max_tokens = lastParams.increase_max_tokens ?? currentRt?.thread.increase_max_tokens ?? false;
     newRuntime.thread.include_project_info = lastParams.include_project_info ?? currentRt?.thread.include_project_info ?? true;
     newRuntime.thread.context_tokens_cap = lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
@@ -287,7 +287,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
     newRuntime.thread.id = id;
     newRuntime.thread.model = model ?? lastParams.model ?? currentRt?.thread.model ?? "";
     newRuntime.thread.boost_reasoning = lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
-    newRuntime.thread.automatic_patch = lastParams.automatic_patch ?? currentRt?.thread.automatic_patch ?? false;
+    newRuntime.thread.automatic_patch = false;
     newRuntime.thread.increase_max_tokens = lastParams.increase_max_tokens ?? currentRt?.thread.increase_max_tokens ?? false;
     newRuntime.thread.include_project_info = lastParams.include_project_info ?? currentRt?.thread.include_project_info ?? true;
     newRuntime.thread.context_tokens_cap = lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
