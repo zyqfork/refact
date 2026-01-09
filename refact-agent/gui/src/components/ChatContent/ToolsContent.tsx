@@ -232,8 +232,7 @@ export const SingleModelToolContent: React.FC<{
     };
   });
 
-  const subchatLog: string[] = toolCalls
-    .flatMap((tc) => tc.subchat_log ?? []);
+  const subchatLog: string[] = toolCalls.flatMap((tc) => tc.subchat_log ?? []);
   const attachedFiles = toolCalls
     .flatMap((tc) => tc.attached_files ?? [])
     .filter((f, i, arr) => arr.indexOf(f) === i);
@@ -307,46 +306,59 @@ function processToolCalls(
   // memories are split in content with 🗃️019957b6ff
 
   if (head.function.name === "cat") {
-    const elem = <CatTool key={`cat-tool-${processed.length}`} toolCall={head} />;
+    const elem = (
+      <CatTool key={`cat-tool-${processed.length}`} toolCall={head} />
+    );
     return processToolCalls(tail, toolResults, features, [...processed, elem]);
   }
 
   if (head.function.name === "tree") {
-    const elem = <TreeTool key={`tree-tool-${processed.length}`} toolCall={head} />;
+    const elem = (
+      <TreeTool key={`tree-tool-${processed.length}`} toolCall={head} />
+    );
     return processToolCalls(tail, toolResults, features, [...processed, elem]);
   }
 
   if (head.function.name === "search_pattern") {
-    const elem = <SearchPatternTool key={`search-pattern-tool-${processed.length}`} toolCall={head} />;
-    return processToolCalls(tail, toolResults, features, [...processed, elem]);
-  }
-
-  if (head.function.name === "search_semantic") {
-    const elem = <SearchSemanticTool key={`search-semantic-tool-${processed.length}`} toolCall={head} />;
-    return processToolCalls(tail, toolResults, features, [...processed, elem]);
-  }
-
-  if (head.function.name === "search_symbol_definition") {
-    const elem = <SearchSymbolTool key={`search-symbol-tool-${processed.length}`} toolCall={head} />;
-    return processToolCalls(tail, toolResults, features, [...processed, elem]);
-  }
-
-  if (head.function.name === "shell") {
     const elem = (
-      <ShellTool
-        key={`shell-tool-${processed.length}`}
+      <SearchPatternTool
+        key={`search-pattern-tool-${processed.length}`}
         toolCall={head}
       />
     );
     return processToolCalls(tail, toolResults, features, [...processed, elem]);
   }
 
-  if (head.function.name === "subagent") {
+  if (head.function.name === "search_semantic") {
     const elem = (
-      <SubagentTool
-        key={`subagent-tool-${processed.length}`}
+      <SearchSemanticTool
+        key={`search-semantic-tool-${processed.length}`}
         toolCall={head}
       />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "search_symbol_definition") {
+    const elem = (
+      <SearchSymbolTool
+        key={`search-symbol-tool-${processed.length}`}
+        toolCall={head}
+      />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "shell") {
+    const elem = (
+      <ShellTool key={`shell-tool-${processed.length}`} toolCall={head} />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
+  if (head.function.name === "subagent") {
+    const elem = (
+      <SubagentTool key={`subagent-tool-${processed.length}`} toolCall={head} />
     );
     return processToolCalls(tail, toolResults, features, [...processed, elem]);
   }
@@ -671,26 +683,33 @@ const ToolUsageSummary = forwardRef<HTMLDivElement, ToolUsageSummaryProps>(
                 {getFileIcon(file)} {truncatePath(file)}
               </Text>
             ))}
-            {currentStep && (() => {
-              const parsed = parseProgressEntry(currentStep);
-              return (
-                <Flex direction="column" gap="1" ml="4" mt="1">
-                  {parsed.step && (
-                    <Flex align="center" gap="1">
-                      {waiting && <Spinner size="1" />}
-                      <Text weight="light" size="1">
-                        {parsed.step}:
+            {currentStep &&
+              (() => {
+                const parsed = parseProgressEntry(currentStep);
+                return (
+                  <Flex direction="column" gap="1" ml="4" mt="1">
+                    {parsed.step && (
+                      <Flex align="center" gap="1">
+                        {waiting && <Spinner size="1" />}
+                        <Text weight="light" size="1">
+                          {parsed.step}:
+                        </Text>
+                      </Flex>
+                    )}
+                    {parsed.lines.map((line, i) => (
+                      <Text
+                        key={i}
+                        weight="light"
+                        size="1"
+                        ml={parsed.step ? "4" : "0"}
+                      >
+                        {parsed.step ? "🔨 " : ""}
+                        {line}
                       </Text>
-                    </Flex>
-                  )}
-                  {parsed.lines.map((line, i) => (
-                    <Text key={i} weight="light" size="1" ml={parsed.step ? "4" : "0"}>
-                      {parsed.step ? "🔨 " : ""}{line}
-                    </Text>
-                  ))}
-                </Flex>
-              );
-            })()}
+                    ))}
+                  </Flex>
+                );
+              })()}
           </Flex>
           <Chevron open={open} />
         </Flex>
@@ -1223,23 +1242,48 @@ const CatTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
     scrollOnHide();
   }, [scrollOnHide]);
 
-  const paths = args.paths?.split(",").map((p) => p.trim()).filter(Boolean) ?? [];
+  const paths =
+    args.paths
+      ?.split(",")
+      .map((p) => p.trim())
+      .filter(Boolean) ?? [];
 
   return (
     <Container py="1">
       <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
         <Collapsible.Root open={open} onOpenChange={setOpen}>
           <Collapsible.Trigger asChild>
-            <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">📄</Text>}
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    📄
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
                   <Text weight="light" size="1">
-                    {paths.length === 1 ? truncatePath(paths[0], 60) : `${paths.length} files`}
+                    {paths.length === 1
+                      ? truncatePath(paths[0], 60)
+                      : `${paths.length} files`}
                   </Text>
                   {paths.length > 1 && (
                     <Text weight="light" size="1" color="gray">
-                      {paths.slice(0, 3).map((p) => truncatePath(p, 25)).join(", ")}{paths.length > 3 ? ", …" : ""}
+                      {paths
+                        .slice(0, 3)
+                        .map((p) => truncatePath(p, 25))
+                        .join(", ")}
+                      {paths.length > 3 ? ", …" : ""}
                     </Text>
                   )}
                 </Flex>
@@ -1248,9 +1292,10 @@ const CatTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
             </Flex>
           </Collapsible.Trigger>
           <Collapsible.Content>
-            {maybeResult?.content && typeof maybeResult.content === "string" && (
-              <Result onClose={handleHide}>{maybeResult.content}</Result>
-            )}
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
           </Collapsible.Content>
         </Collapsible.Root>
       </AnimatedText>
@@ -1291,28 +1336,52 @@ const TreeTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
   const meta = [
     args.use_ast && "with AST",
     args.max_files && `max ${args.max_files}`,
-  ].filter(Boolean).join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <Container py="1">
       <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
         <Collapsible.Root open={open} onOpenChange={setOpen}>
           <Collapsible.Trigger asChild>
-            <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">📂</Text>}
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    📂
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1">{args.path ? truncatePath(args.path, 50) : "project root"}</Text>
-                  {meta && <Text weight="light" size="1" color="gray">{meta}</Text>}
+                  <Text weight="light" size="1">
+                    {args.path ? truncatePath(args.path, 50) : "project root"}
+                  </Text>
+                  {meta && (
+                    <Text weight="light" size="1" color="gray">
+                      {meta}
+                    </Text>
+                  )}
                 </Flex>
               </Flex>
               <Chevron open={open} />
             </Flex>
           </Collapsible.Trigger>
           <Collapsible.Content>
-            {maybeResult?.content && typeof maybeResult.content === "string" && (
-              <Result onClose={handleHide}>{maybeResult.content}</Result>
-            )}
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
           </Collapsible.Content>
         </Collapsible.Root>
       </AnimatedText>
@@ -1354,15 +1423,36 @@ const SearchPatternTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
       <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
         <Collapsible.Root open={open} onOpenChange={setOpen}>
           <Collapsible.Trigger asChild>
-            <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">🔍</Text>}
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    🔍
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1" style={{ fontFamily: "var(--code-font-family)" }}>
+                  <Text
+                    weight="light"
+                    size="1"
+                    style={{ fontFamily: "var(--code-font-family)" }}
+                  >
                     /{args.pattern}/
                   </Text>
                   {args.scope && args.scope !== "workspace" && (
-                    <Text weight="light" size="1" color="gray">in {args.scope}</Text>
+                    <Text weight="light" size="1" color="gray">
+                      in {args.scope}
+                    </Text>
                   )}
                 </Flex>
               </Flex>
@@ -1370,9 +1460,10 @@ const SearchPatternTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
             </Flex>
           </Collapsible.Trigger>
           <Collapsible.Content>
-            {maybeResult?.content && typeof maybeResult.content === "string" && (
-              <Result onClose={handleHide}>{maybeResult.content}</Result>
-            )}
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
           </Collapsible.Content>
         </Collapsible.Root>
       </AnimatedText>
@@ -1414,13 +1505,32 @@ const SearchSemanticTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
       <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
         <Collapsible.Root open={open} onOpenChange={setOpen}>
           <Collapsible.Trigger asChild>
-            <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">🔍</Text>}
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    🔍
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1">&quot;{args.queries}&quot;</Text>
+                  <Text weight="light" size="1">
+                    &quot;{args.queries}&quot;
+                  </Text>
                   {args.scope && args.scope !== "workspace" && (
-                    <Text weight="light" size="1" color="gray">in {args.scope}</Text>
+                    <Text weight="light" size="1" color="gray">
+                      in {args.scope}
+                    </Text>
                   )}
                 </Flex>
               </Flex>
@@ -1428,9 +1538,10 @@ const SearchSemanticTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
             </Flex>
           </Collapsible.Trigger>
           <Collapsible.Content>
-            {maybeResult?.content && typeof maybeResult.content === "string" && (
-              <Result onClose={handleHide}>{maybeResult.content}</Result>
-            )}
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
           </Collapsible.Content>
         </Collapsible.Root>
       </AnimatedText>
@@ -1466,17 +1577,40 @@ const SearchSymbolTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
     scrollOnHide();
   }, [scrollOnHide]);
 
-  const symbols = args.symbols?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+  const symbols =
+    args.symbols
+      ?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean) ?? [];
 
   return (
     <Container py="1">
       <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
         <Collapsible.Root open={open} onOpenChange={setOpen}>
           <Collapsible.Trigger asChild>
-            <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">🔍</Text>}
-                <Text weight="light" size="1" style={{ fontFamily: "var(--code-font-family)" }}>
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    🔍
+                  </Text>
+                )}
+                <Text
+                  weight="light"
+                  size="1"
+                  style={{ fontFamily: "var(--code-font-family)" }}
+                >
                   {symbols.map((s) => `${s}()`).join(", ")}
                 </Text>
               </Flex>
@@ -1484,9 +1618,10 @@ const SearchSymbolTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
             </Flex>
           </Collapsible.Trigger>
           <Collapsible.Content>
-            {maybeResult?.content && typeof maybeResult.content === "string" && (
-              <Result onClose={handleHide}>{maybeResult.content}</Result>
-            )}
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
           </Collapsible.Content>
         </Collapsible.Root>
       </AnimatedText>
@@ -1534,14 +1669,37 @@ const ShellTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
       <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
         <Collapsible.Root open={open} onOpenChange={setOpen}>
           <Collapsible.Trigger asChild>
-            <Flex gap="2" align="end" onClick={() => setOpen((prev) => !prev)} ref={ref}>
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">⚙️</Text>}
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    ⚙️
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1">$ {command}</Text>
-                  {args.workdir && <Text weight="light" size="1" color="gray">in {args.workdir}</Text>}
+                  <Text weight="light" size="1">
+                    $ {command}
+                  </Text>
+                  {args.workdir && (
+                    <Text weight="light" size="1" color="gray">
+                      in {args.workdir}
+                    </Text>
+                  )}
                   {currentStep && (
-                    <Text weight="light" size="1" color="gray">{currentStep}</Text>
+                    <Text weight="light" size="1" color="gray">
+                      {currentStep}
+                    </Text>
                   )}
                 </Flex>
               </Flex>
@@ -1549,9 +1707,10 @@ const ShellTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
             </Flex>
           </Collapsible.Trigger>
           <Collapsible.Content>
-            {maybeResult?.content && typeof maybeResult.content === "string" && (
-              <Result onClose={handleHide}>{maybeResult.content}</Result>
-            )}
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
           </Collapsible.Content>
         </Collapsible.Root>
       </AnimatedText>
@@ -1596,7 +1755,9 @@ const SubagentTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
   const meta = [
     args.tools && `tools: ${args.tools}`,
     args.max_steps && `max: ${args.max_steps}`,
-  ].filter(Boolean).join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <Container py="1">
@@ -1609,33 +1770,58 @@ const SubagentTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
               onClick={() => setOpen((prev) => !prev)}
               ref={ref}
             >
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">🤖</Text>}
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    🤖
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1">{args.task}</Text>
-                  {meta && <Text weight="light" size="1" color="gray">{meta}</Text>}
-                  {currentStep && (() => {
-                    const parsed = parseProgressEntry(currentStep);
-                    return (
-                      <Flex direction="column" gap="1">
-                        {parsed.step && <Text weight="light" size="1">{parsed.step}:</Text>}
-                        {parsed.lines.map((line, i) => (
-                          <Text key={i} weight="light" size="1" ml="3">{parsed.step ? "🔨 " : ""}{line}</Text>
-                        ))}
-                      </Flex>
-                    );
-                  })()}
+                  <Text weight="light" size="1">
+                    {args.task}
+                  </Text>
+                  {meta && (
+                    <Text weight="light" size="1" color="gray">
+                      {meta}
+                    </Text>
+                  )}
+                  {currentStep &&
+                    (() => {
+                      const parsed = parseProgressEntry(currentStep);
+                      return (
+                        <Flex direction="column" gap="1">
+                          {parsed.step && (
+                            <Text weight="light" size="1">
+                              {parsed.step}:
+                            </Text>
+                          )}
+                          {parsed.lines.map((line, i) => (
+                            <Text key={i} weight="light" size="1" ml="3">
+                              {parsed.step ? "🔨 " : ""}
+                              {line}
+                            </Text>
+                          ))}
+                        </Flex>
+                      );
+                    })()}
                 </Flex>
               </Flex>
               <Chevron open={open} />
             </Flex>
           </Collapsible.Trigger>
-        <Collapsible.Content>
-          {maybeResult?.content && typeof maybeResult.content === "string" && (
-            <Result onClose={handleHide}>{maybeResult.content}</Result>
-          )}
-        </Collapsible.Content>
-      </Collapsible.Root>
+          <Collapsible.Content>
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
+          </Collapsible.Content>
+        </Collapsible.Root>
       </AnimatedText>
     </Container>
   );
@@ -1645,7 +1831,9 @@ interface StrategicPlanningArgs {
   important_paths?: string;
 }
 
-const StrategicPlanningTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+const StrategicPlanningTool: React.FC<{ toolCall: ToolCall }> = ({
+  toolCall,
+}) => {
   const [open, setOpen] = React.useState(false);
   const ref = useRef(null);
   const scrollOnHide = useHideScroll(ref);
@@ -1666,7 +1854,10 @@ const StrategicPlanningTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) =
 
   const paths = useMemo(() => {
     if (!args.important_paths) return [];
-    return args.important_paths.split(",").map((p) => p.trim()).filter(Boolean);
+    return args.important_paths
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
   }, [args.important_paths]);
 
   const handleHide = useCallback(() => {
@@ -1688,33 +1879,61 @@ const StrategicPlanningTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) =
               onClick={() => setOpen((prev) => !prev)}
               ref={ref}
             >
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">🎯</Text>}
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    🎯
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1">Strategic Planning</Text>
-                  <Text weight="light" size="1" color="gray">{paths.length} files: {paths.slice(0, 3).map(p => truncatePath(p, 20)).join(", ")}{paths.length > 3 ? ", …" : ""}</Text>
-                  {currentStep && (() => {
-                    const parsed = parseProgressEntry(currentStep);
-                    return (
-                      <Flex direction="column" gap="1">
-                        {parsed.step && <Text weight="light" size="1">{parsed.step}:</Text>}
-                        {parsed.lines.map((line, i) => (
-                          <Text key={i} weight="light" size="1" ml="3">{parsed.step ? "🔨 " : ""}{line}</Text>
-                        ))}
-                      </Flex>
-                    );
-                  })()}
+                  <Text weight="light" size="1">
+                    Strategic Planning
+                  </Text>
+                  <Text weight="light" size="1" color="gray">
+                    {paths.length} files:{" "}
+                    {paths
+                      .slice(0, 3)
+                      .map((p) => truncatePath(p, 20))
+                      .join(", ")}
+                    {paths.length > 3 ? ", …" : ""}
+                  </Text>
+                  {currentStep &&
+                    (() => {
+                      const parsed = parseProgressEntry(currentStep);
+                      return (
+                        <Flex direction="column" gap="1">
+                          {parsed.step && (
+                            <Text weight="light" size="1">
+                              {parsed.step}:
+                            </Text>
+                          )}
+                          {parsed.lines.map((line, i) => (
+                            <Text key={i} weight="light" size="1" ml="3">
+                              {parsed.step ? "🔨 " : ""}
+                              {line}
+                            </Text>
+                          ))}
+                        </Flex>
+                      );
+                    })()}
                 </Flex>
               </Flex>
               <Chevron open={open} />
             </Flex>
           </Collapsible.Trigger>
-        <Collapsible.Content>
-          {maybeResult?.content && typeof maybeResult.content === "string" && (
-            <Result onClose={handleHide}>{maybeResult.content}</Result>
-          )}
-        </Collapsible.Content>
-      </Collapsible.Root>
+          <Collapsible.Content>
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
+          </Collapsible.Content>
+        </Collapsible.Root>
       </AnimatedText>
     </Container>
   );
@@ -1762,35 +1981,61 @@ const DeepResearchTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
               onClick={() => setOpen((prev) => !prev)}
               ref={ref}
             >
-              <Flex gap="2" align="start" style={{ cursor: "pointer", flex: 1 }}>
-                {inProgress ? <Spinner size="1" /> : <Text weight="light" size="1">🔬</Text>}
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    🔬
+                  </Text>
+                )}
                 <Flex gap="1" align="start" direction="column">
-                  <Text weight="light" size="1">Deep Research</Text>
-                  <Text weight="light" size="1" color="gray" style={{ fontStyle: "italic" }}>
+                  <Text weight="light" size="1">
+                    Deep Research
+                  </Text>
+                  <Text
+                    weight="light"
+                    size="1"
+                    color="gray"
+                    style={{ fontStyle: "italic" }}
+                  >
                     {args.research_query}
                   </Text>
-                  {currentStep && (() => {
-                    const parsed = parseProgressEntry(currentStep);
-                    return (
-                      <Flex direction="column" gap="1">
-                        {parsed.step && <Text weight="light" size="1">{parsed.step}:</Text>}
-                        {parsed.lines.map((line, i) => (
-                          <Text key={i} weight="light" size="1" ml="3">{parsed.step ? "🔨 " : ""}{line}</Text>
-                        ))}
-                      </Flex>
-                    );
-                  })()}
+                  {currentStep &&
+                    (() => {
+                      const parsed = parseProgressEntry(currentStep);
+                      return (
+                        <Flex direction="column" gap="1">
+                          {parsed.step && (
+                            <Text weight="light" size="1">
+                              {parsed.step}:
+                            </Text>
+                          )}
+                          {parsed.lines.map((line, i) => (
+                            <Text key={i} weight="light" size="1" ml="3">
+                              {parsed.step ? "🔨 " : ""}
+                              {line}
+                            </Text>
+                          ))}
+                        </Flex>
+                      );
+                    })()}
                 </Flex>
               </Flex>
               <Chevron open={open} />
             </Flex>
           </Collapsible.Trigger>
-        <Collapsible.Content>
-          {maybeResult?.content && typeof maybeResult.content === "string" && (
-            <Result onClose={handleHide}>{maybeResult.content}</Result>
-          )}
-        </Collapsible.Content>
-      </Collapsible.Root>
+          <Collapsible.Content>
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
+          </Collapsible.Content>
+        </Collapsible.Root>
       </AnimatedText>
     </Container>
   );

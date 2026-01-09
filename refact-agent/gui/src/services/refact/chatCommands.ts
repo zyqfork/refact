@@ -225,7 +225,9 @@ export async function cancelQueuedItem(
   port: number,
   apiKey?: string,
 ): Promise<boolean> {
-  const url = `http://127.0.0.1:${port}/v1/chats/${encodeURIComponent(chatId)}/queue/${encodeURIComponent(clientRequestId)}`;
+  const url = `http://127.0.0.1:${port}/v1/chats/${encodeURIComponent(
+    chatId,
+  )}/queue/${encodeURIComponent(clientRequestId)}`;
   const headers: Record<string, string> = {};
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;

@@ -11,7 +11,7 @@ use crate::global_context::GlobalContext;
 use super::types::*;
 use super::content::parse_content_with_attachments;
 use super::generation::start_generation;
-use super::tools::execute_tools;
+use super::tools::execute_tools_with_session;
 use super::trajectories::maybe_save_trajectory;
 
 fn command_triggers_generation(cmd: &ChatCommand) -> bool {
@@ -529,8 +529,9 @@ async fn handle_tool_decisions(
         }
 
         let chat_mode = super::generation::parse_chat_mode(&thread.mode);
-        let (tool_results, _) = execute_tools(
+        let (tool_results, _) = execute_tools_with_session(
             gcx.clone(),
+            session_arc.clone(),
             &tool_calls_to_execute,
             &messages,
             &thread,

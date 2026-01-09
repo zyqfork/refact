@@ -66,7 +66,7 @@ describe("threadStorage", () => {
       const content = "Draft before refresh";
 
       saveDraftMessage(threadId, content);
-      
+
       const retrievedAfterRefresh = getDraftMessage(threadId);
       expect(retrievedAfterRefresh).toBe(content);
     });

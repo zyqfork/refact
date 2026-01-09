@@ -1,6 +1,18 @@
 import React, { useCallback } from "react";
-import { Flex, Box, Text, Card, Badge, Heading, Tooltip } from "@radix-ui/themes";
-import type { TaskBoard, BoardCard, BoardColumn } from "../../services/refact/tasks";
+import {
+  Flex,
+  Box,
+  Text,
+  Card,
+  Badge,
+  Heading,
+  Tooltip,
+} from "@radix-ui/themes";
+import type {
+  TaskBoard,
+  BoardCard,
+  BoardColumn,
+} from "../../services/refact/tasks";
 import styles from "./Tasks.module.css";
 
 const getPriorityColor = (priority: string): "red" | "orange" | "gray" => {
@@ -77,25 +89,31 @@ interface KanbanColumnProps {
   onCardClick?: (card: BoardCard) => void;
 }
 
-const KanbanColumn: React.FC<KanbanColumnProps> = ({ column, cards, onCardClick }) => {
+const KanbanColumn: React.FC<KanbanColumnProps> = ({
+  column,
+  cards,
+  onCardClick,
+}) => {
   return (
     <Flex
       direction="column"
       className={styles.kanbanColumn}
       style={{ borderTopColor: columnColors[column.id] || "var(--gray-5)" }}
     >
-      <Flex justify="between" align="center" className={styles.kanbanColumnHeader}>
+      <Flex
+        justify="between"
+        align="center"
+        className={styles.kanbanColumnHeader}
+      >
         <Heading size="1">{column.title}</Heading>
-        <Badge size="1" color="gray">{cards.length}</Badge>
+        <Badge size="1" color="gray">
+          {cards.length}
+        </Badge>
       </Flex>
       <Box className={styles.kanbanColumnContent}>
         <Flex direction="column" gap="1">
           {cards.map((card) => (
-            <KanbanCard
-              key={card.id}
-              card={card}
-              onClick={onCardClick}
-            />
+            <KanbanCard key={card.id} card={card} onClick={onCardClick} />
           ))}
         </Flex>
       </Box>
@@ -108,10 +126,16 @@ interface KanbanBoardProps {
   onCardClick?: (card: BoardCard) => void;
 }
 
-export const KanbanBoard: React.FC<KanbanBoardProps> = ({ board, onCardClick }) => {
-  const getCardsForColumn = useCallback((columnId: string): BoardCard[] => {
-    return board.cards.filter(card => card.column === columnId);
-  }, [board.cards]);
+export const KanbanBoard: React.FC<KanbanBoardProps> = ({
+  board,
+  onCardClick,
+}) => {
+  const getCardsForColumn = useCallback(
+    (columnId: string): BoardCard[] => {
+      return board.cards.filter((card) => card.column === columnId);
+    },
+    [board.cards],
+  );
 
   return (
     <Flex className={styles.kanbanBoard}>

@@ -1,5 +1,15 @@
 import React, { useCallback, useState } from "react";
-import { Flex, Box, Text, Button, Card, Badge, TextField, Heading, Spinner } from "@radix-ui/themes";
+import {
+  Flex,
+  Box,
+  Text,
+  Button,
+  Card,
+  Badge,
+  TextField,
+  Heading,
+  Spinner,
+} from "@radix-ui/themes";
 import {
   PlusIcon,
   DotFilledIcon,
@@ -19,7 +29,10 @@ import {
 } from "../../services/refact/tasks";
 import { openTask } from "./tasksSlice";
 
-const statusColors: Record<TaskMeta["status"], "gray" | "blue" | "yellow" | "green" | "red"> = {
+const statusColors: Record<
+  TaskMeta["status"],
+  "gray" | "blue" | "yellow" | "green" | "red"
+> = {
   planning: "gray",
   active: "blue",
   paused: "yellow",
@@ -117,11 +130,14 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onClick, onDelete }) => {
                   color="blue"
                   style={{ display: "flex", gap: "4px", alignItems: "center" }}
                 >
-                  <Spinner style={{ width: 12, height: 12 }} /> {task.agents_active} agent{task.agents_active > 1 ? "s" : ""}
+                  <Spinner style={{ width: 12, height: 12 }} />{" "}
+                  {task.agents_active} agent{task.agents_active > 1 ? "s" : ""}
                 </Text>
               )}
             </Flex>
-            <Text size="1" color="gray">{dateTimeString}</Text>
+            <Text size="1" color="gray">
+              {dateTimeString}
+            </Text>
           </Flex>
         </button>
       </Card>
@@ -172,23 +188,32 @@ export const TaskList: React.FC = () => {
       });
   }, [createTask, dispatch, newTaskName]);
 
-  const handleTaskClick = useCallback((task: TaskMeta) => {
-    dispatch(openTask({ id: task.id, name: task.name }));
-    dispatch(push({ name: "task workspace", taskId: task.id }));
-  }, [dispatch]);
+  const handleTaskClick = useCallback(
+    (task: TaskMeta) => {
+      dispatch(openTask({ id: task.id, name: task.name }));
+      dispatch(push({ name: "task workspace", taskId: task.id }));
+    },
+    [dispatch],
+  );
 
-  const handleDeleteTask = useCallback((taskId: string) => {
-    void deleteTask(taskId);
-  }, [deleteTask]);
+  const handleDeleteTask = useCallback(
+    (taskId: string) => {
+      void deleteTask(taskId);
+    },
+    [deleteTask],
+  );
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      handleCreateTask();
-    } else if (e.key === "Escape") {
-      setIsCreating(false);
-      setNewTaskName("");
-    }
-  }, [handleCreateTask]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        handleCreateTask();
+      } else if (e.key === "Escape") {
+        setIsCreating(false);
+        setNewTaskName("");
+      }
+    },
+    [handleCreateTask],
+  );
 
   if (isLoading) {
     return (
@@ -223,7 +248,14 @@ export const TaskList: React.FC = () => {
             <Button onClick={handleCreateTask} disabled={!newTaskName.trim()}>
               Create
             </Button>
-            <Button variant="soft" color="gray" onClick={() => { setIsCreating(false); setNewTaskName(""); }}>
+            <Button
+              variant="soft"
+              color="gray"
+              onClick={() => {
+                setIsCreating(false);
+                setNewTaskName("");
+              }}
+            >
               Cancel
             </Button>
           </Flex>

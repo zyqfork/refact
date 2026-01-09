@@ -243,7 +243,12 @@ export function useChatActions() {
   const cancelQueued = useCallback(
     async (clientRequestId: string) => {
       if (!chatId || !port) return false;
-      return cancelQueuedItem(chatId, clientRequestId, port, apiKey ?? undefined);
+      return cancelQueuedItem(
+        chatId,
+        clientRequestId,
+        port,
+        apiKey ?? undefined,
+      );
     },
     [chatId, port, apiKey],
   );

@@ -29,7 +29,7 @@ import { useLinksFromLsp } from "../../hooks";
 
 import { ChatLinkButton } from "../ChatLinks";
 import { extractLinkFromPuzzle } from "../../utils/extractLinkFromPuzzle";
-import { useInternalLinkHandler } from "../../contexts/InternalLinkContext";
+import { useInternalLinkHandler } from "../../contexts/internalLinkUtils";
 
 export type MarkdownProps = Pick<
   React.ComponentProps<typeof ReactMarkdown>,

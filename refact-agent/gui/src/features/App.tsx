@@ -242,7 +242,9 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
           />
         )}
         {page.name === "tasks list" && <TaskList />}
-        {page.name === "task workspace" && <TaskWorkspace taskId={page.taskId} />}
+        {page.name === "task workspace" && (
+          <TaskWorkspace taskId={page.taskId} />
+        )}
       </PageWrapper>
       {page.name !== "welcome" && <Tour page={pages[pages.length - 1].name} />}
     </Flex>

@@ -139,9 +139,13 @@ export const historySlice = createSlice({
     saveChat: (state, action: PayloadAction<ChatThread>) => {
       if (action.payload.messages.length === 0) return;
       const chat = chatThreadToHistoryItem(action.payload);
-      const existing = state[chat.id];
-      if (existing) {
-        if (existing.isTitleGenerated && !chat.isTitleGenerated) {
+      // Preserve existing metadata if chat already exists
+      if (chat.id in state) {
+        const existing = state[chat.id];
+        if (
+          existing.isTitleGenerated === true &&
+          chat.isTitleGenerated !== true
+        ) {
           chat.title = existing.title;
           chat.isTitleGenerated = true;
         }
@@ -239,9 +243,7 @@ export const historySlice = createSlice({
     getHistory: (state): ChatHistoryItem[] =>
       Object.values(state)
         .filter((item) => !item.task_id)
-        .sort((a, b) =>
-          b.updatedAt.localeCompare(a.updatedAt),
-      ),
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
 
     getHistoryTree: (state): HistoryTreeNode[] => {
       const items = Object.values(state).filter((item) => !item.task_id);
@@ -256,13 +258,18 @@ export const historySlice = createSlice({
       const handoffParentIds = new Set<string>();
 
       for (const item of items) {
-        if (item.link_type === "handoff" && item.parent_id && itemMap.has(item.parent_id)) {
+        if (
+          item.link_type === "handoff" &&
+          item.parent_id &&
+          itemMap.has(item.parent_id)
+        ) {
           handoffParentIds.add(item.parent_id);
         }
       }
 
       for (const item of items) {
-        const node = itemMap.get(item.id)!;
+        const node = itemMap.get(item.id);
+        if (!node) continue;
 
         if (handoffParentIds.has(item.id)) {
           continue;
@@ -273,20 +280,25 @@ export const historySlice = createSlice({
             roots.push(node);
             continue;
           }
-          const parent = itemMap.get(item.parent_id)!;
-          if (parent.parent_id === item.id) {
+          const parent = itemMap.get(item.parent_id);
+          if (!parent || parent.parent_id === item.id) {
             roots.push(node);
             continue;
           }
 
           if (item.link_type === "handoff") {
-            const parentNode = itemMap.get(item.parent_id)!;
-            node.children.push(parentNode);
-            assignedAsChild.add(item.parent_id);
-            roots.push(node);
+            const parentNode = itemMap.get(item.parent_id);
+            if (parentNode) {
+              node.children.push(parentNode);
+              assignedAsChild.add(item.parent_id);
+              roots.push(node);
+            }
           } else {
-            itemMap.get(item.parent_id)!.children.push(node);
-            assignedAsChild.add(item.id);
+            const parentNode = itemMap.get(item.parent_id);
+            if (parentNode) {
+              parentNode.children.push(node);
+              assignedAsChild.add(item.id);
+            }
           }
         } else {
           roots.push(node);

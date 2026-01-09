@@ -12,7 +12,10 @@ import {
   HandoffPreviewResponse,
 } from "../services/refact/trajectory";
 import { trajectoriesApi } from "../services/refact/trajectories";
-import { createChatWithId, requestSseRefresh } from "../features/Chat/Thread/actions";
+import {
+  createChatWithId,
+  requestSseRefresh,
+} from "../features/Chat/Thread/actions";
 import { push } from "../features/Pages/pagesSlice";
 import { selectLspPort, selectApiKey } from "../features/Config/configSlice";
 import { regenerate } from "../services/refact/chatCommands";
@@ -41,18 +44,27 @@ export function useTrajectoryOps() {
     llm_summary_for_excluded: true,
   });
 
-  const [transformPreview, setTransformPreview] = useState<TransformPreviewResponse | null>(null);
-  const [handoffPreview, setHandoffPreview] = useState<HandoffPreviewResponse | null>(null);
+  const [transformPreview, setTransformPreview] =
+    useState<TransformPreviewResponse | null>(null);
+  const [handoffPreview, setHandoffPreview] =
+    useState<HandoffPreviewResponse | null>(null);
 
-  const [previewTransform, { isLoading: isPreviewingTransform }] = usePreviewTransformMutation();
-  const [applyTransform, { isLoading: isApplyingTransform }] = useApplyTransformMutation();
-  const [previewHandoff, { isLoading: isPreviewingHandoff }] = usePreviewHandoffMutation();
-  const [applyHandoff, { isLoading: isApplyingHandoff }] = useApplyHandoffMutation();
+  const [previewTransform, { isLoading: isPreviewingTransform }] =
+    usePreviewTransformMutation();
+  const [applyTransform, { isLoading: isApplyingTransform }] =
+    useApplyTransformMutation();
+  const [previewHandoff, { isLoading: isPreviewingHandoff }] =
+    usePreviewHandoffMutation();
+  const [applyHandoff, { isLoading: isApplyingHandoff }] =
+    useApplyHandoffMutation();
 
   const handlePreviewTransform = useCallback(async () => {
     if (!chatId) return;
     try {
-      const result = await previewTransform({ chatId, options: transformOptions }).unwrap();
+      const result = await previewTransform({
+        chatId,
+        options: transformOptions,
+      }).unwrap();
       setTransformPreview(result);
     } catch {
       setTransformPreview(null);
@@ -74,7 +86,10 @@ export function useTrajectoryOps() {
   const handlePreviewHandoff = useCallback(async () => {
     if (!chatId) return;
     try {
-      const result = await previewHandoff({ chatId, options: handoffOptions }).unwrap();
+      const result = await previewHandoff({
+        chatId,
+        options: handoffOptions,
+      }).unwrap();
       setHandoffPreview(result);
     } catch {
       setHandoffPreview(null);
@@ -84,8 +99,15 @@ export function useTrajectoryOps() {
   const handleApplyHandoff = useCallback(async () => {
     if (!chatId) return false;
     try {
-      const result = await applyHandoff({ chatId, options: handoffOptions }).unwrap();
-      await dispatch(trajectoriesApi.endpoints.listAllTrajectories.initiate(undefined, { forceRefetch: true }));
+      const result = await applyHandoff({
+        chatId,
+        options: handoffOptions,
+      }).unwrap();
+      await dispatch(
+        trajectoriesApi.endpoints.listAllTrajectories.initiate(undefined, {
+          forceRefetch: true,
+        }),
+      );
       dispatch(createChatWithId({ id: result.new_chat_id }));
       dispatch(requestSseRefresh({ chatId: result.new_chat_id }));
       dispatch(push({ name: "chat" }));
@@ -102,15 +124,21 @@ export function useTrajectoryOps() {
     setHandoffPreview(null);
   }, []);
 
-  const updateTransformOption = useCallback((key: keyof TransformOptions, value: boolean) => {
-    setTransformOptions((prev) => ({ ...prev, [key]: value }));
-    setTransformPreview(null);
-  }, []);
+  const updateTransformOption = useCallback(
+    (key: keyof TransformOptions, value: boolean) => {
+      setTransformOptions((prev) => ({ ...prev, [key]: value }));
+      setTransformPreview(null);
+    },
+    [],
+  );
 
-  const updateHandoffOption = useCallback((key: keyof HandoffOptions, value: boolean) => {
-    setHandoffOptions((prev) => ({ ...prev, [key]: value }));
-    setHandoffPreview(null);
-  }, []);
+  const updateHandoffOption = useCallback(
+    (key: keyof HandoffOptions, value: boolean) => {
+      setHandoffOptions((prev) => ({ ...prev, [key]: value }));
+      setHandoffPreview(null);
+    },
+    [],
+  );
 
   return {
     chatId,

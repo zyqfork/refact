@@ -53,7 +53,9 @@ export function useVoiceInput(
     const interval = setInterval(() => {
       getVoiceStatus()
         .then(setStatus)
-        .catch(() => {});
+        .catch(() => {
+          // Silently ignore errors during polling
+        });
     }, 1000);
 
     return () => clearInterval(interval);
@@ -72,7 +74,8 @@ export function useVoiceInput(
         }
         return null;
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to get transcript";
+        const message =
+          err instanceof Error ? err.message : "Failed to get transcript";
         setError(message);
         return null;
       }
@@ -80,9 +83,12 @@ export function useVoiceInput(
       try {
         await startRecording();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to start recording";
+        const message =
+          err instanceof Error ? err.message : "Failed to start recording";
         if (message.includes("Model not downloaded")) {
-          downloadVoiceModel().catch(() => {});
+          downloadVoiceModel().catch(() => {
+            // Silently ignore download errors
+          });
           const newStatus = await getVoiceStatus().catch(() => null);
           if (newStatus) setStatus(newStatus);
         }

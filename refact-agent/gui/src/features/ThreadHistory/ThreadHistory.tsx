@@ -1,4 +1,4 @@
-import { FC, useCallback } from "react";
+import { FC, useCallback, useMemo } from "react";
 import { Config } from "../Config/configSlice";
 import { Button, Flex } from "@radix-ui/themes";
 import { ArrowLeftIcon } from "@radix-ui/react-icons";
@@ -40,14 +40,20 @@ export const ThreadHistory: FC<ThreadHistoryProps> = ({
     devModeChecks: { stabilityCheck: "never" },
   });
 
-  const activeThread = useAppSelector((state) => selectThreadById(state, chatId));
+  const activeThread = useAppSelector((state) =>
+    selectThreadById(state, chatId),
+  );
 
   const threadToUse = historyThread ?? activeThread;
 
-  const historyThreadToPass = threadToUse && {
-    ...threadToUse,
-    model: threadToUse.model || "gpt-4o-mini",
-  };
+  const historyThreadToPass = useMemo(
+    () =>
+      threadToUse && {
+        ...threadToUse,
+        model: threadToUse.model || "gpt-4o-mini",
+      },
+    [threadToUse],
+  );
 
   const error = useAppSelector(getErrorMessage);
   const information = useAppSelector(getInformationMessage);

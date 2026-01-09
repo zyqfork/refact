@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAppSelector } from "./useAppSelector";
 import { selectChatId } from "../features/Chat";
-import { saveDraftMessage, getDraftMessage, clearDraftMessage } from "../utils/threadStorage";
+import {
+  saveDraftMessage,
+  getDraftMessage,
+  clearDraftMessage,
+} from "../utils/threadStorage";
 import { useDebounceCallback } from "usehooks-ts";
 
 export function useDraftMessage() {
@@ -30,10 +34,10 @@ export function useDraftMessage() {
       isInitialMount.current = false;
       return;
     }
-    
+
     if (chatId && chatId !== prevChatIdRef.current) {
       debouncedSave.flush();
-      
+
       const draft = getDraftMessage(chatId);
       setValueInternal(draft);
       prevChatIdRef.current = chatId;

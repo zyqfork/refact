@@ -1,13 +1,20 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppDispatch } from "./useAppDispatch";
 import { useAppSelector } from "./useAppSelector";
+import {
+  applyChatEvent,
+  clearSseRefreshRequest,
+} from "../features/Chat/Thread/actions";
+import { selectSseRefreshRequested } from "../features/Chat/Thread/selectors";
 import { selectLspPort, selectApiKey } from "../features/Config/configSlice";
 import {
   subscribeToChatEvents,
   type ChatEventEnvelope,
 } from "../services/refact/chatSubscription";
-import { applyChatEvent, clearSseRefreshRequest } from "../features/Chat/Thread/actions";
-import { selectSseRefreshRequested } from "../features/Chat/Thread/selectors";
+
+const DEBUG =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("debug");
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected";
 
@@ -118,14 +125,31 @@ export function useChatSubscription(
           try {
             const seq = BigInt(envelope.seq);
             if (envelope.type === "snapshot") {
-              console.log("[SSE] Received snapshot event, seq:", envelope.seq, "messages:", (envelope as { messages?: unknown[] }).messages?.length ?? "?");
+              if (DEBUG) {
+                // eslint-disable-next-line no-console
+                console.log(
+                  "[SSE] Received snapshot event, seq:",
+                  envelope.seq,
+                  "messages:",
+                  (envelope as { messages?: unknown[] }).messages?.length ??
+                    "?",
+                );
+              }
               lastSeqRef.current = seq;
             } else {
               if (seq <= lastSeqRef.current) {
                 return;
               }
               if (seq > lastSeqRef.current + 1n) {
-                console.log("[SSE] Sequence gap detected, reconnecting. Expected:", (lastSeqRef.current + 1n).toString(), "Got:", envelope.seq);
+                if (DEBUG) {
+                  // eslint-disable-next-line no-console
+                  console.log(
+                    "[SSE] Sequence gap detected, reconnecting. Expected:",
+                    (lastSeqRef.current + 1n).toString(),
+                    "Got:",
+                    envelope.seq,
+                  );
+                }
                 cleanup();
                 setStatus("disconnected");
                 scheduleReconnect(0);
@@ -175,7 +199,6 @@ export function useChatSubscription(
     reconnectDelay,
   ]);
 
-  // Keep ref in sync for scheduleReconnect to use
   connectRef.current = connect;
 
   const disconnect = useCallback(() => {
@@ -184,12 +207,13 @@ export function useChatSubscription(
   }, [cleanup]);
 
   const reconnect = useCallback(() => {
-    console.log("[SSE] Manual reconnect triggered for chat:", chatId);
-    cleanup();
+    // eslint-disable-next-line no-console
+    if (DEBUG)
+      console.log("[SSE] Manual reconnect triggered for chat:", chatId);
     setTimeout(() => {
       connect();
     }, 50);
-  }, [cleanup, connect, chatId]);
+  }, [connect, chatId]);
 
   useEffect(() => {
     if (chatId && enabled) {
@@ -203,7 +227,9 @@ export function useChatSubscription(
 
   useEffect(() => {
     if (status === "connected" && chatId && enabled) {
-      cleanup();
+      // eslint-disable-next-line no-console
+      if (DEBUG)
+        console.log("[SSE] Port changed, reconnecting for chat:", chatId);
       connect();
     }
   }, [port]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -212,7 +238,8 @@ export function useChatSubscription(
   const sseRefreshRequested = useAppSelector(selectSseRefreshRequested);
   useEffect(() => {
     if (sseRefreshRequested === chatId && enabled) {
-      console.log("[SSE] Refresh requested for chat:", chatId);
+      // eslint-disable-next-line no-console
+      if (DEBUG) console.log("[SSE] Refresh requested for chat:", chatId);
       dispatch(clearSseRefreshRequest());
       reconnect();
     }

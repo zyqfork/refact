@@ -182,7 +182,7 @@ pub async fn load_memories_by_tags(
             };
 
             let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
-            if frontmatter.is_archived() {
+            if frontmatter.is_archived() || frontmatter.is_deprecated() {
                 continue;
             }
 
@@ -326,7 +326,7 @@ pub async fn memories_search(
         };
 
         let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
-        if frontmatter.is_archived() {
+        if frontmatter.is_archived() || frontmatter.is_deprecated() {
             continue;
         }
 
@@ -507,7 +507,7 @@ async fn memories_search_fallback(
             }
 
             let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
-            if frontmatter.is_archived() {
+            if frontmatter.is_archived() || frontmatter.is_deprecated() {
                 continue;
             }
 

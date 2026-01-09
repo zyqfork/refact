@@ -603,7 +603,9 @@ startListening({
         type: "set_params",
         patch: { automatic_patch: action.payload.value },
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   },
 });
 
@@ -745,7 +747,9 @@ startListening({
         type: "set_params",
         patch: { model: action.payload },
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   },
 });
 
@@ -797,18 +801,24 @@ startListening({
     if (runtime.thread.model) patch.model = runtime.thread.model;
     if (runtime.thread.tool_use) patch.tool_use = runtime.thread.tool_use;
     if (runtime.thread.mode) patch.mode = runtime.thread.mode;
-    if (runtime.thread.boost_reasoning !== undefined) patch.boost_reasoning = runtime.thread.boost_reasoning;
-    if (runtime.thread.automatic_patch !== undefined) patch.automatic_patch = runtime.thread.automatic_patch;
-    if (runtime.thread.include_project_info !== undefined) patch.include_project_info = runtime.thread.include_project_info;
-    if (runtime.thread.context_tokens_cap !== undefined) patch.context_tokens_cap = runtime.thread.context_tokens_cap;
+    if (runtime.thread.boost_reasoning !== undefined)
+      patch.boost_reasoning = runtime.thread.boost_reasoning;
+    if (runtime.thread.automatic_patch !== undefined)
+      patch.automatic_patch = runtime.thread.automatic_patch;
+    if (runtime.thread.include_project_info !== undefined)
+      patch.include_project_info = runtime.thread.include_project_info;
+    if (runtime.thread.context_tokens_cap !== undefined)
+      patch.context_tokens_cap = runtime.thread.context_tokens_cap;
 
     if (Object.keys(patch).length === 0) return;
 
     try {
-      await sendChatCommand(chatId, port, apiKey ?? undefined, { type: "set_params", patch });
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch,
+      });
     } catch {
       // Best effort - ignore if backend rejects
     }
   },
 });
-

@@ -18,12 +18,19 @@ export interface PersistedThreadParams {
   follow_ups_enabled?: boolean;
 }
 
-type DraftMessagesStorage = Partial<Record<string, {
-  content: string;
-  timestamp: number;
-}>>;
+type DraftMessagesStorage = Partial<
+  Record<
+    string,
+    {
+      content: string;
+      timestamp: number;
+    }
+  >
+>;
 
-export function saveLastThreadParams(params: Partial<PersistedThreadParams>): void {
+export function saveLastThreadParams(
+  params: Partial<PersistedThreadParams>,
+): void {
   try {
     if (typeof localStorage === "undefined") return;
     const existing = getLastThreadParams();

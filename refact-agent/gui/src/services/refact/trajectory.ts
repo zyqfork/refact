@@ -53,7 +53,10 @@ export type HandoffApplyResponse = {
 };
 
 function buildUrl(template: string, chatId: string, port: number): string {
-  return `http://127.0.0.1:${port}${template.replace("{chat_id}", encodeURIComponent(chatId))}`;
+  return `http://127.0.0.1:${port}${template.replace(
+    "{chat_id}",
+    encodeURIComponent(chatId),
+  )}`;
 }
 
 export const trajectoryApi = createApi({
@@ -74,7 +77,7 @@ export const trajectoryApi = createApi({
     >({
       async queryFn({ chatId, options }, api, _opts, baseQuery) {
         const state = api.getState() as RootState;
-        const port = state.config.lspPort as number;
+        const port = state.config.lspPort;
         const url = buildUrl(TRAJECTORY_TRANSFORM_PREVIEW_URL, chatId, port);
         const result = await baseQuery({
           url,
@@ -92,7 +95,7 @@ export const trajectoryApi = createApi({
     >({
       async queryFn({ chatId, options }, api, _opts, baseQuery) {
         const state = api.getState() as RootState;
-        const port = state.config.lspPort as number;
+        const port = state.config.lspPort;
         const url = buildUrl(TRAJECTORY_TRANSFORM_APPLY_URL, chatId, port);
         const result = await baseQuery({
           url,
@@ -110,7 +113,7 @@ export const trajectoryApi = createApi({
     >({
       async queryFn({ chatId, options }, api, _opts, baseQuery) {
         const state = api.getState() as RootState;
-        const port = state.config.lspPort as number;
+        const port = state.config.lspPort;
         const url = buildUrl(TRAJECTORY_HANDOFF_PREVIEW_URL, chatId, port);
         const result = await baseQuery({
           url,
@@ -128,7 +131,7 @@ export const trajectoryApi = createApi({
     >({
       async queryFn({ chatId, options }, api, _opts, baseQuery) {
         const state = api.getState() as RootState;
-        const port = state.config.lspPort as number;
+        const port = state.config.lspPort;
         const url = buildUrl(TRAJECTORY_HANDOFF_APPLY_URL, chatId, port);
         const result = await baseQuery({
           url,

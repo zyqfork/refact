@@ -15,7 +15,10 @@ import { getErrorMessage, clearError } from "../../features/Errors/errorsSlice";
 import classNames from "classnames";
 import { selectHost } from "../../features/Config/configSlice";
 import styles from "./Sidebar.module.css";
-import { useListTasksQuery, useDeleteTaskMutation } from "../../services/refact/tasks";
+import {
+  useListTasksQuery,
+  useDeleteTaskMutation,
+} from "../../services/refact/tasks";
 import {
   LayersIcon,
   CheckCircledIcon,
@@ -60,15 +63,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
     [dispatch],
   );
 
-  const handleTaskClick = useCallback((taskId: string) => {
-    dispatch(push({ name: "task workspace", taskId }));
-  }, [dispatch]);
+  const handleTaskClick = useCallback(
+    (taskId: string) => {
+      dispatch(push({ name: "task workspace", taskId }));
+    },
+    [dispatch],
+  );
 
-  const handleDeleteTask = useCallback((taskId: string) => {
-    void deleteTask(taskId);
-  }, [deleteTask]);
+  const handleDeleteTask = useCallback(
+    (taskId: string) => {
+      void deleteTask(taskId);
+    },
+    [deleteTask],
+  );
 
-  const activeTasks = tasks.filter(t => t.status === "active" || t.status === "planning" || t.status === "paused");
+  const activeTasks = tasks.filter(
+    (t) =>
+      t.status === "active" || t.status === "planning" || t.status === "paused",
+  );
 
   return (
     <Flex style={{ ...style, flexDirection: "column" }}>
@@ -81,16 +93,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
 
       {activeTasks.length > 0 && (
         <Box p="2">
-          <Text size="2" weight="medium" color="gray" mb="2" style={{ display: "block" }}>
+          <Text
+            size="2"
+            weight="medium"
+            color="gray"
+            mb="2"
+            style={{ display: "block" }}
+          >
             Tasks
           </Text>
           <Flex direction="column" gap="2">
-            {activeTasks.map(task => {
-              const isActive = task.status === "active" || task.agents_active > 0;
+            {activeTasks.map((task) => {
+              const isActive =
+                task.status === "active" || task.agents_active > 0;
               const dateUpdated = new Date(task.updated_at);
               const dateTimeString = dateUpdated.toLocaleString();
               return (
-                <Box key={task.id} style={{ position: "relative", width: "100%" }}>
+                <Box
+                  key={task.id}
+                  style={{ position: "relative", width: "100%" }}
+                >
                   <Card
                     style={{ width: "100%", marginBottom: "2px" }}
                     variant="surface"
@@ -106,16 +128,38 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
                       }}
                     >
                       <Flex gap="1" align="center">
-                        {isActive && <Spinner style={{ minWidth: 16, minHeight: 16 }} />}
+                        {isActive && (
+                          <Spinner style={{ minWidth: 16, minHeight: 16 }} />
+                        )}
                         {!isActive && task.status === "completed" && (
-                          <CheckCircledIcon style={{ minWidth: 16, minHeight: 16, color: "var(--green-9)" }} />
+                          <CheckCircledIcon
+                            style={{
+                              minWidth: 16,
+                              minHeight: 16,
+                              color: "var(--green-9)",
+                            }}
+                          />
                         )}
                         {!isActive && task.status === "abandoned" && (
-                          <CrossCircledIcon style={{ minWidth: 16, minHeight: 16, color: "var(--red-9)" }} />
+                          <CrossCircledIcon
+                            style={{
+                              minWidth: 16,
+                              minHeight: 16,
+                              color: "var(--red-9)",
+                            }}
+                          />
                         )}
-                        {!isActive && task.status !== "completed" && task.status !== "abandoned" && (
-                          <DotFilledIcon style={{ minWidth: 16, minHeight: 16, color: "var(--gray-9)" }} />
-                        )}
+                        {!isActive &&
+                          task.status !== "completed" &&
+                          task.status !== "abandoned" && (
+                            <DotFilledIcon
+                              style={{
+                                minWidth: 16,
+                                minHeight: 16,
+                                color: "var(--gray-9)",
+                              }}
+                            />
+                          )}
                         <Text
                           as="div"
                           size="2"
@@ -132,21 +176,46 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
 
                       <Flex justify="between" mt="8px">
                         <Flex gap="4">
-                          <Text size="1" style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                          <Text
+                            size="1"
+                            style={{
+                              display: "flex",
+                              gap: "4px",
+                              alignItems: "center",
+                            }}
+                          >
                             <LayersIcon /> {task.cards_done}/{task.cards_total}
                           </Text>
                           {task.agents_active > 0 && (
-                            <Text size="1" color="blue" style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                              <Spinner style={{ width: 12, height: 12 }} /> {task.agents_active}
+                            <Text
+                              size="1"
+                              color="blue"
+                              style={{
+                                display: "flex",
+                                gap: "4px",
+                                alignItems: "center",
+                              }}
+                            >
+                              <Spinner style={{ width: 12, height: 12 }} />{" "}
+                              {task.agents_active}
                             </Text>
                           )}
                         </Flex>
-                        <Text size="1" color="gray">{dateTimeString}</Text>
+                        <Text size="1" color="gray">
+                          {dateTimeString}
+                        </Text>
                       </Flex>
                     </button>
                   </Card>
 
-                  <Flex position="absolute" top="6px" right="6px" gap="1" justify="end" align="center">
+                  <Flex
+                    position="absolute"
+                    top="6px"
+                    right="6px"
+                    gap="1"
+                    justify="end"
+                    align="center"
+                  >
                     <CloseButton
                       size="1"
                       onClick={(event) => {
@@ -166,7 +235,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
       )}
 
       <Box p="2" pb="0">
-        <Text size="2" weight="medium" color="gray" mb="2" style={{ display: "block" }}>
+        <Text
+          size="2"
+          weight="medium"
+          color="gray"
+          mb="2"
+          style={{ display: "block" }}
+        >
           Chats
         </Text>
       </Box>

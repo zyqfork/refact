@@ -27,7 +27,9 @@ export const tasksSlice = createSlice({
   reducers: {
     openTask: (state, action: PayloadAction<{ id: string; name: string }>) => {
       const rawName = action.payload.name;
-      const sanitizedName = (rawName && typeof rawName === "string" ? rawName.trim() : "") || "Task";
+      const sanitizedName =
+        (rawName && typeof rawName === "string" ? rawName.trim() : "") ||
+        "Task";
       const existing = state.openTasks.find((t) => t.id === action.payload.id);
       if (existing) {
         // Update name if changed and new name is meaningful
@@ -46,25 +48,39 @@ export const tasksSlice = createSlice({
     closeTask: (state, action: PayloadAction<string>) => {
       state.openTasks = state.openTasks.filter((t) => t.id !== action.payload);
     },
-    updateTaskName: (state, action: PayloadAction<{ id: string; name: string }>) => {
+    updateTaskName: (
+      state,
+      action: PayloadAction<{ id: string; name: string }>,
+    ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.id);
       if (task) {
         task.name = action.payload.name;
       }
     },
-    addPlannerChat: (state, action: PayloadAction<{ taskId: string; chatId: string }>) => {
+    addPlannerChat: (
+      state,
+      action: PayloadAction<{ taskId: string; chatId: string }>,
+    ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task && !task.plannerChats.includes(action.payload.chatId)) {
         task.plannerChats.push(action.payload.chatId);
       }
     },
-    removePlannerChat: (state, action: PayloadAction<{ taskId: string; chatId: string }>) => {
+    removePlannerChat: (
+      state,
+      action: PayloadAction<{ taskId: string; chatId: string }>,
+    ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task) {
-        task.plannerChats = task.plannerChats.filter((c) => c !== action.payload.chatId);
+        task.plannerChats = task.plannerChats.filter(
+          (c) => c !== action.payload.chatId,
+        );
       }
     },
-    setTaskActiveChat: (state, action: PayloadAction<{ taskId: string; activeChat: ActiveChat }>) => {
+    setTaskActiveChat: (
+      state,
+      action: PayloadAction<{ taskId: string; activeChat: ActiveChat }>,
+    ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task) {
         task.activeChat = action.payload.activeChat;
@@ -76,15 +92,24 @@ export const tasksSlice = createSlice({
   },
 });
 
-export const { openTask, closeTask, updateTaskName, addPlannerChat, removePlannerChat, setTaskActiveChat } =
-  tasksSlice.actions;
+export const {
+  openTask,
+  closeTask,
+  updateTaskName,
+  addPlannerChat,
+  removePlannerChat,
+  setTaskActiveChat,
+} = tasksSlice.actions;
 export const { selectOpenTasks } = tasksSlice.selectors;
 
 // Selector that works with RootState
 export const selectOpenTasksFromRoot = (state: RootState) =>
   state.tasksUI.openTasks;
 
-export const selectTaskActiveChat = (state: RootState, taskId: string): ActiveChat => {
+export const selectTaskActiveChat = (
+  state: RootState,
+  taskId: string,
+): ActiveChat => {
   const task = state.tasksUI.openTasks.find((t) => t.id === taskId);
   return task?.activeChat ?? null;
 };

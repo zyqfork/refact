@@ -87,13 +87,16 @@ export function useVoiceRecording(): UseVoiceRecordingResult {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log("Stream tracks:", stream.getAudioTracks().map(t => ({
-        label: t.label,
-        enabled: t.enabled,
-        muted: t.muted,
-        readyState: t.readyState,
-        settings: t.getSettings()
-      })));
+      console.log(
+        "Stream tracks:",
+        stream.getAudioTracks().map((t) => ({
+          label: t.label,
+          enabled: t.enabled,
+          muted: t.muted,
+          readyState: t.readyState,
+          settings: t.getSettings(),
+        })),
+      );
       streamRef.current = stream;
 
       const audioTracks = stream.getAudioTracks();

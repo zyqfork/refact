@@ -98,7 +98,10 @@ export const Chat: React.FC<ChatProps> = ({
         width="100%"
         px="1"
       >
-        <Flex direction="column" style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
+        <Flex
+          direction="column"
+          style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}
+        >
           <ChatContent
             key={`chat-content-${chatId}`}
             onRetry={handleRetry}
@@ -137,7 +140,9 @@ export const Chat: React.FC<ChatProps> = ({
                   <Text
                     size="1"
                     color="gray"
-                    onClick={() => setIsDebugChatHistoryVisible((prev) => !prev)}
+                    onClick={() =>
+                      setIsDebugChatHistoryVisible((prev) => !prev)
+                    }
                     style={{ cursor: "pointer" }}
                   >
                     mode: {chatToolUse}

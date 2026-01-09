@@ -111,7 +111,9 @@ export const tasksApi = createApi({
         const response = result.data as { meta: TaskMeta };
         return { data: response.meta };
       },
-      providesTags: (_result, _error, taskId) => [{ type: "Tasks", id: taskId }],
+      providesTags: (_result, _error, taskId) => [
+        { type: "Tasks", id: taskId },
+      ],
     }),
 
     deleteTask: builder.mutation<{ deleted: boolean }, string>({
@@ -128,7 +130,10 @@ export const tasksApi = createApi({
       invalidatesTags: ["Tasks"],
     }),
 
-    updateTaskStatus: builder.mutation<TaskMeta, { taskId: string; status: TaskMeta["status"] }>({
+    updateTaskStatus: builder.mutation<
+      TaskMeta,
+      { taskId: string; status: TaskMeta["status"] }
+    >({
       queryFn: async ({ taskId, status }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
@@ -140,7 +145,10 @@ export const tasksApi = createApi({
         if (result.error) return { error: result.error };
         return { data: result.data as TaskMeta };
       },
-      invalidatesTags: (_result, _error, { taskId }) => [{ type: "Tasks", id: taskId }, "Tasks"],
+      invalidatesTags: (_result, _error, { taskId }) => [
+        { type: "Tasks", id: taskId },
+        "Tasks",
+      ],
     }),
 
     getBoard: builder.query<TaskBoard, string>({
@@ -153,10 +161,15 @@ export const tasksApi = createApi({
         if (result.error) return { error: result.error };
         return { data: result.data as TaskBoard };
       },
-      providesTags: (_result, _error, taskId) => [{ type: "Board", id: taskId }],
+      providesTags: (_result, _error, taskId) => [
+        { type: "Board", id: taskId },
+      ],
     }),
 
-    patchBoard: builder.mutation<TaskBoard, { taskId: string; board: Partial<TaskBoard> }>({
+    patchBoard: builder.mutation<
+      TaskBoard,
+      { taskId: string; board: Partial<TaskBoard> }
+    >({
       queryFn: async ({ taskId, board }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
@@ -168,7 +181,9 @@ export const tasksApi = createApi({
         if (result.error) return { error: result.error };
         return { data: result.data as TaskBoard };
       },
-      invalidatesTags: (_result, _error, { taskId }) => [{ type: "Board", id: taskId }],
+      invalidatesTags: (_result, _error, { taskId }) => [
+        { type: "Board", id: taskId },
+      ],
     }),
 
     getReadyCards: builder.query<ReadyCardsResult, string>({
@@ -195,7 +210,10 @@ export const tasksApi = createApi({
       },
     }),
 
-    setOrchestratorInstructions: builder.mutation<{ saved: boolean }, { taskId: string; content: string }>({
+    setOrchestratorInstructions: builder.mutation<
+      { saved: boolean },
+      { taskId: string; content: string }
+    >({
       queryFn: async ({ taskId, content }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
@@ -210,7 +228,10 @@ export const tasksApi = createApi({
       },
     }),
 
-    listTaskTrajectories: builder.query<string[], { taskId: string; role: string }>({
+    listTaskTrajectories: builder.query<
+      string[],
+      { taskId: string; role: string }
+    >({
       queryFn: async ({ taskId, role }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
@@ -235,15 +256,30 @@ export const tasksApi = createApi({
       },
     }),
 
-    updateTaskMeta: builder.mutation<TaskMeta, { taskId: string; name?: string; baseBranch?: string; baseCommit?: string; defaultAgentModel?: string }>({
-      queryFn: async ({ taskId, name, baseBranch, baseCommit, defaultAgentModel }, api, _opts, baseQuery) => {
+    updateTaskMeta: builder.mutation<
+      TaskMeta,
+      {
+        taskId: string;
+        name?: string;
+        baseBranch?: string;
+        baseCommit?: string;
+        defaultAgentModel?: string;
+      }
+    >({
+      queryFn: async (
+        { taskId, name, baseBranch, baseCommit, defaultAgentModel },
+        api,
+        _opts,
+        baseQuery,
+      ) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
         const body: Record<string, string> = {};
         if (name !== undefined) body.name = name;
         if (baseBranch !== undefined) body.base_branch = baseBranch;
         if (baseCommit !== undefined) body.base_commit = baseCommit;
-        if (defaultAgentModel !== undefined) body.default_agent_model = defaultAgentModel;
+        if (defaultAgentModel !== undefined)
+          body.default_agent_model = defaultAgentModel;
         const result = await baseQuery({
           url: `http://127.0.0.1:${port}/v1/tasks/${taskId}/meta`,
           method: "PATCH",
@@ -252,7 +288,9 @@ export const tasksApi = createApi({
         if (result.error) return { error: result.error };
         return { data: result.data as TaskMeta };
       },
-      invalidatesTags: (_result, _error, { taskId }) => [{ type: "Tasks", id: taskId }],
+      invalidatesTags: (_result, _error, { taskId }) => [
+        { type: "Tasks", id: taskId },
+      ],
     }),
   }),
 });

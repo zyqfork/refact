@@ -1105,5 +1105,4 @@ describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
       expect(runtime.thread.messages[1].content).toBe("Hello!");
     });
   });
-
 });

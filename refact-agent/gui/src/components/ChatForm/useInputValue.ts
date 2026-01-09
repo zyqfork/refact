@@ -14,7 +14,8 @@ export function useInputValue(
   React.Dispatch<React.SetStateAction<boolean>>,
 ] {
   const { value, setValue } = useDraftMessage();
-  const [isSendImmediately, setIsSendImmediately] = React.useState<boolean>(false);
+  const [isSendImmediately, setIsSendImmediately] =
+    React.useState<boolean>(false);
   const { submit } = useChatActions();
   const dispatch = useAppDispatch();
   const pages = useAppSelector(selectPages);

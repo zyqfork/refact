@@ -146,9 +146,9 @@ impl Tool for ToolSubagent {
         };
         let max_steps = max_steps.min(50).max(1);
 
-        let (gcx, parent_chat_id) = {
+        let (gcx, parent_chat_id, parent_subchat_tx) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.global_context.clone(), ccx_lock.chat_id.clone())
+            (ccx_lock.global_context.clone(), ccx_lock.chat_id.clone(), ccx_lock.subchat_tx.clone())
         };
 
         let title = if task.len() > 60 {
@@ -176,6 +176,7 @@ impl Tool for ToolSubagent {
             false,
             None,
             Some(tool_call_id.clone()),
+            Some(parent_subchat_tx),
         ).await?;
 
         let user_prompt = build_task_prompt(&task, &expected_result, &tools, max_steps);

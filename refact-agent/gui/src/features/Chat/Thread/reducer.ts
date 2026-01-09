@@ -234,11 +234,19 @@ export const chatReducer = createReducer(initialState, (builder) => {
     );
 
     newRuntime.thread.model = lastParams.model ?? currentRt?.thread.model ?? "";
-    newRuntime.thread.boost_reasoning = lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
+    newRuntime.thread.boost_reasoning =
+      lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
     newRuntime.thread.automatic_patch = false;
-    newRuntime.thread.increase_max_tokens = lastParams.increase_max_tokens ?? currentRt?.thread.increase_max_tokens ?? false;
-    newRuntime.thread.include_project_info = lastParams.include_project_info ?? currentRt?.thread.include_project_info ?? true;
-    newRuntime.thread.context_tokens_cap = lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
+    newRuntime.thread.increase_max_tokens =
+      lastParams.increase_max_tokens ??
+      currentRt?.thread.increase_max_tokens ??
+      false;
+    newRuntime.thread.include_project_info =
+      lastParams.include_project_info ??
+      currentRt?.thread.include_project_info ??
+      true;
+    newRuntime.thread.context_tokens_cap =
+      lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
 
     if (action.payload?.title) {
       newRuntime.thread.title = action.payload.title;
@@ -257,7 +265,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
     if (existingRt) {
       if (isTaskChat) {
         existingRt.thread.is_task_chat = true;
-        state.open_thread_ids = state.open_thread_ids.filter((tid) => tid !== id);
+        state.open_thread_ids = state.open_thread_ids.filter(
+          (tid) => tid !== id,
+        );
       }
       if (title && !existingRt.thread.title) {
         existingRt.thread.title = title;
@@ -285,12 +295,21 @@ export const chatReducer = createReducer(initialState, (builder) => {
     const newRuntime = createThreadRuntime("agent", null, defaultMode);
 
     newRuntime.thread.id = id;
-    newRuntime.thread.model = model ?? lastParams.model ?? currentRt?.thread.model ?? "";
-    newRuntime.thread.boost_reasoning = lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
+    newRuntime.thread.model =
+      model ?? lastParams.model ?? currentRt?.thread.model ?? "";
+    newRuntime.thread.boost_reasoning =
+      lastParams.boost_reasoning ?? currentRt?.thread.boost_reasoning ?? false;
     newRuntime.thread.automatic_patch = false;
-    newRuntime.thread.increase_max_tokens = lastParams.increase_max_tokens ?? currentRt?.thread.increase_max_tokens ?? false;
-    newRuntime.thread.include_project_info = lastParams.include_project_info ?? currentRt?.thread.include_project_info ?? true;
-    newRuntime.thread.context_tokens_cap = lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
+    newRuntime.thread.increase_max_tokens =
+      lastParams.increase_max_tokens ??
+      currentRt?.thread.increase_max_tokens ??
+      false;
+    newRuntime.thread.include_project_info =
+      lastParams.include_project_info ??
+      currentRt?.thread.include_project_info ??
+      true;
+    newRuntime.thread.context_tokens_cap =
+      lastParams.context_tokens_cap ?? currentRt?.thread.context_tokens_cap;
 
     if (title) {
       newRuntime.thread.title = title;
@@ -437,7 +456,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
     const { id, openTab } = action.payload;
     const existingRt = getRuntime(state, id);
     if (existingRt) {
-      const shouldOpenTab = openTab !== false && !existingRt.thread.is_task_chat;
+      const shouldOpenTab =
+        openTab !== false && !existingRt.thread.is_task_chat;
       if (shouldOpenTab && !state.open_thread_ids.includes(id)) {
         state.open_thread_ids.push(id);
       }
@@ -658,7 +678,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
         const backendMode = event.thread.mode;
 
         const snapshotTaskMeta = event.thread.task_meta ?? existing?.task_meta;
-        const isTaskChat = Boolean(existing?.is_task_chat) || Boolean(snapshotTaskMeta?.task_id);
+        const isTaskChat =
+          Boolean(existing?.is_task_chat) || Boolean(snapshotTaskMeta?.task_id);
 
         const thread: ChatThread = {
           id: event.thread.id,
@@ -676,11 +697,13 @@ export const chatReducer = createReducer(initialState, (builder) => {
               ? existing.mode
               : "AGENT",
           boost_reasoning: event.thread.boost_reasoning,
-          context_tokens_cap: event.thread.context_tokens_cap ?? existing?.context_tokens_cap,
+          context_tokens_cap:
+            event.thread.context_tokens_cap ?? existing?.context_tokens_cap,
           include_project_info: event.thread.include_project_info,
           checkpoints_enabled: event.thread.checkpoints_enabled,
           isTitleGenerated: event.thread.is_title_generated,
-          automatic_patch: event.thread.automatic_patch ?? existing?.automatic_patch ?? false,
+          automatic_patch:
+            event.thread.automatic_patch ?? existing?.automatic_patch ?? false,
           increase_max_tokens: existing?.increase_max_tokens ?? false,
           new_chat_suggested: { wasSuggested: false },
           is_task_chat: isTaskChat,
@@ -697,7 +720,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
           waiting_for_response: isBusy,
           prevent_send: false,
           error: event.runtime.error ?? null,
-          queued_items: event.runtime.queued_items as ChatThreadRuntime["queued_items"],
+          queued_items: event.runtime
+            .queued_items as ChatThreadRuntime["queued_items"],
           send_immediately: existingRuntime?.send_immediately ?? false,
           attached_images: existingRuntime?.attached_images ?? [],
           confirmation: {
@@ -773,7 +797,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
         if ("task_meta" in params && params.task_meta != null) {
           rt.thread.task_meta = params.task_meta as ChatThread["task_meta"];
           rt.thread.is_task_chat = true;
-          state.open_thread_ids = state.open_thread_ids.filter((id) => id !== chat_id);
+          state.open_thread_ids = state.open_thread_ids.filter(
+            (id) => id !== chat_id,
+          );
         }
         break;
       }
@@ -788,7 +814,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
         rt.prevent_send = false;
         rt.error = event.error ?? null;
         rt.confirmation.pause = event.paused;
-        rt.queued_items = event.queued_items as ChatThreadRuntime["queued_items"];
+        rt.queued_items =
+          event.queued_items as ChatThreadRuntime["queued_items"];
         if (!event.paused) {
           rt.confirmation.pause_reasons = [];
         }

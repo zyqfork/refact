@@ -37,7 +37,11 @@ function getExtensionFromName(name: string): string {
   return name.substring(dot + 1).replace(/:\d*-\d*/, "");
 }
 
-type ContextVariant = "default" | "enrichment" | "project_context" | "memories_context";
+type ContextVariant =
+  | "default"
+  | "enrichment"
+  | "project_context"
+  | "memories_context";
 
 const FilesContent: React.FC<{
   files: ChatContextFile[];
@@ -225,7 +229,9 @@ export const ContextFiles: React.FC<{
         ? `Project context (${files.length})`
         : variant === "memories_context"
           ? `User memories (${files.length})`
-          : files.map((f) => formatFileName(f.file_name, f.line1, f.line2)).join(", ");
+          : files
+              .map((f) => formatFileName(f.file_name, f.line1, f.line2))
+              .join(", ");
 
   return (
     <Container>
@@ -233,8 +239,12 @@ export const ContextFiles: React.FC<{
         <Collapsible.Trigger asChild>
           <Flex gap="2" align="end" py="1" style={{ cursor: "pointer" }}>
             <Flex gap="2" align="start" style={{ flex: 1 }}>
-              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>{icon}</Text>
-              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>{label}</Text>
+              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>
+                {icon}
+              </Text>
+              <Text weight="light" size="1" style={{ color: "var(--gray-10)" }}>
+                {label}
+              </Text>
             </Flex>
             <Chevron open={open} />
           </Flex>

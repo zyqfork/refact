@@ -40,7 +40,10 @@ export const MicrophoneButton: React.FC<MicrophoneButtonProps> = ({
   }, [error, dispatch]);
 
   useEffect(() => {
-    if (isRecording !== prevRecordingRef.current || isFinishing !== prevFinishingRef.current) {
+    if (
+      isRecording !== prevRecordingRef.current ||
+      isFinishing !== prevFinishingRef.current
+    ) {
       prevRecordingRef.current = isRecording;
       prevFinishingRef.current = isFinishing;
       onRecordingChange?.(isRecording, isFinishing);
@@ -69,13 +72,15 @@ export const MicrophoneButton: React.FC<MicrophoneButtonProps> = ({
       title={undefined}
       disabled={!!disabled || isDownloading || isFinishing}
       onClick={() => void toggleRecording()}
-      className={isRecording ? styles.recording : isFinishing ? styles.finishing : undefined}
+      className={
+        isRecording
+          ? styles.recording
+          : isFinishing
+            ? styles.finishing
+            : undefined
+      }
     >
-      {isDownloading ? (
-        <Spinner size="1" />
-      ) : (
-        <MicrophoneIcon />
-      )}
+      {isDownloading ? <Spinner size="1" /> : <MicrophoneIcon />}
     </IconButton>
   );
 };

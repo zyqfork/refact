@@ -60,39 +60,46 @@ export function useStreamingVoiceRecording(): UseStreamingVoiceRecordingResult {
     }
   }, []);
 
-  const handleEvent = useCallback((event: VoiceStreamEvent) => {
-    if (event.type === "transcript") {
-      const elapsedSeconds = (Date.now() - recordingStartTimeRef.current) / 1000;
-      const wasCut = !event.is_final && elapsedSeconds > LIVE_WINDOW_SECONDS;
-      setTranscript(wasCut ? "... " + event.text : event.text);
-      if (event.is_final) {
+  const handleEvent = useCallback(
+    (event: VoiceStreamEvent) => {
+      if (event.type === "transcript") {
+        const elapsedSeconds =
+          (Date.now() - recordingStartTimeRef.current) / 1000;
+        const wasCut = !event.is_final && elapsedSeconds > LIVE_WINDOW_SECONDS;
+        setTranscript(wasCut ? "... " + event.text : event.text);
+        if (event.is_final) {
+          setIsFinishing(false);
+          finalizeResolveRef.current?.(event.text);
+          finalizeResolveRef.current = null;
+          finalizeRejectRef.current = null;
+          unsubscribeRef.current?.();
+          unsubscribeRef.current = null;
+          cleanupStream();
+        }
+      } else if (event.type === "error") {
+        setError(event.message);
         setIsFinishing(false);
-        finalizeResolveRef.current?.(event.text);
+        finalizeRejectRef.current?.(new Error(event.message));
+        finalizeResolveRef.current = null;
+        finalizeRejectRef.current = null;
+        unsubscribeRef.current?.();
+        unsubscribeRef.current = null;
+        cleanupStream();
+      } else {
+        // event.type === "ended"
+        setIsFinishing(false);
+        finalizeRejectRef.current?.(
+          new Error("Stream ended without final transcript"),
+        );
         finalizeResolveRef.current = null;
         finalizeRejectRef.current = null;
         unsubscribeRef.current?.();
         unsubscribeRef.current = null;
         cleanupStream();
       }
-    } else if (event.type === "error") {
-      setError(event.message);
-      setIsFinishing(false);
-      finalizeRejectRef.current?.(new Error(event.message));
-      finalizeResolveRef.current = null;
-      finalizeRejectRef.current = null;
-      unsubscribeRef.current?.();
-      unsubscribeRef.current = null;
-      cleanupStream();
-    } else if (event.type === "ended") {
-      setIsFinishing(false);
-      finalizeRejectRef.current?.(new Error("Stream ended without final transcript"));
-      finalizeResolveRef.current = null;
-      finalizeRejectRef.current = null;
-      unsubscribeRef.current?.();
-      unsubscribeRef.current = null;
-      cleanupStream();
-    }
-  }, [cleanupStream]);
+    },
+    [cleanupStream],
+  );
 
   const sendBufferedAudio = useCallback(async (final: boolean) => {
     const hasAudio = bufferRef.current.length > 0;
@@ -102,7 +109,10 @@ export function useStreamingVoiceRecording(): UseStreamingVoiceRecordingResult {
     let base64 = "";
 
     if (hasAudio) {
-      const totalLength = bufferRef.current.reduce((acc, arr) => acc + arr.length, 0);
+      const totalLength = bufferRef.current.reduce(
+        (acc, arr) => acc + arr.length,
+        0,
+      );
       const combined = new Float32Array(totalLength);
       let offset = 0;
       for (const arr of bufferRef.current) {

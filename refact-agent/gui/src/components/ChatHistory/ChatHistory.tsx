@@ -73,7 +73,9 @@ const TreeNode = memo(
           badge={getBadge()}
           childCount={hasChildren ? node.children.length : undefined}
           isExpanded={isExpanded}
-          onToggleExpand={hasChildren ? () => onToggleExpand(node.id) : undefined}
+          onToggleExpand={
+            hasChildren ? () => onToggleExpand(node.id) : undefined
+          }
         />
         {hasChildren && isExpanded && (
           <Flex direction="column" gap="1" pt="1">

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::collections::HashSet;
-use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
+use tokio::sync::{Mutex as AMutex, RwLock as ARwLock, mpsc};
 use serde_json::{json, Value};
 use tracing::info;
 use uuid::Uuid;
@@ -83,6 +83,8 @@ pub struct SubchatConfig {
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub parent_tool_call_id: Option<String>,
+    /// Parent's subchat_tx for forwarding tool progress to parent chat
+    pub parent_subchat_tx: Option<Arc<AMutex<mpsc::UnboundedSender<Value>>>>,
 }
 
 pub struct SubchatResult {
@@ -186,6 +188,7 @@ pub async fn resolve_subchat_config(
         prepend_system_prompt,
         wrap_up,
         None,
+        None,
     ).await
 }
 
@@ -202,6 +205,7 @@ pub async fn resolve_subchat_config_with_parent(
     prepend_system_prompt: bool,
     wrap_up: Option<WrapUpConfig>,
     parent_tool_call_id: Option<String>,
+    parent_subchat_tx: Option<Arc<AMutex<mpsc::UnboundedSender<Value>>>>,
 ) -> Result<SubchatConfig, String> {
     if max_steps == 0 {
         return Err("max_steps must be > 0".to_string());
@@ -239,6 +243,7 @@ pub async fn resolve_subchat_config_with_parent(
         temperature: params.subchat_temperature,
         reasoning_effort: params.subchat_reasoning_effort,
         parent_tool_call_id,
+        parent_subchat_tx,
     })
 }
 
@@ -278,6 +283,11 @@ pub async fn run_subchat(
         )
         .await,
     ));
+
+    // Inject parent's subchat_tx so tool progress events flow to parent chat
+    if let Some(ref parent_tx) = config.parent_subchat_tx {
+        ccx.lock().await.subchat_tx = parent_tx.clone();
+    }
 
     let mut usage = ChatUsage::default();
     let mut current_messages = messages;

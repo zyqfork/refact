@@ -1,7 +1,15 @@
 import { expect, test, describe, beforeEach } from "vitest";
 import { chatReducer } from "../features/Chat/Thread/reducer";
 import type { Chat } from "../features/Chat/Thread/types";
-import { newChatAction, createChatWithId, closeThread, switchToThread, addThreadImage, removeThreadImageByIndex, applyChatEvent } from "../features/Chat/Thread/actions";
+import {
+  newChatAction,
+  createChatWithId,
+  closeThread,
+  switchToThread,
+  addThreadImage,
+  removeThreadImageByIndex,
+  applyChatEvent,
+} from "../features/Chat/Thread/actions";
 import type { ChatEventEnvelope } from "../services/refact/chatSubscription";
 
 describe("Chat Thread Reducer - Core Functionality", () => {
@@ -17,15 +25,20 @@ describe("Chat Thread Reducer - Core Functionality", () => {
   describe("Chat Thread Creation", () => {
     test("should_create_new_chat_with_initial_state", () => {
       expect(initialState.open_thread_ids).toHaveLength(1);
-      expect(initialState.current_thread_id).toBe(initialState.open_thread_ids[0]);
+      expect(initialState.current_thread_id).toBe(
+        initialState.open_thread_ids[0],
+      );
       expect(initialState.threads[chatId]?.thread.messages).toHaveLength(0);
     });
 
     test("should_preserve_last_used_parameters", () => {
       const customTitle = "Test Chat Title";
-      const state = chatReducer(initialState, newChatAction({ title: customTitle }));
+      const state = chatReducer(
+        initialState,
+        newChatAction({ title: customTitle }),
+      );
       const newChatId = state.current_thread_id;
-      
+
       expect(state.threads[newChatId]?.thread.title).toBe(customTitle);
       expect(state.open_thread_ids).toHaveLength(2);
     });
@@ -34,11 +47,14 @@ describe("Chat Thread Reducer - Core Functionality", () => {
   describe("Task Chat Handling", () => {
     test("should_not_add_task_chat_to_open_tabs", () => {
       const taskChatId = "task-chat-123";
-      const state = chatReducer(initialState, createChatWithId({
-        id: taskChatId,
-        isTaskChat: true,
-        title: "Task Chat"
-      }));
+      const state = chatReducer(
+        initialState,
+        createChatWithId({
+          id: taskChatId,
+          isTaskChat: true,
+          title: "Task Chat",
+        }),
+      );
 
       expect(state.open_thread_ids).not.toContain(taskChatId);
       expect(state.threads[taskChatId]).toBeDefined();
@@ -47,11 +63,14 @@ describe("Chat Thread Reducer - Core Functionality", () => {
 
     test("should_preserve_is_task_chat_flag_on_snapshot", () => {
       const taskChatId = "task-chat-456";
-      const state = chatReducer(initialState, createChatWithId({
-        id: taskChatId,
-        isTaskChat: true,
-        title: "Task Chat"
-      }));
+      const state = chatReducer(
+        initialState,
+        createChatWithId({
+          id: taskChatId,
+          isTaskChat: true,
+          title: "Task Chat",
+        }),
+      );
 
       expect(state.threads[taskChatId]?.thread.is_task_chat).toBe(true);
       expect(state.open_thread_ids).not.toContain(taskChatId);
@@ -159,26 +178,32 @@ describe("Chat Thread Reducer - Core Functionality", () => {
       let state = initialState;
 
       for (let i = 0; i < 5; i++) {
-        state = chatReducer(state, addThreadImage({
-          id: chatId,
-          image: {
-            name: `image${i}.png`,
-            content: `data:image/png;base64,${i}`,
-            type: "image/png"
-          }
-        }));
+        state = chatReducer(
+          state,
+          addThreadImage({
+            id: chatId,
+            image: {
+              name: `image${i}.png`,
+              content: `data:image/png;base64,${i}`,
+              type: "image/png",
+            },
+          }),
+        );
       }
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(5);
 
-      state = chatReducer(state, addThreadImage({
-        id: chatId,
-        image: {
-          name: "image5.png",
-          content: "data:image/png;base64,5",
-          type: "image/png"
-        }
-      }));
+      state = chatReducer(
+        state,
+        addThreadImage({
+          id: chatId,
+          image: {
+            name: "image5.png",
+            content: "data:image/png;base64,5",
+            type: "image/png",
+          },
+        }),
+      );
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(5);
     });
@@ -186,58 +211,78 @@ describe("Chat Thread Reducer - Core Functionality", () => {
     test("should_remove_image_by_index", () => {
       let state = initialState;
 
-      state = chatReducer(state, addThreadImage({
-        id: chatId,
-        image: {
-          name: "image1.png",
-          content: "data:image/png;base64,1",
-          type: "image/png"
-        }
-      }));
+      state = chatReducer(
+        state,
+        addThreadImage({
+          id: chatId,
+          image: {
+            name: "image1.png",
+            content: "data:image/png;base64,1",
+            type: "image/png",
+          },
+        }),
+      );
 
-      state = chatReducer(state, addThreadImage({
-        id: chatId,
-        image: {
-          name: "image2.png",
-          content: "data:image/png;base64,2",
-          type: "image/png"
-        }
-      }));
+      state = chatReducer(
+        state,
+        addThreadImage({
+          id: chatId,
+          image: {
+            name: "image2.png",
+            content: "data:image/png;base64,2",
+            type: "image/png",
+          },
+        }),
+      );
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(2);
 
-      state = chatReducer(state, removeThreadImageByIndex({
-        id: chatId,
-        index: 0
-      }));
+      state = chatReducer(
+        state,
+        removeThreadImageByIndex({
+          id: chatId,
+          index: 0,
+        }),
+      );
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(1);
-      expect(state.threads[chatId]?.attached_images[0]?.name).toBe("image2.png");
+      expect(state.threads[chatId]?.attached_images[0]?.name).toBe(
+        "image2.png",
+      );
     });
 
     test("should_handle_image_removal_edge_cases", () => {
       let state = initialState;
 
-      state = chatReducer(state, removeThreadImageByIndex({
-        id: chatId,
-        index: 0
-      }));
+      state = chatReducer(
+        state,
+        removeThreadImageByIndex({
+          id: chatId,
+          index: 0,
+        }),
+      );
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(0);
 
-      state = chatReducer(state, addThreadImage({
-        id: chatId,
-        image: {
-          name: "image1.png",
-          content: "data:image/png;base64,1",
-          type: "image/png"
-        }
-      }));
+      state = chatReducer(
+        state,
+        addThreadImage({
+          id: chatId,
+          image: {
+            name: "image1.png",
+            content: "data:image/png;base64,1",
+            type: "image/png",
+          },
+        }),
+      );
 
-      state = chatReducer(state, removeThreadImageByIndex({
-        id: chatId,
-        index: 999
-      }));
+      state = chatReducer(
+        state,
+        removeThreadImageByIndex({
+          id: chatId,
+          index: 999,
+        }),
+      );
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(1);
     });
@@ -245,7 +290,10 @@ describe("Chat Thread Reducer - Core Functionality", () => {
 
   describe("Edge Cases", () => {
     test("should_handle_operations_on_nonexistent_thread_gracefully", () => {
-      const state = chatReducer(initialState, closeThread({ id: "nonexistent-id" }));
+      const state = chatReducer(
+        initialState,
+        closeThread({ id: "nonexistent-id" }),
+      );
 
       expect(state.threads["nonexistent-id"]).toBeUndefined();
       expect(state.current_thread_id).toBe(chatId);

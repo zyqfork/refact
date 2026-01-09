@@ -153,9 +153,9 @@ export const updateOpenThread = createAction<{
   thread: Partial<ChatThread>;
 }>("chatThread/updateOpenThread");
 
-export const switchToThread = createAction<PayloadWithId & { openTab?: boolean }>(
-  "chatThread/switchToThread",
-);
+export const switchToThread = createAction<
+  PayloadWithId & { openTab?: boolean }
+>("chatThread/switchToThread");
 
 export const closeThread = createAction<PayloadWithId & { force?: boolean }>(
   "chatThread/closeThread",

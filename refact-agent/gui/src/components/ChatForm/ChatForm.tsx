@@ -101,7 +101,12 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   const [inputResetKey, setInputResetKey] = React.useState(0);
   const [trajectoryOpen, setTrajectoryOpen] = useState(false);
   const isOnline = useIsOnline();
-  const { isWarning, isContextFull, tokenPercentage, shouldShow: shouldShowUsage } = useUsageCounter();
+  const {
+    isWarning,
+    isContextFull,
+    tokenPercentage,
+    shouldShow: shouldShowUsage,
+  } = useUsageCounter();
 
   const threadToolUse = useAppSelector(selectThreadToolUse);
   const messages = useAppSelector(selectMessages);
@@ -134,7 +139,14 @@ export const ChatForm: React.FC<ChatFormProps> = ({
     if (messages.length === 0) return false;
     if (isContextFull) return true;
     return isWaiting || isStreaming || !isOnline;
-  }, [allDisabled, messages.length, isWaiting, isStreaming, isOnline, isContextFull]);
+  }, [
+    allDisabled,
+    messages.length,
+    isWaiting,
+    isStreaming,
+    isOnline,
+    isContextFull,
+  ]);
 
   const isModelSelectVisible = useMemo(() => messages.length < 1, [messages]);
 
@@ -308,12 +320,15 @@ export const ChatForm: React.FC<ChatFormProps> = ({
     setLiveTranscript(text);
   }, []);
 
-  const handleRecordingChange = useCallback((isRecording: boolean, isFinishing: boolean) => {
-    setIsVoiceActive(isRecording || isFinishing);
-    if (!isRecording && !isFinishing) {
-      setLiveTranscript("");
-    }
-  }, []);
+  const handleRecordingChange = useCallback(
+    (isRecording: boolean, isFinishing: boolean) => {
+      setIsVoiceActive(isRecording || isFinishing);
+      if (!isRecording && !isFinishing) {
+        setLiveTranscript("");
+      }
+    },
+    [],
+  );
 
   if (globalError) {
     return (
@@ -368,14 +383,19 @@ export const ChatForm: React.FC<ChatFormProps> = ({
       {shouldShowUsage && isContextFull && (
         <Flex mb="2" gap="2" align="center">
           <Callout type="error">
-            Context is full ({Math.round(tokenPercentage)}%). Please compress or handoff to continue.
+            Context is full ({Math.round(tokenPercentage)}%). Please compress or
+            handoff to continue.
           </Callout>
-          <TrajectoryButton forceOpen={trajectoryOpen} onOpenChange={setTrajectoryOpen} />
+          <TrajectoryButton
+            forceOpen={trajectoryOpen}
+            onOpenChange={setTrajectoryOpen}
+          />
         </Flex>
       )}
       {shouldShowUsage && isWarning && !isContextFull && (
         <Callout type="warning" mb="2">
-          Context is almost full ({Math.round(tokenPercentage)}%). Consider compressing or handing off soon.
+          Context is almost full ({Math.round(tokenPercentage)}%). Consider
+          compressing or handing off soon.
         </Callout>
       )}
 
@@ -407,9 +427,13 @@ export const ChatForm: React.FC<ChatFormProps> = ({
             onHelpClick={handleHelpCommand}
             commands={commands}
             requestCommandsCompletion={requestCompletion}
-            value={isVoiceActive && liveTranscript
-              ? (value.trim() ? `${value}\n${liveTranscript}` : liveTranscript)
-              : value}
+            value={
+              isVoiceActive && liveTranscript
+                ? value.trim()
+                  ? `${value}\n${liveTranscript}`
+                  : liveTranscript
+                : value
+            }
             onChange={handleChange}
             onSubmit={(event) => {
               handleEnter(event);

@@ -35,7 +35,8 @@ export function useUsageCounter() {
   if (rawTokens > 0) {
     lastKnownTokensRef.current = rawTokens;
   }
-  const currentSessionTokens = rawTokens > 0 ? rawTokens : lastKnownTokensRef.current;
+  const currentSessionTokens =
+    rawTokens > 0 ? rawTokens : lastKnownTokensRef.current;
 
   const tokenPercentage = useMemo(() => {
     if (!maxContextTokens || maxContextTokens === 0) return 0;

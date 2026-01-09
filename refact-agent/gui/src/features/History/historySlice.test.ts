@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  getHistoryTree,
-  HistoryState,
-  ChatHistoryItem,
-} from "./historySlice";
+import { getHistoryTree, HistoryState, ChatHistoryItem } from "./historySlice";
 
 function createHistoryItem(
   id: string,

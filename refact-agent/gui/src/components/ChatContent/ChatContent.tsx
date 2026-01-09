@@ -129,7 +129,8 @@ export const ChatContent: React.FC<ChatContentProps> = ({
             <PlaceHolderText />
           </Container>
         )}
-        {snapshotReceived && renderMessages(messages, onRetryWrapper, isWaiting)}
+        {snapshotReceived &&
+          renderMessages(messages, onRetryWrapper, isWaiting)}
         <Container>
           <UncommittedChangesWarning />
         </Container>

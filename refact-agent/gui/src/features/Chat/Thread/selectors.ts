@@ -214,7 +214,8 @@ export const selectThreadMode = createSelector(
 );
 
 export const selectQueuedItems = (state: RootState) =>
-  state.chat.threads[state.chat.current_thread_id]?.queued_items ?? EMPTY_QUEUED;
+  state.chat.threads[state.chat.current_thread_id]?.queued_items ??
+  EMPTY_QUEUED;
 
 export const selectQueuedItemsCount = createSelector(
   selectQueuedItems,

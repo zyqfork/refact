@@ -20,7 +20,10 @@ import {
 import { newChatAction } from "../../events";
 import { restart, useTourRefs } from "../../features/Tour";
 import { popBackTo, push } from "../../features/Pages/pagesSlice";
-import { useCreateTaskMutation, useUpdateTaskMetaMutation } from "../../services/refact/tasks";
+import {
+  useCreateTaskMutation,
+  useUpdateTaskMetaMutation,
+} from "../../services/refact/tasks";
 import {
   selectOpenTasksFromRoot,
   openTask,
@@ -226,7 +229,9 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
           error_message: "",
         });
       })
-      .catch(() => { /* handled by RTK Query */ });
+      .catch(() => {
+        /* handled by RTK Query */
+      });
   }, [createTask, dispatch, sendTelemetryEvent]);
 
   const goToTab = useCallback(
@@ -405,7 +410,8 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
             {windowWidth < 400 || shouldCollapse ? <HomeIcon /> : "Home"}
           </TabNav.Link>
           {openTasks.map((task) => {
-            const isActive = isTaskTab(activeTab) && activeTab.taskId === task.id;
+            const isActive =
+              isTaskTab(activeTab) && activeTab.taskId === task.id;
             const taskName = task.name.trim() || "Task";
             const isRenaming = renamingTaskId === task.id;
 
@@ -430,7 +436,9 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
               <TabNav.Link
                 active={isActive}
                 key={`task-${task.id}`}
-                onClick={() => goToTab({ type: "task", taskId: task.id, taskName })}
+                onClick={() =>
+                  goToTab({ type: "task", taskId: task.id, taskName })
+                }
                 style={{ minWidth: 0, maxWidth: "150px", cursor: "pointer" }}
                 title={taskName}
               >
@@ -591,10 +599,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
         </>
       ) : (
         <>
-          <Button
-            variant="outline"
-            onClick={onCreateNewTask}
-          >
+          <Button variant="outline" onClick={onCreateNewTask}>
             <CheckboxIcon />
             <Text>New Task</Text>
           </Button>

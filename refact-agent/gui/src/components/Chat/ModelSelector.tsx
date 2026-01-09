@@ -46,7 +46,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   );
 
   const defaultModel = capsData?.chat_default_model ?? "";
-  const effectiveValue = isControlled ? (value ?? defaultModel) : capsForToolUse.currentModel;
+  const effectiveValue = isControlled
+    ? value ?? defaultModel
+    : capsForToolUse.currentModel;
   const handleChange = isControlled
     ? (model: string) => onValueChange?.(model)
     : capsForToolUse.setCapModel;
@@ -55,7 +57,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   if (!capsData || groupedModels.length === 0) {
     return (
       <Text size="1" color="gray">
-        {showLabel ? `${label} ` : ""}{currentModelName || "No models"}
+        {showLabel ? `${label} ` : ""}
+        {currentModelName || "No models"}
       </Text>
     );
   }
@@ -76,7 +79,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         >
           <Select.Trigger
             variant="ghost"
-            title={disabled ? "Cannot change model while streaming" : "Click to change model"}
+            title={
+              disabled
+                ? "Cannot change model while streaming"
+                : "Click to change model"
+            }
             style={{
               cursor: disabled ? "not-allowed" : "pointer",
               padding: "0 4px",
@@ -96,7 +103,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     disabled={model.disabled}
                     textValue={model.displayName}
                   >
-                    <span className={styles.trigger_only}>{model.displayName}</span>
+                    <span className={styles.trigger_only}>
+                      {model.displayName}
+                    </span>
                     <span className={styles.dropdown_only}>
                       <RichModelSelectItem
                         displayName={model.displayName}
@@ -143,7 +152,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   disabled={model.disabled}
                   textValue={model.displayName}
                 >
-                  <span className={styles.trigger_only}>{model.displayName}</span>
+                  <span className={styles.trigger_only}>
+                    {model.displayName}
+                  </span>
                   <span className={styles.dropdown_only}>
                     <RichModelSelectItem
                       displayName={model.displayName}
