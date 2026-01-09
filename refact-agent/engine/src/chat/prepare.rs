@@ -179,9 +179,7 @@ pub async fn prepare_chat_passthrough(
         .iter()
         .map(|tool| tool.clone().into_openai_style(strict_tools))
         .collect();
-    let tools_str_for_limit = if openai_tools.is_empty() {
-        None
-    } else {
+    if !openai_tools.is_empty() {
         big_json["tools"] = json!(openai_tools);
         if let Some(ref tool_choice) = options.tool_choice {
             big_json["tool_choice"] = match tool_choice {
@@ -194,17 +192,12 @@ pub async fn prepare_chat_passthrough(
         if let Some(parallel) = options.parallel_tool_calls {
             big_json["parallel_tool_calls"] = json!(parallel);
         }
-        serde_json::to_string(&openai_tools).ok()
-    };
+    }
 
-    // 7. History limiting with correct token budget
+    // 7. History validation and fixing
     let limited_msgs = fix_and_limit_messages_history(
-        t,
         &messages,
         sampling_parameters,
-        effective_n_ctx,
-        tools_str_for_limit,
-        model_id,
     )?;
 
     // 8. Strip thinking blocks if thinking is disabled

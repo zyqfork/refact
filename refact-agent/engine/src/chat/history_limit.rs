@@ -676,21 +676,10 @@ fn validate_chat_history(messages: &Vec<ChatMessage>) -> Result<Vec<ChatMessage>
 }
 
 pub fn fix_and_limit_messages_history(
-    t: &HasTokenizerAndEot,
     messages: &Vec<ChatMessage>,
     sampling_parameters_to_patch: &mut SamplingParameters,
-    n_ctx: usize,
-    tools_description: Option<String>,
-    model_id: &str,
 ) -> Result<Vec<ChatMessage>, String> {
     let start_time = Instant::now();
-
-    if n_ctx <= sampling_parameters_to_patch.max_new_tokens {
-        return Err(format!(
-            "bad input, n_ctx={}, max_new_tokens={}",
-            n_ctx, sampling_parameters_to_patch.max_new_tokens
-        ));
-    }
 
     let mut mutable_messages = messages.clone();
     replace_broken_tool_call_messages(
@@ -699,50 +688,6 @@ pub fn fix_and_limit_messages_history(
         16000,
     );
     remove_invalid_tool_calls_and_tool_calls_results(&mut mutable_messages);
-
-    let (extra_tokens_per_message, _) = get_model_token_params(model_id);
-    let mut token_cache = TokenCountCache::new();
-    let mut token_counts: Vec<i32> = Vec::with_capacity(mutable_messages.len());
-    for msg in &mutable_messages {
-        let count =
-            token_cache.get_token_count(msg, t.tokenizer.clone(), extra_tokens_per_message)?;
-        token_counts.push(count);
-    }
-    let tools_description_tokens = if let Some(desc) = tools_description.as_ref() {
-        t.count_tokens(desc).unwrap_or(0)
-    } else {
-        0
-    };
-
-    let (occupied_tokens, tokens_limit) = recalculate_token_limits(
-        &token_counts,
-        tools_description_tokens,
-        n_ctx,
-        sampling_parameters_to_patch.max_new_tokens,
-        model_id,
-    );
-
-    tracing::info!(
-        "Token check: occupied_tokens={} vs tokens_limit={}",
-        occupied_tokens,
-        tokens_limit
-    );
-
-    if occupied_tokens > tokens_limit {
-        return Err(format!(
-            "context_overflow: prompt uses {} tokens but limit is {} (n_ctx={}, max_new_tokens={}). \
-            Use the Trajectory panel to compress or start a new chat.",
-            occupied_tokens, tokens_limit, n_ctx, sampling_parameters_to_patch.max_new_tokens
-        ));
-    }
-
-    let (hits, misses, hit_rate) = token_cache.stats();
-    tracing::info!(
-        "Tokenizer cache stats: {} hits, {} misses, {:.2}% hit rate",
-        hits,
-        misses,
-        hit_rate * 100.0
-    );
 
     let total_duration = start_time.elapsed();
     tracing::info!("History validation time: {:?}", total_duration);
