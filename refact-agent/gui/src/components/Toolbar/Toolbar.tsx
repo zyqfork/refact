@@ -45,8 +45,8 @@ import {
 } from "../../features/History/historySlice";
 import {
   saveTitle,
-  selectOpenThreadIds,
   selectAllThreads,
+  selectTabsDisplayData,
   closeThread,
   switchToThread,
   selectChatId,
@@ -109,7 +109,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const [sendTelemetryEvent] =
     telemetryApi.useLazySendTelemetryChatEventQuery();
 
-  const openThreadIds = useAppSelector(selectOpenThreadIds);
+  const tabs = useAppSelector(selectTabsDisplayData);
   const allThreads = useAppSelector(selectAllThreads);
   const currentChatId = useAppSelector(selectChatId);
   const openTasks = useAppSelector(selectOpenTasksFromRoot);
@@ -297,21 +297,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
     }
   }, [focus]);
 
-  const tabs = useMemo(() => {
-    return openThreadIds
-      .map((id) => {
-        const runtime = allThreads[id];
-        if (!runtime) return null;
-        return {
-          id,
-          title: runtime.thread.title ?? "New Chat",
-          read: runtime.thread.read,
-          streaming: runtime.streaming,
-          waiting: runtime.waiting_for_response,
-        };
-      })
-      .filter((t): t is NonNullable<typeof t> => t !== null);
-  }, [openThreadIds, allThreads]);
+
 
   const shouldCollapse = useMemo(() => {
     const dashboardWidth = windowWidth < 400 ? 47 : 70;
