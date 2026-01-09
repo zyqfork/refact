@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { selectMessages, selectThreadMaximumTokens } from "../../features/Chat";
 import { useAppSelector } from "../../hooks";
 import {
@@ -10,14 +10,28 @@ import { isAssistantMessage } from "../../services/refact";
 export function useUsageCounter() {
   const messages = useAppSelector(selectMessages);
   const maxContextTokens = useAppSelector(selectThreadMaximumTokens);
-  const assistantMessages = messages.filter(isAssistantMessage);
-  const usages = assistantMessages.map((msg) => msg.usage);
+
+  // Memoize assistant messages list
+  const assistantMessages = useMemo(
+    () => messages.filter(isAssistantMessage),
+    [messages],
+  );
+
+  // Memoize usages list
+  const usages = useMemo(
+    () => assistantMessages.map((msg) => msg.usage),
+    [assistantMessages],
+  );
+
   const currentThreadUsage = mergeUsages(usages);
-  const lastAssistantMessage =
-    assistantMessages.length > 0
-      ? assistantMessages[assistantMessages.length - 1]
-      : undefined;
-  const lastUsage = lastAssistantMessage?.usage;
+
+  const lastAssistantMessage = useMemo(
+    () =>
+      assistantMessages.length > 0
+        ? assistantMessages[assistantMessages.length - 1]
+        : undefined,
+    [assistantMessages],
+  );
 
   // Check if the last message has server-executed tools (like web_search)
   // These can cause temporary inflated token counts during streaming.
@@ -49,13 +63,21 @@ export function useUsageCounter() {
     });
   }, [currentThreadUsage]);
 
-  const lastKnownTokensRef = useRef(0);
-  const rawTokens = lastUsage?.prompt_tokens ?? 0;
-  if (rawTokens > 0) {
-    lastKnownTokensRef.current = rawTokens;
-  }
-  const currentSessionTokens =
-    rawTokens > 0 ? rawTokens : lastKnownTokensRef.current;
+  // Deterministic fallback: scan backwards through assistant messages for first message with prompt_tokens > 0
+  const currentSessionTokens = useMemo(() => {
+    for (let i = assistantMessages.length - 1; i >= 0; i--) {
+      const t = assistantMessages[i]?.usage?.prompt_tokens;
+      if (typeof t === "number" && t > 0) return t;
+    }
+    return 0;
+  }, [assistantMessages]);
+
+  const isContextFromPreviousMessage = useMemo(() => {
+    if (assistantMessages.length === 0) return false;
+    const lastMsg = assistantMessages[assistantMessages.length - 1];
+    const lastHasTokens = (lastMsg.usage?.prompt_tokens ?? 0) > 0;
+    return !lastHasTokens && currentSessionTokens > 0;
+  }, [assistantMessages, currentSessionTokens]);
 
   const tokenPercentage = useMemo(() => {
     if (!maxContextTokens || maxContextTokens === 0) return 0;
@@ -92,5 +114,6 @@ export function useUsageCounter() {
     isContextFull,
     tokenPercentage,
     hasServerExecutedTools,
+    isContextFromPreviousMessage,
   };
 }
