@@ -160,6 +160,8 @@ export const StreamingTokenCounter: React.FC = () => {
   const showPlaceholder = allText.length === 0 && (isStreaming || isWaiting);
   const isOutputEstimate = actualOutputTokens === 0;
 
+  const tokensToDisplay = isStreaming || isWaiting ? outputTokens : displayTokens;
+
   return (
     <Flex align="center" gap="1" className={styles.inlineContainer}>
       <Text className={styles.separator}>|</Text>
@@ -167,12 +169,12 @@ export const StreamingTokenCounter: React.FC = () => {
       <Text
         key={pulseKey}
         className={classNames(styles.tokenValue, {
-          [styles.animateValue]: displayTokens > 0,
+          [styles.animateValue]: tokensToDisplay > 0,
         })}
       >
         {showPlaceholder
           ? "…"
-          : `${isOutputEstimate ? "~" : ""}${formatNumberToFixed(displayTokens)}`}
+          : `${isOutputEstimate ? "~" : ""}${formatNumberToFixed(tokensToDisplay)}`}
       </Text>
 
       {contextTokens > 0 && maxContextTokens > 0 && (
