@@ -9,7 +9,7 @@ use tokio::sync::RwLock as ARwLock;
 use chrono::Utc;
 
 use crate::global_context::GlobalContext;
-use crate::tasks::types::{TaskMeta, TaskBoard, BoardCard, StatusUpdate, TaskStatus};
+use crate::tasks::types::{TaskMeta, TaskBoard, BoardCard, StatusUpdate, TaskStatus, TrajectoryInfo};
 use crate::tasks::storage;
 
 #[derive(Deserialize)]
@@ -327,10 +327,10 @@ pub async fn handle_update_task_meta(
 pub async fn handle_list_task_trajectories(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path((task_id, role)): Path<(String, String)>,
-) -> Result<Json<Vec<String>>, (StatusCode, String)> {
-    let ids = storage::list_task_trajectories(gcx, &task_id, &role, None).await
+) -> Result<Json<Vec<TrajectoryInfo>>, (StatusCode, String)> {
+    let trajectories = storage::list_task_trajectories(gcx, &task_id, &role, None).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(ids))
+    Ok(Json(trajectories))
 }
 
 pub async fn handle_create_planner_chat(

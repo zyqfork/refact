@@ -128,6 +128,16 @@ pub struct ReadyCardsResult {
     pub failed: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrajectoryInfo {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_state: Option<String>,
+}
+
 impl TaskBoard {
     pub fn get_ready_cards(&self) -> ReadyCardsResult {
         let mut ready = vec![];

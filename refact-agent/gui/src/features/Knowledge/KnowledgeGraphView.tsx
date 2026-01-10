@@ -277,7 +277,7 @@ export function KnowledgeGraphView({
       <CytoscapeComponent
         elements={elements}
         style={{ width: "100%", height: "100%" }}
-        stylesheet={stylesheet as any}
+        stylesheet={stylesheet}
         cy={(cy) => {
           cyRef.current = cy;
           if (!cyReadyRef.current) {

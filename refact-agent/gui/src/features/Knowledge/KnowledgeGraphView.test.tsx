@@ -3,7 +3,9 @@ import { render, screen } from "@testing-library/react";
 import { KnowledgeGraphView } from "./KnowledgeGraphView";
 import type { KnowledgeGraphNode, KnowledgeGraphEdge } from "../../services/refact/types";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 vi.mock("react-cytoscapejs", () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   default: ({ cy, elements }: any) => {
     if (cy) {
       const mockCy = {
@@ -24,8 +26,10 @@ vi.mock("react-cytoscapejs", () => ({
           select: vi.fn(),
         })),
       };
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       cy(mockCy);
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     return <div data-testid="cytoscape-mock">{elements.length} elements</div>;
   },
 }));

@@ -31,9 +31,10 @@ export function buildSubgraph(params: SubgraphParams): SubgraphResult {
   }
 
   const nodeIds = new Set<string>();
-  const queue: Array<{ id: string; d: number }> = [{ id: seedId, d: 0 }];
+  const queue: { id: string; d: number }[] = [{ id: seedId, d: 0 }];
 
   while (queue.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const { id, d } = queue.shift()!;
 
     if (nodeIds.has(id)) continue;

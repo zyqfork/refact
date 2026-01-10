@@ -32,12 +32,15 @@ const mockGraphData: KnowledgeGraphResponse = {
 
 let mockGraphResponse: KnowledgeGraphResponse | null = mockGraphData;
 let mockIsLoading = false;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mockError: any = null;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 vi.mock('../../services/refact/knowledgeGraphApi', () => ({
   useGetKnowledgeGraphQuery: () => ({
     data: mockGraphResponse,
     isLoading: mockIsLoading,
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     error: mockError,
   }),
   useUpdateMemoryMutation: () => [vi.fn(), { isLoading: false }],
@@ -45,13 +48,20 @@ vi.mock('../../services/refact/knowledgeGraphApi', () => ({
 }));
 
 vi.mock('./MemoryListView', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   MemoryListView: ({ memories, selectedId, onSelectId, linkedIds }: any) => (
     <div data-testid="memory-list">
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
       <div>Memories: {memories.length}</div>
       <div>Selected: {selectedId || 'none'}</div>
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
       <div>Linked: {linkedIds.size}</div>
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any */}
       {memories.map((m: any) => (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
         <button key={m.memid} onClick={() => onSelectId(m.memid)}>
+          {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
           {m.title}
         </button>
       ))}
@@ -60,13 +70,20 @@ vi.mock('./MemoryListView', () => ({
 }));
 
 vi.mock('./KnowledgeGraphView', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   KnowledgeGraphView: ({ nodes, edges, onSelectId, isLoading }: any) => (
     <div data-testid="graph-view">
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
       <div>Nodes: {nodes.length}</div>
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
       <div>Edges: {edges.length}</div>
       <div>Loading: {isLoading ? 'yes' : 'no'}</div>
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any */}
       {nodes.map((n: any) => (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
         <button key={n.id} onClick={() => onSelectId(n.id)}>
+          {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
           {n.label}
         </button>
       ))}
@@ -75,18 +92,24 @@ vi.mock('./KnowledgeGraphView', () => ({
 }));
 
 vi.mock('./MemoryDetailsEditor', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   MemoryDetailsEditor: ({ memory, onMemoryDeleted }: any) => (
     <div data-testid="details-editor">
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */}
       <div>Memory: {memory ? memory.title : 'none'}</div>
+      {/* eslint-disable-next-line @typescript-eslint/no-unsafe-assignment */}
       <button onClick={onMemoryDeleted}>Delete</button>
     </div>
   ),
 }));
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 describe('KnowledgeWorkspace', () => {
   beforeEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     mockGraphResponse = mockGraphData;
     mockIsLoading = false;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     mockError = null;
   });
 
@@ -160,6 +183,7 @@ describe('KnowledgeWorkspace', () => {
   });
 
   it('shows error state when graph fails to load', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     mockError = { message: 'Failed to fetch' };
     render(<KnowledgeWorkspace />);
 
@@ -167,6 +191,7 @@ describe('KnowledgeWorkspace', () => {
   });
 
   it('handles empty graph data', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     mockGraphResponse = {
       nodes: [],
       edges: [],

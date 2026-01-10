@@ -9,7 +9,7 @@ use chrono::Utc;
 
 use crate::global_context::GlobalContext;
 use crate::files_correction::get_project_dirs;
-use super::types::{TaskMeta, TaskBoard, TaskStatus};
+use super::types::{TaskMeta, TaskBoard, TaskStatus, TrajectoryInfo};
 
 const TASKS_DIR: &str = "tasks";
 
@@ -240,37 +240,63 @@ pub async fn list_task_trajectories(
     task_id: &str,
     role: &str,
     agent_id: Option<&str>,
-) -> Result<Vec<String>, String> {
-    let task_dir = get_task_dir(gcx, task_id).await?;
+) -> Result<Vec<TrajectoryInfo>, String> {
+    let task_dir = get_task_dir(gcx.clone(), task_id).await?;
     let traj_dir = get_task_trajectory_dir(&task_dir, role, agent_id);
 
     if !traj_dir.exists() {
         return Ok(vec![]);
     }
 
-    let mut trajectories: Vec<(String, String)> = vec![];
+    let mut trajectories: Vec<TrajectoryInfo> = vec![];
     let mut entries = fs::read_dir(&traj_dir).await.map_err(|e| e.to_string())?;
     while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
         let path = entry.path();
         if path.extension().map_or(false, |e| e == "json") {
             if let Some(stem) = path.file_stem() {
                 let id = stem.to_string_lossy().to_string();
-                let updated_at = if let Ok(content) = fs::read_to_string(&path).await {
-                    serde_json::from_str::<serde_json::Value>(&content)
-                        .ok()
-                        .and_then(|data| data.get("updated_at").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                trajectories.push((id, updated_at));
+                if let Ok(content) = fs::read_to_string(&path).await {
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let title = data.get("title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let created_at = data.get("created_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let updated_at = data.get("updated_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        trajectories.push(TrajectoryInfo {
+                            id,
+                            title,
+                            created_at,
+                            updated_at,
+                            session_state: None,
+                        });
+                    }
+                }
             }
         }
     }
 
-    trajectories.sort_by(|a, b| b.1.cmp(&a.1));
+    // Sort by created_at ascending (oldest first)
+    trajectories.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
-    Ok(trajectories.into_iter().map(|(id, _)| id).collect())
+    // Add session state for active sessions
+    let gcx_locked = gcx.read().await;
+    let sessions = gcx_locked.chat_sessions.read().await;
+    for traj in &mut trajectories {
+        if let Some(session_arc) = sessions.get(&traj.id) {
+            let session = session_arc.lock().await;
+            traj.session_state = Some(session.runtime.state.to_string());
+        }
+    }
+
+    Ok(trajectories)
 }
 
 pub fn infer_task_id_from_chat_id(chat_id: &str) -> Option<String> {
@@ -295,39 +321,13 @@ pub async fn get_planner_chat_id(
     gcx: Arc<ARwLock<GlobalContext>>,
     task_id: &str,
 ) -> Result<String, String> {
-    let task_dir = get_task_dir(gcx.clone(), task_id).await?;
-    let traj_dir = get_task_trajectory_dir(&task_dir, "planner", None);
+    let trajectories = list_task_trajectories(gcx, task_id, "planner", None).await?;
 
-    if !traj_dir.exists() {
-        return Ok(format!("plan-{}", task_id));
-    }
-
-    let mut entries = fs::read_dir(&traj_dir).await.map_err(|e| e.to_string())?;
-    let mut planners: Vec<(String, String)> = vec![];
-
-    while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-        let path = entry.path();
-        if path.extension().map_or(false, |e| e == "json") {
-            if let Some(stem) = path.file_stem() {
-                let id = stem.to_string_lossy().to_string();
-                if let Ok(content) = fs::read_to_string(&path).await {
-                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let updated_at = data.get("updated_at")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        planners.push((id, updated_at));
-                    }
-                }
-            }
-        }
-    }
-
-    planners.sort_by(|a, b| b.1.cmp(&a.1));
-
-    if let Some((id, _)) = planners.first() {
-        return Ok(id.clone());
-    }
-
-    Ok(format!("plan-{}", task_id))
+    // Return most recently updated planner (the "active" one)
+    trajectories
+        .iter()
+        .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+        .map(|t| t.id.clone())
+        .ok_or_else(|| format!("plan-{}", task_id))
+        .or_else(|default| Ok(default))
 }
