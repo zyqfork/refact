@@ -54,6 +54,7 @@ export function KnowledgeGraphView({
 }: KnowledgeGraphViewProps) {
   const cyRef = useRef<Cytoscape.Core | null>(null);
   const layoutRef = useRef<Cytoscape.Layouts | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [cyReady, setCyReady] = useState(false);
   const cyReadyRef = useRef(false);
 
@@ -209,6 +210,17 @@ export function KnowledgeGraphView({
   }, [cyReady, handleNodeClick, handleBackgroundClick]);
 
   useEffect(() => {
+    if (!cyReady || !containerRef.current || !cyRef.current) return;
+    if (typeof ResizeObserver === "undefined") return;
+
+    const ro = new ResizeObserver(() => {
+      cyRef.current?.resize();
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, [cyReady]);
+
+  useEffect(() => {
     if (!cyRef.current || !cyReady) return;
 
     if (layoutRef.current) {
@@ -219,10 +231,16 @@ export function KnowledgeGraphView({
     const layoutOpts: Cytoscape.LayoutOptions & Record<string, unknown> = {
       name: "fcose",
       animationDuration: 500,
-      randomize: false,
-      idealEdgeLength: 120,
-      nodeRepulsion: 5000,
-      edgeElasticity: 0.5,
+      randomize: true,
+      randomSeed: 42,
+      idealEdgeLength: 220,
+      nodeRepulsion: 18000,
+      nodeSeparation: 90,
+      edgeElasticity: 0.35,
+      gravity: 0.15,
+      packComponents: true,
+      componentSpacing: 140,
+      padding: 30,
     };
 
     layoutRef.current = cyRef.current.layout(layoutOpts);
@@ -267,6 +285,7 @@ export function KnowledgeGraphView({
 
   return (
     <div
+      ref={containerRef}
       style={{
         width: "100%",
         height: "100%",
