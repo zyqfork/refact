@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use axum::Extension;
 use axum::http::{Response, StatusCode};
@@ -12,6 +12,7 @@ use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 use crate::knowledge_graph::KnowledgeFrontmatter;
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
+use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
 
 #[derive(Deserialize)]
 pub struct UpdateMemoryPost {
@@ -41,6 +42,55 @@ pub struct MemoryOperationResponse {
     pub error: Option<String>,
 }
 
+fn get_knowledge_root(gcx: &Arc<ARwLock<GlobalContext>>) -> Result<PathBuf, ScratchError> {
+    let workspace_folders = gcx.blocking_read().documents_state.workspace_folders.clone();
+    let folders = workspace_folders.lock().unwrap();
+    
+    if folders.is_empty() {
+        return Err(ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "No workspace folder configured".to_string(),
+        ));
+    }
+    
+    Ok(folders[0].join(KNOWLEDGE_FOLDER_NAME))
+}
+
+async fn validate_knowledge_path(
+    file_path: &Path,
+    workspace_root: &Path,
+) -> Result<PathBuf, ScratchError> {
+    let canonical = tokio::fs::canonicalize(file_path).await.map_err(|_| {
+        ScratchError::new(
+            StatusCode::NOT_FOUND,
+            "File not found".to_string(),
+        )
+    })?;
+    
+    let root_canonical = tokio::fs::canonicalize(workspace_root).await.map_err(|_| {
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Cannot access workspace".to_string(),
+        )
+    })?;
+    
+    if !canonical.starts_with(&root_canonical) {
+        return Err(ScratchError::new(
+            StatusCode::FORBIDDEN,
+            "Path outside knowledge directory".to_string(),
+        ));
+    }
+    
+    if canonical.extension().map(|e| e != "md").unwrap_or(true) {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            "Only .md files allowed".to_string(),
+        ));
+    }
+    
+    Ok(canonical)
+}
+
 pub async fn handle_v1_knowledge_update_memory(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     body_bytes: hyper::body::Bytes,
@@ -52,14 +102,11 @@ pub async fn handle_v1_knowledge_update_memory(
         )
     })?;
 
-    let file_path = PathBuf::from(&post.file_path);
-    
-    if !file_path.exists() {
-        return Err(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("Memory file not found: {}", post.file_path),
-        ));
-    }
+    let knowledge_root = get_knowledge_root(&gcx)?;
+    let file_path = validate_knowledge_path(
+        Path::new(&post.file_path),
+        &knowledge_root,
+    ).await?;
 
     let existing_text = get_file_text_from_memory_or_disk(gcx.clone(), &file_path)
         .await
@@ -134,14 +181,11 @@ pub async fn handle_v1_knowledge_delete_memory(
         )
     })?;
 
-    let file_path = PathBuf::from(&post.file_path);
-    
-    if !file_path.exists() {
-        return Err(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("Memory file not found: {}", post.file_path),
-        ));
-    }
+    let knowledge_root = get_knowledge_root(&gcx)?;
+    let file_path = validate_knowledge_path(
+        Path::new(&post.file_path),
+        &knowledge_root,
+    ).await?;
 
     if post.archive {
         crate::memories::archive_document(gcx.clone(), &file_path)
