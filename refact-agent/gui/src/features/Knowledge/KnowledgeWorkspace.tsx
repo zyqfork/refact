@@ -89,31 +89,29 @@ export function KnowledgeWorkspace() {
 
   return (
     <div className={styles.workspace}>
-      <div className={styles.leftPanel}>
-        <div className={styles.listSection}>
-          <MemoryListView
-            memories={memoryRecords}
-            selectedId={selectedId}
-            onSelectId={handleSelectMemory}
-            linkedIds={linkedIds}
-          />
-        </div>
-
-        <div className={styles.graphSection}>
-          <KnowledgeGraphView
-            nodes={linkedDocNodes}
-            edges={docDocEdges}
-            selectedId={selectedId}
-            onSelectId={handleSelectMemory}
-            isLoading={isLoading}
-          />
-        </div>
-      </div>
-
-      <div className={styles.rightPanel}>
+      <div className={styles.editorSection}>
         <MemoryDetailsEditor
           memory={selectedMemory}
           onMemoryDeleted={handleMemoryDeleted}
+        />
+      </div>
+
+      <div className={styles.listSection}>
+        <MemoryListView
+          memories={memoryRecords}
+          selectedId={selectedId}
+          onSelectId={handleSelectMemory}
+          linkedIds={linkedIds}
+        />
+      </div>
+
+      <div className={styles.graphSection}>
+        <KnowledgeGraphView
+          nodes={linkedDocNodes}
+          edges={docDocEdges}
+          selectedId={selectedId}
+          onSelectId={handleSelectMemory}
+          isLoading={isLoading}
         />
       </div>
     </div>
