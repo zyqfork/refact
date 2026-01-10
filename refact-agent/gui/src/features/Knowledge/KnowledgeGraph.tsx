@@ -5,7 +5,7 @@ import type Cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
 import { Flex, Text, Checkbox } from "@radix-ui/themes";
 import { useGetKnowledgeGraphQuery } from "../../services/refact/knowledgeGraphApi";
-import { buildSubgraph } from "./knowledgeGraphSubgraph";
+import { buildSubgraph, makeEdgeId } from "./knowledgeGraphSubgraph";
 import type { KnowledgeGraphNode } from "../../services/refact/types";
 import styles from "./KnowledgeGraph.module.css";
 
@@ -130,7 +130,7 @@ export function KnowledgeGraph() {
 
       const nodes = graph.nodes.filter((node) => subgraph.nodeIds.has(node.id));
       const edges = graph.edges.filter((edge) => {
-        const edgeId = `${edge.source}|${edge.target}|${edge.edge_type}`;
+        const edgeId = makeEdgeId(edge.source, edge.target, edge.edge_type);
         return subgraph.edgeIds.has(edgeId);
       });
 
@@ -164,7 +164,7 @@ export function KnowledgeGraph() {
     })),
     ...filteredEdges.map((edge) => ({
       data: {
-        id: `${edge.source}|${edge.target}|${edge.edge_type}`,
+        id: makeEdgeId(edge.source, edge.target, edge.edge_type),
         source: edge.source,
         target: edge.target,
         label: edge.edge_type,

@@ -16,90 +16,51 @@ export type SubgraphResult = {
   edgeIds: Set<string>;
 };
 
+export function makeEdgeId(source: string, target: string, edgeType: string): string {
+  return JSON.stringify([source, target, edgeType]);
+}
+
 export function buildSubgraph(params: SubgraphParams): SubgraphResult {
   const { seedId, depth, nodes, edges, includeNode } = params;
 
-  const nodeMap = new Map<string, KnowledgeGraphNode>();
-  nodes.forEach((node) => {
-    nodeMap.set(node.id, node);
-  });
+  const nodeIndex = new Map(nodes.map(n => [n.id, n]));
+  const seedNode = nodeIndex.get(seedId);
 
-  const seedNode = nodeMap.get(seedId);
   if (!seedNode) {
     return { nodeIds: new Set(), edgeIds: new Set() };
   }
 
-  const adjacencyList = new Map<string, string[]>();
-  const edgeMap = new Map<string, KnowledgeGraphEdge>();
-
-  edges.forEach((edge) => {
-    if (!nodeMap.has(edge.source) || !nodeMap.has(edge.target)) {
-      return;
-    }
-
-    const edgeId = `${edge.source}|${edge.target}|${edge.edge_type}`;
-    edgeMap.set(edgeId, edge);
-
-    if (!adjacencyList.has(edge.source)) {
-      adjacencyList.set(edge.source, []);
-    }
-    adjacencyList.get(edge.source)!.push(edge.target);
-
-    if (!adjacencyList.has(edge.target)) {
-      adjacencyList.set(edge.target, []);
-    }
-    adjacencyList.get(edge.target)!.push(edge.source);
-  });
-
-  const visitedNodes = new Set<string>();
-  const resultNodeIds = new Set<string>();
-  const resultEdgeIds = new Set<string>();
-
-  const queue: Array<{ id: string; currentDepth: number }> = [
-    { id: seedId, currentDepth: 0 },
-  ];
-  visitedNodes.add(seedId);
-  resultNodeIds.add(seedId);
+  const nodeIds = new Set<string>();
+  const queue: Array<{ id: string; d: number }> = [{ id: seedId, d: 0 }];
 
   while (queue.length > 0) {
-    const current = queue.shift()!;
+    const { id, d } = queue.shift()!;
 
-    if (current.currentDepth >= depth) {
-      continue;
-    }
+    if (nodeIds.has(id)) continue;
 
-    const neighbors = adjacencyList.get(current.id) || [];
+    const node = nodeIndex.get(id);
+    if (!node || !includeNode(node)) continue;
 
-    for (const neighborId of neighbors) {
-      const neighborNode = nodeMap.get(neighborId);
-      if (!neighborNode) continue;
+    nodeIds.add(id);
 
-      if (!includeNode(neighborNode)) continue;
-
-      if (!visitedNodes.has(neighborId)) {
-        visitedNodes.add(neighborId);
-        resultNodeIds.add(neighborId);
-        queue.push({ id: neighborId, currentDepth: current.currentDepth + 1 });
-      }
-
-      const forwardEdgeId = `${current.id}|${neighborId}|`;
-      const backwardEdgeId = `${neighborId}|${current.id}|`;
-
-      for (const [edgeId, edge] of edgeMap.entries()) {
-        if (
-          edgeId.startsWith(forwardEdgeId) ||
-          edgeId.startsWith(backwardEdgeId)
-        ) {
-          if (
-            resultNodeIds.has(edge.source) &&
-            resultNodeIds.has(edge.target)
-          ) {
-            resultEdgeIds.add(edgeId);
-          }
+    if (d < depth) {
+      for (const edge of edges) {
+        if (edge.source === id && !nodeIds.has(edge.target)) {
+          queue.push({ id: edge.target, d: d + 1 });
+        }
+        if (edge.target === id && !nodeIds.has(edge.source)) {
+          queue.push({ id: edge.source, d: d + 1 });
         }
       }
     }
   }
 
-  return { nodeIds: resultNodeIds, edgeIds: resultEdgeIds };
+  const edgeIds = new Set<string>();
+  for (const edge of edges) {
+    if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
+      edgeIds.add(makeEdgeId(edge.source, edge.target, edge.edge_type));
+    }
+  }
+
+  return { nodeIds, edgeIds };
 }
