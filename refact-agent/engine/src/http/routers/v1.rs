@@ -53,6 +53,9 @@ use crate::http::routers::v1::providers::{
 
 use crate::http::routers::v1::vecdb::{handle_v1_vecdb_search, handle_v1_vecdb_status};
 use crate::http::routers::v1::knowledge_graph::handle_v1_knowledge_graph;
+use crate::http::routers::v1::knowledge_ops::{
+    handle_v1_knowledge_update_memory, handle_v1_knowledge_delete_memory,
+};
 use crate::http::routers::v1::v1_integrations::{
     handle_v1_integration_get, handle_v1_integration_icon, handle_v1_integration_save,
     handle_v1_integration_delete, handle_v1_integrations, handle_v1_integrations_filtered,
@@ -100,6 +103,7 @@ pub mod graceful_shutdown;
 mod gui_help_handlers;
 pub mod knowledge_enrichment;
 mod knowledge_graph;
+mod knowledge_ops;
 pub mod links;
 pub mod lsp_like_handlers;
 pub mod providers;
@@ -226,6 +230,8 @@ pub fn make_v1_router() -> Router {
         .route("/vdb-search", post(handle_v1_vecdb_search))
         .route("/vdb-status", get(handle_v1_vecdb_status))
         .route("/knowledge-graph", get(handle_v1_knowledge_graph))
+        .route("/knowledge/update-memory", post(handle_v1_knowledge_update_memory))
+        .route("/knowledge/delete-memory", delete(handle_v1_knowledge_delete_memory))
         .route("/trajectory-compress", post(handle_v1_trajectory_compress))
         .route("/trajectories", get(handle_v1_trajectories_list))
         .route("/trajectories/all", get(handle_v1_trajectories_all))
