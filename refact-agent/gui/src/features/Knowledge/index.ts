@@ -3,6 +3,7 @@ export { KnowledgeGraphView } from "./KnowledgeGraphView";
 export { MemoryCard } from "./MemoryCard";
 export { MemoryEditModal } from "./MemoryEditModal";
 export { MemoryListView } from "./MemoryListView";
+export { MemoryDetailsEditor } from "./MemoryDetailsEditor";
 export { useKnowledgeGraphTheme } from "./useKnowledgeGraphTheme";
 export {
   knowledgeSlice,
