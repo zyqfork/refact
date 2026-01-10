@@ -5,7 +5,6 @@ import type Cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
 import { Flex, Text, Checkbox } from "@radix-ui/themes";
 import { useGetKnowledgeGraphQuery } from "../../services/refact/knowledgeGraphApi";
-import { useKnowledgeGraphTheme } from "./useKnowledgeGraphTheme";
 import { buildSubgraph } from "./knowledgeGraphSubgraph";
 import type { KnowledgeGraphNode } from "../../services/refact/types";
 import styles from "./KnowledgeGraph.module.css";
@@ -42,7 +41,6 @@ type VisibleNodeGroups = {
 
 export function KnowledgeGraph() {
   const { data: graph, isLoading, error } = useGetKnowledgeGraphQuery(undefined);
-  const { colors } = useKnowledgeGraphTheme();
   const cyRef = useRef<Cytoscape.Core | null>(null);
   const layoutRef = useRef<any>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -56,7 +54,7 @@ export function KnowledgeGraph() {
     entities: false,
   });
   const [filters, setFilters] = useState<FilterState>({
-    kinds: new Set(["code", "decision", "trajectory", "preference"]),
+    kinds: new Set(["code", "decision", "trajectory", "preference", "deprecated"]),
     statuses: new Set(["active", "deprecated"]),
     tags: new Set<string>(),
   });
@@ -177,7 +175,7 @@ export function KnowledgeGraph() {
     {
       selector: "node",
       style: {
-        "background-color": colors.accent,
+        "background-color": "#8B5CF6", // accent-9 purple
         label: "",
         "font-size": "12px",
         color: "#ffffff",
@@ -192,62 +190,69 @@ export function KnowledgeGraph() {
     {
       selector: 'node[type="doc_code"]',
       style: {
-        "background-color": colors.kind.code,
+        "background-color": "#3B82F6", // blue-500
       },
     },
     {
       selector: 'node[type="doc_decision"]',
       style: {
-        "background-color": colors.kind.decision,
+        "background-color": "#8B5CF6", // purple-500
       },
     },
     {
       selector: 'node[type="doc_trajectory"]',
       style: {
-        "background-color": colors.kind.trajectory,
+        "background-color": "#EC4899", // pink-500
       },
     },
     {
       selector: 'node[type="doc_preference"]',
       style: {
-        "background-color": colors.kind.preference,
+        "background-color": "#10B981", // emerald-500
+      },
+    },
+    {
+      selector: 'node[type="doc_deprecated"]',
+      style: {
+        "background-color": "#6B7280", // gray-500
+        opacity: 0.6,
       },
     },
     {
       selector: 'node[type="tag"]',
       style: {
-        "background-color": colors.kind.other,
+        "background-color": "#F59E0B", // amber-500
       },
     },
     {
       selector: 'node[type="file"]',
       style: {
-        "background-color": colors.kind.other,
+        "background-color": "#06B6D4", // cyan-500
       },
     },
     {
       selector: 'node[type="entity"]',
       style: {
-        "background-color": colors.kind.other,
+        "background-color": "#EF4444", // red-500
       },
     },
     {
       selector: "edge",
       style: {
         width: 1,
-        "line-color": colors.gray,
-        "target-arrow-color": colors.gray,
+        "line-color": "#9CA3AF", // gray-400
+        "target-arrow-color": "#9CA3AF",
         "target-arrow-shape": "triangle",
         "curve-style": "bezier",
-        opacity: 0.6,
+        opacity: 0.4,
       },
     },
     {
       selector: "node:selected",
       style: {
         "border-width": 3,
-        "border-color": colors.accent,
-        "background-color": colors.accent,
+        "border-color": "#8B5CF6",
+        "background-color": "#A78BFA",
       },
     },
   ];
@@ -354,7 +359,7 @@ export function KnowledgeGraph() {
 
   const resetFilters = useCallback(() => {
     setFilters({
-      kinds: new Set(["code", "decision", "trajectory", "preference"]),
+      kinds: new Set(["code", "decision", "trajectory", "preference", "deprecated"]),
       statuses: new Set(["active", "deprecated"]),
       tags: new Set<string>(),
     });
@@ -454,7 +459,7 @@ export function KnowledgeGraph() {
           </div>
           {mode === "overview" ? (
             <div className={styles.filterOptions}>
-              {["code", "decision", "trajectory", "preference"].map((kind) => (
+              {["code", "decision", "trajectory", "preference", "deprecated"].map((kind) => (
                 <label key={kind} className={styles.filterCheckbox}>
                   <Checkbox
                     checked={filters.kinds.has(kind)}
