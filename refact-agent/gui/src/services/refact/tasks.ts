@@ -60,6 +60,14 @@ export interface ReadyCardsResult {
   failed: string[];
 }
 
+export interface TrajectoryInfo {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  session_state?: string;
+}
+
 export const tasksApi = createApi({
   reducerPath: "tasksApi",
   baseQuery: fetchBaseQuery({
@@ -230,7 +238,7 @@ export const tasksApi = createApi({
     }),
 
     listTaskTrajectories: builder.query<
-      string[],
+      TrajectoryInfo[],
       { taskId: string; role: string }
     >({
       queryFn: async ({ taskId, role }, api, _opts, baseQuery) => {
@@ -240,7 +248,7 @@ export const tasksApi = createApi({
           url: `http://127.0.0.1:${port}/v1/tasks/${taskId}/trajectories/${role}`,
         });
         if (result.error) return { error: result.error };
-        return { data: result.data as string[] };
+        return { data: result.data as TrajectoryInfo[] };
       },
     }),
 

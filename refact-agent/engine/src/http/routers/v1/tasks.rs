@@ -345,8 +345,8 @@ pub async fn handle_create_planner_chat(
 
     let max_num = existing
         .iter()
-        .filter_map(|id| {
-            id.strip_prefix(&format!("planner-{}-", task_id))
+        .filter_map(|t| {
+            t.id.strip_prefix(&format!("planner-{}-", task_id))
                 .and_then(|s| s.parse::<u32>().ok())
         })
         .max()

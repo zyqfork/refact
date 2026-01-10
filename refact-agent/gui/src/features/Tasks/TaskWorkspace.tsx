@@ -40,6 +40,7 @@ import {
   selectOpenTasksFromRoot,
   setTaskActiveChat,
   selectTaskActiveChat,
+  PlannerInfo,
 } from "./tasksSlice";
 import { selectThreadById } from "../Chat/Thread";
 import { InternalLinkProvider } from "../../contexts/InternalLinkContext";
@@ -51,46 +52,56 @@ type ActiveChat =
   | null;
 
 interface PlannerPanelProps {
-  taskId: string;
-  plannerChats: string[];
+  plannerChats: PlannerInfo[];
   activeChat: ActiveChat;
+  activePlannerId: string | null;
   onNewPlanner: () => void;
   onSelectPlanner: (chatId: string) => void;
   onRemovePlanner: (chatId: string) => void;
 }
 
 interface PlannerItemProps {
-  chatId: string;
-  index: number;
+  planner: PlannerInfo;
+  isSelected: boolean;
   isActive: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }
 
+function formatPlannerDate(dateStr: string): string {
+  if (!dateStr) return "";
+  try {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
 const PlannerItem: React.FC<PlannerItemProps> = ({
-  chatId,
-  index,
+  planner,
+  isSelected,
   isActive,
   onSelect,
   onRemove,
 }) => {
-  const thread = useAppSelector((state) => selectThreadById(state, chatId));
-  const title = thread?.title;
-  const hasGeneratedTitle =
-    title && title !== "New Chat" && title.trim() !== "";
-  const displayTitle = hasGeneratedTitle
-    ? `Planner #${index + 1}: ${title}`
-    : `Planner #${index + 1}`;
+  const thread = useAppSelector((state) => selectThreadById(state, planner.id));
+  const title = thread?.title || planner.title;
+  const hasGeneratedTitle = title && title !== "New Chat" && title.trim() !== "";
+  const displayTitle = hasGeneratedTitle ? title : formatPlannerDate(planner.createdAt);
 
   return (
     <Box
       className={styles.panelItem}
       onClick={onSelect}
-      style={{ background: isActive ? "var(--accent-4)" : undefined }}
+      style={{ background: isSelected ? "var(--accent-4)" : undefined }}
     >
-      <Badge size="1" color="violet">
-        📋
-      </Badge>
+      <Flex align="center" gap="1">
+        {isActive && (
+          <Badge size="1" color="green" radius="full">●</Badge>
+        )}
+        <Badge size="1" color="violet">📋</Badge>
+      </Flex>
       <Text
         size="1"
         style={{
@@ -120,6 +131,7 @@ const PlannerItem: React.FC<PlannerItemProps> = ({
 const PlannerPanel: React.FC<PlannerPanelProps> = ({
   plannerChats,
   activeChat,
+  activePlannerId,
   onNewPlanner,
   onSelectPlanner,
   onRemovePlanner,
@@ -144,16 +156,14 @@ const PlannerPanel: React.FC<PlannerPanelProps> = ({
         ) : (
           <ScrollArea scrollbars="vertical">
             <Flex direction="column" gap="1">
-              {plannerChats.map((chatId, idx) => (
+              {plannerChats.map((planner) => (
                 <PlannerItem
-                  key={chatId}
-                  chatId={chatId}
-                  index={idx}
-                  isActive={
-                    activeChat?.type === "planner" && activeChat.chatId === chatId
-                  }
-                  onSelect={() => onSelectPlanner(chatId)}
-                  onRemove={() => onRemovePlanner(chatId)}
+                  key={planner.id}
+                  planner={planner}
+                  isSelected={activeChat?.type === "planner" && activeChat.chatId === planner.id}
+                  isActive={planner.id === activePlannerId}
+                  onSelect={() => onSelectPlanner(planner.id)}
+                  onRemove={() => onRemovePlanner(planner.id)}
                 />
               ))}
             </Flex>
@@ -398,6 +408,12 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     () => currentTaskUI?.plannerChats ?? [],
     [currentTaskUI?.plannerChats],
   );
+  const activePlannerId = useMemo(() => {
+    if (plannerChats.length === 0) return null;
+    return plannerChats.reduce((latest, p) =>
+      p.updatedAt > latest.updatedAt ? p : latest
+    ).id;
+  }, [plannerChats]);
   const activeChat = useAppSelector((state) =>
     selectTaskActiveChat(state, taskId),
   );
@@ -407,7 +423,6 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const plannersRestoredRef = React.useRef(false);
   const prevTaskStatusRef = React.useRef<string | undefined>(undefined);
 
-  // Open task tab when task data is available
   useEffect(() => {
     if (task) {
       dispatch(openTask({ id: taskId, name: task.name }));
@@ -418,61 +433,70 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     if (!savedPlanners || plannersRestoredRef.current) return;
     plannersRestoredRef.current = true;
 
-    for (const chatId of savedPlanners) {
-      if (plannerChats.includes(chatId)) continue;
+    for (const traj of savedPlanners) {
+      if (plannerChats.some((p) => p.id === traj.id)) continue;
 
       dispatch(
         createChatWithId({
-          id: chatId,
-          title: "",
+          id: traj.id,
+          title: traj.title,
           isTaskChat: true,
           mode: "TASK_PLANNER",
           taskMeta: { task_id: taskId, role: "planner" },
         }),
       );
-      dispatch(addPlannerChat({ taskId, chatId }));
+      dispatch(addPlannerChat({
+        taskId,
+        planner: {
+          id: traj.id,
+          title: traj.title,
+          createdAt: traj.created_at,
+          updatedAt: traj.updated_at,
+          sessionState: traj.session_state,
+        },
+      }));
     }
 
     if (savedPlanners.length > 0 && !activeChat) {
-      const firstPlanner = savedPlanners[0];
+      const mostRecent = savedPlanners.reduce((latest, p) =>
+        p.updated_at > latest.updated_at ? p : latest
+      );
       dispatch(
         setTaskActiveChat({
           taskId,
-          activeChat: { type: "planner", chatId: firstPlanner },
+          activeChat: { type: "planner", chatId: mostRecent.id },
         }),
       );
     }
   }, [dispatch, taskId, savedPlanners, plannerChats, activeChat]);
 
-  // Fallback logic: if active planner chat was deleted, switch to first available planner
   useEffect(() => {
     if (
       activeChat?.type === "planner" &&
-      !plannerChats.includes(activeChat.chatId)
+      !plannerChats.some((p) => p.id === activeChat.chatId)
     ) {
-      if (plannerChats.length > 0) {
+      if (activePlannerId) {
         dispatch(
           setTaskActiveChat({
             taskId,
-            activeChat: { type: "planner", chatId: plannerChats[0] },
+            activeChat: { type: "planner", chatId: activePlannerId },
           }),
         );
       } else {
         dispatch(setTaskActiveChat({ taskId, activeChat: null }));
       }
     }
-  }, [activeChat, plannerChats, dispatch, taskId]);
+  }, [activeChat, plannerChats, activePlannerId, dispatch, taskId]);
 
-  // Fallback logic: if active agent card was deleted, switch to first planner
   useEffect(() => {
     if (activeChat?.type === "agent" && board) {
       const cardExists = board.cards.some((c) => c.id === activeChat.cardId);
       if (!cardExists) {
-        if (plannerChats.length > 0) {
+        if (activePlannerId) {
           dispatch(
             setTaskActiveChat({
               taskId,
-              activeChat: { type: "planner", chatId: plannerChats[0] },
+              activeChat: { type: "planner", chatId: activePlannerId },
             }),
           );
         } else {
@@ -480,7 +504,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         }
       }
     }
-  }, [activeChat, board, dispatch, taskId, plannerChats]);
+  }, [activeChat, board, dispatch, taskId, activePlannerId]);
   useEffect(() => {
     if (!task) return;
 
@@ -516,6 +540,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
       .unwrap()
       .then((result) => {
         const newChatId = result.chat_id;
+        const now = new Date().toISOString();
         dispatch(
           createChatWithId({
             id: newChatId,
@@ -525,7 +550,15 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
             taskMeta: { task_id: taskId, role: "planner" },
           }),
         );
-        dispatch(addPlannerChat({ taskId, chatId: newChatId }));
+        dispatch(addPlannerChat({
+          taskId,
+          planner: {
+            id: newChatId,
+            title: "",
+            createdAt: now,
+            updatedAt: now,
+          },
+        }));
         dispatch(
           setTaskActiveChat({
             taskId,
@@ -540,13 +573,15 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     (chatId: string) => {
       dispatch(removePlannerChat({ taskId, chatId }));
       if (activeChat?.type === "planner" && activeChat.chatId === chatId) {
-        // Switch to another planner or null
-        const remaining = plannerChats.filter((c) => c !== chatId);
+        const remaining = plannerChats.filter((p) => p.id !== chatId);
         if (remaining.length > 0) {
+          const mostRecent = remaining.reduce((latest, p) =>
+            p.updatedAt > latest.updatedAt ? p : latest
+          );
           dispatch(
             setTaskActiveChat({
               taskId,
-              activeChat: { type: "planner", chatId: remaining[0] },
+              activeChat: { type: "planner", chatId: mostRecent.id },
             }),
           );
         } else {
@@ -712,9 +747,9 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
 
           <Flex className={styles.panelsSection}>
             <PlannerPanel
-              taskId={taskId}
               plannerChats={plannerChats}
               activeChat={activeChat}
+              activePlannerId={activePlannerId}
               onNewPlanner={handleNewPlanner}
               onSelectPlanner={handleSelectPlanner}
               onRemovePlanner={handleRemovePlanner}

@@ -4,12 +4,20 @@ import { RootState } from "../../app/store";
 type ActiveChat =
   | { type: "planner"; chatId: string }
   | { type: "agent"; cardId: string; chatId: string }
-  | null; // null means no active chat yet
+  | null;
+
+export interface PlannerInfo {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  sessionState?: string;
+}
 
 export interface OpenTask {
   id: string;
   name: string;
-  plannerChats: string[];
+  plannerChats: PlannerInfo[];
   activeChat: ActiveChat;
 }
 
@@ -59,11 +67,23 @@ export const tasksSlice = createSlice({
     },
     addPlannerChat: (
       state,
-      action: PayloadAction<{ taskId: string; chatId: string }>,
+      action: PayloadAction<{ taskId: string; planner: PlannerInfo }>,
     ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
-      if (task && !task.plannerChats.includes(action.payload.chatId)) {
-        task.plannerChats.push(action.payload.chatId);
+      if (task && !task.plannerChats.some((p) => p.id === action.payload.planner.id)) {
+        task.plannerChats.push(action.payload.planner);
+      }
+    },
+    updatePlannerChat: (
+      state,
+      action: PayloadAction<{ taskId: string; planner: Partial<PlannerInfo> & { id: string } }>,
+    ) => {
+      const task = state.openTasks.find((t) => t.id === action.payload.taskId);
+      if (task) {
+        const idx = task.plannerChats.findIndex((p) => p.id === action.payload.planner.id);
+        if (idx !== -1) {
+          task.plannerChats[idx] = { ...task.plannerChats[idx], ...action.payload.planner };
+        }
       }
     },
     removePlannerChat: (
@@ -73,7 +93,7 @@ export const tasksSlice = createSlice({
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task) {
         task.plannerChats = task.plannerChats.filter(
-          (c) => c !== action.payload.chatId,
+          (p) => p.id !== action.payload.chatId,
         );
       }
     },
@@ -97,6 +117,7 @@ export const {
   closeTask,
   updateTaskName,
   addPlannerChat,
+  updatePlannerChat,
   removePlannerChat,
   setTaskActiveChat,
 } = tasksSlice.actions;
