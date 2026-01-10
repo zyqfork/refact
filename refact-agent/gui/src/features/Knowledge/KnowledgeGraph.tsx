@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import CytoscapeComponent from "react-cytoscapejs";
 import cytoscape from "cytoscape";
 import type Cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
-import { Flex, Text, Checkbox } from "@radix-ui/themes";
+import { Flex, Text, Checkbox, Button } from "@radix-ui/themes";
 import { useGetKnowledgeGraphQuery } from "../../services/refact/knowledgeGraphApi";
 import { useKnowledgeGraphTheme } from "./useKnowledgeGraphTheme";
+import { buildSubgraph } from "./knowledgeGraphSubgraph";
+import type { KnowledgeGraphNode } from "../../services/refact/types";
 import styles from "./KnowledgeGraph.module.css";
 
 // Register fcose layout extension
@@ -29,22 +31,58 @@ type CytoscapeElement = {
   group?: "nodes" | "edges";
 };
 
+type ViewMode = "overview" | "focus";
+
+type VisibleNodeGroups = {
+  docs: boolean;
+  tags: boolean;
+  files: boolean;
+  entities: boolean;
+};
+
 export function KnowledgeGraph() {
   const { data: graph, isLoading, error } = useGetKnowledgeGraphQuery(undefined);
   const { colors } = useKnowledgeGraphTheme();
   const cyRef = useRef<Cytoscape.Core | null>(null);
+  const layoutRef = useRef<any>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [mode, setMode] = useState<ViewMode>("overview");
+  const [focusSeedId, setFocusSeedId] = useState<string | null>(null);
+  const [focusDepth, setFocusDepth] = useState<1 | 2>(1);
+  const [visibleNodeGroups, setVisibleNodeGroups] = useState<VisibleNodeGroups>({
+    docs: true,
+    tags: true,
+    files: true,
+    entities: false,
+  });
   const [filters, setFilters] = useState<FilterState>({
     kinds: new Set(["code", "decision", "trajectory", "preference"]),
     statuses: new Set(["active", "deprecated"]),
     tags: new Set<string>(),
   });
 
+  const handleNodeClick = useCallback((nodeId: string) => {
+    setSelectedNode(nodeId);
+    if (mode === "overview") {
+      const node = graph?.nodes.find((n) => n.id === nodeId);
+      if (node && node.node_type.startsWith("doc_")) {
+        setFocusSeedId(nodeId);
+        setMode("focus");
+      }
+    }
+  }, [mode, graph]);
+
+  const handleBackToOverview = useCallback(() => {
+    setMode("overview");
+    setFocusSeedId(null);
+    setSelectedNode(null);
+  }, []);
+
   useEffect(() => {
     if (cyRef.current) {
       cyRef.current.on("tap", "node", (e: any) => {
         const nodeId = e.target.id();
-        setSelectedNode(nodeId);
+        handleNodeClick(nodeId);
       });
 
       cyRef.current.on("tap", (e: any) => {
@@ -52,8 +90,29 @@ export function KnowledgeGraph() {
           setSelectedNode(null);
         }
       });
+
+      const handleZoom = () => {
+        if (!cyRef.current) return;
+        const zoom = cyRef.current.zoom();
+        cyRef.current.elements("node").forEach((node: any) => {
+          node.style("label", zoom > 1.2 ? node.data("label") : "");
+        });
+      };
+
+      cyRef.current.on("zoom", handleZoom);
+
+      cyRef.current.on("mouseover", "node", (e: any) => {
+        e.target.style("label", e.target.data("label"));
+      });
+
+      cyRef.current.on("mouseout", "node", (e: any) => {
+        const zoom = cyRef.current?.zoom() || 1;
+        if (zoom <= 1.2) {
+          e.target.style("label", "");
+        }
+      });
     }
-  }, []);
+  }, [handleNodeClick]);
 
   if (isLoading) {
     return (
@@ -75,20 +134,60 @@ export function KnowledgeGraph() {
     return null;
   }
 
-  const filteredNodes = graph.nodes.filter((node) => {
+  const includeNodeByType = useCallback((node: KnowledgeGraphNode): boolean => {
     const nodeType = node.node_type.toLowerCase();
-    if (nodeType.includes("doc_")) {
+    
+    if (nodeType.startsWith("doc_")) {
       const kind = nodeType.replace("doc_", "");
       return filters.kinds.has(kind);
     }
+    
+    if (nodeType === "tag") return visibleNodeGroups.tags;
+    if (nodeType === "file") return visibleNodeGroups.files;
+    if (nodeType === "entity") return visibleNodeGroups.entities;
+    
     return true;
-  });
+  }, [filters.kinds, visibleNodeGroups]);
 
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredEdges = graph.edges.filter(
-    (edge) =>
-      filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
-  );
+  const { filteredNodes, filteredEdges } = useMemo(() => {
+    if (mode === "overview") {
+      const nodes = graph.nodes.filter((node) => {
+        const nodeType = node.node_type.toLowerCase();
+        if (nodeType.startsWith("doc_")) {
+          const kind = nodeType.replace("doc_", "");
+          return filters.kinds.has(kind);
+        }
+        return false;
+      });
+
+      const nodeIds = new Set(nodes.map((n) => n.id));
+      const edges = graph.edges.filter(
+        (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
+      );
+
+      return { filteredNodes: nodes, filteredEdges: edges };
+    }
+
+    if (mode === "focus" && focusSeedId) {
+      const subgraph = buildSubgraph({
+        seedId: focusSeedId,
+        depth: focusDepth,
+        nodes: graph.nodes,
+        edges: graph.edges,
+        includeNode: includeNodeByType,
+      });
+
+      const nodes = graph.nodes.filter((node) => subgraph.nodeIds.has(node.id));
+      const edges = graph.edges.filter((edge) => {
+        const edgeId = `${edge.source}|${edge.target}|${edge.edge_type}`;
+        return subgraph.edgeIds.has(edgeId);
+      });
+
+      return { filteredNodes: nodes, filteredEdges: edges };
+    }
+
+    return { filteredNodes: [], filteredEdges: [] };
+  }, [mode, focusSeedId, focusDepth, graph, filters.kinds, includeNodeByType]);
 
   const degreeMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -128,7 +227,7 @@ export function KnowledgeGraph() {
       selector: "node",
       style: {
         "background-color": colors.accent,
-        label: "data(label)",
+        label: "",
         "font-size": "12px",
         color: "#ffffff",
         "text-valign": "center",
@@ -202,6 +301,33 @@ export function KnowledgeGraph() {
     },
   ];
 
+  useEffect(() => {
+    if (!cyRef.current) return;
+
+    layoutRef.current?.stop();
+
+    const layoutOpts = mode === "overview"
+      ? {
+          name: "concentric",
+          animationDuration: 500,
+          randomize: false,
+          minNodeSpacing: 50,
+          concentric: (node: any) => node.degree(),
+          levelWidth: () => 2,
+        }
+      : {
+          name: "fcose",
+          animationDuration: 500,
+          randomize: false,
+          idealEdgeLength: 100,
+          nodeRepulsion: 4500,
+          edgeElasticity: 0.45,
+        };
+
+    layoutRef.current = cyRef.current.layout(layoutOpts as any);
+    layoutRef.current.run();
+  }, [mode, focusSeedId, elements]);
+
   const handleKindToggle = (kind: string) => {
     setFilters((prev) => {
       const newKinds = new Set(prev.kinds);
@@ -214,6 +340,13 @@ export function KnowledgeGraph() {
     });
   };
 
+  const handleNodeGroupToggle = (group: keyof VisibleNodeGroups) => {
+    setVisibleNodeGroups((prev) => ({
+      ...prev,
+      [group]: !prev[group],
+    }));
+  };
+
   const selectedNodeData = selectedNode
     ? graph.nodes.find((n) => n.id === selectedNode)
     : null;
@@ -224,11 +357,6 @@ export function KnowledgeGraph() {
         elements={elements}
         style={{ width: "100%", height: "100%" }}
         stylesheet={stylesheet}
-        layout={{
-          name: "fcose",
-          animationDuration: 500,
-          randomize: false,
-        } as any}
         cy={(cy: any) => {
           cyRef.current = cy;
         }}
@@ -236,19 +364,74 @@ export function KnowledgeGraph() {
       />
 
       <div className={styles.sidebar}>
-        <div className={styles.filterSection}>
-          <div className={styles.filterTitle}>Document Types</div>
-          <div className={styles.filterOptions}>
-            {["code", "decision", "trajectory", "preference"].map((kind) => (
-              <label key={kind} className={styles.filterCheckbox}>
-                <Checkbox
-                  checked={filters.kinds.has(kind)}
-                  onCheckedChange={() => handleKindToggle(kind)}
-                />
-                <Text size="2">{kind}</Text>
-              </label>
-            ))}
+        {mode === "focus" && (
+          <div className={styles.filterSection}>
+            <Button onClick={handleBackToOverview} size="2" variant="soft">
+              ← Back to Overview
+            </Button>
           </div>
+        )}
+
+        <div className={styles.filterSection}>
+          <div className={styles.filterTitle}>
+            {mode === "overview" ? "Document Types" : "View Mode"}
+          </div>
+          {mode === "overview" ? (
+            <div className={styles.filterOptions}>
+              {["code", "decision", "trajectory", "preference"].map((kind) => (
+                <label key={kind} className={styles.filterCheckbox}>
+                  <Checkbox
+                    checked={filters.kinds.has(kind)}
+                    onCheckedChange={() => handleKindToggle(kind)}
+                  />
+                  <Text size="2">{kind}</Text>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className={styles.filterOptions}>
+              <label className={styles.filterCheckbox}>
+                <Checkbox
+                  checked={visibleNodeGroups.tags}
+                  onCheckedChange={() => handleNodeGroupToggle("tags")}
+                />
+                <Text size="2">Tags</Text>
+              </label>
+              <label className={styles.filterCheckbox}>
+                <Checkbox
+                  checked={visibleNodeGroups.files}
+                  onCheckedChange={() => handleNodeGroupToggle("files")}
+                />
+                <Text size="2">Files</Text>
+              </label>
+              <label className={styles.filterCheckbox}>
+                <Checkbox
+                  checked={visibleNodeGroups.entities}
+                  onCheckedChange={() => handleNodeGroupToggle("entities")}
+                />
+                <Text size="2">Entities</Text>
+              </label>
+              <div className={styles.filterOptions}>
+                <Text size="1" color="gray">Depth:</Text>
+                <Flex gap="2">
+                  <Button
+                    size="1"
+                    variant={focusDepth === 1 ? "solid" : "soft"}
+                    onClick={() => setFocusDepth(1)}
+                  >
+                    1
+                  </Button>
+                  <Button
+                    size="1"
+                    variant={focusDepth === 2 ? "solid" : "soft"}
+                    onClick={() => setFocusDepth(2)}
+                  >
+                    2
+                  </Button>
+                </Flex>
+              </div>
+            </div>
+          )}
         </div>
 
         {graph.stats && (
