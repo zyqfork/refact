@@ -86,8 +86,8 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
     }).unwrap().then(() => {
       setIsDirty(false);
       onMemoryUpdated?.();
-    }).catch((error: unknown) => {
-      console.error('Failed to save memory:', error);
+    }).catch((_error: unknown) => {
+      // Error is handled by RTK Query
     });
   };
 
@@ -100,8 +100,8 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
     }).unwrap().then(() => {
       setIsDeleteOpen(false);
       onMemoryDeleted?.();
-    }).catch((error: unknown) => {
-      console.error('Failed to delete memory:', error);
+    }).catch((_error: unknown) => {
+      // Error is handled by RTK Query
     });
   };
 

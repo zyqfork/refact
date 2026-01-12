@@ -72,8 +72,8 @@ export const knowledgeGraphApi = createApi({
         try {
           await queryFulfilled;
           dispatch(knowledgeGraphApi.util.invalidateTags(["KnowledgeGraph"]));
-        } catch (err) {
-          console.error("Failed to update memory", err);
+        } catch {
+          // Error is handled by RTK Query
         }
       },
     }),

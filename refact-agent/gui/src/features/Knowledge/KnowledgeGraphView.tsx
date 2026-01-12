@@ -30,7 +30,11 @@ interface KnowledgeGraphViewProps {
 }
 
 const isDocNode = (node: KnowledgeGraphNode): boolean => {
-  return node.node_type === "doc" || node.node_type.startsWith("doc_");
+  const nodeType = node.node_type;
+  if (nodeType === "doc_deprecated" || nodeType === "doc_trajectory") {
+    return false;
+  }
+  return nodeType === "doc" || nodeType.startsWith("doc_");
 };
 const NODE_COLORS: Record<string, string> = {
   code: "#3B82F6",
@@ -171,11 +175,11 @@ export function KnowledgeGraphView({
       });
     };
 
-    cyRef.current.on("tap", "node", (e) => {
-      handleNodeClick(e.target.id() as string);
+    cyRef.current.on("tap", "node", (e: Cytoscape.EventObject) => {
+      handleNodeClick((e.target as Cytoscape.NodeSingular).id());
     });
 
-    cyRef.current.on("tap", (e) => {
+    cyRef.current.on("tap", (e: Cytoscape.EventObject) => {
       if (e.target === cyRef.current) {
         handleBackgroundClick();
       }
@@ -183,14 +187,14 @@ export function KnowledgeGraphView({
 
     cyRef.current.on("zoom", handleZoom);
 
-    cyRef.current.on("mouseover", "node", (e) => {
-      e.target.style("label", e.target.data("label") as string);
+    cyRef.current.on("mouseover", "node", (e: Cytoscape.EventObject) => {
+      (e.target as Cytoscape.NodeSingular).style("label", (e.target as Cytoscape.NodeSingular).data("label") as string);
     });
 
-    cyRef.current.on("mouseout", "node", (e) => {
+    cyRef.current.on("mouseout", "node", (e: Cytoscape.EventObject) => {
       const zoom = cyRef.current?.zoom() ?? 1;
       if (zoom <= 1.2) {
-        e.target.style("label", "");
+        (e.target as Cytoscape.NodeSingular).style("label", "");
       }
     });
 
@@ -289,7 +293,7 @@ export function KnowledgeGraphView({
       <CytoscapeComponent
         elements={elements}
         style={{ width: "100%", height: "100%" }}
-        stylesheet={stylesheet as any}
+        stylesheet={stylesheet as Cytoscape.StylesheetStyle[]}
         cy={(cy) => {
           cyRef.current = cy;
           if (!cyReadyRef.current) {

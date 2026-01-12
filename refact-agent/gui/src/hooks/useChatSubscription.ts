@@ -207,9 +207,8 @@ export function useChatSubscription(
   }, [cleanup]);
 
   const reconnect = useCallback(() => {
-    // eslint-disable-next-line no-console
     if (DEBUG)
-      console.log("[SSE] Manual reconnect triggered for chat:", chatId);
+      console.log("[SSE] Manual reconnect triggered for chat:", chatId); // eslint-disable-line no-console
     setTimeout(() => {
       connect();
     }, 50);
@@ -227,9 +226,8 @@ export function useChatSubscription(
 
   useEffect(() => {
     if (status === "connected" && chatId && enabled) {
-      // eslint-disable-next-line no-console
       if (DEBUG)
-        console.log("[SSE] Port changed, reconnecting for chat:", chatId);
+        console.log("[SSE] Port changed, reconnecting for chat:", chatId); // eslint-disable-line no-console
       connect();
     }
   }, [port]); // eslint-disable-line react-hooks/exhaustive-deps

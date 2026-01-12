@@ -2,7 +2,7 @@ use axum::Extension;
 use axum::extract::Query;
 use axum::response::Result;
 use hyper::{Body, Response, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::custom_error::ScratchError;

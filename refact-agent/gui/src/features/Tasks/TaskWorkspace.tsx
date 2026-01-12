@@ -86,7 +86,7 @@ const PlannerItem: React.FC<PlannerItemProps> = ({
   onRemove,
 }) => {
   const thread = useAppSelector((state) => selectThreadById(state, planner.id));
-  const title = thread?.title || planner.title;
+  const title = thread?.title ?? planner.title;
   const hasGeneratedTitle = title && title !== "New Chat" && title.trim() !== "";
   const displayTitle = hasGeneratedTitle ? title : formatPlannerDate(planner.createdAt);
 

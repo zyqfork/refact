@@ -10,6 +10,7 @@ pub struct TokenCountCache {
 }
 
 impl TokenCountCache {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         TokenCountCache {
             cache: HashMap::new(),
@@ -54,6 +55,7 @@ impl TokenCountCache {
         self.cache.remove(&key);
     }
 
+    #[allow(dead_code)]
     pub fn stats(&self) -> (usize, usize, f32) {
         let total = self.hits + self.misses;
         let hit_rate = if total > 0 {

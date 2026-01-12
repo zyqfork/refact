@@ -3,10 +3,10 @@ declare module "react-cytoscapejs" {
   import type { CSSProperties } from "react";
 
   export interface CytoscapeComponentProps {
-    elements: Array<{
+    elements: {
       data: Record<string, unknown>;
       group?: "nodes" | "edges";
-    }>;
+    }[];
     style?: CSSProperties;
     stylesheet?: Cytoscape.StylesheetStyle[];
     layout?: Cytoscape.LayoutOptions;

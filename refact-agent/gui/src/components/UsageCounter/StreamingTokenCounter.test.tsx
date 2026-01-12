@@ -11,7 +11,7 @@ import { AssistantMessage, UserMessage } from "../../services/refact";
 function createTestStore(overrides: {
   streaming?: boolean;
   waiting?: boolean;
-  messages?: Array<UserMessage | AssistantMessage>;
+  messages?: (UserMessage | AssistantMessage)[];
   maxTokens?: number;
 }) {
   const emptyState = chatReducer(undefined, { type: "@@INIT" });
