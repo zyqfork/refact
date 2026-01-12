@@ -72,7 +72,12 @@ function formatPlannerDate(dateStr: string): string {
   if (!dateStr) return "";
   try {
     const date = new Date(dateStr);
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   } catch {
     return "";
   }
@@ -87,8 +92,11 @@ const PlannerItem: React.FC<PlannerItemProps> = ({
 }) => {
   const thread = useAppSelector((state) => selectThreadById(state, planner.id));
   const title = thread?.title ?? planner.title;
-  const hasGeneratedTitle = title && title !== "New Chat" && title.trim() !== "";
-  const displayTitle = hasGeneratedTitle ? title : formatPlannerDate(planner.createdAt);
+  const hasGeneratedTitle =
+    title && title !== "New Chat" && title.trim() !== "";
+  const displayTitle = hasGeneratedTitle
+    ? title
+    : formatPlannerDate(planner.createdAt);
 
   return (
     <Box
@@ -98,9 +106,13 @@ const PlannerItem: React.FC<PlannerItemProps> = ({
     >
       <Flex align="center" gap="1">
         {isActive && (
-          <Badge size="1" color="green" radius="full">●</Badge>
+          <Badge size="1" color="green" radius="full">
+            ●
+          </Badge>
         )}
-        <Badge size="1" color="violet">📋</Badge>
+        <Badge size="1" color="violet">
+          📋
+        </Badge>
       </Flex>
       <Text
         size="1"
@@ -160,7 +172,10 @@ const PlannerPanel: React.FC<PlannerPanelProps> = ({
                 <PlannerItem
                   key={planner.id}
                   planner={planner}
-                  isSelected={activeChat?.type === "planner" && activeChat.chatId === planner.id}
+                  isSelected={
+                    activeChat?.type === "planner" &&
+                    activeChat.chatId === planner.id
+                  }
                   isActive={planner.id === activePlannerId}
                   onSelect={() => onSelectPlanner(planner.id)}
                   onRemove={() => onRemovePlanner(planner.id)}
@@ -411,7 +426,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const activePlannerId = useMemo(() => {
     if (plannerChats.length === 0) return null;
     return plannerChats.reduce((latest, p) =>
-      p.updatedAt > latest.updatedAt ? p : latest
+      p.updatedAt > latest.updatedAt ? p : latest,
     ).id;
   }, [plannerChats]);
   const activeChat = useAppSelector((state) =>
@@ -445,21 +460,23 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
           taskMeta: { task_id: taskId, role: "planner" },
         }),
       );
-      dispatch(addPlannerChat({
-        taskId,
-        planner: {
-          id: traj.id,
-          title: traj.title,
-          createdAt: traj.created_at,
-          updatedAt: traj.updated_at,
-          sessionState: traj.session_state,
-        },
-      }));
+      dispatch(
+        addPlannerChat({
+          taskId,
+          planner: {
+            id: traj.id,
+            title: traj.title,
+            createdAt: traj.created_at,
+            updatedAt: traj.updated_at,
+            sessionState: traj.session_state,
+          },
+        }),
+      );
     }
 
     if (savedPlanners.length > 0 && !activeChat) {
       const mostRecent = savedPlanners.reduce((latest, p) =>
-        p.updated_at > latest.updated_at ? p : latest
+        p.updated_at > latest.updated_at ? p : latest,
       );
       dispatch(
         setTaskActiveChat({
@@ -550,15 +567,17 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
             taskMeta: { task_id: taskId, role: "planner" },
           }),
         );
-        dispatch(addPlannerChat({
-          taskId,
-          planner: {
-            id: newChatId,
-            title: "",
-            createdAt: now,
-            updatedAt: now,
-          },
-        }));
+        dispatch(
+          addPlannerChat({
+            taskId,
+            planner: {
+              id: newChatId,
+              title: "",
+              createdAt: now,
+              updatedAt: now,
+            },
+          }),
+        );
         dispatch(
           setTaskActiveChat({
             taskId,
@@ -576,7 +595,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         const remaining = plannerChats.filter((p) => p.id !== chatId);
         if (remaining.length > 0) {
           const mostRecent = remaining.reduce((latest, p) =>
-            p.updatedAt > latest.updatedAt ? p : latest
+            p.updatedAt > latest.updatedAt ? p : latest,
           );
           dispatch(
             setTaskActiveChat({

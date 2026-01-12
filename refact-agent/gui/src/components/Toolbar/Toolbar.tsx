@@ -304,8 +304,6 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
     }
   }, [focus]);
 
-
-
   const shouldCollapse = useMemo(() => {
     const dashboardWidth = windowWidth < 400 ? 47 : 70;
     const totalWidth = dashboardWidth + 140 * (tabs.length + openTasks.length);
@@ -390,7 +388,11 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   return (
     <Flex align="center" m="4px" gap="4px" style={{ alignSelf: "stretch" }}>
       <Flex flexGrow="1" align="start" maxHeight="40px" overflowY="hidden">
-        <TabNav.Root style={{ flex: 1, overflowX: "scroll" }} ref={tabNav} className={styles.tabNav}>
+        <TabNav.Root
+          style={{ flex: 1, overflowX: "scroll" }}
+          ref={tabNav}
+          className={styles.tabNav}
+        >
           <TabNav.Link
             active={isDashboardTab(activeTab)}
             ref={(x) => refs.setBack(x)}

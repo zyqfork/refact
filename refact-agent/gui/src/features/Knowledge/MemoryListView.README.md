@@ -15,14 +15,14 @@ A card-based grid view for displaying knowledge memories with responsive layout 
 ## Usage
 
 ```tsx
-import { MemoryListView } from './features/Knowledge';
+import { MemoryListView } from "./features/Knowledge";
 
 function MyComponent() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const linkedIds = new Set(['mem-1', 'mem-3']);
-  
+  const linkedIds = new Set(["mem-1", "mem-3"]);
+
   const filteredMemories = memories.filter(
-    m => m.kind !== 'deprecated' && m.kind !== 'trajectory'
+    (m) => m.kind !== "deprecated" && m.kind !== "trajectory",
   );
 
   return (
@@ -38,12 +38,12 @@ function MyComponent() {
 
 ## Props
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `memories` | `KnowledgeMemoRecord[]` | Array of memory records to display |
-| `selectedId` | `string \| null` | ID of currently selected memory |
-| `onSelectId` | `(id: string) => void` | Callback when card is clicked |
-| `linkedIds` | `Set<string>` | Set of memory IDs that appear in graph edges |
+| Prop         | Type                    | Description                                  |
+| ------------ | ----------------------- | -------------------------------------------- |
+| `memories`   | `KnowledgeMemoRecord[]` | Array of memory records to display           |
+| `selectedId` | `string \| null`        | ID of currently selected memory              |
+| `onSelectId` | `(id: string) => void`  | Callback when card is clicked                |
+| `linkedIds`  | `Set<string>`           | Set of memory IDs that appear in graph edges |
 
 ## Kind Colors
 
@@ -65,6 +65,7 @@ Matches KnowledgeGraph.tsx colors:
 ## Styling
 
 Uses Radix design tokens exclusively:
+
 - Colors: `--color-panel`, `--gray-a7`, `--accent-9`
 - Spacing: `--space-1` through `--space-4`
 - Radius: `--radius-1`, `--radius-2`

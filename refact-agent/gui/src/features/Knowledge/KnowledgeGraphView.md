@@ -24,11 +24,11 @@ A simplified, pure graph renderer for displaying memory nodes and their relation
 
 ```typescript
 interface KnowledgeGraphViewProps {
-  nodes: KnowledgeGraphNode[];      // All nodes from API
-  edges: KnowledgeGraphEdge[];      // All edges from API
-  selectedId: string | null;        // Currently selected node ID
+  nodes: KnowledgeGraphNode[]; // All nodes from API
+  edges: KnowledgeGraphEdge[]; // All edges from API
+  selectedId: string | null; // Currently selected node ID
   onSelectId: (id: string | null) => void; // Selection callback
-  isLoading?: boolean;              // Show loading state
+  isLoading?: boolean; // Show loading state
 }
 ```
 
@@ -56,16 +56,19 @@ function MyComponent() {
 ## Filtering Behavior
 
 ### Nodes
+
 - **Included**: `doc_code`, `doc_decision`, `doc_preference`, `doc_pattern`, `doc_lesson`
 - **Excluded**: `doc_deprecated`, `doc_trajectory`, `tag`, `file`, `entity`, and any other types
 
 ### Edges
+
 - Only edges where both source AND target are included doc nodes
 - All other edges are filtered out
 
 ## Layout Configuration
 
 Uses fcose (force-directed) layout with these parameters:
+
 - `idealEdgeLength`: 120px
 - `nodeRepulsion`: 5000
 - `edgeElasticity`: 0.5
@@ -80,25 +83,27 @@ Uses fcose (force-directed) layout with these parameters:
 
 ## Differences from KnowledgeGraph.tsx
 
-| Feature | KnowledgeGraph | KnowledgeGraphView |
-|---------|----------------|-------------------|
-| Filter UI | ✅ Checkboxes for kinds/statuses | ❌ None |
-| Sidebar | ✅ Stats + node details | ❌ None |
-| Focus mode | ✅ 1-hop/2-hop traversal | ❌ None |
-| Overview mode | ✅ Concentric layout | ❌ None |
-| Node groups | ✅ Tags/files/entities toggles | ❌ None |
-| Deprecated nodes | ✅ Optional display | ❌ Always hidden |
-| Trajectory nodes | ✅ Optional display | ❌ Always hidden |
-| Layout | Concentric or fcose | fcose only |
+| Feature          | KnowledgeGraph                   | KnowledgeGraphView |
+| ---------------- | -------------------------------- | ------------------ |
+| Filter UI        | ✅ Checkboxes for kinds/statuses | ❌ None            |
+| Sidebar          | ✅ Stats + node details          | ❌ None            |
+| Focus mode       | ✅ 1-hop/2-hop traversal         | ❌ None            |
+| Overview mode    | ✅ Concentric layout             | ❌ None            |
+| Node groups      | ✅ Tags/files/entities toggles   | ❌ None            |
+| Deprecated nodes | ✅ Optional display              | ❌ Always hidden   |
+| Trajectory nodes | ✅ Optional display              | ❌ Always hidden   |
+| Layout           | Concentric or fcose              | fcose only         |
 
 ## Testing
 
 Run tests:
+
 ```bash
 npm test -- --run src/features/Knowledge/KnowledgeGraphView.test.tsx
 ```
 
 Test coverage:
+
 - ✅ Empty state rendering
 - ✅ Node and edge rendering
 - ✅ Non-doc node filtering

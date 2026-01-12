@@ -166,34 +166,32 @@ export function setUpStore(preloadedState?: Partial<RootState>) {
             },
           });
 
-      return (
-        middleware
-          .prepend(
-            pingApi.middleware,
-            statisticsApi.middleware,
-            capsApi.middleware,
-            promptsApi.middleware,
-            toolsApi.middleware,
-            commandsApi.middleware,
-            smallCloudApi.middleware,
-            pathApi.middleware,
-            linksApi.middleware,
-            integrationsApi.middleware,
-            dockerApi.middleware,
-            checkpointsApi.middleware,
-            telemetryApi.middleware,
-            knowledgeApi.middleware,
-            knowledgeGraphApi.middleware,
-            providersApi.middleware,
-            modelsApi.middleware,
-            teamsApi.middleware,
-            trajectoriesApi.middleware,
-            trajectoryApi.middleware,
-            tasksApi.middleware,
-          )
-          .prepend(historyMiddleware.middleware)
-          .prepend(listenerMiddleware.middleware)
-      );
+      return middleware
+        .prepend(
+          pingApi.middleware,
+          statisticsApi.middleware,
+          capsApi.middleware,
+          promptsApi.middleware,
+          toolsApi.middleware,
+          commandsApi.middleware,
+          smallCloudApi.middleware,
+          pathApi.middleware,
+          linksApi.middleware,
+          integrationsApi.middleware,
+          dockerApi.middleware,
+          checkpointsApi.middleware,
+          telemetryApi.middleware,
+          knowledgeApi.middleware,
+          knowledgeGraphApi.middleware,
+          providersApi.middleware,
+          modelsApi.middleware,
+          teamsApi.middleware,
+          trajectoriesApi.middleware,
+          trajectoryApi.middleware,
+          tasksApi.middleware,
+        )
+        .prepend(historyMiddleware.middleware)
+        .prepend(listenerMiddleware.middleware);
     },
   });
 

@@ -16,7 +16,13 @@ export type TrajectoryMeta = {
   task_role?: string;
   agent_id?: string;
   card_id?: string;
-  session_state?: "idle" | "generating" | "executing_tools" | "paused" | "waiting_ide" | "error";
+  session_state?:
+    | "idle"
+    | "generating"
+    | "executing_tools"
+    | "paused"
+    | "waiting_ide"
+    | "error";
 };
 
 export type TrajectoryData = {

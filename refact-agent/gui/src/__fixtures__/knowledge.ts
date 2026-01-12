@@ -29,7 +29,7 @@ export const STUB_MEMORIES: MemoRecord[] = [
     title: "Project Information",
     created: "2024-01-03",
     kind: "code",
-    score: 0.90,
+    score: 0.9,
   },
   {
     memid: "eb1d64684c",
@@ -40,7 +40,7 @@ export const STUB_MEMORIES: MemoRecord[] = [
       "Long goal Long goal Long goal Long goal Long goal Long goal Long goal Long goal Long goal Long goal",
     created: "2024-01-04",
     kind: "code",
-    score: 0.80,
+    score: 0.8,
   },
 ];
 

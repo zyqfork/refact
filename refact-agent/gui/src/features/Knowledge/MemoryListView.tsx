@@ -1,5 +1,5 @@
-import type { KnowledgeMemoRecord } from '../../services/refact/types';
-import styles from './MemoryListView.module.css';
+import type { KnowledgeMemoRecord } from "../../services/refact/types";
+import styles from "./MemoryListView.module.css";
 
 interface MemoryListViewProps {
   memories: KnowledgeMemoRecord[];
@@ -9,16 +9,19 @@ interface MemoryListViewProps {
 }
 
 const KIND_CONFIG = {
-  code: { icon: '📄', color: '#3B82F6' },
-  decision: { icon: '🎯', color: '#8B5CF6' },
-  preference: { icon: '⭐', color: '#10B981' },
-  pattern: { icon: '🔄', color: '#F59E0B' },
-  lesson: { icon: '📚', color: '#06B6D4' },
+  code: { icon: "📄", color: "#3B82F6" },
+  decision: { icon: "🎯", color: "#8B5CF6" },
+  preference: { icon: "⭐", color: "#10B981" },
+  pattern: { icon: "🔄", color: "#F59E0B" },
+  lesson: { icon: "📚", color: "#06B6D4" },
 } as const;
 
 type KindKey = keyof typeof KIND_CONFIG;
 
-function getKindConfig(kind: string | undefined): { icon: string; color: string } {
+function getKindConfig(kind: string | undefined): {
+  icon: string;
+  color: string;
+} {
   if (kind && kind in KIND_CONFIG) {
     return KIND_CONFIG[kind as KindKey];
   }
@@ -46,13 +49,13 @@ export function MemoryListView({
         {memories.map((memory) => {
           const isSelected = selectedId === memory.memid;
           const isLinked = linkedIds.has(memory.memid);
-          const kind = memory.kind ?? 'code';
+          const kind = memory.kind ?? "code";
           const kindConfig = getKindConfig(memory.kind);
 
           return (
             <button
               key={memory.memid}
-              className={`${styles.card} ${isSelected ? styles.selected : ''}`}
+              className={`${styles.card} ${isSelected ? styles.selected : ""}`}
               onClick={() => onSelectId(memory.memid)}
               type="button"
               aria-pressed={isSelected}
@@ -67,11 +70,14 @@ export function MemoryListView({
                     {kindConfig.icon}
                   </span>
                   <span className={styles.title}>
-                    {memory.title ?? 'Untitled'}
+                    {memory.title ?? "Untitled"}
                   </span>
                 </div>
                 {isLinked && (
-                  <span className={styles.linkBadge} aria-label="Linked in graph">
+                  <span
+                    className={styles.linkBadge}
+                    aria-label="Linked in graph"
+                  >
                     🔗
                   </span>
                 )}

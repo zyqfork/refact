@@ -4,7 +4,10 @@ import cytoscape from "cytoscape";
 import type Cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
 import { Flex, Text } from "@radix-ui/themes";
-import type { KnowledgeGraphNode, KnowledgeGraphEdge } from "../../services/refact/types";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphEdge,
+} from "../../services/refact/types";
 import styles from "./KnowledgeGraphView.module.css";
 
 cytoscape.use(fcose);
@@ -65,7 +68,7 @@ export function KnowledgeGraphView({
   const filteredEdges = useMemo(() => {
     const nodeIds = new Set(filteredNodes.map((n) => n.id));
     return edges.filter(
-      (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)
+      (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
     );
   }, [filteredNodes, edges]);
 
@@ -156,7 +159,7 @@ export function KnowledgeGraphView({
     (nodeId: string) => {
       onSelectId(nodeId);
     },
-    [onSelectId]
+    [onSelectId],
   );
 
   const handleBackgroundClick = useCallback(() => {
@@ -188,7 +191,10 @@ export function KnowledgeGraphView({
     cyRef.current.on("zoom", handleZoom);
 
     cyRef.current.on("mouseover", "node", (e: Cytoscape.EventObject) => {
-      (e.target as Cytoscape.NodeSingular).style("label", (e.target as Cytoscape.NodeSingular).data("label") as string);
+      (e.target as Cytoscape.NodeSingular).style(
+        "label",
+        (e.target as Cytoscape.NodeSingular).data("label") as string,
+      );
     });
 
     cyRef.current.on("mouseout", "node", (e: Cytoscape.EventObject) => {

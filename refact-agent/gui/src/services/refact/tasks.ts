@@ -14,7 +14,13 @@ export interface TaskMeta {
   base_branch?: string;
   base_commit?: string;
   default_agent_model?: string;
-  planner_session_state?: "idle" | "generating" | "executing_tools" | "paused" | "waiting_ide" | "error";
+  planner_session_state?:
+    | "idle"
+    | "generating"
+    | "executing_tools"
+    | "paused"
+    | "waiting_ide"
+    | "error";
 }
 
 export interface BoardColumn {

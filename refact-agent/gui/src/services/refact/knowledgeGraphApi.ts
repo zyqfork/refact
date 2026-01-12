@@ -1,9 +1,6 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { RootState } from "../../app/store";
-import type {
-  KnowledgeGraphResponse,
-  SuccessResponse,
-} from "./types";
+import type { KnowledgeGraphResponse, SuccessResponse } from "./types";
 
 export const knowledgeGraphApi = createApi({
   reducerPath: "knowledgeGraphApi",
@@ -26,7 +23,9 @@ export const knowledgeGraphApi = createApi({
         const state = api.getState() as RootState;
         const port = state.config.lspPort as unknown as number;
         const includeContent = arg?.includeContent ?? false;
-        const url = `http://127.0.0.1:${port}/v1/knowledge-graph?include_content=${includeContent ? 1 : 0}`;
+        const url = `http://127.0.0.1:${port}/v1/knowledge-graph?include_content=${
+          includeContent ? 1 : 0
+        }`;
 
         const response = await baseQuery({ url });
 

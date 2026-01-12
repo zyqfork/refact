@@ -1,10 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { KnowledgeGraphView } from "./KnowledgeGraphView";
-import type { KnowledgeGraphNode, KnowledgeGraphEdge } from "../../services/refact/types";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphEdge,
+} from "../../services/refact/types";
 
 vi.mock("react-cytoscapejs", () => ({
-  default: ({ cy, elements }: { cy?: (cy: unknown) => void; elements: unknown[] }) => {
+  default: ({
+    cy,
+    elements,
+  }: {
+    cy?: (cy: unknown) => void;
+    elements: unknown[];
+  }) => {
     if (cy) {
       const mockCy = {
         on: vi.fn(),
@@ -30,13 +39,21 @@ vi.mock("react-cytoscapejs", () => ({
   },
 }));
 
-const createDocNode = (id: string, type: string, label: string): KnowledgeGraphNode => ({
+const createDocNode = (
+  id: string,
+  type: string,
+  label: string,
+): KnowledgeGraphNode => ({
   id,
   node_type: type,
   label,
 });
 
-const createEdge = (source: string, target: string, type: string): KnowledgeGraphEdge => ({
+const createEdge = (
+  source: string,
+  target: string,
+  type: string,
+): KnowledgeGraphEdge => ({
   source,
   target,
   edge_type: type,
@@ -50,7 +67,7 @@ describe("KnowledgeGraphView", () => {
         edges={[]}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByText("No linked memories")).toBeInTheDocument();
@@ -69,7 +86,7 @@ describe("KnowledgeGraphView", () => {
         edges={edges}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByTestId("cytoscape-mock")).toBeInTheDocument();
@@ -91,7 +108,7 @@ describe("KnowledgeGraphView", () => {
         edges={edges}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByText("3 elements")).toBeInTheDocument();
@@ -115,7 +132,7 @@ describe("KnowledgeGraphView", () => {
         edges={edges}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByText("3 elements")).toBeInTheDocument();
@@ -139,7 +156,7 @@ describe("KnowledgeGraphView", () => {
         edges={edges}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByText("3 elements")).toBeInTheDocument();
@@ -157,7 +174,7 @@ describe("KnowledgeGraphView", () => {
         edges={[]}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByTestId("cytoscape-mock")).toBeInTheDocument();
@@ -172,7 +189,7 @@ describe("KnowledgeGraphView", () => {
         selectedId={null}
         onSelectId={vi.fn()}
         isLoading={true}
-      />
+      />,
     );
 
     expect(screen.getByText("Loading graph...")).toBeInTheDocument();
@@ -188,7 +205,7 @@ describe("KnowledgeGraphView", () => {
         edges={[]}
         selectedId={null}
         onSelectId={onSelectId}
-      />
+      />,
     );
 
     expect(screen.getByTestId("cytoscape-mock")).toBeInTheDocument();
@@ -215,7 +232,7 @@ describe("KnowledgeGraphView", () => {
         edges={edges}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByText("9 elements")).toBeInTheDocument();
@@ -234,7 +251,7 @@ describe("KnowledgeGraphView", () => {
         edges={edges}
         selectedId={null}
         onSelectId={vi.fn()}
-      />
+      />,
     );
 
     // Should have 2 nodes + 1 edge = 3 elements

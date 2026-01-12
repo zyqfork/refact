@@ -14,7 +14,10 @@ import { OpenInNewWindowIcon } from "@radix-ui/react-icons";
 import type { ChatHistoryItem } from "../../features/History/historySlice";
 import { isUserMessage } from "../../services/refact";
 import { useAppSelector } from "../../hooks";
-import { useChatSessionStates, SessionState } from "../../hooks/useStreamingChatIds";
+import {
+  useChatSessionStates,
+  SessionState,
+} from "../../hooks/useStreamingChatIds";
 import { getTotalCostMeteringForMessages } from "../../utils/getMetering";
 import { Coin } from "../../images";
 
@@ -68,7 +71,8 @@ export const HistoryItem: React.FC<{
   };
 
   const sessionState = getSessionState();
-  const isWorking = sessionState === "generating" || sessionState === "executing_tools";
+  const isWorking =
+    sessionState === "generating" || sessionState === "executing_tools";
   const isPaused = sessionState === "paused" || sessionState === "waiting_ide";
   const isError = sessionState === "error";
   return (
@@ -94,14 +98,25 @@ export const HistoryItem: React.FC<{
           <Flex gap="1" align="center">
             {isWorking && <Spinner style={{ minWidth: 16, minHeight: 16 }} />}
             {!isWorking && isPaused && (
-              <PauseIcon style={{ minWidth: 16, minHeight: 16, color: "var(--yellow-9)" }} />
+              <PauseIcon
+                style={{
+                  minWidth: 16,
+                  minHeight: 16,
+                  color: "var(--yellow-9)",
+                }}
+              />
             )}
             {!isWorking && !isPaused && isError && (
-              <CrossCircledIcon style={{ minWidth: 16, minHeight: 16, color: "var(--red-9)" }} />
+              <CrossCircledIcon
+                style={{ minWidth: 16, minHeight: 16, color: "var(--red-9)" }}
+              />
             )}
-            {!isWorking && !isPaused && !isError && historyItem.read === false && (
-              <DotFilledIcon style={{ minWidth: 16, minHeight: 16 }} />
-            )}
+            {!isWorking &&
+              !isPaused &&
+              !isError &&
+              historyItem.read === false && (
+                <DotFilledIcon style={{ minWidth: 16, minHeight: 16 }} />
+              )}
             <Text
               as="div"
               size="2"

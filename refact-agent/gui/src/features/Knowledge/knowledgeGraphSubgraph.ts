@@ -16,14 +16,18 @@ export type SubgraphResult = {
   edgeIds: Set<string>;
 };
 
-export function makeEdgeId(source: string, target: string, edgeType: string): string {
+export function makeEdgeId(
+  source: string,
+  target: string,
+  edgeType: string,
+): string {
   return JSON.stringify([source, target, edgeType]);
 }
 
 export function buildSubgraph(params: SubgraphParams): SubgraphResult {
   const { seedId, depth, nodes, edges, includeNode } = params;
 
-  const nodeIndex = new Map(nodes.map(n => [n.id, n]));
+  const nodeIndex = new Map(nodes.map((n) => [n.id, n]));
   const seedNode = nodeIndex.get(seedId);
 
   if (!seedNode) {

@@ -70,19 +70,30 @@ export const tasksSlice = createSlice({
       action: PayloadAction<{ taskId: string; planner: PlannerInfo }>,
     ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
-      if (task && !task.plannerChats.some((p) => p.id === action.payload.planner.id)) {
+      if (
+        task &&
+        !task.plannerChats.some((p) => p.id === action.payload.planner.id)
+      ) {
         task.plannerChats.push(action.payload.planner);
       }
     },
     updatePlannerChat: (
       state,
-      action: PayloadAction<{ taskId: string; planner: Partial<PlannerInfo> & { id: string } }>,
+      action: PayloadAction<{
+        taskId: string;
+        planner: Partial<PlannerInfo> & { id: string };
+      }>,
     ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task) {
-        const idx = task.plannerChats.findIndex((p) => p.id === action.payload.planner.id);
+        const idx = task.plannerChats.findIndex(
+          (p) => p.id === action.payload.planner.id,
+        );
         if (idx !== -1) {
-          task.plannerChats[idx] = { ...task.plannerChats[idx], ...action.payload.planner };
+          task.plannerChats[idx] = {
+            ...task.plannerChats[idx],
+            ...action.payload.planner,
+          };
         }
       }
     },

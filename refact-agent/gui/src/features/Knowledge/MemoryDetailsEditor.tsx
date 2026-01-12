@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react';
-import { Button, Dialog, Flex, TextField } from '@radix-ui/themes';
-import type { KnowledgeMemoRecord } from '../../services/refact/types';
-import { useUpdateMemoryMutation, useDeleteMemoryMutation } from '../../services/refact/knowledgeGraphApi';
-import styles from './MemoryDetailsEditor.module.css';
+import { useState, useEffect } from "react";
+import { Button, Dialog, Flex, TextField } from "@radix-ui/themes";
+import type { KnowledgeMemoRecord } from "../../services/refact/types";
+import {
+  useUpdateMemoryMutation,
+  useDeleteMemoryMutation,
+} from "../../services/refact/knowledgeGraphApi";
+import styles from "./MemoryDetailsEditor.module.css";
 
 interface MemoryDetailsEditorProps {
   memory: KnowledgeMemoRecord | null;
@@ -17,60 +20,67 @@ interface DraftMemory {
   kind: string;
 }
 
-export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }: MemoryDetailsEditorProps) {
+export function MemoryDetailsEditor({
+  memory,
+  onMemoryUpdated,
+  onMemoryDeleted,
+}: MemoryDetailsEditorProps) {
   const [draft, setDraft] = useState<DraftMemory>({
-    title: '',
-    content: '',
+    title: "",
+    content: "",
     tags: [],
-    kind: 'code',
+    kind: "code",
   });
   const [isDirty, setIsDirty] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
-  const [tagsInput, setTagsInput] = useState('');
+  const [tagsInput, setTagsInput] = useState("");
 
   const [updateMemory, { isLoading: isSaving }] = useUpdateMemoryMutation();
   const [deleteMemory] = useDeleteMemoryMutation();
 
   useEffect(() => {
     if (!memory) {
-      setDraft({ title: '', content: '', tags: [], kind: 'code' });
+      setDraft({ title: "", content: "", tags: [], kind: "code" });
       setIsDirty(false);
-      setTagsInput('');
+      setTagsInput("");
     } else {
       setDraft({
-        title: memory.title ?? '',
+        title: memory.title ?? "",
         content: memory.content,
         tags: memory.tags,
-        kind: memory.kind ?? 'code',
+        kind: memory.kind ?? "code",
       });
       setIsDirty(false);
-      setTagsInput(memory.tags.join(', '));
+      setTagsInput(memory.tags.join(", "));
     }
   }, [memory]);
 
-  const handleFieldChange = (field: keyof DraftMemory, value: string | string[]) => {
-    setDraft(prev => ({ ...prev, [field]: value }));
+  const handleFieldChange = (
+    field: keyof DraftMemory,
+    value: string | string[],
+  ) => {
+    setDraft((prev) => ({ ...prev, [field]: value }));
     setIsDirty(true);
   };
 
   const parseTags = (input: string): string[] => {
     return input
       .split(/[,\n]/)
-      .map(tag => tag.trim())
-      .filter(tag => tag.length > 0)
+      .map((tag) => tag.trim())
+      .filter((tag) => tag.length > 0)
       .filter((tag, index, self) => self.indexOf(tag) === index);
   };
 
   const handleTagsBlur = () => {
     const parsed = parseTags(tagsInput);
-    handleFieldChange('tags', parsed);
+    handleFieldChange("tags", parsed);
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
-    const newTags = draft.tags.filter(tag => tag !== tagToRemove);
-    handleFieldChange('tags', newTags);
-    setTagsInput(newTags.join(', '));
+    const newTags = draft.tags.filter((tag) => tag !== tagToRemove);
+    handleFieldChange("tags", newTags);
+    setTagsInput(newTags.join(", "));
   };
 
   const handleSave = () => {
@@ -83,12 +93,15 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
       tags: draft.tags,
       kind: draft.kind,
       filenames: [memory.file_path],
-    }).unwrap().then(() => {
-      setIsDirty(false);
-      onMemoryUpdated?.();
-    }).catch((_error: unknown) => {
-      // Error is handled by RTK Query
-    });
+    })
+      .unwrap()
+      .then(() => {
+        setIsDirty(false);
+        onMemoryUpdated?.();
+      })
+      .catch((_error: unknown) => {
+        // Error is handled by RTK Query
+      });
   };
 
   const handleDelete = (archive: boolean) => {
@@ -97,12 +110,15 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
     void deleteMemory({
       file_path: memory.file_path,
       archive,
-    }).unwrap().then(() => {
-      setIsDeleteOpen(false);
-      onMemoryDeleted?.();
-    }).catch((_error: unknown) => {
-      // Error is handled by RTK Query
-    });
+    })
+      .unwrap()
+      .then(() => {
+        setIsDeleteOpen(false);
+        onMemoryDeleted?.();
+      })
+      .catch((_error: unknown) => {
+        // Error is handled by RTK Query
+      });
   };
 
   const handleDiscardChanges = () => {
@@ -129,7 +145,7 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
         </label>
         <TextField.Root
           value={draft.title}
-          onChange={(e) => handleFieldChange('title', e.target.value)}
+          onChange={(e) => handleFieldChange("title", e.target.value)}
           placeholder="Untitled"
           className={styles.input}
         />
@@ -142,7 +158,7 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
 
       <div className={styles.field}>
         <label className={styles.label}>CREATED</label>
-        <div className={styles.readOnlyValue}>{memory.created ?? '—'}</div>
+        <div className={styles.readOnlyValue}>{memory.created ?? "—"}</div>
       </div>
 
       <div className={styles.field}>
@@ -176,7 +192,9 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
         <label className={styles.label}>FILE PATH</label>
         <div className={styles.readOnlyValue}>
           {memory.file_path ?? (
-            <span className={styles.warning}>⚠️ This memory has no file path and cannot be edited</span>
+            <span className={styles.warning}>
+              ⚠️ This memory has no file path and cannot be edited
+            </span>
           )}
         </div>
       </div>
@@ -185,7 +203,7 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
         <label className={styles.label}>CONTENT</label>
         <textarea
           value={draft.content}
-          onChange={(e) => handleFieldChange('content', e.target.value)}
+          onChange={(e) => handleFieldChange("content", e.target.value)}
           className={styles.textarea}
           placeholder="Memory content..."
         />
@@ -197,7 +215,7 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
           disabled={!canSave || isSaving}
           style={{ flex: 1 }}
         >
-          {isSaving ? 'Saving...' : 'Save'}
+          {isSaving ? "Saving..." : "Save"}
         </Button>
         <Button
           color="red"
@@ -223,16 +241,10 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
                 >
                   Cancel
                 </Button>
-                <Button
-                  color="yellow"
-                  onClick={() => handleDelete(true)}
-                >
+                <Button color="yellow" onClick={() => handleDelete(true)}>
                   Archive
                 </Button>
-                <Button
-                  color="red"
-                  onClick={() => handleDelete(false)}
-                >
+                <Button color="red" onClick={() => handleDelete(false)}>
                   Permanently Delete
                 </Button>
               </Flex>
@@ -242,7 +254,10 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
       )}
 
       {showDiscardDialog && (
-        <Dialog.Root open={showDiscardDialog} onOpenChange={setShowDiscardDialog}>
+        <Dialog.Root
+          open={showDiscardDialog}
+          onOpenChange={setShowDiscardDialog}
+        >
           <Dialog.Content>
             <Dialog.Title>Unsaved Changes</Dialog.Title>
             <Flex direction="column" gap="3">
@@ -254,10 +269,7 @@ export function MemoryDetailsEditor({ memory, onMemoryUpdated, onMemoryDeleted }
                 >
                   Cancel
                 </Button>
-                <Button
-                  color="red"
-                  onClick={handleDiscardChanges}
-                >
+                <Button color="red" onClick={handleDiscardChanges}>
                   Discard
                 </Button>
               </Flex>

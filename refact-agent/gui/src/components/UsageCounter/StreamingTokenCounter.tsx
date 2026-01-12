@@ -60,7 +60,8 @@ export const StreamingTokenCounter: React.FC = () => {
   // The value itself is not used, but subscribing triggers re-renders
   void useAppSelector(selectStreamVersion);
 
-  const { currentSessionTokens, isContextFromPreviousMessage } = useUsageCounter();
+  const { currentSessionTokens, isContextFromPreviousMessage } =
+    useUsageCounter();
 
   const [visible, setVisible] = useState(() => isStreaming || isWaiting);
   const [displayTokens, setDisplayTokens] = useState(0);
@@ -80,15 +81,12 @@ export const StreamingTokenCounter: React.FC = () => {
   const waitingForNewAssistant =
     (isWaiting || isStreaming) && lastUserIdx > lastAssistantIdx;
 
-  const activeAssistantMessage = useMemo(
-    (): AssistantMessage | null => {
-      if (waitingForNewAssistant) return null;
-      if (lastAssistantIdx < 0) return null;
-      const msg = messages[lastAssistantIdx];
-      return isAssistantMessage(msg) ? msg : null;
-    },
-    [messages, lastAssistantIdx, waitingForNewAssistant],
-  );
+  const activeAssistantMessage = useMemo((): AssistantMessage | null => {
+    if (waitingForNewAssistant) return null;
+    if (lastAssistantIdx < 0) return null;
+    const msg = messages[lastAssistantIdx];
+    return isAssistantMessage(msg) ? msg : null;
+  }, [messages, lastAssistantIdx, waitingForNewAssistant]);
 
   const usage = activeAssistantMessage?.usage;
 
@@ -115,7 +113,8 @@ export const StreamingTokenCounter: React.FC = () => {
   }, [contextTokens, maxContextTokens]);
 
   const hasAnyOutput = allText.length > 0 || outputTokens > 0;
-  const hasFinalUsage = (usage?.prompt_tokens ?? 0) > 0 || (usage?.completion_tokens ?? 0) > 0;
+  const hasFinalUsage =
+    (usage?.prompt_tokens ?? 0) > 0 || (usage?.completion_tokens ?? 0) > 0;
 
   useEffect(() => {
     if (hideTimerRef.current) {
@@ -164,7 +163,8 @@ export const StreamingTokenCounter: React.FC = () => {
   const showPlaceholder = allText.length === 0 && (isStreaming || isWaiting);
   const isOutputEstimate = actualOutputTokens === 0;
 
-  const tokensToDisplay = isStreaming || isWaiting ? outputTokens : displayTokens;
+  const tokensToDisplay =
+    isStreaming || isWaiting ? outputTokens : displayTokens;
 
   return (
     <Flex align="center" gap="1" className={styles.inlineContainer}>
@@ -178,15 +178,19 @@ export const StreamingTokenCounter: React.FC = () => {
       >
         {showPlaceholder
           ? "…"
-          : `${isOutputEstimate ? "~" : ""}${formatNumberToFixed(tokensToDisplay)}`}
+          : `${isOutputEstimate ? "~" : ""}${formatNumberToFixed(
+              tokensToDisplay,
+            )}`}
       </Text>
 
       {contextTokens > 0 && maxContextTokens > 0 && (
         <Text
           className={classNames(styles.contextPercent, {
             [styles.fallback]: isContextFromPreviousMessage,
-            [styles.warning]: contextPercentage >= 70 && !isContextFromPreviousMessage,
-            [styles.critical]: contextPercentage >= 90 && !isContextFromPreviousMessage,
+            [styles.warning]:
+              contextPercentage >= 70 && !isContextFromPreviousMessage,
+            [styles.critical]:
+              contextPercentage >= 90 && !isContextFromPreviousMessage,
           })}
         >
           ({isOutputEstimate || isContextFromPreviousMessage ? "~" : ""}
