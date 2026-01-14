@@ -80,3 +80,24 @@ export type Usage = {
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
 };
+
+export type TokenMapSegment = {
+  label: string;
+  category: string;
+  tokens: number;
+  percentage: number;
+};
+
+export type TokenMapItem = {
+  category: string;
+  label: string;
+  tokens: number;
+};
+
+export type TokenMap = {
+  total_prompt_tokens: number;
+  max_context_tokens: number;
+  estimated: boolean;
+  segments: TokenMapSegment[];
+  top_items: TokenMapItem[];
+};

@@ -1450,9 +1450,13 @@ pub async fn gather_system_context(
 
     let environment_instructions = generate_environment_instructions(&detected_environments);
 
-    let memories = load_memories_by_tags(gcx.clone(), MEMORY_TAGS_FOR_CONTEXT, MAX_MEMORIES_IN_CONTEXT)
-        .await
-        .unwrap_or_default();
+    let memories = load_memories_by_tags(
+        gcx.clone(),
+        MEMORY_TAGS_FOR_CONTEXT,
+        MAX_MEMORIES_IN_CONTEXT,
+    )
+    .await
+    .unwrap_or_default();
 
     Ok(SystemContext {
         system_info,
@@ -1481,7 +1485,10 @@ pub fn create_memories_message(memories: &[MemoRecord]) -> Option<ChatMessage> {
             let content = if memo.content.len() > MAX_MEMORY_CONTENT_SIZE {
                 format!(
                     "{}\n\n[TRUNCATED]",
-                    memo.content.chars().take(MAX_MEMORY_CONTENT_SIZE).collect::<String>()
+                    memo.content
+                        .chars()
+                        .take(MAX_MEMORY_CONTENT_SIZE)
+                        .collect::<String>()
                 )
             } else {
                 memo.content.clone()
@@ -1519,8 +1526,12 @@ pub fn create_memories_message(memories: &[MemoRecord]) -> Option<ChatMessage> {
     })
 }
 
-fn max_file_size() -> usize { limits().max_file_size }
-fn max_included_files() -> usize { limits().max_included_files }
+fn max_file_size() -> usize {
+    limits().max_file_size
+}
+fn max_included_files() -> usize {
+    limits().max_included_files
+}
 
 pub async fn create_instruction_files_message(
     instruction_files: &[InstructionFile],

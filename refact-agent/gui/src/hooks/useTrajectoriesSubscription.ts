@@ -90,7 +90,10 @@ export function useTrajectoriesSubscription() {
             dispatch(closeThread({ id: data.id, force: true }));
           } else {
             const existsInHistory = data.id in historyRef.current;
-            if (existsInHistory && (data.title || data.updated_at)) {
+            if (
+              existsInHistory &&
+              (data.title !== undefined || data.updated_at !== undefined)
+            ) {
               dispatch(
                 updateChatMetaById({
                   id: data.id,

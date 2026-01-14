@@ -362,8 +362,11 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
 
     if !have_system {
         match chat_meta.chat_mode {
-            ChatMode::EXPLORE | ChatMode::AGENT | ChatMode::NO_TOOLS
-            | ChatMode::TASK_PLANNER | ChatMode::TASK_AGENT => {
+            ChatMode::EXPLORE
+            | ChatMode::AGENT
+            | ChatMode::NO_TOOLS
+            | ChatMode::TASK_PLANNER
+            | ChatMode::TASK_AGENT => {
                 let system_message_content = system_prompt_add_extra_instructions(
                     gcx.clone(),
                     get_default_system_prompt(gcx.clone(), chat_meta.chat_mode.clone()).await,
@@ -411,8 +414,13 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
         tracing::info!("Skipping project/system context injection (include_project_info=false)");
     }
 
-    if matches!(chat_meta.chat_mode, ChatMode::TASK_PLANNER | ChatMode::TASK_AGENT) {
-        match inject_task_memories(&gcx, &mut messages, stream_back_to_user, &chat_meta.chat_id).await {
+    if matches!(
+        chat_meta.chat_mode,
+        ChatMode::TASK_PLANNER | ChatMode::TASK_AGENT
+    ) {
+        match inject_task_memories(&gcx, &mut messages, stream_back_to_user, &chat_meta.chat_id)
+            .await
+        {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!("Failed to inject task memories: {}", e);
@@ -530,7 +538,10 @@ pub async fn inject_task_memories(
         let truncated_content = if content.len() > MAX_TASK_MEMORY_CONTENT_SIZE {
             format!(
                 "{}\n\n[TRUNCATED]",
-                content.chars().take(MAX_TASK_MEMORY_CONTENT_SIZE).collect::<String>()
+                content
+                    .chars()
+                    .take(MAX_TASK_MEMORY_CONTENT_SIZE)
+                    .collect::<String>()
             )
         } else {
             content.clone()

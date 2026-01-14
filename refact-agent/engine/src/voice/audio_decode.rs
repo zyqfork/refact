@@ -117,7 +117,9 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, S
         return Ok(samples.to_vec());
     }
 
-    use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
 
     let params = SincInterpolationParameters {
         sinc_len: 256,
@@ -133,7 +135,8 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, S
         params,
         samples.len(),
         1,
-    ).map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+    )
+    .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
 
     let input = vec![samples.to_vec()];
     let output = resampler

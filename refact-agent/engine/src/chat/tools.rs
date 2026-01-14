@@ -34,13 +34,14 @@ use super::config::{limits, tokens};
 
 async fn get_effective_n_ctx(gcx: Arc<ARwLock<GlobalContext>>, thread: &ThreadParams) -> usize {
     let default_n_ctx = tokens().default_n_ctx;
-    let model_n_ctx = match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
-        Ok(caps) => match crate::caps::resolve_chat_model(caps, &thread.model) {
-            Ok(model_rec) if model_rec.base.n_ctx > 0 => model_rec.base.n_ctx,
-            _ => default_n_ctx,
-        },
-        Err(_) => default_n_ctx,
-    };
+    let model_n_ctx =
+        match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
+            Ok(caps) => match crate::caps::resolve_chat_model(caps, &thread.model) {
+                Ok(model_rec) if model_rec.base.n_ctx > 0 => model_rec.base.n_ctx,
+                _ => default_n_ctx,
+            },
+            Err(_) => default_n_ctx,
+        };
     match thread.context_tokens_cap {
         Some(cap) if cap > 0 => cap.min(model_n_ctx),
         _ => model_n_ctx,
@@ -111,7 +112,10 @@ fn spawn_subchat_bridge(
 
         loop {
             if cancel_flag_clone.load(Ordering::Relaxed) {
-                info!("spawn_subchat_bridge: cancelled, sending cleanup events for {} active tools", active_tool_call_ids.len());
+                info!(
+                    "spawn_subchat_bridge: cancelled, sending cleanup events for {} active tools",
+                    active_tool_call_ids.len()
+                );
                 let mut session = session_arc.lock().await;
                 for tool_call_id in active_tool_call_ids.drain(..) {
                     session.emit(ChatEvent::SubchatUpdate {
@@ -253,16 +257,18 @@ pub async fn process_tool_calls_once(
         let mut session = session_arc.lock().await;
         for tc in &server_tool_calls {
             // Check if a tool result already exists for this tool call
-            let result_exists = session.messages.iter().any(|m| {
-                m.role == "tool" && m.tool_call_id == tc.id
-            });
+            let result_exists = session
+                .messages
+                .iter()
+                .any(|m| m.role == "tool" && m.tool_call_id == tc.id);
             if !result_exists {
                 let tool_message = ChatMessage {
                     message_id: Uuid::new_v4().to_string(),
                     role: "tool".to_string(),
-                    content: ChatContent::SimpleText(
-                        format!("[Results from '{}' are included in the assistant's response above]", tc.function.name)
-                    ),
+                    content: ChatContent::SimpleText(format!(
+                        "[Results from '{}' are included in the assistant's response above]",
+                        tc.function.name
+                    )),
                     tool_call_id: tc.id.clone(),
                     tool_failed: Some(false),
                     ..Default::default()
@@ -301,10 +307,10 @@ pub async fn process_tool_calls_once(
     }
 
     if !confirmations.is_empty() {
-        let dominated_by_patch = thread.automatic_patch
-            && confirmations.iter().all(|c| is_patch_like_tool(&c.command));
+        let dominated_by_patch =
+            thread.automatic_patch && confirmations.iter().all(|c| is_patch_like_tool(&c.command));
         let autoapprove_all_tools = matches!(chat_mode, ChatMode::TASK_AGENT);
-        
+
         if !(dominated_by_patch || autoapprove_all_tools) {
             let mut session = session_arc.lock().await;
             session.set_paused_with_reasons(confirmations);
@@ -491,10 +497,13 @@ pub async fn execute_tools_with_session(
 
     let code_workdir = if let Some(tm) = thread.task_meta.as_ref() {
         match crate::tasks::storage::load_board(gcx.clone(), &tm.task_id).await {
-            Ok(board) => {
-                board.get_card(&tm.card_id.as_ref().unwrap_or(&String::new()))
-                    .and_then(|card| card.agent_worktree.as_ref().map(|p| std::path::PathBuf::from(p)))
-            }
+            Ok(board) => board
+                .get_card(&tm.card_id.as_ref().unwrap_or(&String::new()))
+                .and_then(|card| {
+                    card.agent_worktree
+                        .as_ref()
+                        .map(|p| std::path::PathBuf::from(p))
+                }),
             Err(_) => None,
         }
     } else {
@@ -527,8 +536,16 @@ pub async fn execute_tools_with_session(
 
     let cancel_flag = spawn_subchat_bridge(ccx.clone(), session_arc.clone());
 
-    let result =
-        execute_tools_inner(gcx, ccx, tool_calls, chat_mode, budget, options, &prompt_messages).await;
+    let result = execute_tools_inner(
+        gcx,
+        ccx,
+        tool_calls,
+        chat_mode,
+        budget,
+        options,
+        &prompt_messages,
+    )
+    .await;
 
     cancel_flag.store(true, Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -582,17 +599,21 @@ async fn execute_tools_inner(
                 let _permit = semaphore.acquire().await.unwrap();
 
                 if !available_tool_names.contains(&tool_call.function.name) {
-                    return (idx, vec![ChatMessage {
-                        message_id: Uuid::new_v4().to_string(),
-                        role: "tool".to_string(),
-                        content: ChatContent::SimpleText(format!(
-                            "Error: tool '{}' not found",
-                            tool_call.function.name
-                        )),
-                        tool_call_id: tool_call.id.clone(),
-                        tool_failed: Some(true),
-                        ..Default::default()
-                    }], vec![]);
+                    return (
+                        idx,
+                        vec![ChatMessage {
+                            message_id: Uuid::new_v4().to_string(),
+                            role: "tool".to_string(),
+                            content: ChatContent::SimpleText(format!(
+                                "Error: tool '{}' not found",
+                                tool_call.function.name
+                            )),
+                            tool_call_id: tool_call.id.clone(),
+                            tool_failed: Some(true),
+                            ..Default::default()
+                        }],
+                        vec![],
+                    );
                 }
 
                 let tool_opt = crate::tools::tools_list::get_available_tools(gcx.clone())
@@ -603,17 +624,21 @@ async fn execute_tools_inner(
                 let mut tool = match tool_opt {
                     Some(t) => t,
                     None => {
-                        return (idx, vec![ChatMessage {
-                            message_id: Uuid::new_v4().to_string(),
-                            role: "tool".to_string(),
-                            content: ChatContent::SimpleText(format!(
-                                "Error: tool '{}' not found",
-                                tool_call.function.name
-                            )),
-                            tool_call_id: tool_call.id.clone(),
-                            tool_failed: Some(true),
-                            ..Default::default()
-                        }], vec![]);
+                        return (
+                            idx,
+                            vec![ChatMessage {
+                                message_id: Uuid::new_v4().to_string(),
+                                role: "tool".to_string(),
+                                content: ChatContent::SimpleText(format!(
+                                    "Error: tool '{}' not found",
+                                    tool_call.function.name
+                                )),
+                                tool_call_id: tool_call.id.clone(),
+                                tool_failed: Some(true),
+                                ..Default::default()
+                            }],
+                            vec![],
+                        );
                     }
                 };
 
@@ -621,14 +646,21 @@ async fn execute_tools_inner(
                     match serde_json::from_str(&tool_call.function.arguments) {
                         Ok(a) => a,
                         Err(e) => {
-                            return (idx, vec![ChatMessage {
-                                message_id: Uuid::new_v4().to_string(),
-                                role: "tool".to_string(),
-                                content: ChatContent::SimpleText(format!("Error parsing arguments: {}", e)),
-                                tool_call_id: tool_call.id.clone(),
-                                tool_failed: Some(true),
-                                ..Default::default()
-                            }], vec![]);
+                            return (
+                                idx,
+                                vec![ChatMessage {
+                                    message_id: Uuid::new_v4().to_string(),
+                                    role: "tool".to_string(),
+                                    content: ChatContent::SimpleText(format!(
+                                        "Error parsing arguments: {}",
+                                        e
+                                    )),
+                                    tool_call_id: tool_call.id.clone(),
+                                    tool_failed: Some(true),
+                                    ..Default::default()
+                                }],
+                                vec![],
+                            );
                         }
                     };
 
@@ -658,14 +690,18 @@ async fn execute_tools_inner(
                     }
                     Err(e) => {
                         info!("Tool execution failed: {}: {}", tool_call.function.name, e);
-                        (idx, vec![ChatMessage {
-                            message_id: Uuid::new_v4().to_string(),
-                            role: "tool".to_string(),
-                            content: ChatContent::SimpleText(format!("Error: {}", e)),
-                            tool_call_id: tool_call.id.clone(),
-                            tool_failed: Some(true),
-                            ..Default::default()
-                        }], vec![])
+                        (
+                            idx,
+                            vec![ChatMessage {
+                                message_id: Uuid::new_v4().to_string(),
+                                role: "tool".to_string(),
+                                content: ChatContent::SimpleText(format!("Error: {}", e)),
+                                tool_call_id: tool_call.id.clone(),
+                                tool_failed: Some(true),
+                                ..Default::default()
+                            }],
+                            vec![],
+                        )
                     }
                 }
             }
@@ -731,10 +767,13 @@ pub async fn execute_tools(
 
     let code_workdir = if let Some(tm) = thread.task_meta.as_ref() {
         match crate::tasks::storage::load_board(gcx.clone(), &tm.task_id).await {
-            Ok(board) => {
-                board.get_card(&tm.card_id.as_ref().unwrap_or(&String::new()))
-                    .and_then(|card| card.agent_worktree.as_ref().map(|p| std::path::PathBuf::from(p)))
-            }
+            Ok(board) => board
+                .get_card(&tm.card_id.as_ref().unwrap_or(&String::new()))
+                .and_then(|card| {
+                    card.agent_worktree
+                        .as_ref()
+                        .map(|p| std::path::PathBuf::from(p))
+                }),
             Err(_) => None,
         }
     } else {

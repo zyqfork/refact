@@ -442,11 +442,7 @@ pub fn fix_and_limit_messages_history(
     let start_time = Instant::now();
 
     let mut mutable_messages = messages.clone();
-    replace_broken_tool_call_messages(
-        &mut mutable_messages,
-        sampling_parameters_to_patch,
-        16000,
-    );
+    replace_broken_tool_call_messages(&mut mutable_messages, sampling_parameters_to_patch, 16000);
     remove_invalid_tool_calls_and_tool_calls_results(&mut mutable_messages);
 
     let total_duration = start_time.elapsed();

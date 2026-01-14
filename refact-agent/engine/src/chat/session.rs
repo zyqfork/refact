@@ -216,7 +216,10 @@ impl ChatSession {
     }
 
     pub fn build_queued_items(&self) -> Vec<QueuedItem> {
-        self.command_queue.iter().map(|r| r.to_queued_item()).collect()
+        self.command_queue
+            .iter()
+            .map(|r| r.to_queued_item())
+            .collect()
     }
 
     pub fn emit_queue_update(&mut self) {
@@ -305,8 +308,14 @@ impl ChatSession {
                 ChatContent::ContextFiles(v) => !v.is_empty(),
             };
             let has_structured_data = draft.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty())
-                || draft.reasoning_content.as_ref().map_or(false, |r| !r.trim().is_empty())
-                || draft.thinking_blocks.as_ref().map_or(false, |tb| !tb.is_empty())
+                || draft
+                    .reasoning_content
+                    .as_ref()
+                    .map_or(false, |r| !r.trim().is_empty())
+                || draft
+                    .thinking_blocks
+                    .as_ref()
+                    .map_or(false, |tb| !tb.is_empty())
                 || !draft.citations.is_empty();
 
             self.emit(ChatEvent::StreamFinished {
@@ -1154,7 +1163,12 @@ mod tests {
         assert_eq!(session.runtime.queued_items.len(), 1);
         let mut found_update = false;
         while let Ok(env) = rx.try_recv() {
-            if let ChatEvent::RuntimeUpdated { queue_size, queued_items, .. } = env.event {
+            if let ChatEvent::RuntimeUpdated {
+                queue_size,
+                queued_items,
+                ..
+            } = env.event
+            {
                 assert_eq!(queue_size, 1);
                 assert_eq!(queued_items.len(), 1);
                 found_update = true;

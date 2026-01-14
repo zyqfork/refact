@@ -54,7 +54,11 @@ async fn send_entertainment_message(
             "content": message_text
         }
     });
-    tracing::info!("deep_research: sending entertainment message: tool_call_id={}, subchat_id={}", tool_call_id, message_text);
+    tracing::info!(
+        "deep_research: sending entertainment message: tool_call_id={}, subchat_id={}",
+        tool_call_id,
+        message_text
+    );
     match subchat_tx.lock().await.send(entertainment_msg) {
         Ok(_) => tracing::info!("deep_research: entertainment message sent successfully"),
         Err(e) => tracing::error!("deep_research: failed to send entertainment message: {}", e),
@@ -87,7 +91,14 @@ async fn execute_deep_research(
     subchat_tx: Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
     research_query: String,
     tool_call_id: String,
-) -> Result<(ChatMessage, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<
+    (
+        ChatMessage,
+        ChatUsage,
+        serde_json::Map<String, serde_json::Value>,
+    ),
+    String,
+> {
     send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -103,7 +114,10 @@ async fn execute_deep_research(
     cancel_token.cancel();
 
     let subchat_result = result?;
-    let reply = subchat_result.messages.last().cloned()
+    let reply = subchat_result
+        .messages
+        .last()
+        .cloned()
         .ok_or("No response from deep research")?;
 
     Ok((reply, subchat_result.usage, subchat_result.metering))
@@ -166,7 +180,8 @@ impl Tool for ToolDeepResearch {
             subchat_tx,
             research_query.clone(),
             tool_call_id.clone(),
-        ).await?;
+        )
+        .await?;
 
         let research_content = format!(
             "# Deep Research Report\n\n{}",
@@ -184,31 +199,35 @@ impl Tool for ToolDeepResearch {
             base_kind: "research".to_string(),
             base_title: Some(title),
         };
-        let memory_note = match memories_add_enriched(ccx.clone(), &research_content, enrichment_params).await {
-            Ok(path) => {
-                tracing::info!("Created enriched memory from deep research: {:?}", path);
-                format!(
-                    "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
-                    path.display()
-                )
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create enriched memory from deep research: {}", e);
-                String::new()
-            }
-        };
+        let memory_note =
+            match memories_add_enriched(ccx.clone(), &research_content, enrichment_params).await {
+                Ok(path) => {
+                    tracing::info!("Created enriched memory from deep research: {:?}", path);
+                    format!(
+                        "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
+                        path.display()
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create enriched memory from deep research: {}", e);
+                    String::new()
+                }
+            };
         let final_message = format!("{}{}", research_content, memory_note);
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(final_message),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            usage: Some(usage_collector),
-            extra: metering,
-            output_filter: Some(OutputFilter::no_limits()),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(final_message),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                usage: Some(usage_collector),
+                extra: metering,
+                output_filter: Some(OutputFilter::no_limits()),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

@@ -1,4 +1,12 @@
-import { Card, Flex, HoverCard, Text, Box } from "@radix-ui/themes";
+import {
+  Card,
+  Flex,
+  HoverCard,
+  Text,
+  Box,
+  Tabs,
+  Popover,
+} from "@radix-ui/themes";
 import classNames from "classnames";
 import React, { useMemo, useState } from "react";
 
@@ -11,6 +19,8 @@ import {
   selectThreadMaximumTokens,
   selectThreadImages,
 } from "../../features/Chat";
+import { TokensMapContent } from "./TokensMapContent";
+import { useTokenMap } from "./useTokenMap";
 import { formatNumberToFixed } from "../../utils/formatNumberToFixed";
 import {
   useAppSelector,
@@ -236,6 +246,7 @@ const DefaultHoverTriggerContent: React.FC<{
   coinsGenerated?: number;
   coinsCacheRead?: number;
   coinsCacheCreation?: number;
+  tokenMap?: import("../../services/refact/chat").TokenMap | null;
 }> = ({
   currentSessionTokens,
   maxContextTokens,
@@ -246,6 +257,7 @@ const DefaultHoverTriggerContent: React.FC<{
   coinsGenerated,
   coinsCacheRead,
   coinsCacheCreation,
+  tokenMap,
 }) => {
   const hasContent =
     (totalCoins !== undefined && totalCoins > 0) || maxContextTokens > 0;
@@ -274,9 +286,9 @@ const DefaultHoverTriggerContent: React.FC<{
         </HoverCard.Root>
       )}
       {maxContextTokens > 0 && (
-        <HoverCard.Root>
-          <HoverCard.Trigger>
-            <Flex align="center" gap="1" style={{ cursor: "default" }}>
+        <Popover.Root>
+          <Popover.Trigger>
+            <Flex align="center" gap="1" style={{ cursor: "pointer" }}>
               <CircularProgress
                 value={currentSessionTokens}
                 max={maxContextTokens}
@@ -287,16 +299,34 @@ const DefaultHoverTriggerContent: React.FC<{
                 {formatNumberToFixed(currentSessionTokens)}
               </Text>
             </Flex>
-          </HoverCard.Trigger>
-          <HoverCard.Content size="1" side="top" align="center">
-            <TokensHoverContent
-              currentSessionTokens={currentSessionTokens}
-              maxContextTokens={maxContextTokens}
-              inputTokens={inputTokens}
-              outputTokens={outputTokens}
-            />
-          </HoverCard.Content>
-        </HoverCard.Root>
+          </Popover.Trigger>
+          <Popover.Content
+            size="1"
+            side="top"
+            align="center"
+            style={{ minWidth: "280px" }}
+          >
+            <Tabs.Root defaultValue="summary">
+              <Tabs.List size="1">
+                <Tabs.Trigger value="summary">Summary</Tabs.Trigger>
+                <Tabs.Trigger value="map">Breakdown</Tabs.Trigger>
+              </Tabs.List>
+              <Box pt="2">
+                <Tabs.Content value="summary">
+                  <TokensHoverContent
+                    currentSessionTokens={currentSessionTokens}
+                    maxContextTokens={maxContextTokens}
+                    inputTokens={inputTokens}
+                    outputTokens={outputTokens}
+                  />
+                </Tabs.Content>
+                <Tabs.Content value="map">
+                  <TokensMapContent tokenMap={tokenMap} />
+                </Tabs.Content>
+              </Box>
+            </Tabs.Root>
+          </Popover.Content>
+        </Popover.Root>
       )}
     </Flex>
   );
@@ -313,6 +343,7 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
   const currentMessageTokens = useAppSelector(selectThreadCurrentMessageTokens);
   const meteringTokens = useTotalTokenMeteringForChat();
   const cost = useTotalCostForChat();
+  const tokenMap = useTokenMap();
 
   const totalCoins = useMemo(() => {
     return (
@@ -414,6 +445,7 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
           coinsGenerated={cost?.metering_coins_generated}
           coinsCacheRead={cost?.metering_coins_cache_read}
           coinsCacheCreation={cost?.metering_coins_cache_creation}
+          tokenMap={tokenMap}
         />
       </Flex>
     );

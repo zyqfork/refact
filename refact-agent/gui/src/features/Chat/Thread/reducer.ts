@@ -228,11 +228,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
       tool_use: state.tool_use,
       maybeMode: currentRt?.thread.mode ?? lastParams.mode,
     });
-    const newRuntime = createThreadRuntime(
-      state.tool_use,
-      null,
-      mode,
-    );
+    const newRuntime = createThreadRuntime(state.tool_use, null, mode);
 
     newRuntime.thread.model = lastParams.model ?? currentRt?.thread.model ?? "";
     newRuntime.thread.boost_reasoning =
@@ -409,7 +405,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
       }
       state.current_thread_id = action.payload.id;
       existingRt.thread.read = true;
-      existingRt.snapshot_received = false;
+      // Don't reset snapshot_received - thread was already hydrated
       return;
     }
 
@@ -462,9 +458,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
       if (shouldOpenTab && !state.open_thread_ids.includes(id)) {
         state.open_thread_ids.push(id);
       }
-      if (state.current_thread_id !== id) {
-        existingRt.snapshot_received = false;
-      }
+      // Don't reset snapshot_received on tab switches.
+      // The flag means "thread has been hydrated at least once", not "currently connected".
       state.current_thread_id = id;
       existingRt.thread.read = true;
     }

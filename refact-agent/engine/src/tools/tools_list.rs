@@ -340,15 +340,36 @@ pub async fn get_available_tools_by_chat_mode(
         ChatMode::TASK_PLANNER => {
             let planner_whitelist = [
                 // Investigation tools
-                "tree", "cat", "search_pattern", "search_symbol_definition", "search_semantic",
-                "knowledge", "search_trajectories", "get_trajectory_context", "web",
-                "shell", "subagent", "deep_research", "strategic_planning", "update_textdoc",
+                "tree",
+                "cat",
+                "search_pattern",
+                "search_symbol_definition",
+                "search_semantic",
+                "knowledge",
+                "search_trajectories",
+                "get_trajectory_context",
+                "web",
+                "shell",
+                "subagent",
+                "deep_research",
+                "strategic_planning",
+                "update_textdoc",
                 // Board management
-                "task_board_get", "task_board_create_card", "task_board_update_card",
-                "task_board_delete_card", "task_board_move_card", "task_ready_cards",
+                "task_board_get",
+                "task_board_create_card",
+                "task_board_update_card",
+                "task_board_delete_card",
+                "task_board_move_card",
+                "task_ready_cards",
                 // Execution
-                "task_spawn_agent", "task_check_agents", "task_merge_agent",
-                "task_mark_card_done", "task_mark_card_failed",
+                "task_spawn_agent",
+                "task_check_agents",
+                "task_merge_agent",
+                "task_mark_card_done",
+                "task_mark_card_failed",
+                // Task memory
+                "task_memory_save",
+                "task_memories_get",
             ];
             tools
                 .filter(|tool| planner_whitelist.contains(&tool.tool_description().name.as_str()))
@@ -356,23 +377,51 @@ pub async fn get_available_tools_by_chat_mode(
         }
         ChatMode::AGENT => {
             let task_tools_blacklist = [
-                "task_init", "task_board_get", "task_board_create_card", "task_board_update_card",
-                "task_board_move_card", "task_board_delete_card", "task_ready_cards",
-                "task_spawn_agent", "task_check_agents", "task_merge_agent", "task_assign_agent",
-                "task_agent_update", "task_agent_complete", "task_agent_fail",
-                "task_mark_card_done", "task_mark_card_failed", "task_agent_finish",
+                "task_init",
+                "task_board_get",
+                "task_board_create_card",
+                "task_board_update_card",
+                "task_board_move_card",
+                "task_board_delete_card",
+                "task_ready_cards",
+                "task_spawn_agent",
+                "task_check_agents",
+                "task_merge_agent",
+                "task_assign_agent",
+                "task_agent_update",
+                "task_agent_complete",
+                "task_agent_fail",
+                "task_mark_card_done",
+                "task_mark_card_failed",
+                "task_agent_finish",
+                "task_memory_save",
+                "task_memories_get",
             ];
             tools
-                .filter(|tool| !task_tools_blacklist.contains(&tool.tool_description().name.as_str()))
+                .filter(|tool| {
+                    !task_tools_blacklist.contains(&tool.tool_description().name.as_str())
+                })
                 .collect()
         }
         ChatMode::TASK_AGENT => {
             let agent_blacklist = [
-                "deep_research", "strategic_planning",
-                "task_init", "task_board_get", "task_board_create_card", "task_board_update_card",
-                "task_board_move_card", "task_board_delete_card", "task_ready_cards",
-                "task_spawn_agent", "task_agent_update", "task_agent_complete", "task_agent_fail",
-                "task_assign_agent", "task_check_agents", "task_mark_card_done", "task_mark_card_failed",
+                "deep_research",
+                "strategic_planning",
+                "task_init",
+                "task_board_get",
+                "task_board_create_card",
+                "task_board_update_card",
+                "task_board_move_card",
+                "task_board_delete_card",
+                "task_ready_cards",
+                "task_spawn_agent",
+                "task_agent_update",
+                "task_agent_complete",
+                "task_agent_fail",
+                "task_assign_agent",
+                "task_check_agents",
+                "task_mark_card_done",
+                "task_mark_card_failed",
             ];
             tools
                 .filter(|tool| !agent_blacklist.contains(&tool.tool_description().name.as_str()))

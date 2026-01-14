@@ -22,7 +22,9 @@ const FILE_EDITING_TOOLS: &[&str] = &[
 ];
 
 fn tools_contain_file_editing(tools: &[String]) -> bool {
-    tools.iter().any(|t| FILE_EDITING_TOOLS.contains(&t.as_str()))
+    tools
+        .iter()
+        .any(|t| FILE_EDITING_TOOLS.contains(&t.as_str()))
 }
 
 pub struct ToolSubagent {
@@ -76,8 +78,6 @@ You have access to these tools: {tools_list}
         max_steps = max_steps
     )
 }
-
-
 
 #[async_trait]
 impl Tool for ToolSubagent {
@@ -163,11 +163,19 @@ impl Tool for ToolSubagent {
 
         let (gcx, parent_chat_id, parent_subchat_tx) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.global_context.clone(), ccx_lock.chat_id.clone(), ccx_lock.subchat_tx.clone())
+            (
+                ccx_lock.global_context.clone(),
+                ccx_lock.chat_id.clone(),
+                ccx_lock.subchat_tx.clone(),
+            )
         };
 
         let has_editing_tools = tools_contain_file_editing(&tools);
-        let config_name = if has_editing_tools { "subagent_with_editing" } else { "subagent" };
+        let config_name = if has_editing_tools {
+            "subagent_with_editing"
+        } else {
+            "subagent"
+        };
 
         let title = if task.len() > 60 {
             let end = task
@@ -189,13 +197,18 @@ impl Tool for ToolSubagent {
             Some(title),
             Some(parent_chat_id),
             Some("subagent".to_string()),
-            if tools.is_empty() { None } else { Some(tools.clone()) },
+            if tools.is_empty() {
+                None
+            } else {
+                Some(tools.clone())
+            },
             max_steps,
             false,
             None,
             Some(tool_call_id.clone()),
             Some(parent_subchat_tx),
-        ).await?;
+        )
+        .await?;
 
         let user_prompt = build_task_prompt(&task, &expected_result, &tools, max_steps);
 
@@ -212,7 +225,11 @@ impl Tool for ToolSubagent {
             },
         ];
 
-        tracing::info!("Starting subagent for task: {} (model: {})", task, config.model);
+        tracing::info!(
+            "Starting subagent for task: {} (model: {})",
+            task,
+            config.model
+        );
 
         let result = run_subchat(gcx, messages, config).await?;
 
@@ -234,16 +251,19 @@ impl Tool for ToolSubagent {
             task, expected_result, result_content
         );
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result_message),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            usage: Some(result.usage),
-            extra: result.metering,
-            output_filter: Some(OutputFilter::no_limits()),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result_message),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                usage: Some(result.usage),
+                extra: result.metering,
+                output_filter: Some(OutputFilter::no_limits()),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

@@ -110,7 +110,10 @@ impl Tool for ToolTaskMemorySave {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, task_meta) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.task_meta.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.task_meta.clone(),
+            )
         };
 
         let task_id = task_meta
@@ -136,7 +139,12 @@ impl Tool for ToolTaskMemorySave {
         let tags: Vec<String> = args
             .get("tags")
             .and_then(|v| v.as_str())
-            .map(|s| s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
+            .map(|s| {
+                s.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
             .unwrap_or_default();
 
         let memories_dir = get_task_memories_dir(gcx.clone(), &task_id).await?;
@@ -252,7 +260,10 @@ impl Tool for ToolTaskMemoriesGet {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, task_meta) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.task_meta.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.task_meta.clone(),
+            )
         };
 
         let task_id = task_meta
@@ -334,16 +345,26 @@ impl Tool for ToolTaskMemoriesGet {
                         let title = content
                             .lines()
                             .find(|l| l.starts_with("# ") || l.starts_with("title:"))
-                            .map(|l| l.trim_start_matches("# ").trim_start_matches("title:").trim())
+                            .map(|l| {
+                                l.trim_start_matches("# ")
+                                    .trim_start_matches("title:")
+                                    .trim()
+                            })
                             .unwrap_or_else(|| {
-                                p.file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("unknown")
+                                p.file_name().and_then(|n| n.to_str()).unwrap_or("unknown")
                             });
-                        format!("- {} ({})", title, p.file_name().unwrap_or_default().to_string_lossy())
+                        format!(
+                            "- {} ({})",
+                            title,
+                            p.file_name().unwrap_or_default().to_string_lossy()
+                        )
                     })
                     .collect();
-                format!("## Task Memories ({})\n\n{}", titles.len(), titles.join("\n"))
+                format!(
+                    "## Task Memories ({})\n\n{}",
+                    titles.len(),
+                    titles.join("\n")
+                )
             }
             _ => {
                 let mut output = format!("## Task Memories ({})\n\n", memories.len());
@@ -369,7 +390,11 @@ impl Tool for ToolTaskMemoriesGet {
             }
         };
 
-        info!("Task memories retrieved: {} files for task {}", memories.len(), task_id);
+        info!(
+            "Task memories retrieved: {} files for task {}",
+            memories.len(),
+            task_id
+        );
 
         Ok((
             false,

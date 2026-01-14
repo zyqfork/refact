@@ -41,7 +41,11 @@ pub async fn inject_priority_messages_if_any(
     }
 
     for request in priority_requests {
-        if let ChatCommand::UserMessage { content, attachments } = request.command {
+        if let ChatCommand::UserMessage {
+            content,
+            attachments,
+        } = request.command
+        {
             let mut session = session_arc.lock().await;
             let parsed_content = parse_content_with_attachments(&content, &attachments);
             let checkpoints = if session.thread.checkpoints_enabled {
@@ -105,7 +109,9 @@ pub fn drain_priority_user_messages(queue: &mut VecDeque<CommandRequest>) -> Vec
     priority_messages
 }
 
-pub fn drain_non_priority_user_messages(queue: &mut VecDeque<CommandRequest>) -> Vec<CommandRequest> {
+pub fn drain_non_priority_user_messages(
+    queue: &mut VecDeque<CommandRequest>,
+) -> Vec<CommandRequest> {
     let mut messages = Vec::new();
     let mut i = 0;
     while i < queue.len() {
@@ -177,7 +183,9 @@ pub fn apply_setparams_patch(
     }
     if let Some(task_meta_value) = patch.get("task_meta") {
         if !task_meta_value.is_null() {
-            if let Ok(task_meta) = serde_json::from_value::<super::types::TaskMeta>(task_meta_value.clone()) {
+            if let Ok(task_meta) =
+                serde_json::from_value::<super::types::TaskMeta>(task_meta_value.clone())
+            {
                 thread.task_meta = Some(task_meta);
                 changed = true;
             }
@@ -216,8 +224,8 @@ pub async fn process_command_queue(
             }
 
             let state = session.runtime.state;
-            let is_busy = state == SessionState::Generating
-                || state == SessionState::ExecutingTools;
+            let is_busy =
+                state == SessionState::Generating || state == SessionState::ExecutingTools;
 
             let notify = session.queue_notify.clone();
             let waiter = notify.notified();
@@ -320,8 +328,13 @@ pub async fn process_command_queue(
                     session.add_message(user_message);
 
                     for additional in additional_messages {
-                        if let ChatCommand::UserMessage { content: add_content, attachments: add_attachments } = additional.command {
-                            let add_parsed = parse_content_with_attachments(&add_content, &add_attachments);
+                        if let ChatCommand::UserMessage {
+                            content: add_content,
+                            attachments: add_attachments,
+                        } = additional.command
+                        {
+                            let add_parsed =
+                                parse_content_with_attachments(&add_content, &add_attachments);
                             let add_message = ChatMessage {
                                 message_id: Uuid::new_v4().to_string(),
                                 role: "user".to_string(),

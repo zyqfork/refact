@@ -100,13 +100,17 @@ const TreeNode = memo(
 
 TreeNode.displayName = "TreeNode";
 
-function getSortedHistory(history: Record<string, ChatHistoryItem>): ChatHistoryItem[] {
+function getSortedHistory(
+  history: Record<string, ChatHistoryItem>,
+): ChatHistoryItem[] {
   return Object.values(history)
     .filter((item) => !item.task_id)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-function buildHistoryTree(history: Record<string, ChatHistoryItem>): HistoryTreeNode[] {
+function buildHistoryTree(
+  history: Record<string, ChatHistoryItem>,
+): HistoryTreeNode[] {
   const items = Object.values(history).filter((item) => !item.task_id);
   const itemMap = new Map<string, HistoryTreeNode>();
   const roots: HistoryTreeNode[] = [];
@@ -119,7 +123,11 @@ function buildHistoryTree(history: Record<string, ChatHistoryItem>): HistoryTree
   const handoffParentIds = new Set<string>();
 
   for (const item of items) {
-    if (item.link_type === "handoff" && item.parent_id && itemMap.has(item.parent_id)) {
+    if (
+      item.link_type === "handoff" &&
+      item.parent_id &&
+      itemMap.has(item.parent_id)
+    ) {
       handoffParentIds.add(item.parent_id);
     }
   }

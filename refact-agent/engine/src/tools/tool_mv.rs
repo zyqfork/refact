@@ -78,7 +78,10 @@ impl Tool for ToolMv {
 
         let (gcx, code_workdir) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.global_context.clone(), ccx_lock.code_workdir.clone())
+            (
+                ccx_lock.global_context.clone(),
+                ccx_lock.code_workdir.clone(),
+            )
         };
         let project_dirs = get_project_dirs_with_code_workdir(gcx.clone(), &code_workdir).await;
 

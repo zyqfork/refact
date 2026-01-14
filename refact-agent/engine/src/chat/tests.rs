@@ -1205,16 +1205,19 @@ mod tests {
 
         assert_eq!(simulate_agent_loop(&[ToolStepOutcome::NoToolCalls]), 1);
         assert_eq!(simulate_agent_loop(&[ToolStepOutcome::Paused]), 1);
-        assert_eq!(simulate_agent_loop(&[
-            ToolStepOutcome::Continue,
-            ToolStepOutcome::NoToolCalls
-        ]), 2);
-        assert_eq!(simulate_agent_loop(&[
-            ToolStepOutcome::Continue,
-            ToolStepOutcome::Continue,
-            ToolStepOutcome::Continue,
-            ToolStepOutcome::Paused
-        ]), 4);
+        assert_eq!(
+            simulate_agent_loop(&[ToolStepOutcome::Continue, ToolStepOutcome::NoToolCalls]),
+            2
+        );
+        assert_eq!(
+            simulate_agent_loop(&[
+                ToolStepOutcome::Continue,
+                ToolStepOutcome::Continue,
+                ToolStepOutcome::Continue,
+                ToolStepOutcome::Paused
+            ]),
+            4
+        );
 
         let many_continues: Vec<_> = (0..100).map(|_| ToolStepOutcome::Continue).collect();
         assert_eq!(simulate_agent_loop(&many_continues), MAX_CYCLES);
@@ -1264,7 +1267,12 @@ mod tests {
         ];
 
         for (id, expected) in tool_calls {
-            assert_eq!(is_server_executed_tool(id), expected, "Failed for id: {}", id);
+            assert_eq!(
+                is_server_executed_tool(id),
+                expected,
+                "Failed for id: {}",
+                id
+            );
         }
 
         let all_calls = vec!["call_1", "srvtoolu_2", "call_3", "srvtoolu_4"];
@@ -1278,13 +1286,11 @@ mod tests {
 
     #[test]
     fn test_no_tool_calls_when_last_message_not_assistant() {
-        let messages = vec![
-            ChatMessage {
-                role: "user".to_string(),
-                content: ChatContent::SimpleText("Hello".to_string()),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::SimpleText("Hello".to_string()),
+            ..Default::default()
+        }];
 
         let last_msg = messages.last();
         let has_tool_calls = match last_msg {
@@ -1297,14 +1303,12 @@ mod tests {
 
     #[test]
     fn test_no_tool_calls_when_assistant_has_none() {
-        let messages = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: ChatContent::SimpleText("Hello".to_string()),
-                tool_calls: None,
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText("Hello".to_string()),
+            tool_calls: None,
+            ..Default::default()
+        }];
 
         let last_msg = messages.last();
         let has_tool_calls = match last_msg {
@@ -1317,22 +1321,20 @@ mod tests {
 
     #[test]
     fn test_has_tool_calls_when_assistant_has_calls() {
-        let messages = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: ChatContent::SimpleText("Let me help".to_string()),
-                tool_calls: Some(vec![ChatToolCall {
-                    id: "call_123".to_string(),
-                    index: Some(0),
-                    function: ChatToolFunction {
-                        name: "test_tool".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                    tool_type: "function".to_string(),
-                }]),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText("Let me help".to_string()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call_123".to_string(),
+                index: Some(0),
+                function: ChatToolFunction {
+                    name: "test_tool".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                tool_type: "function".to_string(),
+            }]),
+            ..Default::default()
+        }];
 
         let last_msg = messages.last();
         let has_tool_calls = match last_msg {
@@ -1390,7 +1392,10 @@ mod tests {
         assert!(matches!(parse_chat_mode("no_tools"), ChatMode::NO_TOOLS));
         assert!(matches!(parse_chat_mode("EXPLORE"), ChatMode::EXPLORE));
         assert!(matches!(parse_chat_mode("CONFIGURE"), ChatMode::CONFIGURE));
-        assert!(matches!(parse_chat_mode("PROJECT_SUMMARY"), ChatMode::PROJECT_SUMMARY));
+        assert!(matches!(
+            parse_chat_mode("PROJECT_SUMMARY"),
+            ChatMode::PROJECT_SUMMARY
+        ));
         assert!(matches!(parse_chat_mode("unknown"), ChatMode::AGENT));
         assert!(matches!(parse_chat_mode(""), ChatMode::AGENT));
     }

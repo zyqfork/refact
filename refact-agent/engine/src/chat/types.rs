@@ -9,12 +9,24 @@ use uuid::Uuid;
 use crate::call_validation::{ChatMessage, ChatUsage};
 use super::config::{limits, timeouts, presentation};
 
-pub fn max_queue_size() -> usize { limits().max_queue_size }
-pub fn session_idle_timeout() -> std::time::Duration { timeouts().session_idle }
-pub fn session_cleanup_interval() -> std::time::Duration { timeouts().session_cleanup_interval }
-pub fn stream_idle_timeout() -> std::time::Duration { timeouts().stream_idle }
-pub fn stream_total_timeout() -> std::time::Duration { timeouts().stream_total }
-pub fn stream_heartbeat() -> std::time::Duration { timeouts().stream_heartbeat }
+pub fn max_queue_size() -> usize {
+    limits().max_queue_size
+}
+pub fn session_idle_timeout() -> std::time::Duration {
+    timeouts().session_idle
+}
+pub fn session_cleanup_interval() -> std::time::Duration {
+    timeouts().session_cleanup_interval
+}
+pub fn stream_idle_timeout() -> std::time::Duration {
+    timeouts().stream_idle
+}
+pub fn stream_total_timeout() -> std::time::Duration {
+    timeouts().stream_total
+}
+pub fn stream_heartbeat() -> std::time::Duration {
+    timeouts().stream_heartbeat
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -336,20 +348,26 @@ impl CommandRequest {
             ChatCommand::UserMessage { content, .. } => {
                 ("user_message".to_string(), extract_preview(content))
             }
-            ChatCommand::RetryFromIndex { content, index, .. } => {
-                ("retry_from_index".to_string(), format!("@{}: {}", index, extract_preview(content)))
-            }
+            ChatCommand::RetryFromIndex { content, index, .. } => (
+                "retry_from_index".to_string(),
+                format!("@{}: {}", index, extract_preview(content)),
+            ),
             ChatCommand::SetParams { patch } => {
                 let model = patch.get("model").and_then(|v| v.as_str()).unwrap_or("");
                 ("set_params".to_string(), format!("model={}", model))
             }
             ChatCommand::Abort {} => ("abort".to_string(), String::new()),
-            ChatCommand::ToolDecision { tool_call_id, accepted } => {
-                ("tool_decision".to_string(), format!("{}: {}", tool_call_id, accepted))
-            }
-            ChatCommand::ToolDecisions { decisions } => {
-                ("tool_decisions".to_string(), format!("{} decisions", decisions.len()))
-            }
+            ChatCommand::ToolDecision {
+                tool_call_id,
+                accepted,
+            } => (
+                "tool_decision".to_string(),
+                format!("{}: {}", tool_call_id, accepted),
+            ),
+            ChatCommand::ToolDecisions { decisions } => (
+                "tool_decisions".to_string(),
+                format!("{} decisions", decisions.len()),
+            ),
             ChatCommand::IdeToolResult { tool_call_id, .. } => {
                 ("ide_tool_result".to_string(), tool_call_id.clone())
             }

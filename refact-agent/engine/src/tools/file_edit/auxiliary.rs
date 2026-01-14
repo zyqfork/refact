@@ -3,7 +3,8 @@ use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_o
 use crate::call_validation::DiffChunk;
 use crate::files_correction::{
     canonicalize_normalized_path, check_if_its_inside_a_workspace_or_config,
-    correct_to_nearest_dir_path, get_project_dirs_with_code_workdir, preprocess_path_for_normalization,
+    correct_to_nearest_dir_path, get_project_dirs_with_code_workdir,
+    preprocess_path_for_normalization,
 };
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::GlobalContext;
@@ -44,7 +45,10 @@ fn resolve_path_with_workdir(path: &PathBuf, code_workdir: &Option<PathBuf>) -> 
         }
     }
 
-    warn!("Cannot properly resolve {:?} to worktree, using filename only", path);
+    warn!(
+        "Cannot properly resolve {:?} to worktree, using filename only",
+        path
+    );
     workdir.join(path.file_name().unwrap_or_default())
 }
 

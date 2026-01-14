@@ -124,7 +124,9 @@ fn deduplicate_and_merge_context_files(
                 };
                 notes.push(format!(
                     "📎 `{}` already in context (message #{}, via `{}`). Skipping to save tokens.",
-                    range, msg_idx + 1, tool_name
+                    range,
+                    msg_idx + 1,
+                    tool_name
                 ));
             } else {
                 result.push(cf);
@@ -144,7 +146,9 @@ fn deduplicate_and_merge_context_files(
                 };
                 notes.push(format!(
                     "📎 `{}` already in context (message #{}, via `{}`). Skipping to save tokens.",
-                    range, msg_idx + 1, tool_name
+                    range,
+                    msg_idx + 1,
+                    tool_name
                 ));
             } else {
                 result.push(cf);
@@ -227,8 +231,16 @@ fn find_coverage_in_history(cf: &ContextFile, messages: &[ChatMessage]) -> Optio
                 if has_truncation_markers(&existing.file_content) {
                     continue;
                 }
-                let ex_start = if existing.line1 == 0 { 1 } else { existing.line1 };
-                let ex_end = if existing.line2 == 0 { usize::MAX } else { existing.line2 };
+                let ex_start = if existing.line1 == 0 {
+                    1
+                } else {
+                    existing.line1
+                };
+                let ex_end = if existing.line2 == 0 {
+                    usize::MAX
+                } else {
+                    existing.line2
+                };
                 if ex_start <= cf_start && ex_end >= cf_end {
                     return Some((idx, msg.tool_call_id.clone()));
                 }
@@ -246,7 +258,8 @@ async fn postprocess_context_file_results(
     mut pp_settings: PostprocessSettings,
     existing_messages: &[ChatMessage],
 ) -> (Option<ChatMessage>, Vec<String>, usize) {
-    let (deduped_files, dedup_notes) = deduplicate_and_merge_context_files(context_files, existing_messages);
+    let (deduped_files, dedup_notes) =
+        deduplicate_and_merge_context_files(context_files, existing_messages);
 
     let (skip_pp_files, mut pp_files): (Vec<_>, Vec<_>) =
         deduped_files.into_iter().partition(|cf| cf.skip_pp);
@@ -284,7 +297,11 @@ async fn postprocess_context_file_results(
     )
     .await;
 
-    let notes: Vec<String> = dedup_notes.into_iter().chain(pp_notes).chain(skip_notes).collect();
+    let notes: Vec<String> = dedup_notes
+        .into_iter()
+        .chain(pp_notes)
+        .chain(skip_notes)
+        .collect();
 
     let all_files: Vec<_> = pp_result
         .into_iter()
@@ -356,7 +373,9 @@ async fn fill_skip_pp_files_with_budget(
                     };
                     notes.push(format!(
                         "📎 Skipped `{}`: already retrieved in message #{} via `{}`.",
-                        range, dup_info.0 + 1, dup_info.1
+                        range,
+                        dup_info.0 + 1,
+                        dup_info.1
                     ));
                     continue;
                 }
@@ -430,8 +449,16 @@ fn find_duplicate_in_history(
                 if has_truncation_markers(&existing.file_content) {
                     continue;
                 }
-                let ex_start = if existing.line1 == 0 { 1 } else { existing.line1 };
-                let ex_end = if existing.line2 == 0 { usize::MAX } else { existing.line2 };
+                let ex_start = if existing.line1 == 0 {
+                    1
+                } else {
+                    existing.line1
+                };
+                let ex_end = if existing.line2 == 0 {
+                    usize::MAX
+                } else {
+                    existing.line2
+                };
                 if ex_start <= cf_start && ex_end >= cf_end {
                     let tool_name = find_tool_name_for_context(messages, idx);
                     return Some((idx, tool_name));
@@ -544,7 +571,12 @@ mod tests {
         make_context_file_with_rev(name, line1, line2, Some("test_rev".to_string()))
     }
 
-    fn make_context_file_with_rev(name: &str, line1: usize, line2: usize, file_rev: Option<String>) -> ContextFile {
+    fn make_context_file_with_rev(
+        name: &str,
+        line1: usize,
+        line2: usize,
+        file_rev: Option<String>,
+    ) -> ContextFile {
         ContextFile {
             file_name: name.to_string(),
             file_content: String::new(),

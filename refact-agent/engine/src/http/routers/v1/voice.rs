@@ -45,8 +45,9 @@ pub async fn handle_v1_voice_download(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     body: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let req: DownloadModelRequest = serde_json::from_slice(&body)
-        .unwrap_or(DownloadModelRequest { model: "base.en".to_string() });
+    let req: DownloadModelRequest = serde_json::from_slice(&body).unwrap_or(DownloadModelRequest {
+        model: "base.en".to_string(),
+    });
 
     WhisperModel::from_name(&req.model)
         .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
@@ -106,7 +107,9 @@ pub async fn handle_v1_voice_stream_subscribe(
     let voice_service = gcx_locked.voice_service.clone();
     drop(gcx_locked);
 
-    let session_arc = voice_service.get_or_create_session(&session_id, language).await;
+    let session_arc = voice_service
+        .get_or_create_session(&session_id, language)
+        .await;
     let session = session_arc.lock().await;
     let mut rx = session.subscribe();
     drop(session);
@@ -148,7 +151,9 @@ pub async fn handle_v1_voice_stream_chunk(
     let voice_service = gcx_locked.voice_service.clone();
     drop(gcx_locked);
 
-    let session_arc = voice_service.get_or_create_session(&session_id, req.language.clone()).await;
+    let session_arc = voice_service
+        .get_or_create_session(&session_id, req.language.clone())
+        .await;
     let mut session = session_arc.lock().await;
 
     if !req.audio_data.is_empty() {

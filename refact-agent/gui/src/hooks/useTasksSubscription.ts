@@ -11,7 +11,9 @@ export function useTasksSubscription() {
   const dispatch = useAppDispatch();
   const config = useConfig();
   const disconnectRef = useRef<(() => void) | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const connect = useCallback(() => {
     if (disconnectRef.current) {
@@ -30,7 +32,11 @@ export function useTasksSubscription() {
       switch (envelope.type) {
         case "snapshot":
           dispatch(
-            tasksApi.util.updateQueryData("listTasks", undefined, () => envelope.tasks),
+            tasksApi.util.updateQueryData(
+              "listTasks",
+              undefined,
+              () => envelope.tasks,
+            ),
           );
           break;
 
@@ -53,17 +59,25 @@ export function useTasksSubscription() {
                 const existing = draft[index];
                 draft[index] = {
                   ...envelope.meta,
-                  planner_session_state: envelope.meta.planner_session_state ?? existing.planner_session_state,
+                  planner_session_state:
+                    envelope.meta.planner_session_state ??
+                    existing.planner_session_state,
                 };
               }
               draft.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
             }),
           );
           dispatch(
-            tasksApi.util.updateQueryData("getTask", envelope.task_id, (existing) => ({
-              ...envelope.meta,
-              planner_session_state: envelope.meta.planner_session_state ?? existing?.planner_session_state,
-            })),
+            tasksApi.util.updateQueryData(
+              "getTask",
+              envelope.task_id,
+              (existing) => ({
+                ...envelope.meta,
+                planner_session_state:
+                  envelope.meta.planner_session_state ??
+                  existing.planner_session_state,
+              }),
+            ),
           );
           break;
 
@@ -80,7 +94,11 @@ export function useTasksSubscription() {
 
         case "board_changed":
           dispatch(
-            tasksApi.util.updateQueryData("getBoard", envelope.task_id, () => envelope.board),
+            tasksApi.util.updateQueryData(
+              "getBoard",
+              envelope.task_id,
+              () => envelope.board,
+            ),
           );
           break;
       }

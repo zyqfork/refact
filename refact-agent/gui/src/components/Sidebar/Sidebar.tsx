@@ -50,9 +50,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
     devModeChecks: { stabilityCheck: "never" },
   });
   const historyIsLoading = useAppSelector((app) => app.history.isLoading);
-  const { data: tasks, isFetching: tasksIsFetching } = useListTasksQuery(undefined, {
-    refetchOnMountOrArgChange: true,
-  });
+  const { data: tasks, isFetching: tasksIsFetching } = useListTasksQuery(
+    undefined,
+    {
+      refetchOnMountOrArgChange: true,
+    },
+  );
   const tasksIsLoading = tasksIsFetching || tasks === undefined;
   const [deleteTask] = useDeleteTaskMutation();
 
@@ -275,7 +278,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
             })}
           </Flex>
         ) : (
-          <Text size="2" color="gray">No active tasks</Text>
+          <Text size="2" color="gray">
+            No active tasks
+          </Text>
         )}
       </Box>
 

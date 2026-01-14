@@ -134,7 +134,10 @@ pub async fn resolve_subchat_params(
 
     if !error_log.is_empty() {
         let errors: Vec<String> = error_log.iter().map(|e| e.to_string()).collect();
-        return Err(format!("YAML errors while loading customization: {}", errors.join("; ")));
+        return Err(format!(
+            "YAML errors while loading customization: {}",
+            errors.join("; ")
+        ));
     }
 
     let params = customization
@@ -145,15 +148,24 @@ pub async fn resolve_subchat_params(
             format!(
                 "subchat params for tool '{}' not found in customization YAML. Available: {:?}",
                 tool_name,
-                customization.subchat_tool_parameters.keys().collect::<Vec<_>>()
+                customization
+                    .subchat_tool_parameters
+                    .keys()
+                    .collect::<Vec<_>>()
             )
         })?;
 
     if params.subchat_n_ctx == 0 {
-        return Err(format!("subchat_n_ctx must be > 0 for tool '{}'", tool_name));
+        return Err(format!(
+            "subchat_n_ctx must be > 0 for tool '{}'",
+            tool_name
+        ));
     }
     if params.subchat_max_new_tokens == 0 {
-        return Err(format!("subchat_max_new_tokens must be > 0 for tool '{}'", tool_name));
+        return Err(format!(
+            "subchat_max_new_tokens must be > 0 for tool '{}'",
+            tool_name
+        ));
     }
 
     Ok(params)
@@ -218,7 +230,8 @@ pub async fn resolve_subchat_config(
         wrap_up,
         None,
         None,
-    ).await
+    )
+    .await
 }
 
 pub async fn resolve_subchat_config_with_parent(
@@ -290,7 +303,10 @@ pub async fn run_subchat(
     messages: Vec<ChatMessage>,
     config: SubchatConfig,
 ) -> Result<SubchatResult, String> {
-    info!("run_subchat tool={} model={} stateful={}", config.tool_name, config.model, config.stateful);
+    info!(
+        "run_subchat tool={} model={} stateful={}",
+        config.tool_name, config.model, config.stateful
+    );
 
     let chat_id = config
         .chat_id
@@ -351,7 +367,10 @@ pub async fn run_subchat(
 
         let thread = ThreadParams {
             id: chat_id.clone(),
-            title: config.title.clone().unwrap_or_else(|| "Subchat".to_string()),
+            title: config
+                .title
+                .clone()
+                .unwrap_or_else(|| "Subchat".to_string()),
             model: config.model.clone(),
             mode: "AGENT".to_string(),
             tool_use: tool_use_str,
@@ -369,11 +388,7 @@ pub async fn run_subchat(
         messages: current_messages,
         usage,
         metering,
-        chat_id: if config.stateful {
-            Some(chat_id)
-        } else {
-            None
-        },
+        chat_id: if config.stateful { Some(chat_id) } else { None },
     })
 }
 
@@ -394,7 +409,8 @@ pub async fn run_subchat_once(
         1,
         false,
         None,
-    ).await?;
+    )
+    .await?;
 
     let chat_id = format!("subchat-{}", Uuid::new_v4());
 
@@ -561,10 +577,7 @@ async fn run_subchat_with_wrap_up(
     )
     .await?;
 
-    messages.push(ChatMessage::new(
-        "user".to_string(),
-        wrap_up.prompt.clone(),
-    ));
+    messages.push(ChatMessage::new("user".to_string(), wrap_up.prompt.clone()));
 
     let final_results = subchat_single_internal(
         ccx.clone(),
@@ -585,7 +598,9 @@ async fn run_subchat_with_wrap_up(
 }
 
 fn truncate_args(s: &str, max: usize) -> String {
-    if s.len() <= max { return s.to_string(); }
+    if s.len() <= max {
+        return s.to_string();
+    }
     format!("{}…", &s[..max])
 }
 
@@ -831,6 +846,7 @@ fn convert_results_to_messages(
         };
 
         let msg = ChatMessage {
+            message_id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content: ChatContent::SimpleText(result.content),
             tool_calls,
@@ -844,7 +860,10 @@ fn convert_results_to_messages(
             } else {
                 Some(result.thinking_blocks)
             },
+            citations: result.citations,
+            finish_reason: result.finish_reason,
             usage: result.usage,
+            extra: result.extra,
             ..Default::default()
         };
 
@@ -868,17 +887,16 @@ fn update_usage_from_messages(usage: &mut ChatUsage, messages: &[Vec<ChatMessage
     }
 }
 
-fn aggregate_metering_from_messages(messages: &[ChatMessage]) -> serde_json::Map<String, serde_json::Value> {
+fn aggregate_metering_from_messages(
+    messages: &[ChatMessage],
+) -> serde_json::Map<String, serde_json::Value> {
     let mut aggregated = serde_json::Map::new();
 
     for msg in messages.iter().filter(|m| m.role == "assistant") {
         for (key, value) in &msg.extra {
             if key.starts_with("metering_") {
                 if let Some(num) = value.as_f64() {
-                    let current = aggregated
-                        .get(key)
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
+                    let current = aggregated.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     aggregated.insert(key.clone(), serde_json::json!(current + num));
                 }
             }
@@ -939,4 +957,3 @@ async fn subchat_single_internal(
     )
     .await
 }
-

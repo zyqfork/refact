@@ -10,7 +10,10 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
 use crate::chat::types::SessionState;
 
-async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>, args: &HashMap<String, Value>) -> Result<String, String> {
+async fn get_task_id(
+    ccx: &Arc<AMutex<AtCommandsContext>>,
+    args: &HashMap<String, Value>,
+) -> Result<String, String> {
     if let Some(id) = args.get("task_id").and_then(|v| v.as_str()) {
         return Ok(id.to_string());
     }
@@ -25,7 +28,9 @@ async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>, args: &HashMap<String
 pub struct ToolTaskCheckAgents;
 
 impl ToolTaskCheckAgents {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[derive(Debug)]
@@ -65,7 +70,9 @@ async fn get_agent_statuses(
                 None
             };
 
-            let last_status_update = card.status_updates.last()
+            let last_status_update = card
+                .status_updates
+                .last()
                 .map(|u| format!("{}: {}", u.timestamp, u.message));
 
             statuses.push(AgentStatus {
@@ -87,17 +94,18 @@ fn format_agent_status(status: &AgentStatus) -> String {
     let (state_emoji, state_text) = match status.column.as_str() {
         "done" => ("✅", "Completed"),
         "failed" => ("❌", "Failed"),
-        "doing" => {
-            match &status.session_state {
-                Some(SessionState::Generating) => ("🔄", "Generating response"),
-                Some(SessionState::ExecutingTools) => ("⚙️", "Executing tools"),
-                Some(SessionState::Paused) => ("⏸️", "Paused (awaiting confirmation)"),
-                Some(SessionState::WaitingIde) => ("⏳", "Waiting for IDE"),
-                Some(SessionState::Error) => ("⚠️", "Error state (will be marked as failed)"),
-                Some(SessionState::Idle) => ("💤", "Idle (waiting)"),
-                None => ("❓", "Unknown/offline (will be marked as failed if stuck too long)"),
-            }
-        }
+        "doing" => match &status.session_state {
+            Some(SessionState::Generating) => ("🔄", "Generating response"),
+            Some(SessionState::ExecutingTools) => ("⚙️", "Executing tools"),
+            Some(SessionState::Paused) => ("⏸️", "Paused (awaiting confirmation)"),
+            Some(SessionState::WaitingIde) => ("⏳", "Waiting for IDE"),
+            Some(SessionState::Error) => ("⚠️", "Error state (will be marked as failed)"),
+            Some(SessionState::Idle) => ("💤", "Idle (waiting)"),
+            None => (
+                "❓",
+                "Unknown/offline (will be marked as failed if stuck too long)",
+            ),
+        },
         _ => ("❓", "Unknown"),
     };
 
@@ -106,7 +114,10 @@ fn format_agent_status(status: &AgentStatus) -> String {
         state_emoji, status.card_title, status.card_id, state_text, status.column
     );
 
-    result.push_str(&format!("📎 [View Agent Chat](refact://chat/{})\n", status.agent_chat_id));
+    result.push_str(&format!(
+        "📎 [View Agent Chat](refact://chat/{})\n",
+        status.agent_chat_id
+    ));
 
     if let Some(report) = &status.final_report {
         let preview: String = report.chars().take(300).collect();
@@ -125,7 +136,9 @@ fn format_agent_status(status: &AgentStatus) -> String {
 
 #[async_trait]
 impl Tool for ToolTaskCheckAgents {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -156,20 +169,21 @@ impl Tool for ToolTaskCheckAgents {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let ccx_lock = ccx.lock().await;
-        
-        let is_planner = ccx_lock.task_meta.as_ref()
+
+        let is_planner = ccx_lock
+            .task_meta
+            .as_ref()
             .map(|m| m.role == "planner")
             .unwrap_or(false);
 
         if !is_planner {
-            return Err(
-                "task_check_agents can only be called by the task planner. \
-                 Switch to the planner chat to check agent status.".to_string()
-            );
+            return Err("task_check_agents can only be called by the task planner. \
+                 Switch to the planner chat to check agent status."
+                .to_string());
         }
-        
+
         drop(ccx_lock);
-        
+
         let task_id = get_task_id(&ccx, args).await?;
         let gcx = ccx.lock().await.global_context.clone();
 
@@ -178,24 +192,21 @@ impl Tool for ToolTaskCheckAgents {
         if statuses.is_empty() {
             let result = "# Agent Status\n\nNo agents have been spawned yet for this task.\n\nUse `task_spawn_agent(card_id)` to spawn an agent for a card.".to_string();
 
-            return Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-                role: "tool".to_string(),
-                content: ChatContent::SimpleText(result),
-                tool_calls: None,
-                tool_call_id: tool_call_id.clone(),
-                ..Default::default()
-            })]));
+            return Ok((
+                false,
+                vec![ContextEnum::ChatMessage(ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(result),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    ..Default::default()
+                })],
+            ));
         }
 
-        let running: Vec<_> = statuses.iter()
-            .filter(|s| s.column == "doing")
-            .collect();
-        let completed: Vec<_> = statuses.iter()
-            .filter(|s| s.column == "done")
-            .collect();
-        let failed: Vec<_> = statuses.iter()
-            .filter(|s| s.column == "failed")
-            .collect();
+        let running: Vec<_> = statuses.iter().filter(|s| s.column == "doing").collect();
+        let completed: Vec<_> = statuses.iter().filter(|s| s.column == "done").collect();
+        let failed: Vec<_> = statuses.iter().filter(|s| s.column == "failed").collect();
 
         let mut result = format!(
             "# Agent Status Summary\n\n**Total:** {} agents | 🔄 Running: {} | ✅ Done: {} | ❌ Failed: {}\n\n",
@@ -229,19 +240,26 @@ impl Tool for ToolTaskCheckAgents {
         if running.is_empty() && !completed.is_empty() && failed.is_empty() {
             result.push_str("🎉 **All agents have completed successfully!**\n");
         } else if !failed.is_empty() {
-            result.push_str("⚠️ **Some agents have failed.** Review their reports and consider replanning.\n");
+            result.push_str(
+                "⚠️ **Some agents have failed.** Review their reports and consider replanning.\n",
+            );
         } else if !running.is_empty() {
             result.push_str("⏳ **Agents are still working.** Do not check again, wait for the completion message to arrive.\n");
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
 }

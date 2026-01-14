@@ -181,9 +181,15 @@ async fn create_knowledge_context(
     existing_paths: &HashSet<String>,
     current_chat_id: Option<&str>,
 ) -> Option<ChatMessage> {
-    let memories = memories_search(gcx.clone(), query_text, KNOWLEDGE_TOP_N, TRAJECTORY_TOP_N, current_chat_id)
-        .await
-        .ok()?;
+    let memories = memories_search(
+        gcx.clone(),
+        query_text,
+        KNOWLEDGE_TOP_N,
+        TRAJECTORY_TOP_N,
+        current_chat_id,
+    )
+    .await
+    .ok()?;
 
     let high_score_memories: Vec<_> = memories
         .into_iter()

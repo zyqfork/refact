@@ -58,10 +58,22 @@ pub struct TaskBoard {
 
 fn default_columns() -> Vec<BoardColumn> {
     vec![
-        BoardColumn { id: "planned".into(), title: "Planned".into() },
-        BoardColumn { id: "doing".into(), title: "Doing".into() },
-        BoardColumn { id: "done".into(), title: "Done".into() },
-        BoardColumn { id: "failed".into(), title: "Failed".into() },
+        BoardColumn {
+            id: "planned".into(),
+            title: "Planned".into(),
+        },
+        BoardColumn {
+            id: "doing".into(),
+            title: "Doing".into(),
+        },
+        BoardColumn {
+            id: "done".into(),
+            title: "Done".into(),
+        },
+        BoardColumn {
+            id: "failed".into(),
+            title: "Failed".into(),
+        },
     ]
 }
 
@@ -146,7 +158,9 @@ impl TaskBoard {
         let mut completed = vec![];
         let mut failed = vec![];
 
-        let done_cards: std::collections::HashSet<_> = self.cards.iter()
+        let done_cards: std::collections::HashSet<_> = self
+            .cards
+            .iter()
             .filter(|c| c.column == "done")
             .map(|c| c.id.as_str())
             .collect();
@@ -157,7 +171,9 @@ impl TaskBoard {
                 "failed" => failed.push(card.id.clone()),
                 "doing" => in_progress.push(card.id.clone()),
                 "planned" => {
-                    let deps_satisfied = card.depends_on.iter()
+                    let deps_satisfied = card
+                        .depends_on
+                        .iter()
                         .all(|dep| done_cards.contains(dep.as_str()));
                     if deps_satisfied {
                         ready.push(card.id.clone());
@@ -169,7 +185,13 @@ impl TaskBoard {
             }
         }
 
-        ReadyCardsResult { ready, blocked, in_progress, completed, failed }
+        ReadyCardsResult {
+            ready,
+            blocked,
+            in_progress,
+            completed,
+            failed,
+        }
     }
 
     pub fn get_card(&self, card_id: &str) -> Option<&BoardCard> {
@@ -186,12 +208,14 @@ impl TaskBoard {
             None => return vec![],
         };
 
-        card.depends_on.iter()
+        card.depends_on
+            .iter()
             .filter_map(|dep_id| {
                 self.get_card(dep_id).and_then(|dep_card| {
-                    dep_card.final_report.as_ref().map(|report| {
-                        (dep_card.title.clone(), report.clone())
-                    })
+                    dep_card
+                        .final_report
+                        .as_ref()
+                        .map(|report| (dep_card.title.clone(), report.clone()))
                 })
             })
             .collect()

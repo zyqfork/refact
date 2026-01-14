@@ -13,7 +13,6 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-
 use crate::call_validation::{ChatMessage, ChatContent};
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
@@ -1119,10 +1118,14 @@ fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let parent_id = data.extra.get("parent_id")
+    let parent_id = data
+        .extra
+        .get("parent_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let link_type = data.extra.get("link_type")
+    let link_type = data
+        .extra
+        .get("link_type")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
@@ -1228,7 +1231,8 @@ pub async fn handle_v1_trajectories_all(
                         if !role_dir.exists() {
                             continue;
                         }
-                        let trajectories = collect_task_trajectories(&role_dir, &task_id, role, None).await;
+                        let trajectories =
+                            collect_task_trajectories(&role_dir, &task_id, role, None).await;
                         result.extend(trajectories);
                     }
                 }
@@ -1276,7 +1280,13 @@ async fn collect_task_trajectories(
 
         if path.is_dir() {
             let sub_agent_id = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let sub_trajectories = Box::pin(collect_task_trajectories(&path, task_id, role, Some(sub_agent_id))).await;
+            let sub_trajectories = Box::pin(collect_task_trajectories(
+                &path,
+                task_id,
+                role,
+                Some(sub_agent_id),
+            ))
+            .await;
             result.extend(sub_trajectories);
             continue;
         }
@@ -1310,12 +1320,9 @@ pub async fn handle_v1_trajectories_get(
     Path(id): Path<String>,
 ) -> Result<Response<Body>, ScratchError> {
     validate_trajectory_id(&id)?;
-    let file_path = find_trajectory_path(gcx, &id)
-        .await
-        .ok_or_else(|| ScratchError::new(
-            StatusCode::NOT_FOUND,
-            "Trajectory not found".to_string(),
-        ))?;
+    let file_path = find_trajectory_path(gcx, &id).await.ok_or_else(|| {
+        ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
+    })?;
     let content = fs::read_to_string(&file_path)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1397,10 +1404,9 @@ pub async fn handle_v1_trajectories_delete(
     validate_trajectory_id(&id)?;
     let file_path = find_trajectory_path(gcx.clone(), &id)
         .await
-        .ok_or_else(|| ScratchError::new(
-            StatusCode::NOT_FOUND,
-            "Trajectory not found".to_string(),
-        ))?;
+        .ok_or_else(|| {
+            ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
+        })?;
     fs::remove_file(&file_path)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

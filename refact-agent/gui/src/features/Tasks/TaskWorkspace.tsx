@@ -17,6 +17,7 @@ import {
 } from "@radix-ui/react-icons";
 import { AgentStatusDot } from "./AgentStatusDot";
 import { ScrollArea } from "../../components/ScrollArea";
+import { ChatLoading } from "../../components/ChatContent/ChatLoading";
 import { useAppDispatch, useAppSelector } from "../../hooks";
 import { pop } from "../Pages/pagesSlice";
 import { KanbanBoard } from "./KanbanBoard";
@@ -705,11 +706,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   );
 
   if (taskLoading || boardLoading || !task || !board) {
-    return (
-      <Flex align="center" justify="center" style={{ height: "100%" }}>
-        <Text color="gray">Loading task...</Text>
-      </Flex>
-    );
+    return <ChatLoading />;
   }
 
   const chatLabel = !activeChat

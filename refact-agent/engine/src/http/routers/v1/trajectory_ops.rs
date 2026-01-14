@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock as ARwLock;
 use uuid::Uuid;
 
-
-use crate::chat::trajectory_ops::{CompressOptions, HandoffOptions, TransformStats, compress_in_place, handoff_select, sanitize_messages_for_new_thread};
+use crate::chat::trajectory_ops::{
+    CompressOptions, HandoffOptions, TransformStats, compress_in_place, handoff_select,
+    sanitize_messages_for_new_thread,
+};
 use crate::chat::types::SessionState;
 use crate::chat::get_or_create_session_with_trajectory;
 use crate::chat::trajectories::TrajectorySnapshot;
@@ -64,7 +66,10 @@ fn describe_transform_actions(opts: &CompressOptions) -> Vec<String> {
         actions.push("Drop project information from system messages".to_string());
     }
     if opts.compress_non_agentic_tools {
-        actions.push("Compress tool results (preserving deep_research, subagent, strategic_planning)".to_string());
+        actions.push(
+            "Compress tool results (preserving deep_research, subagent, strategic_planning)"
+                .to_string(),
+        );
     }
     actions.push("Remove invalid tool calls and orphan results".to_string());
     actions
@@ -91,8 +96,6 @@ fn describe_handoff_actions(opts: &HandoffOptions) -> Vec<String> {
     }
     actions
 }
-
-
 
 pub async fn handle_transform_preview(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
@@ -139,10 +142,15 @@ pub async fn handle_transform_apply(
     let stats = {
         let mut session = session_arc.lock().await;
 
-        if session.runtime.state != SessionState::Idle && session.runtime.state != SessionState::Error {
+        if session.runtime.state != SessionState::Idle
+            && session.runtime.state != SessionState::Error
+        {
             return Err(ScratchError::new(
                 StatusCode::CONFLICT,
-                format!("Session is not idle or error, current state: {:?}", session.runtime.state),
+                format!(
+                    "Session is not idle or error, current state: {:?}",
+                    session.runtime.state
+                ),
             ));
         }
 
@@ -183,7 +191,8 @@ pub async fn handle_handoff_preview(
         session.messages.clone()
     };
 
-    let (_, stats, _) = handoff_select(&messages, &req.options, gcx.clone(), false, &chat_id).await
+    let (_, stats, _) = handoff_select(&messages, &req.options, gcx.clone(), false, &chat_id)
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let response = HandoffPreviewResponse {
@@ -213,18 +222,29 @@ pub async fn handle_handoff_apply(
     let (messages, thread, task_meta) = {
         let session = session_arc.lock().await;
 
-        if session.runtime.state != SessionState::Idle && session.runtime.state != SessionState::Error {
+        if session.runtime.state != SessionState::Idle
+            && session.runtime.state != SessionState::Error
+        {
             return Err(ScratchError::new(
                 StatusCode::CONFLICT,
-                format!("Session is busy, current state: {:?}", session.runtime.state),
+                format!(
+                    "Session is busy, current state: {:?}",
+                    session.runtime.state
+                ),
             ));
         }
 
-        (session.messages.clone(), session.thread.clone(), session.thread.task_meta.clone())
+        (
+            session.messages.clone(),
+            session.thread.clone(),
+            session.thread.task_meta.clone(),
+        )
     };
 
-    let (selected_messages, stats, _) = handoff_select(&messages, &req.options, gcx.clone(), true, &chat_id).await
-        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let (selected_messages, stats, _) =
+        handoff_select(&messages, &req.options, gcx.clone(), true, &chat_id)
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let selected_messages = sanitize_messages_for_new_thread(&selected_messages);
 
@@ -251,7 +271,8 @@ pub async fn handle_handoff_apply(
         link_type: Some("handoff".to_string()),
     };
 
-    save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "handoff").await
+    save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "handoff")
+        .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let response = HandoffApplyResponse { new_chat_id, stats };

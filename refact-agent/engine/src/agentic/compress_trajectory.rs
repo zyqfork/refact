@@ -89,7 +89,8 @@ pub async fn compress_trajectory(
         .await
         .map_err(|e| format!("Error: {}", e))?;
 
-    let content = result.messages
+    let content = result
+        .messages
         .last()
         .and_then(|last_m| match &last_m.content {
             ChatContent::SimpleText(text) => Some(text.clone()),

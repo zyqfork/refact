@@ -2,12 +2,7 @@ import React, { useCallback, useState } from "react";
 import { ChatForm, ChatFormProps } from "../ChatForm";
 import { ChatContent } from "../ChatContent";
 import { Flex, Button, Text, Card } from "@radix-ui/themes";
-import {
-  useAppSelector,
-  useAppDispatch,
-  useChatSubscription,
-  useChatActions,
-} from "../../hooks";
+import { useAppSelector, useAppDispatch, useChatActions } from "../../hooks";
 import { type Config } from "../../features/Config/configSlice";
 import {
   enableSend,
@@ -45,10 +40,8 @@ export const Chat: React.FC<ChatProps> = ({
 
   const chatId = useAppSelector(selectChatId);
 
-  // SSE subscription for real-time state updates from engine
-  useChatSubscription(chatId, {
-    enabled: true,
-  });
+  // SSE subscription is handled by useAllChatsSubscription in App.tsx
+  // which subscribes to all open tabs including the current one
 
   const { submit, abort, retryFromIndex } = useChatActions();
 

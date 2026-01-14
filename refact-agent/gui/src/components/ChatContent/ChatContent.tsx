@@ -124,13 +124,13 @@ export const ChatContent: React.FC<ChatContentProps> = ({
         p="2"
         gap="1"
       >
-        {!snapshotReceived && <ChatLoading />}
-        {snapshotReceived && messages.length === 0 && (
+        {!snapshotReceived && messages.length === 0 && <ChatLoading />}
+        {(snapshotReceived || messages.length > 0) && messages.length === 0 && (
           <Container>
             <PlaceHolderText />
           </Container>
         )}
-        {snapshotReceived &&
+        {(snapshotReceived || messages.length > 0) &&
           renderMessages(messages, onRetryWrapper, isWaiting)}
         <Container>
           <UncommittedChangesWarning />

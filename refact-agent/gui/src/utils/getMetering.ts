@@ -1,33 +1,57 @@
-import { Usage } from "../services/refact/chat";
-import {
-  AssistantMessage,
-  ChatMessage,
-  ChatMessages,
-  isAssistantMessage,
-} from "../services/refact/types";
+import { ChatMessage, ChatMessages } from "../services/refact/types";
 
 type MessageWithExtra = ChatMessage & {
   extra?: Record<string, unknown>;
 };
+
+function parseNumberish(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
 
 function getMeteringValue(
   message: MessageWithExtra,
   field: string,
 ): number | undefined {
   const directValue = (message as unknown as Record<string, unknown>)[field];
-  if (typeof directValue === "number") return directValue;
+  const directNum = parseNumberish(directValue);
+  if (directNum !== undefined) return directNum;
 
-  const extraValue = message.extra?.[field];
-  if (typeof extraValue === "number") return extraValue;
+  const extraNum = parseNumberish(message.extra?.[field]);
+  if (extraNum !== undefined) return extraNum;
 
   return undefined;
 }
 
-export function getTotalCostMeteringForMessages(messages: ChatMessages) {
-  const assistantMessages = messages.filter(hasUsageAndPrice);
-  if (assistantMessages.length === 0) return null;
+function hasCoinMetering(message: ChatMessage): boolean {
+  const m = message as MessageWithExtra;
+  return (
+    getMeteringValue(m, "metering_coins_prompt") !== undefined ||
+    getMeteringValue(m, "metering_coins_generated") !== undefined ||
+    getMeteringValue(m, "metering_coins_cache_creation") !== undefined ||
+    getMeteringValue(m, "metering_coins_cache_read") !== undefined
+  );
+}
 
-  return assistantMessages.reduce<{
+function hasTokenMetering(message: ChatMessage): boolean {
+  const m = message as MessageWithExtra;
+  return (
+    getMeteringValue(m, "metering_prompt_tokens_n") !== undefined ||
+    getMeteringValue(m, "metering_generated_tokens_n") !== undefined ||
+    getMeteringValue(m, "metering_cache_creation_tokens_n") !== undefined ||
+    getMeteringValue(m, "metering_cache_read_tokens_n") !== undefined
+  );
+}
+
+export function getTotalCostMeteringForMessages(messages: ChatMessages) {
+  const meteringMessages = messages.filter(hasCoinMetering);
+  if (meteringMessages.length === 0) return null;
+
+  return meteringMessages.reduce<{
     metering_coins_prompt: number;
     metering_coins_generated: number;
     metering_coins_cache_creation: number;
@@ -59,10 +83,10 @@ export function getTotalCostMeteringForMessages(messages: ChatMessages) {
 }
 
 export function getTotalTokenMeteringForMessages(messages: ChatMessages) {
-  const assistantMessages = messages.filter(hasUsageAndPrice);
-  if (assistantMessages.length === 0) return null;
+  const meteringMessages = messages.filter(hasTokenMetering);
+  if (meteringMessages.length === 0) return null;
 
-  return assistantMessages.reduce<{
+  return meteringMessages.reduce<{
     metering_prompt_tokens_n: number;
     metering_generated_tokens_n: number;
     metering_cache_creation_tokens_n: number;
@@ -91,40 +115,4 @@ export function getTotalTokenMeteringForMessages(messages: ChatMessages) {
       metering_cache_read_tokens_n: 0,
     },
   );
-}
-function hasUsageAndPrice(message: ChatMessage): message is AssistantMessage & {
-  usage: Usage & {
-    completion_tokens: number;
-    prompt_tokens: number;
-    cache_creation_input_tokens?: number;
-    cache_read_input_tokens?: number;
-  };
-} {
-  if (!isAssistantMessage(message)) return false;
-  if (!("usage" in message)) return false;
-  if (!message.usage) return false;
-  if (typeof message.usage.completion_tokens !== "number") return false;
-  if (typeof message.usage.prompt_tokens !== "number") return false;
-
-  const hasCoinPrompt =
-    getMeteringValue(message as MessageWithExtra, "metering_coins_prompt") !==
-    undefined;
-  const hasCoinGenerated =
-    getMeteringValue(message as MessageWithExtra, "metering_coins_generated") !==
-    undefined;
-  const hasCoinCacheCreation =
-    getMeteringValue(
-      message as MessageWithExtra,
-      "metering_coins_cache_creation",
-    ) !== undefined;
-  const hasCoinCacheRead =
-    getMeteringValue(message as MessageWithExtra, "metering_coins_cache_read") !==
-    undefined;
-
-  if (!hasCoinPrompt) return false;
-  if (!hasCoinGenerated) return false;
-  if (!hasCoinCacheCreation) return false;
-  if (!hasCoinCacheRead) return false;
-
-  return true;
 }

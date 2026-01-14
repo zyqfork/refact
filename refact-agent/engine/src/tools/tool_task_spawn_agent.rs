@@ -18,7 +18,10 @@ use crate::chat::types::{ThreadParams, TaskMeta, CommandRequest, ChatCommand};
 use crate::chat::{get_or_create_session_with_trajectory, process_command_queue};
 use crate::git::operations;
 
-async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>, args: &HashMap<String, Value>) -> Result<String, String> {
+async fn get_task_id(
+    ccx: &Arc<AMutex<AtCommandsContext>>,
+    args: &HashMap<String, Value>,
+) -> Result<String, String> {
     if let Some(id) = args.get("task_id").and_then(|v| v.as_str()) {
         return Ok(id.to_string());
     }
@@ -45,7 +48,8 @@ async fn resolve_agent_model(
         return Ok(current_model.to_string());
     }
 
-    let caps = try_load_caps_quickly_if_not_present(gcx, 0).await
+    let caps = try_load_caps_quickly_if_not_present(gcx, 0)
+        .await
         .map_err(|e| format!("Failed to load caps for model resolution: {}", e))?;
 
     let default_model = &caps.defaults.chat_default_model;
@@ -53,7 +57,10 @@ async fn resolve_agent_model(
         return Ok(default_model.clone());
     }
 
-    Err("No model available: task default, current_model, and global default are all empty".to_string())
+    Err(
+        "No model available: task default, current_model, and global default are all empty"
+            .to_string(),
+    )
 }
 
 async fn setup_agent_worktree(
@@ -87,7 +94,10 @@ async fn setup_agent_worktree(
         storage::save_task_meta(gcx.clone(), task_id, &task_meta).await?;
     }
     let agent_id_short = &agent_id[..agent_id.len().min(8)];
-    let branch_name = format!("refact/task/{}/card/{}/{}", task_id, card_id, agent_id_short);
+    let branch_name = format!(
+        "refact/task/{}/card/{}/{}",
+        task_id, card_id, agent_id_short
+    );
     let worktree_name = format!("{}-{}-{}", task_id, card_id, agent_id_short);
     let worktree_path = workspace_root
         .join(".refact")
@@ -100,7 +110,13 @@ async fn setup_agent_worktree(
         .await
         .map_err(|e| format!("Failed to create worktree parent dir: {}", e))?;
 
-    operations::create_worktree(&repo, &worktree_path, &worktree_name, &branch_name, &base_commit)?;
+    operations::create_worktree(
+        &repo,
+        &worktree_path,
+        &worktree_name,
+        &branch_name,
+        &base_commit,
+    )?;
 
     let card_id_owned = card_id.to_string();
     let branch_name_clone = branch_name.clone();
@@ -115,15 +131,22 @@ async fn setup_agent_worktree(
             card.agent_worktree_name = Some(worktree_name_clone.clone());
         }
         Ok(())
-    }).await?;
+    })
+    .await?;
 
-    Ok((Some(branch_name), Some(worktree_path_str), Some(worktree_name)))
+    Ok((
+        Some(branch_name),
+        Some(worktree_path_str),
+        Some(worktree_name),
+    ))
 }
 
 pub struct ToolTaskSpawnAgent;
 
 impl ToolTaskSpawnAgent {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 fn build_agent_prompt(
@@ -154,7 +177,9 @@ fn build_agent_prompt(
 
 #[async_trait]
 impl Tool for ToolTaskSpawnAgent {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -190,24 +215,30 @@ impl Tool for ToolTaskSpawnAgent {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let ccx_lock = ccx.lock().await;
-        
-        let is_planner = ccx_lock.task_meta.as_ref()
+
+        let is_planner = ccx_lock
+            .task_meta
+            .as_ref()
             .map(|m| m.role == "planner")
             .unwrap_or(false);
 
         if !is_planner {
-            return Err(
-                "task_spawn_agent can only be called by the task planner. \
-                 Switch to the planner chat to spawn agents.".to_string()
-            );
+            return Err("task_spawn_agent can only be called by the task planner. \
+                 Switch to the planner chat to spawn agents."
+                .to_string());
         }
-        
+
         drop(ccx_lock);
-        
+
         let task_id = get_task_id(&ccx, args).await?;
-        let card_id = args.get("card_id").and_then(|v| v.as_str())
+        let card_id = args
+            .get("card_id")
+            .and_then(|v| v.as_str())
             .ok_or("Missing 'card_id'")?;
-        let suggested_steps: usize = match args.get("suggested_steps").or_else(|| args.get("max_steps")) {
+        let suggested_steps: usize = match args
+            .get("suggested_steps")
+            .or_else(|| args.get("max_steps"))
+        {
             Some(Value::String(s)) => s.parse().unwrap_or(30),
             Some(Value::Number(n)) => n.as_u64().unwrap_or(30) as usize,
             _ => 30,
@@ -221,7 +252,10 @@ impl Tool for ToolTaskSpawnAgent {
         if let Some(workspace_root) = project_dirs.first() {
             if let Ok(repo) = git2::Repository::open(workspace_root) {
                 if operations::has_uncommitted_changes(&repo)? {
-                    return Err("Cannot spawn agent: Please commit or stash changes before spawning agents".to_string());
+                    return Err(
+                        "Cannot spawn agent: Please commit or stash changes before spawning agents"
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -276,27 +310,30 @@ impl Tool for ToolTaskSpawnAgent {
             storage::update_task_stats(gcx.clone(), &task_id).await?;
 
             let card = board.get_card(card_id).unwrap();
-            let dep_context = board.get_dependency_reports(card_id)
+            let dep_context = board
+                .get_dependency_reports(card_id)
                 .into_iter()
                 .map(|(title, report)| format!("### {}\n{}", title, report))
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
-            let (_agent_branch, _agent_worktree, _agent_worktree_name) = match setup_agent_worktree(
-                gcx.clone(),
-                &task_id,
-                &agent_id,
-                card_id,
-            ).await {
-                Ok(result) => result,
-                Err(e) if e.contains("not a git repository") || e.contains("No workspace folder") => {
-                    tracing::warn!("Workspace is not a git repo, agent will work in main directory: {}", e);
-                    (None, None, None)
-                }
-                Err(e) => {
-                    return Err(format!("Cannot spawn agent: {}", e));
-                }
-            };
+            let (_agent_branch, _agent_worktree, _agent_worktree_name) =
+                match setup_agent_worktree(gcx.clone(), &task_id, &agent_id, card_id).await {
+                    Ok(result) => result,
+                    Err(e)
+                        if e.contains("not a git repository")
+                            || e.contains("No workspace folder") =>
+                    {
+                        tracing::warn!(
+                            "Workspace is not a git repo, agent will work in main directory: {}",
+                            e
+                        );
+                        (None, None, None)
+                    }
+                    Err(e) => {
+                        return Err(format!("Cannot spawn agent: {}", e));
+                    }
+                };
 
             (card.title.clone(), card.instructions.clone(), dep_context)
         };
@@ -306,7 +343,8 @@ impl Tool for ToolTaskSpawnAgent {
             gcx_locked.chat_sessions.clone()
         };
 
-        let session_arc = get_or_create_session_with_trajectory(gcx.clone(), &sessions, &agent_chat_id).await;
+        let session_arc =
+            get_or_create_session_with_trajectory(gcx.clone(), &sessions, &agent_chat_id).await;
 
         {
             let mut session = session_arc.lock().await;
@@ -333,7 +371,12 @@ impl Tool for ToolTaskSpawnAgent {
                 link_type: None,
             };
 
-            let user_prompt = build_agent_prompt(&card_title, &card_instructions, &dependency_context, suggested_steps);
+            let user_prompt = build_agent_prompt(
+                &card_title,
+                &card_instructions,
+                &dependency_context,
+                suggested_steps,
+            );
             let user_msg = ChatMessage {
                 role: "user".to_string(),
                 content: ChatContent::SimpleText(user_prompt),
@@ -363,13 +406,23 @@ impl Tool for ToolTaskSpawnAgent {
             drop(session);
 
             if !processor_running.swap(true, Ordering::SeqCst) {
-                tokio::spawn(process_command_queue(gcx.clone(), session_arc.clone(), processor_running));
+                tokio::spawn(process_command_queue(
+                    gcx.clone(),
+                    session_arc.clone(),
+                    processor_running,
+                ));
             } else {
                 queue_notify.notify_one();
             }
         }
 
-        tracing::info!("Spawned agent {} for card {}: {} (model: {})", agent_id, card_id, card_title, model);
+        tracing::info!(
+            "Spawned agent {} for card {}: {} (model: {})",
+            agent_id,
+            card_id,
+            card_title,
+            model
+        );
 
         let result_message = format!(
             r#"# Agent Spawned: {}
@@ -385,14 +438,19 @@ The agent will call `task_agent_finish()` when done. Use `task_check_agents` to 
             card_title, card_id, agent_id, model, agent_chat_id
         );
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result_message),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result_message),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
 }

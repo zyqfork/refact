@@ -46,7 +46,11 @@ pub struct MemoryOperationResponse {
 }
 
 fn get_knowledge_root(gcx: &Arc<ARwLock<GlobalContext>>) -> Result<PathBuf, ScratchError> {
-    let workspace_folders = gcx.blocking_read().documents_state.workspace_folders.clone();
+    let workspace_folders = gcx
+        .blocking_read()
+        .documents_state
+        .workspace_folders
+        .clone();
     let folders = workspace_folders.lock().unwrap();
 
     if folders.is_empty() {
@@ -63,12 +67,9 @@ async fn validate_knowledge_path(
     file_path: &Path,
     workspace_root: &Path,
 ) -> Result<PathBuf, ScratchError> {
-    let canonical = tokio::fs::canonicalize(file_path).await.map_err(|_| {
-        ScratchError::new(
-            StatusCode::NOT_FOUND,
-            "File not found".to_string(),
-        )
-    })?;
+    let canonical = tokio::fs::canonicalize(file_path)
+        .await
+        .map_err(|_| ScratchError::new(StatusCode::NOT_FOUND, "File not found".to_string()))?;
 
     let root_canonical = tokio::fs::canonicalize(workspace_root).await.map_err(|_| {
         ScratchError::new(
@@ -106,10 +107,7 @@ pub async fn handle_v1_knowledge_update_memory(
     })?;
 
     let knowledge_root = get_knowledge_root(&gcx)?;
-    let file_path = validate_knowledge_path(
-        Path::new(&post.file_path),
-        &knowledge_root,
-    ).await?;
+    let file_path = validate_knowledge_path(Path::new(&post.file_path), &knowledge_root).await?;
 
     let existing_text = get_file_text_from_memory_or_disk(gcx.clone(), &file_path)
         .await
@@ -132,16 +130,23 @@ pub async fn handle_v1_knowledge_update_memory(
     frontmatter.updated = Some(Local::now().format("%Y-%m-%d").to_string());
 
     let content_to_write = post.content.unwrap_or_else(|| {
-        existing_text.split("\n\n").skip(1).collect::<Vec<_>>().join("\n\n")
+        existing_text
+            .split("\n\n")
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join("\n\n")
     });
     let new_content = format!("{}\n\n{}", frontmatter.to_yaml(), content_to_write.trim());
 
-    let dir = file_path.parent().ok_or_else(|| {
-        ScratchError::new(
-            StatusCode::BAD_REQUEST,
-            "Invalid file path: no parent directory".to_string(),
-        )
-    })?.to_path_buf();
+    let dir = file_path
+        .parent()
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::BAD_REQUEST,
+                "Invalid file path: no parent directory".to_string(),
+            )
+        })?
+        .to_path_buf();
 
     let file_path_clone = file_path.clone();
     tokio::task::spawn_blocking(move || {
@@ -189,7 +194,11 @@ pub async fn handle_v1_knowledge_update_memory(
             .await;
     }
 
-    gcx.write().await.documents_state.memory_document_map.remove(&file_path);
+    gcx.write()
+        .await
+        .documents_state
+        .memory_document_map
+        .remove(&file_path);
 
     tracing::info!("Updated memory: {}", file_path.display());
 
@@ -218,10 +227,7 @@ pub async fn handle_v1_knowledge_delete_memory(
     })?;
 
     let knowledge_root = get_knowledge_root(&gcx)?;
-    let file_path = validate_knowledge_path(
-        Path::new(&post.file_path),
-        &knowledge_root,
-    ).await?;
+    let file_path = validate_knowledge_path(Path::new(&post.file_path), &knowledge_root).await?;
 
     if post.archive {
         crate::memories::archive_document(gcx.clone(), &file_path)
@@ -234,14 +240,12 @@ pub async fn handle_v1_knowledge_delete_memory(
             })?;
         tracing::info!("Archived memory: {}", file_path.display());
     } else {
-        fs::remove_file(&file_path)
-            .await
-            .map_err(|e| {
-                ScratchError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to delete memory file: {}", e),
-                )
-            })?;
+        fs::remove_file(&file_path).await.map_err(|e| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to delete memory file: {}", e),
+            )
+        })?;
         tracing::info!("Deleted memory: {}", file_path.display());
     }
 
@@ -251,7 +255,11 @@ pub async fn handle_v1_knowledge_delete_memory(
             .await;
     }
 
-    gcx.write().await.documents_state.memory_document_map.remove(&file_path);
+    gcx.write()
+        .await
+        .documents_state
+        .memory_document_map
+        .remove(&file_path);
 
     Ok(Response::builder()
         .status(StatusCode::OK)

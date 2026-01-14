@@ -42,7 +42,9 @@ pub enum ToolChoice {
     None,
     Required,
     #[serde(rename = "function")]
-    Function { name: String },
+    Function {
+        name: String,
+    },
 }
 
 impl Default for ChatPrepareOptions {
@@ -186,7 +188,9 @@ pub async fn prepare_chat_passthrough(
                 ToolChoice::Auto => json!("auto"),
                 ToolChoice::None => json!("none"),
                 ToolChoice::Required => json!("required"),
-                ToolChoice::Function { name } => json!({"type": "function", "function": {"name": name}}),
+                ToolChoice::Function { name } => {
+                    json!({"type": "function", "function": {"name": name}})
+                }
             };
         }
         if let Some(parallel) = options.parallel_tool_calls {
@@ -195,18 +199,18 @@ pub async fn prepare_chat_passthrough(
     }
 
     // 7. History validation and fixing
-    let limited_msgs = fix_and_limit_messages_history(
-        &messages,
-        sampling_parameters,
-    )?;
+    let limited_msgs = fix_and_limit_messages_history(&messages, sampling_parameters)?;
 
     // 8. Strip thinking blocks if thinking is disabled
     let limited_adapted_msgs =
         strip_thinking_blocks_if_disabled(limited_msgs, sampling_parameters, &model_record);
 
     // 9. Convert to OpenAI format
-    let converted_messages =
-        convert_messages_to_openai_format(limited_adapted_msgs.clone(), style, &model_record.base.id);
+    let converted_messages = convert_messages_to_openai_format(
+        limited_adapted_msgs.clone(),
+        style,
+        &model_record.base.id,
+    );
 
     big_json["messages"] = json!(converted_messages);
 

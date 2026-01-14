@@ -71,7 +71,10 @@ impl Tool for ToolTree {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, code_workdir) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.global_context.clone(), ccx_lock.code_workdir.clone())
+            (
+                ccx_lock.global_context.clone(),
+                ccx_lock.code_workdir.clone(),
+            )
         };
         let paths_from_anywhere = paths_from_anywhere(gcx.clone()).await;
 
@@ -101,7 +104,8 @@ impl Tool for ToolTree {
                     return Err(format!("⚠️ '{}' is a file, not a directory. 💡 Use cat('{}') to read it, or tree() without path for project root", path, path));
                 }
 
-                let project_dirs = get_project_dirs_with_code_workdir(gcx.clone(), &code_workdir).await;
+                let project_dirs =
+                    get_project_dirs_with_code_workdir(gcx.clone(), &code_workdir).await;
                 let candidate = return_one_candidate_or_a_good_error(
                     gcx.clone(),
                     &path,
@@ -113,8 +117,9 @@ impl Tool for ToolTree {
                 let true_path = crate::files_correction::canonical_path(candidate);
 
                 let all_project_dirs = get_project_dirs(gcx.clone()).await;
-                let is_within_project_dirs = all_project_dirs.iter().any(|p| true_path.starts_with(&p))
-                    || project_dirs.iter().any(|p| true_path.starts_with(&p));
+                let is_within_project_dirs =
+                    all_project_dirs.iter().any(|p| true_path.starts_with(&p))
+                        || project_dirs.iter().any(|p| true_path.starts_with(&p));
                 if !is_within_project_dirs && !gcx.read().await.cmdline.inside_container {
                     return Err(format!("⚠️ '{}' is outside project directories. 💡 Use tree() without path to see project root", path));
                 }

@@ -321,7 +321,6 @@ instead of raw data. Clients must access response.data for the payload.
 - The subject should complete: "If applied, this commit will <description>"
 - Don't just paraphrase the user - analyze the diff to add specificity"#;
 
-
 pub fn remove_fencing(message: &String) -> Vec<String> {
     let trimmed_message = message.trim();
     if !trimmed_message.contains("```") {
@@ -455,7 +454,8 @@ pub async fn generate_commit_message_by_diff(
         .await
         .map_err(|e| format!("Error: {}", e))?;
 
-    let commit_message = result.messages
+    let commit_message = result
+        .messages
         .last()
         .and_then(|last_m| match &last_m.content {
             ChatContent::SimpleText(text) => Some(text.clone()),

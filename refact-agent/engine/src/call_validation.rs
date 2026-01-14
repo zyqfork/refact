@@ -321,9 +321,7 @@ pub enum ChatMode {
 impl ChatMode {
     pub fn is_agentic(self) -> bool {
         match self {
-            ChatMode::AGENT
-            | ChatMode::TASK_PLANNER
-            | ChatMode::TASK_AGENT => true,
+            ChatMode::AGENT | ChatMode::TASK_PLANNER | ChatMode::TASK_AGENT => true,
             ChatMode::NO_TOOLS
             | ChatMode::EXPLORE
             | ChatMode::CONFIGURE

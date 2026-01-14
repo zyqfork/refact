@@ -290,7 +290,8 @@ pub struct GlobalContext {
     pub git_operations_abort_flag: Arc<AtomicBool>,
     pub app_searchable_id: String,
     pub trajectory_events_tx: Option<tokio::sync::broadcast::Sender<crate::chat::TrajectoryEvent>>,
-    pub task_events_tx: Option<tokio::sync::broadcast::Sender<crate::tasks::events::TaskEventEnvelope>>,
+    pub task_events_tx:
+        Option<tokio::sync::broadcast::Sender<crate::tasks::events::TaskEventEnvelope>>,
     pub task_events_seq: Option<Arc<std::sync::atomic::AtomicU64>>,
     pub chat_sessions: crate::chat::SessionsMap,
     pub voice_service: SharedVoiceService,

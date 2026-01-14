@@ -133,7 +133,10 @@ impl Tool for ToolUndoTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
         let (_, _, chunks, _) = tool_undo_text_doc_exec(gcx, args, &code_workdir).await?;
         Ok((
@@ -155,7 +158,10 @@ impl Tool for ToolUndoTextDoc {
     ) -> Result<MatchConfirmDeny, String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
         let can_exec = parse_args(gcx, args, &code_workdir).await.is_ok();
         if !can_exec {

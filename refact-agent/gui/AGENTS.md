@@ -1,7 +1,7 @@
 # Refact Agent GUI - Developer Guide
 
-**Last Updated**: December 2024  
-**Version**: 2.0.10-alpha.4  
+**Last Updated**: January 2025
+**Version**: 2.0.10-alpha.3
 **Repository**: https://github.com/smallcloudai/refact/tree/main/refact-agent/gui
 
 ---
@@ -119,7 +119,7 @@ gui/
 │   │   ├── ChatForm/      # Input form + controls
 │   │   ├── Sidebar/       # Navigation
 │   │   └── ...
-│   ├── hooks/             # Custom React hooks (60+)
+│   ├── hooks/             # Custom React hooks (55+)
 │   ├── services/          # API definitions
 │   │   ├── refact/        # LSP server APIs (RTK Query)
 │   │   └── smallcloud/    # Cloud auth APIs
@@ -135,19 +135,32 @@ gui/
 
 ### Data Flow Patterns
 
-**1. User Action → State Update → UI Re-render**
+**1. Command/Event Architecture (Chat)**
 
 ```
 User clicks "Send"
-  → dispatch(chatAskQuestionThunk)
-  → sendChat() API call
-  → streaming chunks arrive
-  → dispatch(chatResponse) per chunk
-  → reducer updates state.chat.thread.messages
+  → useChatActions().submit()
+  → POST /v1/chats/{chatId}/commands
+  → Backend processes, starts streaming
+  → SSE events arrive via subscription
+  → dispatch(applyChatEvent) per event
+  → reducer updates state.chat.threads[id]
   → React re-renders ChatContent
 ```
 
-**2. IDE Integration (postMessage)**
+**2. SSE Subscription Flow**
+
+```
+useAllChatsSubscription()
+  → subscribeToChatEvents() for each open thread
+  → GET /v1/chats/subscribe?chat_id={id}
+  → Parse SSE: "data: {...}\n\n"
+  → Validate sequence numbers
+  → dispatch(applyChatEvent)
+  → Gap detected? → Reconnect for fresh snapshot
+```
+
+**3. IDE Integration (postMessage)**
 
 ```
 IDE Extension ⇄ window.postMessage ⇄ GUI (iframe)
@@ -157,14 +170,16 @@ IDE Extension ⇄ window.postMessage ⇄ GUI (iframe)
     │←──── Commands (open file, paste) ───┤
 ```
 
-**3. Tool Calling Flow**
+**4. Tool Calling Flow**
 
 ```
 AI suggests tool_call
-  → Confirmation popup (if not automatic)
+  → pause_required SSE event
+  → Confirmation popup shown
   → User approves
-  → Tool executed (LSP or IDE)
-  → Result message inserted
+  → POST /v1/chats/{chatId}/commands (tool_result)
+  → Backend executes tool
+  → Result via SSE events
   → AI continues with result
 ```
 
@@ -363,247 +378,248 @@ gui/
 
 ### Overview
 
-The chat system uses **Server-Sent Events (SSE)** over HTTP fetch streams for real-time AI responses.
+The chat system uses a **Command-based SSE architecture** where:
+
+- **Commands** are sent via `POST /v1/chats/{chatId}/commands`
+- **Events** are received via SSE subscription to `/v1/chats/subscribe?chat_id={chatId}`
+
+This is a **push-based, event-driven model** where the backend maintains chat state and pushes updates to all connected clients.
 
 ### Complete Flow Timeline
 
 ```
 1. User types message & clicks Send
    ↓
-2. dispatch(chatAskQuestionThunk({messages, chatId, mode}))
-   → src/features/Chat/Thread/actions.ts:335
+2. useChatActions().submit(question)
+   → src/hooks/useChatActions.ts
    ↓
-3. formatMessagesForLsp(messages)
-   → Converts internal format to LSP format
-   → Filters out UI-only fields
+3. sendUserMessage(chatId, content, port, apiKey, priority)
+   → src/services/refact/chatCommands.ts
    ↓
-4. sendChat({messages, model, stream: true, abortSignal, ...})
-   → src/services/refact/chat.ts:146
-   → POST http://127.0.0.1:8001/v1/chat
-   → Body: {messages, model, stream: true, meta: {chat_id, chat_mode}}
+4. POST http://127.0.0.1:8001/v1/chats/{chatId}/commands
+   → Body: {type: "user_message", content, client_request_id}
    ↓
-5. response.body.getReader() → ReadableStream<Uint8Array>
+5. Backend processes command, starts streaming
    ↓
-6. consumeStream(reader, signal, onAbort, onChunk)
-   → src/features/Chat/Thread/utils.ts:886
-   → Decodes SSE format: "data: {json}\n\n"
+6. SSE subscription receives events
+   → subscribeToChatEvents() in chatSubscription.ts
+   → Parses SSE format: "data: {json}\n\n"
    ↓
-7. For each chunk: onChunk(json)
-   → dispatch(chatResponse({...json, id: chatId}))
+7. For each event: dispatch(applyChatEvent(event))
+   → src/features/Chat/Thread/actions.ts
    ↓
-8. Reducer: case chatResponse (reducer.ts:207)
-   → formatChatResponse(state.thread.messages, payload)
-   → Updates messages array immutably
-   → Sets streaming: true, waiting_for_response: false
+8. Reducer handles event types (reducer.ts)
+   → snapshot: Full state replacement
+   → stream_delta: Apply incremental updates via applyDeltaOps()
+   → stream_finished: Mark streaming complete
+   → message_added/updated/removed: Update messages
    ↓
 9. ChatContent component re-renders with updated messages
-   → Renders incrementally as content streams
+   → Renders incrementally as deltas arrive
    ↓
-10. Stream ends: "data: [DONE]" or error
-    → dispatch(doneStreaming({id: chatId}))
-    → postProcessMessagesAfterStreaming()
-    → streaming: false, read: true
+10. Stream ends: stream_finished event
+    → streaming: false, usage data available
 ```
 
-### SSE Stream Format
+### SSE Event Types
 
-**Protocol**: Server-Sent Events via ReadableStream
+**Protocol**: Server-Sent Events via fetch ReadableStream
 
 ```
-data: {"choices":[{"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}\n\n
-data: {"choices":[{"delta":{"content":" world"},"finish_reason":null}]}\n\n
-data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"total_tokens":50}}\n\n
-data: [DONE]\n\n
+data: {"type":"snapshot","seq":0,"thread":{...},"runtime":{...},"messages":[...]}\n\n
+data: {"type":"stream_started","seq":1,"msg_id":5}\n\n
+data: {"type":"stream_delta","seq":2,"ops":[{"op":"append_content","value":"Hello"}]}\n\n
+data: {"type":"stream_finished","seq":3,"usage":{"total_tokens":50}}\n\n
 ```
 
-**Special markers:**
+**Key Event Types:**
 
-- `data: [DONE]` - Stream complete
-- `data: [ERROR]` - Generic error
-- `data: {"detail":"..."}` - Structured error (LiteLLM format)
-- `data: {"error":{"message":"..."}}` - LiteLLM streaming error
+| Event Type          | Purpose                                            |
+| ------------------- | -------------------------------------------------- |
+| `snapshot`          | Full state sync (sent on connect, resets seq to 0) |
+| `stream_started`    | AI response beginning                              |
+| `stream_delta`      | Incremental content updates (DeltaOp[])            |
+| `stream_finished`   | AI response complete with usage stats              |
+| `message_added`     | New message in thread                              |
+| `message_updated`   | Message content changed                            |
+| `message_removed`   | Message deleted                                    |
+| `thread_updated`    | Thread metadata changed (title, params)            |
+| `runtime_updated`   | Runtime state changed (streaming, waiting)         |
+| `pause_required`    | Tool confirmation needed                           |
+| `pause_cleared`     | Confirmation resolved                              |
+| `ide_tool_required` | IDE tool execution needed                          |
+| `ack`               | Command acknowledgment                             |
 
-### The `consumeStream` Function
+### The `subscribeToChatEvents` Function
 
-**Location**: `src/features/Chat/Thread/utils.ts:886`
+**Location**: `src/services/refact/chatSubscription.ts`
 
 **Key features:**
 
-1. **Malformed chunk handling** - If buffer doesn't end with `\n\n`, combines with next chunk
-2. **Error detection** - Checks for `{"detail":...}` at byte level before parsing
-3. **Robust parsing** - Falls back to buffer combination on JSON parse errors
-4. **Abort handling** - Respects AbortSignal for user cancellation
+1. **Sequence validation** - Tracks `seq` numbers, reconnects on gaps
+2. **Robust parsing** - Handles chunked JSON, malformed data
+3. **Auto-reconnect** - Reconnects on errors with backoff
+4. **Callback-based** - Dispatches events via callbacks to Redux
 
 ```typescript
-export function consumeStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal,
-  onAbort: () => void,
-  onChunk: (chunk: Record<string, unknown>) => void,
-) {
-  const decoder = new TextDecoder();
-
-  function pump({
-    done,
-    value,
-  }: ReadableStreamReadResult<Uint8Array>): Promise<void> {
-    if (done) return Promise.resolve();
-    if (signal.aborted) {
-      onAbort();
-      return Promise.resolve();
-    }
-
-    // Decode bytes to string
-    const streamAsString = decoder.decode(value);
-
-    // Split by SSE delimiter
-    const deltas = streamAsString.split("\n\n").filter((str) => str.length > 0);
-
-    for (const delta of deltas) {
-      if (!delta.startsWith("data: ")) continue;
-
-      const maybeJsonString = delta.substring(6); // Remove "data: "
-
-      if (maybeJsonString === "[DONE]") return Promise.resolve();
-      if (maybeJsonString === "[ERROR]")
-        return Promise.reject(new Error("error from lsp"));
-
-      // Parse JSON
-      const json = parseOrElse<Record<string, unknown>>(maybeJsonString, {});
-      onChunk(json);
-    }
-
-    return reader.read().then(pump); // Recursive read
-  }
-
-  return reader.read().then(pump);
+export function subscribeToChatEvents(
+  chatId: string,
+  port: number,
+  callbacks: ChatSubscriptionCallbacks,
+  apiKey?: string,
+): () => void {
+  // Returns unsubscribe function
+  // Connects to /v1/chats/subscribe?chat_id={chatId}
+  // Parses SSE stream and calls callbacks.onEvent()
 }
 ```
 
-### The `formatChatResponse` Function
+### The `applyDeltaOps` Function
 
-**Location**: `src/features/Chat/Thread/utils.ts:331-650` (320 lines!)
+**Location**: `src/services/refact/chatSubscription.ts`
 
-**Purpose**: Merge streaming delta into existing messages array
+**Purpose**: Apply streaming delta operations to a message
 
-**Response Types Handled:**
+**Delta Operations:**
 
-| Type                   | Detection              | Action                                       |
-| ---------------------- | ---------------------- | -------------------------------------------- |
-| `UserResponse`         | `role: "user"`         | Replace last user message (compression hint) |
-| `ContextFileResponse`  | `role: "context_file"` | Append context files                         |
-| `SubchatResponse`      | Has `subchat_id`       | Update tool call with subchat ID             |
-| `ToolResponse`         | `role: "tool"`         | Append tool result message                   |
-| `DiffResponse`         | `role: "diff"`         | Append diff chunks                           |
-| `PlainTextResponse`    | `role: "plain_text"`   | Append plain text message                    |
-| `SystemResponse`       | `role: "system"`       | **Prepend** to messages (goes first)         |
-| **ChatResponseChoice** | Has `choices[]`        | **Merge delta into assistant message** ⭐    |
-
-**Delta Types (in `choices[0].delta`):**
+| Operation           | Purpose                     |
+| ------------------- | --------------------------- |
+| `append_content`    | Append to message content   |
+| `append_reasoning`  | Append to reasoning_content |
+| `set_tool_calls`    | Set/update tool_calls array |
+| `add_citation`      | Add web search citation     |
+| `set_usage`         | Set token usage stats       |
+| `set_finish_reason` | Set completion reason       |
 
 ```typescript
-delta: {
-  role?: "assistant",
-  content?: string,                    // Main response text
-  reasoning_content?: string,          // Separate reasoning field
-  tool_calls?: ToolCall[],             // Function calls
-  thinking_blocks?: ThinkingBlock[],   // COT blocks
-  provider_specific_fields?: {
-    citation?: WebSearchCitation       // Web search results
-  }
+export function applyDeltaOps(
+  message: ChatMessage,
+  ops: DeltaOp[],
+): ChatMessage {
+  // Immutably applies each operation to the message
+  // Returns new message object
 }
 ```
 
-**Merging Logic:**
+### Command Types
 
-1. **Content delta** - Concatenate strings: `prevContent + delta.content`
-2. **Tool calls delta** - `mergeToolCalls(prev, add)`:
-   - If new tool (has `function.name`), append
-   - If continuation (only `arguments`), concat to last tool's arguments
-   - Handle missing IDs (generate UUID)
-   - Handle broken indexes (Qwen3/sglang quirks)
-3. **Thinking blocks** - `mergeThinkingBlocks(prev, add)`:
-   - Always merge into first block
-   - Concat `thinking` and `signature` strings
-4. **Citations** - Append to array (web search links)
-5. **Usage/Metering** - Take highest values (later chunks have final counts)
+**Sent via**: `POST /v1/chats/{chatId}/commands`
 
-**Post-processing** (`postProcessMessagesAfterStreaming`):
+| Command Type      | Purpose                       |
+| ----------------- | ----------------------------- |
+| `user_message`    | Send user message             |
+| `abort`           | Stop current generation       |
+| `regenerate`      | Regenerate last response      |
+| `update_message`  | Edit existing message         |
+| `remove_message`  | Delete message                |
+| `tool_result`     | Provide tool execution result |
+| `ide_tool_result` | IDE tool execution result     |
+| `set_params`      | Update thread parameters      |
 
-- Deduplicate tool calls
-- Filter out server-executed tools (`srvtoolu_*` prefix)
-- Clean up incomplete tool calls
+### SSE Subscription Hooks
+
+**`useChatSubscription(chatId, options)`** - Single chat subscription
+
+- Manages connection lifecycle
+- Handles reconnection on errors/gaps
+- Returns: `{status, error, connect, disconnect, reconnect}`
+
+**`useAllChatsSubscription()`** - Multi-tab subscription manager
+
+- Subscribes to all open threads
+- Dynamic subscribe/unsubscribe on tab changes
+- Per-thread sequence tracking
+
+**`useEnsureSubscriptionConnected()`** - Connection guarantee
+
+- Ensures snapshot received before actions
+- Polls for connection with timeout
+- Returns: `{ensureConnected, isConnected}`
 
 ### State Transitions
 
 ```typescript
-// Initial state
+// Initial state (per-thread in threads[id])
 {
   streaming: false,
   waiting_for_response: false,
   prevent_send: false,
+  snapshot_received: false,
   thread: { messages: [] }
 }
 
-// After submit
-dispatch(chatAskedQuestion) →
+// After SSE snapshot event
+applyChatEvent({type: "snapshot"}) →
 {
-  waiting_for_response: true,  // Blocks duplicate sends
-  prevent_send: false
+  snapshot_received: true,      // UI can now render
+  thread: { messages: [...] }   // Full state from backend
 }
 
-// First chunk arrives
-dispatch(chatResponse) →
+// After user sends message
+sendUserMessage() →
+{
+  waiting_for_response: true,   // Blocks duplicate sends
+}
+
+// stream_started event
+applyChatEvent({type: "stream_started"}) →
 {
   streaming: true,              // UI shows streaming indicator
   waiting_for_response: false,
-  thread: { messages: [{role: "assistant", content: "H"}] }
 }
 
-// More chunks
-dispatch(chatResponse) x N →
+// stream_delta events
+applyChatEvent({type: "stream_delta", ops: [...]}) →
 {
   streaming: true,
-  thread: { messages: [{role: "assistant", content: "Hello world..."}] }
+  // applyDeltaOps() updates message content incrementally
 }
 
-// Stream completes
-dispatch(doneStreaming) →
+// stream_finished event
+applyChatEvent({type: "stream_finished"}) →
 {
   streaming: false,
   waiting_for_response: false,
-  prevent_send: false,         // Allow next message
-  thread: { read: true, messages: [...] }  // Mark as read
+  prevent_send: false,          // Allow next message
 }
 
 // Error
-dispatch(chatError) →
+applyChatEvent({type: "ack", success: false, error: "..."}) →
 {
   streaming: false,
   waiting_for_response: false,
-  prevent_send: true,          // Block sends until error cleared
   error: "Error message"
 }
 ```
 
-### Tool Loop Detection
+### Sequence Number Validation
 
-**Problem**: AI might call same tool repeatedly with same args (infinite loop)
+**Problem**: SSE events can be lost or arrive out of order
 
-**Solution**: `checkForToolLoop(messages)` (actions.ts:293)
+**Solution**: Every event has a `seq` number
 
-- Scans recent assistant+tool messages
-- Detects duplicate tool calls with identical results
-- Sets `only_deterministic_messages: true` to stop streaming
-
-### Queued Messages (Priority System)
-
-**Feature**: User can send multiple messages while streaming
+- `snapshot` resets sequence to 0
+- Each subsequent event increments by 1
+- Gap detected → immediate reconnect for fresh snapshot
 
 ```typescript
-type QueuedUserMessage = {
+// In useChatSubscription
+if (event.seq > lastSeq + 1) {
+  // Gap detected - reconnect
+  reconnect();
+  return;
+}
+lastSeq = event.seq;
+```
+
+### Queued Items (Priority System)
+
+**Feature**: User can queue commands while streaming
+
+```typescript
+type QueuedItem = {
   id: string;
-  message: UserMessage;
+  command: ChatCommandBase;
   createdAt: number;
   priority?: boolean; // Send immediately after current stream ends
 };
@@ -612,11 +628,11 @@ type QueuedUserMessage = {
 // Priority queue: sends right after streaming (next turn)
 ```
 
-**Hook**: `useAutoSend()` in `useSendChatRequest.ts:362-477`
+**State**: `queued_items` in `ChatThreadRuntime`
 
-- Monitors `queuedMessages`, `streaming`, `hasUnsentTools`
-- Auto-flushes when appropriate conditions met
-- Priority messages bypass tool completion wait
+- Commands queued when `streaming` or `waiting_for_response`
+- Auto-flushed when conditions allow
+- Priority items bypass tool completion wait
 
 ---
 
@@ -665,17 +681,63 @@ export const store = configureStore({
 
 ### Key Slices
 
-| Slice            | Purpose                | Location                                         | State Keys                                                                                |
-| ---------------- | ---------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| **chat**         | Active thread + cache  | `features/Chat/Thread/reducer.ts`                | `thread`, `streaming`, `waiting_for_response`, `prevent_send`, `cache`, `queued_messages` |
-| **history**      | Chat history (max 100) | `features/History/historySlice.ts`               | `chats`, `selectedId`                                                                     |
-| **config**       | Global settings        | `features/Config/configSlice.ts`                 | `host`, `lspPort`, `apiKey`, `features`, `themeProps`                                     |
-| **pages**        | Navigation stack       | `features/Pages/pagesSlice.ts`                   | `pages` (array of page objects)                                                           |
-| **activeFile**   | IDE context            | `features/Chat/activeFile.ts`                    | `file_name`, `can_paste`, `cursor`                                                        |
-| **checkpoints**  | Rollback UI state      | `features/Checkpoints/checkpointsSlice.ts`       | `previewData`, `restoreInProgress`                                                        |
-| **confirmation** | Tool pause reasons     | `features/ToolConfirmation/confirmationSlice.ts` | `pauseReasons`, `wasInteracted`, `confirmationStatus`                                     |
-| **errors**       | Error messages         | `features/Errors/errorsSlice.ts`                 | `errors` (array)                                                                          |
-| **teams**        | Active team/group      | `features/Teams/teamsSlice.ts`                   | `activeGroup`                                                                             |
+| Slice            | Purpose                 | Location                                     | State Keys                                                                                                                |
+| ---------------- | ----------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **chat**         | Multi-thread chat state | `features/Chat/Thread/reducer.ts`            | `current_thread_id`, `open_thread_ids`, `threads`, `system_prompt`, `tool_use`, `sse_refresh_requested`, `stream_version` |
+| **history**      | Chat history (max 100)  | `features/History/historySlice.ts`           | `chats`, `selectedId`                                                                                                     |
+| **config**       | Global settings         | `features/Config/configSlice.ts`             | `host`, `lspPort`, `apiKey`, `features`, `themeProps`                                                                     |
+| **pages**        | Navigation stack        | `features/Pages/pagesSlice.ts`               | `pages` (array of page objects)                                                                                           |
+| **activeFile**   | IDE context             | `features/Chat/activeFile.ts`                | `file_name`, `can_paste`, `cursor`                                                                                        |
+| **checkpoints**  | Rollback UI state       | `features/Checkpoints/checkpointsSlice.ts`   | `previewData`, `restoreInProgress`                                                                                        |
+| **teams**        | Active team/group       | `features/Teams/teamsSlice.ts`               | `activeGroup`                                                                                                             |
+| **tasks**        | Task management         | `features/Tasks/tasksSlice.ts`               | `openTasks`, task metadata                                                                                                |
+| **integrations** | Integration state       | `features/Integrations/integrationsSlice.ts` | Integration configuration                                                                                                 |
+
+### Chat State Structure (Multi-Thread)
+
+The chat slice now uses a **multi-thread architecture**:
+
+```typescript
+interface Chat {
+  // Navigation
+  current_thread_id: string;
+  open_thread_ids: string[]; // Visible tabs
+  threads: Record<string, ChatThreadRuntime | undefined>;
+
+  // Global settings
+  system_prompt: SystemPrompts;
+  tool_use: ToolUse; // "quick" | "explore" | "agent"
+  checkpoints_enabled?: boolean;
+
+  // SSE control
+  sse_refresh_requested: string | null; // Triggers reconnect
+  stream_version: number; // Forces re-renders
+}
+
+interface ChatThreadRuntime {
+  thread: ChatThread; // Persistent data
+  streaming: boolean; // Per-thread streaming state
+  waiting_for_response: boolean;
+  prevent_send: boolean;
+  error: string | null;
+  queued_items: QueuedItem[];
+  attached_images: ImageFile[];
+  confirmation: ThreadConfirmation; // Tool pause state
+  snapshot_received: boolean; // Backend sync complete
+}
+
+interface ChatThread {
+  id: string;
+  messages: ChatMessages;
+  model: string;
+  title?: string;
+  tool_use?: ToolUse;
+  mode?: LspChatMode;
+  is_task_chat?: boolean; // Task workspace flag
+  task_meta?: TaskMeta;
+  // ... other metadata
+}
+```
 
 ### RTK Query APIs
 
@@ -696,44 +758,50 @@ export const store = configureStore({
 | **linksApi**        | `/v1/links`                 | Smart links        | `getLinks`                           |
 | **smallCloudApi**   | `https://www.smallcloud.ai` | Auth/user          | `getUser`, `getUserSurvey` (GraphQL) |
 
-**Note**: Chat is NOT an RTK Query API - uses manual `fetch` with custom streaming logic.
+**Note**: Chat uses a **Commands API** (`/v1/chats/{chatId}/commands`) for sending and **SSE subscription** (`/v1/chats/subscribe`) for receiving - not RTK Query.
 
 ### Selectors Pattern
 
-**Always use selectors** (don't access `state.chat.thread.messages` directly)
+**Always use selectors** (don't access `state.chat.threads[id]` directly)
 
 ```typescript
 // src/features/Chat/Thread/selectors.ts
 
-export const selectThread = (state: RootState) => state.chat.thread;
-export const selectMessages = (state: RootState) => state.chat.thread.messages;
-export const selectIsStreaming = (state: RootState) => state.chat.streaming;
-export const selectChatId = (state: RootState) => state.chat.thread.id;
+// Current thread selectors
+export const selectCurrentThreadId = (state: RootState) =>
+  state.chat.current_thread_id;
+export const selectCurrentThread = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread;
+export const selectMessages = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread.messages ?? [];
+export const selectIsStreaming = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.streaming ?? false;
+export const selectSnapshotReceived = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.snapshot_received ?? false;
 
-// Memoized selectors with Reselect
-export const selectLastAssistantMessage = createSelector(
-  [selectMessages],
-  (messages) => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (isAssistantMessage(messages[i])) return messages[i];
-    }
-    return null;
-  },
+// Multi-tab selectors
+export const selectOpenThreadIds = (state: RootState) =>
+  state.chat.open_thread_ids;
+export const selectTabsDisplayData = createSelector(
+  [selectOpenThreadIds, (state: RootState) => state.chat.threads],
+  (ids, threads) =>
+    ids.map((id) => ({
+      id,
+      title: threads[id]?.thread.title,
+      streaming: threads[id]?.streaming,
+      waiting: threads[id]?.waiting_for_response,
+      read: threads[id]?.thread.read,
+    })),
 );
 
-// Complex selectors
-export const selectHasUncalledTools = createSelector(
-  [selectMessages],
-  (messages) => {
-    const lastMsg = messages[messages.length - 1];
-    if (!isAssistantMessage(lastMsg)) return false;
-    if (!lastMsg.tool_calls) return false;
-    return lastMsg.tool_calls.some((tc) => !isServerExecutedTool(tc.id));
-  },
-);
+// Per-thread selectors (by ID)
+export const selectThreadById = (state: RootState, id: string) =>
+  state.chat.threads[id];
+export const selectIsStreamingById = (state: RootState, id: string) =>
+  state.chat.threads[id]?.streaming ?? false;
 ```
 
-**30+ selectors** in `selectors.ts` - use them for consistency!
+**40+ selectors** in `selectors.ts` - use them for consistency!
 
 ### Redux Persist
 
@@ -1577,58 +1645,78 @@ export const { useGetCapsQuery, useLazyGetCapsQuery } = capsApi;
 - **Auto-generates hooks**: `useGetCapsQuery`, `useLazyGetCapsQuery`
 - **Caching** by default
 
-### Chat API (Special Case)
+### Chat Commands API
 
-**Why not RTK Query?** Streaming + custom chunking logic
+**Location**: `src/services/refact/chatCommands.ts`
 
-**Location**: `src/services/refact/chat.ts`
+**Why not RTK Query?** Command-based architecture with SSE responses
 
 ```typescript
-export async function sendChat({
-  messages,
-  model,
-  stream: true,
-  abortSignal,
-  chatId,
-  port = 8001,
-  apiKey,
-  mode,
-  // ...
-}: SendChatArgs): Promise<Response> {
+export async function sendChatCommand(
+  chatId: string,
+  port: number,
+  apiKey: string | undefined,
+  command: ChatCommandBase,
+  priority?: boolean,
+): Promise<Response> {
   const body = JSON.stringify({
-    messages,
-    model,
-    stream: true,
-    meta: {
-      chat_id: chatId,
-      chat_mode: mode ?? 'EXPLORE',
-      // ...
-    }
-  })
+    ...command,
+    client_request_id: crypto.randomUUID(),
+    priority,
+  });
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-  }
-
-  const url = `http://127.0.0.1:${port}/v1/chat`
-
-  return fetch(url, {
-    method: 'POST',
-    headers,
+  return fetch(`http://127.0.0.1:${port}/v1/chats/${chatId}/commands`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    },
     body,
-    signal: abortSignal,
-    credentials: 'same-origin'
-  })
+  });
+}
+
+// Convenience functions
+export function sendUserMessage(chatId, content, port, apiKey, priority) {
+  return sendChatCommand(
+    chatId,
+    port,
+    apiKey,
+    {
+      type: "user_message",
+      content,
+    },
+    priority,
+  );
+}
+
+export function sendAbort(chatId, port, apiKey) {
+  return sendChatCommand(chatId, port, apiKey, { type: "abort" });
 }
 ```
 
-**Response format** (SSE):
+### Chat Subscription API
 
-```
-data: {"choices":[{"delta":{"role":"assistant","content":"Hi"},...}]}\n\n
-data: {"choices":[{"delta":{"content":" there"},...}]}\n\n
-data: [DONE]\n\n
+**Location**: `src/services/refact/chatSubscription.ts`
+
+```typescript
+export function subscribeToChatEvents(
+  chatId: string,
+  port: number,
+  callbacks: ChatSubscriptionCallbacks,
+  apiKey?: string,
+): () => void {
+  // Connects to SSE endpoint
+  const url = `http://127.0.0.1:${port}/v1/chats/subscribe?chat_id=${chatId}`;
+
+  // Returns unsubscribe function
+  // Parses SSE stream and dispatches events via callbacks
+}
+
+export interface ChatSubscriptionCallbacks {
+  onEvent: (event: ChatEventEnvelope) => void;
+  onError: (error: Error) => void;
+  onClose: () => void;
+}
 ```
 
 ### SmallCloud API (GraphQL)
@@ -2428,21 +2516,23 @@ type ToolStatus =
 
 Each chat thread has **two layers of state**:
 
-| Layer           | Type                | Storage                         | Contents                                                         |
-| --------------- | ------------------- | ------------------------------- | ---------------------------------------------------------------- |
-| **Thread data** | `ChatThread`        | `state.chat.threads[id].thread` | title, messages, model, mode, checkpoints                        |
-| **Runtime**     | `ChatThreadRuntime` | `state.chat.threads[id]`        | streaming, waiting, queue, confirmation, errors, attached_images |
+| Layer           | Type                | Storage                         | Contents                                                                            |
+| --------------- | ------------------- | ------------------------------- | ----------------------------------------------------------------------------------- |
+| **Thread data** | `ChatThread`        | `state.chat.threads[id].thread` | title, messages, model, mode, checkpoints, task_meta                                |
+| **Runtime**     | `ChatThreadRuntime` | `state.chat.threads[id]`        | streaming, waiting, queue, confirmation, errors, attached_images, snapshot_received |
 
 **Visibility modes**:
 
 - **Open tab**: `id ∈ state.chat.open_thread_ids` (visible in toolbar)
 - **Background runtime**: in `state.chat.threads` but not in `open_thread_ids`
+- **Task chat**: `is_task_chat: true` - excluded from regular tabs, managed separately
 
 **Key files**:
 
 - Types: `src/features/Chat/Thread/types.ts`
 - Reducers: `src/features/Chat/Thread/reducer.ts`
 - Selectors: `src/features/Chat/Thread/selectors.ts`
+- Actions: `src/features/Chat/Thread/actions.ts`
 
 ### Per-Thread State Machine
 
@@ -2486,68 +2576,68 @@ Each chat thread has **two layers of state**:
 
 ```
 ChatForm.onSubmit
-  → useSendChatRequest.submit()                    [hooks/useSendChatRequest.ts]
-    → if busy: enqueueUserMessage()               [actions.ts → reducer.ts]
-    → else: sendMessages()
-      → setIsWaitingForResponse({id, true})       [reducer.ts]
-      → pre-flight confirmation check             [toolsApi.checkForConfirmation]
-        → if pause: setThreadPauseReasons() + return early
-      → chatAskQuestionThunk()                    [actions.ts]
+  → useChatActions().submit(question)              [hooks/useChatActions.ts]
+    → buildMessageContent(question, images)
+    → sendUserMessage(chatId, content, port, apiKey, priority)
+                                                   [services/refact/chatCommands.ts]
+    → POST /v1/chats/{chatId}/commands
+      → Body: {type: "user_message", content, client_request_id}
 ```
 
-#### 2. Streaming Response
+#### 2. SSE Event Processing
 
 ```
-chatAskQuestionThunk                              [actions.ts]
-  → sendChat(stream: true)                        [services/refact/chat.ts]
-  → for each chunk: dispatch(chatResponse())     [reducer.ts]
-    → streaming = true
-    → waiting_for_response = false
-    → merge chunk into messages (formatChatResponse)
-  → finally: dispatch(doneStreaming())           [reducer.ts]
-    → streaming = false
-    → postProcessMessagesAfterStreaming()
+subscribeToChatEvents()                           [services/refact/chatSubscription.ts]
+  → GET /v1/chats/subscribe?chat_id={chatId}
+  → for each SSE event:
+    → dispatch(applyChatEvent(event))             [actions.ts]
+
+applyChatEvent handler                            [reducer.ts]
+  → switch(event.type):
+    → "snapshot": Full state replacement
+    → "stream_started": streaming = true
+    → "stream_delta": applyDeltaOps() to message
+    → "stream_finished": streaming = false, usage available
+    → "message_added/updated/removed": Update messages
+    → "pause_required": Set confirmation state
+    → "runtime_updated": Sync runtime flags
 ```
 
-#### 3. Auto-Continuation (Middleware)
+#### 3. Tool Confirmation Flow
 
 ```
-doneStreaming listener                            [middleware.ts:346-393]
-  → resetThreadImages (if current thread)
-  → skip if: error, prevent_send, already paused
-  → selectHasUncalledToolsById()                 [selectors.ts]
-  → if uncalled tools exist:
-    → checkForConfirmation()                     [toolsApi]
-      → if pause needed:
-        → setThreadPauseReasons()
-        → auto-switch to thread (if background)
-        → return
-      → else:
-        → setIsWaitingForResponse({id, true})
-        → chatAskQuestionThunk() to continue
-```
-
-#### 4. Tool Confirmation Flow
-
-```
-setThreadPauseReasons                             [reducer.ts:567-577]
-  → pause = true
-  → pause_reasons = [...]
-  → confirmationStatus = false (blocks autosend)
+pause_required event                              [reducer.ts]
+  → confirmation.pause = true
+  → confirmation.pause_reasons = [...]
   → streaming = false
   → waiting_for_response = false
 
-Auto-switch listener                              [middleware.ts:593-605]
+Auto-switch listener                              [middleware.ts]
   → if thread ≠ current: switchToThread()
-  → switchToThread adds to open_thread_ids       [reducer.ts:407-415]
+  → switchToThread adds to open_thread_ids
 
-ChatForm renders ToolConfirmation                 [ChatForm.tsx:327-330]
+ChatForm renders ToolConfirmation                 [ChatForm.tsx]
   when confirmation.pause === true
 
-User clicks Confirm → confirmToolUsage()          [useSendChatRequest.ts:303-308]
-  → clearThreadPauseReasons()
-  → setThreadConfirmationStatus(wasInteracted: true)
-  → sendMessages(currentMessages) to continue
+User clicks Confirm                               [useChatActions.ts]
+  → respondToToolConfirmation(toolCallId, allow)
+  → POST /v1/chats/{chatId}/commands
+    → Body: {type: "tool_result", tool_call_id, allow}
+```
+
+#### 4. Background Thread Handling
+
+```
+useAllChatsSubscription()                         [hooks/useAllChatsSubscription.ts]
+  → Subscribes to all open_thread_ids + current_thread_id
+  → Dynamic subscribe/unsubscribe on tab changes
+  → Per-thread sequence tracking
+  → Auto-reconnect on errors/gaps
+
+Background thread needs confirmation:
+  → pause_required event received
+  → middleware auto-switches to that thread
+  → User sees confirmation UI
 ```
 
 ### Background Thread Handling
@@ -2608,12 +2698,27 @@ builder.addCase(restoreChat, (state, action) => {
 });
 ```
 
-### SSE Subscription (Metadata Sync)
+### SSE Subscriptions
 
-Backend sends trajectory updates via Server-Sent Events:
+**Two SSE subscription systems**:
+
+#### 1. Chat Subscription (Per-Thread)
+
+```typescript
+// useChatSubscription.ts / useAllChatsSubscription.ts
+// Connects to: /v1/chats/subscribe?chat_id={chatId}
+// Receives: ChatEventEnvelope (snapshot, stream_delta, etc.)
+// Purpose: Real-time chat state sync
+```
+
+#### 2. Trajectories Subscription (Global)
 
 ```typescript
 // useTrajectoriesSubscription.ts
+// Connects to: /v1/trajectories/subscribe
+// Receives: TrajectoryEvent (deleted, updated, created)
+// Purpose: Chat history sync across sessions
+
 eventSource.onmessage = (event) => {
   const data: TrajectoryEvent = JSON.parse(event.data);
 
@@ -2621,56 +2726,72 @@ eventSource.onmessage = (event) => {
     dispatch(deleteChatById(data.id));
     dispatch(closeThread({ id: data.id, force: true }));
   } else if (data.type === "updated" || data.type === "created") {
-    // Fetch full trajectory and update
-    dispatch(hydrateHistory([trajectory]));
-    // IMPORTANT: Only sync metadata, NOT messages
-    dispatch(
-      updateOpenThread({
-        id: data.id,
-        thread: {
-          title: thread.title,
-          isTitleGenerated: thread.isTitleGenerated,
-          // NO messages - they are local-authoritative
-        },
-      }),
-    );
+    // Fetch full trajectory and update history
+    // Only sync metadata (title, timestamps), NOT messages
   }
 };
 ```
 
-**Critical**: Messages are never synced from SSE to prevent overwriting in-progress conversations.
+**Critical**: Chat messages come from chat subscription, not trajectories. Trajectories only sync metadata.
 
-### useAutoSend Hook
+### Key Chat Hooks
 
-Handles automatic continuation and queue flushing:
+#### useChatActions
+
+Primary hook for chat interactions:
 
 ```typescript
-// useSendChatRequest.ts:351-462
-const stopForToolConfirmation = useMemo(() => {
-  if (isIntegration) return false;
-  if (isPaused) return true; // Hard stop when paused
-  return !wasInteracted && !areToolsConfirmed;
-}, [isIntegration, isPaused, wasInteracted, areToolsConfirmed]);
+// hooks/useChatActions.ts
+const { submit, abort, regenerate, respondToToolConfirmation } = useChatActions();
 
-// Queue flushing
-useEffect(
-  () => {
-    if (queuedMessages.length === 0) return;
-    const nextQueued = queuedMessages[0];
-    const isPriority = nextQueued.priority;
+// Send user message
+submit("Hello AI", priority?: boolean);
 
-    // Priority: flush after streaming ends
-    // Regular: flush only when fully idle (no tools pending)
-    const canFlush = isPriority ? canFlushBase : isFullyIdle;
-    if (!canFlush) return;
+// Abort current generation
+abort();
 
-    dispatch(dequeueUserMessage({ queuedId: nextQueued.id }));
-    void sendMessages([...currentMessages, nextQueued.message]);
-  },
-  [
-    /* deps */
-  ],
-);
+// Regenerate last response
+regenerate();
+
+// Respond to tool confirmation
+respondToToolConfirmation(toolCallId, allow: boolean);
+```
+
+#### useChatSubscription
+
+Manages SSE connection for a single chat:
+
+```typescript
+// hooks/useChatSubscription.ts
+const { status, error, connect, disconnect, reconnect, isConnected } =
+  useChatSubscription(chatId, { autoConnect: true });
+
+// Status: "disconnected" | "connecting" | "connected"
+```
+
+#### useAllChatsSubscription
+
+Manages SSE connections for all open tabs:
+
+```typescript
+// hooks/useAllChatsSubscription.ts
+useAllChatsSubscription(); // Called once at app level
+
+// Automatically subscribes to all open_thread_ids + current_thread_id
+// Handles dynamic subscribe/unsubscribe on tab changes
+```
+
+#### useEnsureSubscriptionConnected
+
+Ensures connection before actions:
+
+```typescript
+// hooks/useEnsureSubscriptionConnected.ts
+const { ensureConnected, isConnected } = useEnsureSubscriptionConnected();
+
+// Wait for snapshot before sending
+await ensureConnected(); // Polls with 5s timeout
+submit("Hello");
 ```
 
 ### Tab UI Indicators
@@ -3243,6 +3364,44 @@ export const STUB_TOOL_CALL = {
 };
 ```
 
+### SSE Protocol Tests
+
+**Comprehensive SSE event testing** (new in this version):
+
+```typescript
+// chatSSEProtocol.test.ts (1400+ lines)
+describe("ChatEvent parsing", () => {
+  test("handles snapshot event", () => {
+    const event = parseSSEEvent('data: {"type":"snapshot","seq":0,...}');
+    expect(event.type).toBe("snapshot");
+  });
+
+  test("handles stream_delta with DeltaOps", () => {
+    const event = parseSSEEvent('data: {"type":"stream_delta","ops":[...]}');
+    // Tests all DeltaOp types: append_content, set_tool_calls, etc.
+  });
+
+  test("validates sequence numbers", () => {
+    // Gap detection, reconnect triggers
+  });
+});
+
+// chatSSEProtocolCornerCases.test.ts (560+ lines)
+describe("SSE edge cases", () => {
+  test("handles chunked JSON across packets", () => {
+    // JSON split across multiple SSE data lines
+  });
+
+  test("handles malformed JSON gracefully", () => {
+    // Error recovery without crash
+  });
+
+  test("handles large payloads", () => {
+    // Memory and parsing efficiency
+  });
+});
+```
+
 ### Example Tests
 
 **Component test**:
@@ -3266,31 +3425,25 @@ describe('ChatForm', () => {
       expect(screen.getByText('Sending...')).toBeInTheDocument()
     })
   })
-
-  test('disables send when empty', () => {
-    render(<ChatForm />)
-    const button = screen.getByRole('button', { name: /send/i })
-    expect(button).toBeDisabled()
-  })
 })
 ```
 
-**Hook test**:
+**SSE subscription test**:
 
 ```typescript
-// useSendChatRequest.test.ts
-import { renderHook, waitFor } from "@testing-library/react";
-import { useSendChatRequest } from "./useSendChatRequest";
+// useChatSubscription.test.tsx
+import { renderHook } from "@testing-library/react";
+import { useChatSubscription } from "./useChatSubscription";
 
-test("submit sends message", async () => {
-  const { result } = renderHook(() => useSendChatRequest());
+test("starts disconnected with null chatId", () => {
+  const { result } = renderHook(() => useChatSubscription(null));
+  expect(result.current.status).toBe("disconnected");
+});
 
-  act(() => {
-    result.current.submit({ question: "Test" });
-  });
-
+test("connects when chatId provided", async () => {
+  const { result } = renderHook(() => useChatSubscription("test-id"));
   await waitFor(() => {
-    expect(result.current.isWaiting).toBe(true);
+    expect(result.current.status).toBe("connected");
   });
 });
 ```
@@ -3432,52 +3585,69 @@ telemetryApi.useSendTelemetryChatEventMutation()
 
 ### Common Issues & Solutions
 
+#### Issue: Messages not appearing
+
+**Triage**:
+
+```typescript
+// Check per-thread state in Redux DevTools:
+const runtime = state.chat.threads[chatId];
+runtime.snapshot_received; // Must be true
+runtime.streaming; // Check if stuck
+runtime.error; // Check for errors
+```
+
+**Fix**:
+
+- If `snapshot_received: false` → SSE not connected, check network
+- Force reconnect: `dispatch(requestSseRefresh({ chatId }))`
+- Check SSE endpoint in Network tab
+
 #### Issue: Messages not sending
 
 **Triage**:
 
 ```typescript
-// Check these selectors in Redux DevTools:
-state.chat.prevent_send; // Should be false
-state.chat.waiting_for_response; // Should be false when idle
-state.chat.streaming; // Should be false when idle
-state.confirmation.pauseReasons; // Should be empty []
+const runtime = state.chat.threads[chatId];
+runtime.prevent_send; // Should be false
+runtime.waiting_for_response; // Should be false when idle
+runtime.streaming; // Should be false when idle
+runtime.confirmation.pause; // Should be false
 ```
 
 **Fix**:
 
-- If `prevent_send: true` → Click "Retry" or start new chat
-- If paused → Check ToolConfirmation popup, confirm or reject
-- If streaming stuck → Reload app
+- If `prevent_send: true` → Start new chat
+- If paused → Check ToolConfirmation popup
+- If streaming stuck → Check for missing `stream_finished` event
 
-#### Issue: Tool confirmation stuck
+#### Issue: SSE connection drops
 
 **Triage**:
 
-```typescript
-state.confirmation.pauseReasons; // What's blocking?
-state.confirmation.wasInteracted; // Did user interact?
-```
+- Check Network tab for SSE endpoint status
+- Look for sequence gap warnings in console
+- Check `useChatSubscription` status in React DevTools
 
 **Fix**:
 
-- Check if IDE sent `ideToolCallResponse`
-- Check middleware listener is running
-- Confirm/reject manually in UI
+- Auto-reconnect should trigger on gaps
+- Manual: `dispatch(requestSseRefresh({ chatId }))`
+- Check LSP server is running
 
 #### Issue: Streaming stopped mid-response
 
 **Triage**:
 
-- Check browser console for errors
-- Check Network tab for aborted requests
-- Check if `doneStreaming` was called prematurely
+- Check for `stream_finished` event in Network tab
+- Check `streaming` flag in Redux state
+- Look for errors in SSE stream
 
 **Fix**:
 
-- LSP server issue (restart LSP)
-- Network interruption (retry)
-- Check abort controller logic
+- Missing `stream_finished` → Backend issue
+- Network interruption → Auto-reconnect should handle
+- Abort triggered → Check abort logic
 
 #### Issue: Dark mode not working
 
@@ -3798,7 +3968,15 @@ state.chat.queued_messages: QueuedUserMessage[]
 
 ### Usage Tracking
 
-**Shows in UI**: Token counts, cost estimates
+**Shows in UI**: Token counts, cost estimates, streaming progress
+
+**Components**:
+
+| Component               | Purpose                                                             |
+| ----------------------- | ------------------------------------------------------------------- |
+| `UsageCounter`          | Main panel with circular progress, coin costs, token breakdown      |
+| `StreamingTokenCounter` | Live output tokens during streaming (estimated via `text.length/4`) |
+| `TokensMapContent`      | Visual breakdown bar chart + category list                          |
 
 **Data sources**:
 
@@ -3817,7 +3995,17 @@ message.metering_*_tokens_n?: number
 message.metering_coins_*?: number
 ```
 
-**Component**: `UsageCounter` - Shows breakdown of token usage
+**Hooks**:
+
+- `useUsageCounter()` - Aggregates usage from assistant messages
+- `useTokenMap()` - Computes token distribution by category
+- `useTotalCostForChat()` - Calculates coin costs
+
+**Visual indicators**:
+
+- Circular progress with % of context used
+- Warning at 70%, critical at 90%
+- Live streaming counter with pulse animation
 
 ### Reasoning Content
 
@@ -3860,14 +4048,24 @@ message.thinking_blocks = [{ thinking: "...", signature: "..." }];
 src/
 ├── app/                 # Redux store, middleware, storage
 ├── components/          # Reusable UI (40+ components)
-├── features/            # Redux slices + feature UIs (25+ features)
-├── hooks/               # Custom hooks (60+)
-├── services/            # API definitions (refact + smallcloud)
-├── events/              # IDE integration types
-├── lib/                 # Library entry + render function
-├── utils/               # Utility functions
-├── __fixtures__/        # Test data (20+ files)
-└── debugConfig.ts       # Debug namespaces
+│   └── UsageCounter/    # Token tracking components (NEW)
+├── features/            # Redux slices + feature UIs
+│   ├── Chat/Thread/     # Multi-thread chat state
+│   ├── Tasks/           # Task management (NEW)
+│   └── Knowledge/       # Memory/knowledge system
+├── hooks/               # Custom hooks (55+)
+│   ├── useChatSubscription.ts      # SSE per-chat
+│   ├── useAllChatsSubscription.ts  # SSE multi-tab
+│   ├── useChatActions.ts           # Chat commands
+│   └── useEnsureSubscriptionConnected.ts
+├── services/refact/     # API definitions
+│   ├── chatCommands.ts  # Commands API
+│   ├── chatSubscription.ts  # SSE subscription
+│   └── ...
+├── __tests__/           # Test files (15+)
+│   ├── chatSSEProtocol.test.ts     # SSE event tests
+│   └── chatSSEProtocolCornerCases.test.ts
+└── __fixtures__/        # Test data (20+ files)
 ```
 
 ### Key Commands
@@ -3892,9 +4090,17 @@ npm run alpha:publish    # Publish to npm
 
 **Redux**:
 
-- Use selectors (don't access state directly)
-- Use RTK Query for APIs
+- Use selectors (don't access `state.chat.threads[id]` directly)
+- Use RTK Query for REST APIs
+- Use Commands API for chat actions
 - Use listeners for cross-cutting concerns
+
+**SSE**:
+
+- Subscribe via `useChatSubscription` or `useAllChatsSubscription`
+- Handle events via `applyChatEvent` action
+- Check `snapshot_received` before rendering
+- Validate sequence numbers for gap detection
 
 **Components**:
 
@@ -3906,7 +4112,7 @@ npm run alpha:publish    # Publish to npm
 
 - Export from `hooks/index.ts`
 - Use `useAppSelector`/`useAppDispatch` wrappers
-- Follow `use` prefix convention
+- Use `useChatActions` for chat operations
 
 **Types**:
 
@@ -3917,21 +4123,28 @@ npm run alpha:publish    # Publish to npm
 ### Critical State Invariants
 
 ```typescript
-// Chat can send if ALL true:
-!state.chat.prevent_send
-!state.chat.waiting_for_response
-!state.chat.streaming
-!selectHasUncalledTools(state)
-state.confirmation.pauseReasons.length === 0
+// Chat can send if ALL true (per-thread):
+const runtime = state.chat.threads[chatId];
+runtime.snapshot_received; // Must have initial state from SSE
+!runtime.streaming;
+!runtime.waiting_for_response;
+!runtime.prevent_send;
+!runtime.error;
+!runtime.confirmation.pause;
 
-// Tool confirmation needed if:
-lastMessage.tool_calls exists
-!wasInteracted
-!(isPatchLike && automatic_patch)
+// Thread is safe to delete when:
+!runtime.streaming &&
+  !runtime.waiting_for_response &&
+  !runtime.confirmation.pause;
+
+// SSE reconnect triggered when:
+event.seq > lastSeq + 1; // Sequence gap detected
+// OR
+state.chat.sse_refresh_requested === chatId; // Manual refresh
 
 // Queue flushes when:
 // Priority: base conditions (no streaming, no waiting)
-// Regular: base + no tools + no pause reasons
+// Regular: base + no pause reasons
 ```
 
 ### Common Gotchas
@@ -3951,23 +4164,40 @@ lastMessage.tool_calls exists
 // Check state in console:
 window.__REDUX_DEVTOOLS_EXTENSION__;
 
-// Force re-render:
-dispatch(newChatAction());
+// Check current thread state:
+const state = store.getState();
+const runtime = state.chat.threads[state.chat.current_thread_id];
+console.log({
+  snapshot_received: runtime?.snapshot_received,
+  streaming: runtime?.streaming,
+  waiting: runtime?.waiting_for_response,
+  pause: runtime?.confirmation.pause,
+});
 
-// Clear pause:
-dispatch(
-  clearPauseReasonsAndHandleToolsStatus({
-    wasInteracted: false,
-    confirmationStatus: true,
-  }),
-);
+// Force SSE reconnect:
+dispatch(requestSseRefresh({ chatId }));
 
-// Reset prevent_send:
-dispatch(enableSend({ id: chatId }));
+// Check SSE subscription status:
+// Look for useChatSubscription hook's status in React DevTools
 
 // Check LSP health:
 fetch("http://127.0.0.1:8001/v1/ping").then((r) => r.json());
+
+// Check SSE endpoint:
+fetch("http://127.0.0.1:8001/v1/chats/subscribe?chat_id=test").then((r) =>
+  console.log("SSE available:", r.ok),
+);
 ```
+
+### SSE-Specific Debugging
+
+| Issue                  | Check               | Solution                                  |
+| ---------------------- | ------------------- | ----------------------------------------- |
+| Messages not appearing | `snapshot_received` | Wait for snapshot or force reconnect      |
+| Duplicate messages     | Sequence numbers    | Check for gap detection issues            |
+| Stuck streaming        | `streaming` flag    | Check for missing `stream_finished` event |
+| Connection drops       | Network tab         | Check for SSE endpoint errors             |
+| State out of sync      | Redux DevTools      | Compare with backend state                |
 
 ---
 
@@ -3977,12 +4207,21 @@ fetch("http://127.0.0.1:8001/v1/ping").then((r) => r.json());
 
 **MUST CHECK**:
 
-1. State transitions (`waiting_for_response`, `streaming`, `prevent_send`)
-2. Tool confirmation logic (don't break pause system)
-3. Queue flush conditions (priority vs regular)
-4. Abort handling (cleanup state properly)
-5. Message formatting (use `formatChatResponse`)
+1. State transitions (`waiting_for_response`, `streaming`, `prevent_send`, `snapshot_received`)
+2. SSE event handling in reducer (`applyChatEvent` cases)
+3. Command sending via `chatCommands.ts` (not direct chat API)
+4. Sequence number validation (gaps trigger reconnect)
+5. Tool confirmation logic (don't break pause system)
 6. Type guards (don't assume message structure)
+
+### When Adding SSE Event Types
+
+**MUST DO**:
+
+1. Add type definition in `services/refact/chatSubscription.ts`
+2. Add handler case in reducer's `applyChatEvent`
+3. Update `ChatEventEnvelope` union type
+4. Add tests in `chatSSEProtocol.test.ts`
 
 ### When Adding Message Types
 
@@ -3990,10 +4229,9 @@ fetch("http://127.0.0.1:8001/v1/ping").then((r) => r.json());
 
 1. Add type definition in `services/refact/types.ts`
 2. Add type guard (`isMyMessage`)
-3. Update `formatChatResponse` to handle it
+3. Handle in reducer if received via SSE
 4. Update `renderMessages` to render it
 5. Create component for rendering
-6. Update `formatMessagesForLsp` if needed for sending
 
 ### When Touching Redux
 
@@ -4021,11 +4259,13 @@ fetch("http://127.0.0.1:8001/v1/ping").then((r) => r.json());
 🚨 **STOP if you see**:
 
 - Direct state mutation outside reducers
+- Accessing `state.chat.thread` (old pattern - use `state.chat.threads[id]`)
+- Using old streaming functions (`consumeStream`, `formatChatResponse`)
+- Sending messages via direct chat API (use Commands API)
 - Hardcoded colors (#hex) or spacing (px)
 - `any` types (use proper typing)
-- Synchronous network calls (use async)
-- Missing type guards for message routing
-- Global CSS without `:global()` wrapper
+- Missing sequence validation in SSE handling
+- Missing `snapshot_received` checks before rendering
 - Missing cleanup in `useEffect` returns
 
 ---
@@ -4034,14 +4274,22 @@ fetch("http://127.0.0.1:8001/v1/ping").then((r) => r.json());
 
 **Current**: v2.0.10-alpha.3
 
-**Recent changes** (inferred from codebase):
+**Major Architecture Changes** (January 2025):
 
-- Queued messages with priority system
-- Compression hints and new chat suggestions
-- Reasoning content support
-- Tool confirmation improvements
-- Docker integration enhancements
-- Checkpoints UI polish
+- **SSE-based streaming**: Replaced fetch streaming with command/event architecture
+- **Multi-thread state**: `threads` map replaces single `thread` object
+- **Commands API**: All chat actions via `/v1/chats/{chatId}/commands`
+- **Subscription hooks**: `useChatSubscription`, `useAllChatsSubscription`, `useEnsureSubscriptionConnected`
+- **Sequence validation**: Gap detection with auto-reconnect
+
+**Recent Feature Additions**:
+
+- Task management (Kanban board, task workspaces)
+- Enhanced Knowledge/Memory system with graph view
+- StreamingTokenCounter for live token display
+- TokensMapContent for detailed usage breakdown
+- Comprehensive SSE protocol tests (2000+ lines)
+- Multi-tab support with background thread processing
 
 ---
 
@@ -4088,8 +4336,8 @@ test: add tool loop prevention test
 
 ---
 
-**Last Updated**: December 2024  
-**Document Version**: 1.0  
+**Last Updated**: January 2025
+**Document Version**: 2.0 (SSE Architecture)
 **Maintained by**: SmallCloudAI Team
 
 ---

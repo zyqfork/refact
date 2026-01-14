@@ -19,19 +19,31 @@ use crate::chat::types::{ChatCommand, CommandRequest};
 
 async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>) -> Result<String, String> {
     let ccx_lock = ccx.lock().await;
-    ccx_lock.task_meta.as_ref()
+    ccx_lock
+        .task_meta
+        .as_ref()
         .map(|m| m.task_id.clone())
-        .ok_or_else(|| "This tool can only be used by task agents (chat not bound to a task)".to_string())
+        .ok_or_else(|| {
+            "This tool can only be used by task agents (chat not bound to a task)".to_string()
+        })
 }
 
 async fn get_card_id(ccx: &Arc<AMutex<AtCommandsContext>>) -> Result<String, String> {
     let ccx_lock = ccx.lock().await;
-    ccx_lock.task_meta.as_ref()
+    ccx_lock
+        .task_meta
+        .as_ref()
         .and_then(|m| m.card_id.clone())
-        .ok_or_else(|| "This tool can only be used by task agents (no card_id in task_meta)".to_string())
+        .ok_or_else(|| {
+            "This tool can only be used by task agents (no card_id in task_meta)".to_string()
+        })
 }
 
-fn auto_commit_worktree(worktree_path: &Path, card_id: &str, card_title: &str) -> Result<Option<String>, String> {
+fn auto_commit_worktree(
+    worktree_path: &Path,
+    card_id: &str,
+    card_title: &str,
+) -> Result<Option<String>, String> {
     if !worktree_path.exists() {
         return Ok(None);
     }
@@ -59,16 +71,22 @@ fn auto_commit_worktree(worktree_path: &Path, card_id: &str, card_title: &str) -
         .map_err(|e| format!("Failed to stage changes: {}", e))?;
 
     if !add_output.status.success() {
-        return Err(format!("git add failed: {}", String::from_utf8_lossy(&add_output.stderr)));
+        return Err(format!(
+            "git add failed: {}",
+            String::from_utf8_lossy(&add_output.stderr)
+        ));
     }
 
     let commit_msg = format!("Card {}: {}", card_id, card_title);
     let commit_output = Command::new("git")
         .args([
-            "-c", "user.name=Refact Agent",
-            "-c", "user.email=agent@refact.ai",
+            "-c",
+            "user.name=Refact Agent",
+            "-c",
+            "user.email=agent@refact.ai",
             "commit",
-            "-m", &commit_msg,
+            "-m",
+            &commit_msg,
             "--no-gpg-sign",
         ])
         .current_dir(worktree_path)
@@ -89,19 +107,25 @@ fn auto_commit_worktree(worktree_path: &Path, card_id: &str, card_title: &str) -
         .output()
         .map_err(|e| format!("Failed to get commit hash: {}", e))?;
 
-    let commit_hash = String::from_utf8_lossy(&rev_output.stdout).trim().to_string();
+    let commit_hash = String::from_utf8_lossy(&rev_output.stdout)
+        .trim()
+        .to_string();
     Ok(Some(commit_hash))
 }
 
 pub struct ToolTaskAgentFinish;
 
 impl ToolTaskAgentFinish {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Tool for ToolTaskAgentFinish {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -145,7 +169,8 @@ impl Tool for ToolTaskAgentFinish {
             _ => return Err("Missing or invalid 'success' parameter (must be boolean)".to_string()),
         };
 
-        let report = args.get("report")
+        let report = args
+            .get("report")
             .and_then(|v| v.as_str())
             .ok_or("Missing 'report' parameter")?
             .to_string();
@@ -153,7 +178,8 @@ impl Tool for ToolTaskAgentFinish {
         let gcx = ccx.lock().await.global_context.clone();
 
         let board_pre = storage::load_board(gcx.clone(), &task_id).await?;
-        let card_pre = board_pre.get_card(&card_id)
+        let card_pre = board_pre
+            .get_card(&card_id)
             .ok_or(format!("Card {} not found", card_id))?;
         let worktree_path = card_pre.agent_worktree.clone();
         let card_title_for_commit = card_pre.title.clone();
@@ -180,11 +206,10 @@ impl Tool for ToolTaskAgentFinish {
         let success_clone = success;
         let commit_hash = commit_result.clone();
 
-        let (board, (card_title, _agent_branch, all_finished)) = storage::update_board_atomic(
-            gcx.clone(),
-            &task_id,
-            move |board| {
-                let card = board.get_card_mut(&card_id_owned)
+        let (board, (card_title, _agent_branch, all_finished)) =
+            storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
+                let card = board
+                    .get_card_mut(&card_id_owned)
                     .ok_or(format!("Card {} not found in task", card_id_owned))?;
 
                 if card.column == "done" || card.column == "failed" {
@@ -221,14 +246,16 @@ impl Tool for ToolTaskAgentFinish {
                     });
                 }
 
-                let agents_active = board.cards.iter()
+                let agents_active = board
+                    .cards
+                    .iter()
                     .filter(|c| c.column == "doing" && c.assignee.is_some())
                     .count();
                 let all_finished = agents_active == 0;
 
                 Ok((card_title, agent_branch, all_finished))
-            },
-        ).await?;
+            })
+            .await?;
 
         storage::update_task_stats(gcx.clone(), &task_id).await?;
 
@@ -271,9 +298,24 @@ impl Tool for ToolTaskAgentFinish {
                 if card.agent_chat_id.is_none() {
                     continue;
                 }
-                let status = if card.column == "done" { "✅ done" } else if card.column == "failed" { "❌ failed" } else { continue };
-                let report_preview: String = card.final_report.as_deref().unwrap_or("").chars().take(200).collect();
-                results.push(format!("**{} ({})**: {}\n{}", card.id, card.title, status, report_preview));
+                let status = if card.column == "done" {
+                    "✅ done"
+                } else if card.column == "failed" {
+                    "❌ failed"
+                } else {
+                    continue;
+                };
+                let report_preview: String = card
+                    .final_report
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect();
+                results.push(format!(
+                    "**{} ({})**: {}\n{}",
+                    card.id, card.title, status, report_preview
+                ));
             }
 
             let planner_message = format!(
@@ -287,7 +329,9 @@ impl Tool for ToolTaskAgentFinish {
             };
 
             let planner_chat_id = storage::get_planner_chat_id(gcx.clone(), &task_id).await?;
-            let planner_session = get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id).await;
+            let planner_session =
+                get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id)
+                    .await;
 
             let request = CommandRequest {
                 client_request_id: format!("task-all-finished-{}", Uuid::new_v4()),
@@ -315,14 +359,19 @@ impl Tool for ToolTaskAgentFinish {
             }
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result_message),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result_message),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
 }

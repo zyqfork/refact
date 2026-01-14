@@ -23,7 +23,8 @@ fn get_board_locks() -> &'static AMutex<HashMap<String, Arc<AMutex<()>>>> {
 
 async fn get_board_lock(task_id: &str) -> Arc<AMutex<()>> {
     let mut locks = get_board_locks().lock().await;
-    locks.entry(task_id.to_string())
+    locks
+        .entry(task_id.to_string())
         .or_insert_with(|| Arc::new(AMutex::new(())))
         .clone()
 }
@@ -55,7 +56,10 @@ pub fn validate_task_id(task_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn get_task_dir(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str) -> Result<PathBuf, String> {
+pub async fn get_task_dir(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+) -> Result<PathBuf, String> {
     validate_task_id(task_id)?;
     let tasks_dir = get_tasks_dir(gcx).await?;
     Ok(tasks_dir.join(task_id))
@@ -92,36 +96,58 @@ async fn load_task_meta_from_path(path: &PathBuf) -> Result<TaskMeta, String> {
     serde_yaml::from_str(&content).map_err(|e| e.to_string())
 }
 
-pub async fn load_task_meta(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str) -> Result<TaskMeta, String> {
+pub async fn load_task_meta(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+) -> Result<TaskMeta, String> {
     let task_dir = get_task_dir(gcx, task_id).await?;
     let meta_path = task_dir.join("meta.yaml");
     load_task_meta_from_path(&meta_path).await
 }
 
-pub async fn save_task_meta(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str, meta: &TaskMeta) -> Result<(), String> {
+pub async fn save_task_meta(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+    meta: &TaskMeta,
+) -> Result<(), String> {
     let task_dir = get_task_dir(gcx, task_id).await?;
     let meta_path = task_dir.join("meta.yaml");
     let content = serde_yaml::to_string(meta).map_err(|e| e.to_string())?;
-    fs::write(&meta_path, content).await.map_err(|e| e.to_string())
+    fs::write(&meta_path, content)
+        .await
+        .map_err(|e| e.to_string())
 }
 
-pub async fn load_board(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str) -> Result<TaskBoard, String> {
+pub async fn load_board(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+) -> Result<TaskBoard, String> {
     let task_dir = get_task_dir(gcx, task_id).await?;
     let board_path = task_dir.join("board.yaml");
     if !board_path.exists() {
         return Ok(TaskBoard::default());
     }
-    let content = fs::read_to_string(&board_path).await.map_err(|e| e.to_string())?;
+    let content = fs::read_to_string(&board_path)
+        .await
+        .map_err(|e| e.to_string())?;
     serde_yaml::from_str(&content).map_err(|e| e.to_string())
 }
 
-pub async fn save_board(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str, board: &TaskBoard) -> Result<(), String> {
+pub async fn save_board(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+    board: &TaskBoard,
+) -> Result<(), String> {
     let task_dir = get_task_dir(gcx, task_id).await?;
     let board_path = task_dir.join("board.yaml");
     let tmp_path = task_dir.join("board.yaml.tmp");
     let content = serde_yaml::to_string(board).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, &content).await.map_err(|e| e.to_string())?;
-    fs::rename(&tmp_path, &board_path).await.map_err(|e| e.to_string())
+    fs::write(&tmp_path, &content)
+        .await
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, &board_path)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn update_board_atomic<F, T>(
@@ -140,15 +166,22 @@ where
     let result = updater(&mut board)?;
     board.rev += 1;
     save_board(gcx.clone(), task_id, &board).await?;
-    emit_task_event(gcx, TaskEvent::BoardChanged {
-        task_id: task_id.to_string(),
-        rev: board.rev,
-        board: board.clone(),
-    }).await;
+    emit_task_event(
+        gcx,
+        TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        },
+    )
+    .await;
     Ok((board, result))
 }
 
-pub async fn load_planner_instructions(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str) -> Result<String, String> {
+pub async fn load_planner_instructions(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+) -> Result<String, String> {
     let task_dir = get_task_dir(gcx, task_id).await?;
     let path = task_dir.join("planner_instructions.md");
     if !path.exists() {
@@ -157,7 +190,11 @@ pub async fn load_planner_instructions(gcx: Arc<ARwLock<GlobalContext>>, task_id
     fs::read_to_string(&path).await.map_err(|e| e.to_string())
 }
 
-pub async fn save_planner_instructions(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str, content: &str) -> Result<(), String> {
+pub async fn save_planner_instructions(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+    content: &str,
+) -> Result<(), String> {
     let task_dir = get_task_dir(gcx, task_id).await?;
     let path = task_dir.join("planner_instructions.md");
     fs::write(&path, content).await.map_err(|e| e.to_string())
@@ -168,16 +205,26 @@ pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result
     let task_id = Uuid::new_v4().to_string();
     let task_dir = tasks_dir.join(&task_id);
 
-    fs::create_dir_all(&task_dir).await.map_err(|e| e.to_string())?;
-    fs::create_dir_all(task_dir.join("trajectories").join("planner")).await.map_err(|e| e.to_string())?;
-    fs::create_dir_all(task_dir.join("trajectories").join("agents")).await.map_err(|e| e.to_string())?;
+    fs::create_dir_all(&task_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    fs::create_dir_all(task_dir.join("trajectories").join("planner"))
+        .await
+        .map_err(|e| e.to_string())?;
+    fs::create_dir_all(task_dir.join("trajectories").join("agents"))
+        .await
+        .map_err(|e| e.to_string())?;
 
     let now = Utc::now().to_rfc3339();
     let has_user_provided_name = !name.trim().is_empty() && name.to_lowercase() != "new task";
     let meta = TaskMeta {
         schema_version: 1,
         id: task_id.clone(),
-        name: if has_user_provided_name { name.to_string() } else { "New Task".to_string() },
+        name: if has_user_provided_name {
+            name.to_string()
+        } else {
+            "New Task".to_string()
+        },
         status: TaskStatus::Planning,
         created_at: now.clone(),
         updated_at: now,
@@ -197,12 +244,21 @@ pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result
     save_planner_instructions(gcx.clone(), &task_id, "").await?;
 
     let planner_chat_id = format!("planner-{}-1", task_id);
-    crate::chat::trajectories::save_initial_planner_trajectory(gcx.clone(), &task_id, &planner_chat_id).await?;
+    crate::chat::trajectories::save_initial_planner_trajectory(
+        gcx.clone(),
+        &task_id,
+        &planner_chat_id,
+    )
+    .await?;
 
-    emit_task_event(gcx, TaskEvent::TaskCreated {
-        task_id: task_id.clone(),
-        meta: meta.clone(),
-    }).await;
+    emit_task_event(
+        gcx,
+        TaskEvent::TaskCreated {
+            task_id: task_id.clone(),
+            meta: meta.clone(),
+        },
+    )
+    .await;
 
     Ok(meta)
 }
@@ -210,42 +266,67 @@ pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result
 pub async fn delete_task(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str) -> Result<(), String> {
     let task_dir = get_task_dir(gcx.clone(), task_id).await?;
     if task_dir.exists() {
-        fs::remove_dir_all(&task_dir).await.map_err(|e| e.to_string())?;
+        fs::remove_dir_all(&task_dir)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    emit_task_event(gcx, TaskEvent::TaskDeleted {
-        task_id: task_id.to_string(),
-    }).await;
+    emit_task_event(
+        gcx,
+        TaskEvent::TaskDeleted {
+            task_id: task_id.to_string(),
+        },
+    )
+    .await;
     Ok(())
 }
 
-pub async fn update_task_name(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str, name: &str) -> Result<TaskMeta, String> {
+pub async fn update_task_name(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+    name: &str,
+) -> Result<TaskMeta, String> {
     let mut meta = load_task_meta(gcx.clone(), task_id).await?;
     meta.name = name.to_string();
     meta.is_name_generated = true;
     meta.updated_at = Utc::now().to_rfc3339();
     save_task_meta(gcx.clone(), task_id, &meta).await?;
-    emit_task_event(gcx, TaskEvent::TaskUpdated {
-        task_id: task_id.to_string(),
-        meta: meta.clone(),
-    }).await;
+    emit_task_event(
+        gcx,
+        TaskEvent::TaskUpdated {
+            task_id: task_id.to_string(),
+            meta: meta.clone(),
+        },
+    )
+    .await;
     Ok(meta)
 }
 
-pub async fn update_task_stats(gcx: Arc<ARwLock<GlobalContext>>, task_id: &str) -> Result<TaskMeta, String> {
+pub async fn update_task_stats(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+) -> Result<TaskMeta, String> {
     let mut meta = load_task_meta(gcx.clone(), task_id).await?;
     let board = load_board(gcx.clone(), task_id).await?;
 
     meta.cards_total = board.cards.len();
     meta.cards_done = board.cards.iter().filter(|c| c.column == "done").count();
     meta.cards_failed = board.cards.iter().filter(|c| c.column == "failed").count();
-    meta.agents_active = board.cards.iter().filter(|c| c.column == "doing" && c.assignee.is_some()).count();
+    meta.agents_active = board
+        .cards
+        .iter()
+        .filter(|c| c.column == "doing" && c.assignee.is_some())
+        .count();
     meta.updated_at = Utc::now().to_rfc3339();
 
     save_task_meta(gcx.clone(), task_id, &meta).await?;
-    emit_task_event(gcx, TaskEvent::TaskUpdated {
-        task_id: task_id.to_string(),
-        meta: meta.clone(),
-    }).await;
+    emit_task_event(
+        gcx,
+        TaskEvent::TaskUpdated {
+            task_id: task_id.to_string(),
+            meta: meta.clone(),
+        },
+    )
+    .await;
     Ok(meta)
 }
 
@@ -279,15 +360,18 @@ pub async fn list_task_trajectories(
                 let id = stem.to_string_lossy().to_string();
                 if let Ok(content) = fs::read_to_string(&path).await {
                     if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let title = data.get("title")
+                        let title = data
+                            .get("title")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let created_at = data.get("created_at")
+                        let created_at = data
+                            .get("created_at")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let updated_at = data.get("updated_at")
+                        let updated_at = data
+                            .get("updated_at")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
@@ -328,7 +412,10 @@ pub fn infer_task_id_from_chat_id(chat_id: &str) -> Option<String> {
     }
     if let Some(rest) = chat_id.strip_prefix("planner-") {
         if let Some((task_id, suffix)) = rest.rsplit_once('-') {
-            if !task_id.is_empty() && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+            if !task_id.is_empty()
+                && !suffix.is_empty()
+                && suffix.chars().all(|c| c.is_ascii_digit())
+            {
                 return Some(task_id.to_string());
             }
         }

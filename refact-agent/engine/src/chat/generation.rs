@@ -44,7 +44,9 @@ fn tail_needs_assistant(messages: &[ChatMessage]) -> bool {
                 if !saw_toolish {
                     return false;
                 }
-                let Some(tcs) = m.tool_calls.as_ref() else { return false };
+                let Some(tcs) = m.tool_calls.as_ref() else {
+                    return false;
+                };
                 if tcs.is_empty() {
                     return false;
                 }
@@ -177,21 +179,26 @@ pub async fn run_llm_generation(
     let chat_mode = parse_chat_mode(&thread.mode);
 
     let tools: Vec<crate::tools::tools_description::ToolDesc> = {
-        let all_tools: Vec<_> = crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
-            .await
-            .into_iter()
-            .map(|tool| tool.tool_description())
-            .collect();
+        let all_tools: Vec<_> =
+            crate::tools::tools_list::get_available_tools_by_chat_mode(gcx.clone(), chat_mode)
+                .await
+                .into_iter()
+                .map(|tool| tool.tool_description())
+                .collect();
 
         if thread.tool_use.is_empty() || thread.tool_use == "agent" {
             all_tools
         } else {
-            let allowed: std::collections::HashSet<String> = thread.tool_use
+            let allowed: std::collections::HashSet<String> = thread
+                .tool_use
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            all_tools.into_iter().filter(|t| allowed.contains(&t.name)).collect()
+            all_tools
+                .into_iter()
+                .filter(|t| allowed.contains(&t.name))
+                .collect()
         }
     };
 
@@ -275,15 +282,26 @@ pub async fn run_llm_generation(
                 if msg.role == "assistant" {
                     continue;
                 }
-                if msg.role == "system" && session.messages.first().map(|m| m.role == "system").unwrap_or(false) {
+                if msg.role == "system"
+                    && session
+                        .messages
+                        .first()
+                        .map(|m| m.role == "system")
+                        .unwrap_or(false)
+                {
                     continue;
                 }
-                if msg.role == "cd_instruction" && session.messages.iter().any(|m| m.role == "cd_instruction") {
+                if msg.role == "cd_instruction"
+                    && session.messages.iter().any(|m| m.role == "cd_instruction")
+                {
                     continue;
                 }
-                if msg.role == "context_file" && session.messages.iter().any(|m| {
-                    m.role == "context_file" && m.tool_call_id == msg.tool_call_id
-                }) {
+                if msg.role == "context_file"
+                    && session
+                        .messages
+                        .iter()
+                        .any(|m| m.role == "context_file" && m.tool_call_id == msg.tool_call_id)
+                {
                     continue;
                 }
                 let mut msg_with_id = msg.clone();
@@ -353,13 +371,16 @@ pub async fn run_llm_generation(
         let session = session_arc.lock().await;
         let task_meta = session.thread.task_meta.clone();
         drop(session);
-        
+
         if let Some(tm) = task_meta {
             match crate::tasks::storage::load_board(gcx.clone(), &tm.task_id).await {
-                Ok(board) => {
-                    board.get_card(&tm.card_id.as_ref().unwrap_or(&String::new()))
-                        .and_then(|card| card.agent_worktree.as_ref().map(|p| std::path::PathBuf::from(p)))
-                }
+                Ok(board) => board
+                    .get_card(&tm.card_id.as_ref().unwrap_or(&String::new()))
+                    .and_then(|card| {
+                        card.agent_worktree
+                            .as_ref()
+                            .map(|p| std::path::PathBuf::from(p))
+                    }),
                 Err(_) => None,
             }
         } else {
@@ -605,18 +626,13 @@ mod tests {
 
     #[test]
     fn test_tail_needs_assistant_ends_with_assistant_no_tools() {
-        let messages = vec![
-            make_user_msg("hello"),
-            make_assistant_msg("response"),
-        ];
+        let messages = vec![make_user_msg("hello"), make_assistant_msg("response")];
         assert!(!tail_needs_assistant(&messages));
     }
 
     #[test]
     fn test_tail_needs_assistant_ends_with_user() {
-        let messages = vec![
-            make_user_msg("hello"),
-        ];
+        let messages = vec![make_user_msg("hello")];
         assert!(tail_needs_assistant(&messages));
     }
 

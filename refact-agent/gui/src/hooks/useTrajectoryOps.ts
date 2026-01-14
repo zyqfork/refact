@@ -102,22 +102,22 @@ export function useTrajectoryOps() {
     try {
       const isTaskChat = thread.is_task_chat;
       const taskMeta = thread.task_meta;
-      
+
       const result = await applyHandoff({
         chatId,
         options: handoffOptions,
       }).unwrap();
-      
+
       await dispatch(
         trajectoriesApi.endpoints.listAllTrajectories.initiate(undefined, {
           forceRefetch: true,
         }),
       );
-      
+
       if (isTaskChat && taskMeta?.role === "planner") {
         const taskId = taskMeta.task_id;
         const now = new Date().toISOString();
-        
+
         dispatch(
           createChatWithId({
             id: result.new_chat_id,
@@ -127,9 +127,11 @@ export function useTrajectoryOps() {
             taskMeta: { task_id: taskId, role: "planner" },
           }),
         );
-        
-        const { addPlannerChat, setTaskActiveChat } = await import("../features/Tasks/tasksSlice");
-        
+
+        const { addPlannerChat, setTaskActiveChat } = await import(
+          "../features/Tasks/tasksSlice"
+        );
+
         dispatch(
           addPlannerChat({
             taskId,
@@ -141,14 +143,14 @@ export function useTrajectoryOps() {
             },
           }),
         );
-        
+
         dispatch(
           setTaskActiveChat({
             taskId,
             activeChat: { type: "planner", chatId: result.new_chat_id },
           }),
         );
-        
+
         dispatch(requestSseRefresh({ chatId: result.new_chat_id }));
         setHandoffPreview(null);
         await regenerate(result.new_chat_id, port, apiKey ?? undefined);
@@ -159,7 +161,7 @@ export function useTrajectoryOps() {
         setHandoffPreview(null);
         await regenerate(result.new_chat_id, port, apiKey ?? undefined);
       }
-      
+
       return true;
     } catch {
       return false;

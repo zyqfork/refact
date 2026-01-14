@@ -28,7 +28,10 @@ impl WhisperModel {
             "medium.en" => Ok(Self::MediumEn),
             "medium" => Ok(Self::Medium),
             "large-v3" => Ok(Self::LargeV3),
-            _ => Err(format!("Unknown model: {}. Use: tiny.en, base.en, small.en, medium.en, large-v3", name)),
+            _ => Err(format!(
+                "Unknown model: {}. Use: tiny.en, base.en, small.en, medium.en, large-v3",
+                name
+            )),
         }
     }
 
@@ -95,7 +98,11 @@ pub async fn download_model(
         return Ok(dest_path);
     }
 
-    info!("Downloading {} ({} MB)...", model.filename(), model.size_mb());
+    info!(
+        "Downloading {} ({} MB)...",
+        model.filename(),
+        model.size_mb()
+    );
 
     let client = reqwest::Client::new();
     let response = client
@@ -105,15 +112,18 @@ pub async fn download_model(
         .map_err(|e| format!("Download failed: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("Download failed with status: {}", response.status()));
+        return Err(format!(
+            "Download failed with status: {}",
+            response.status()
+        ));
     }
 
     let total_size = response.content_length().unwrap_or(0);
     let mut downloaded: u64 = 0;
 
     let temp_path = dest_path.with_extension("bin.tmp");
-    let mut file = std::fs::File::create(&temp_path)
-        .map_err(|e| format!("Failed to create file: {}", e))?;
+    let mut file =
+        std::fs::File::create(&temp_path).map_err(|e| format!("Failed to create file: {}", e))?;
 
     let mut stream = response.bytes_stream();
 

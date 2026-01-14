@@ -74,9 +74,7 @@ pub struct PresentationLimits {
 
 impl Default for PresentationLimits {
     fn default() -> Self {
-        Self {
-            preview_chars: 120,
-        }
+        Self { preview_chars: 120 }
     }
 }
 

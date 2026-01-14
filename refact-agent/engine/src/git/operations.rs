@@ -427,16 +427,14 @@ pub fn get_current_branch(repo: &Repository) -> Result<String, String> {
 
 pub fn get_head_commit(repo: &Repository) -> Result<String, String> {
     let head = repo.head().map_err_with_prefix("Failed to get HEAD:")?;
-    let commit = head.peel_to_commit().map_err_with_prefix("Failed to get HEAD commit:")?;
+    let commit = head
+        .peel_to_commit()
+        .map_err_with_prefix("Failed to get HEAD commit:")?;
     Ok(commit.id().to_string())
 }
 
 pub fn has_uncommitted_changes(repo: &Repository) -> Result<bool, String> {
-    let (staged, unstaged) = get_diff_statuses(
-        git2::StatusShow::IndexAndWorkdir,
-        repo,
-        false,
-    )?;
+    let (staged, unstaged) = get_diff_statuses(git2::StatusShow::IndexAndWorkdir, repo, false)?;
     Ok(!staged.is_empty() || !unstaged.is_empty())
 }
 
@@ -447,8 +445,8 @@ pub fn create_worktree(
     branch_name: &str,
     base_commit: &str,
 ) -> Result<(), String> {
-    let commit_oid = git2::Oid::from_str(base_commit)
-        .map_err(|e| format!("Invalid commit OID: {}", e))?;
+    let commit_oid =
+        git2::Oid::from_str(base_commit).map_err(|e| format!("Invalid commit OID: {}", e))?;
     let commit = repo
         .find_commit(commit_oid)
         .map_err_with_prefix("Failed to find commit:")?;
@@ -456,11 +454,10 @@ pub fn create_worktree(
     let ref_name = format!("refs/heads/{}", branch_name);
     let branch_ref = match repo.find_reference(&ref_name) {
         Ok(r) => r,
-        Err(_) => {
-            repo.branch(branch_name, &commit, false)
-                .map_err_with_prefix("Failed to create branch:")?
-                .into_reference()
-        }
+        Err(_) => repo
+            .branch(branch_name, &commit, false)
+            .map_err_with_prefix("Failed to create branch:")?
+            .into_reference(),
     };
 
     let mut worktree_opts = git2::WorktreeAddOptions::new();

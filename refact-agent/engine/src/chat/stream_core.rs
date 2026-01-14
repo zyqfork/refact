@@ -64,7 +64,7 @@ pub async fn run_llm_stream<C: StreamCollector>(
     let _ = slowdown_arc.acquire().await;
 
     let mut sampling = params.sampling.clone();
-    sampling.n = Some(1);  // Always force n=1, multi-choice not supported
+    sampling.n = Some(1); // Always force n=1, multi-choice not supported
 
     let mut event_source =
         crate::forward_to_openai_endpoint::forward_to_openai_style_endpoint_streaming(
@@ -394,7 +394,11 @@ async fn format_stream_error(err: EventSourceError) -> String {
                     return format!("LLM error ({}): {}", status, err_obj);
                 }
             }
-            let preview = if text.len() > 500 { &text[..500] } else { &text };
+            let preview = if text.len() > 500 {
+                &text[..500]
+            } else {
+                &text
+            };
             format!("LLM error ({}): {}", status, preview)
         }
         other => format!("Stream error: {}", other),

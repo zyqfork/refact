@@ -88,8 +88,13 @@ export function subscribeToTaskEvents(
             if (isValidTaskEventEnvelope(parsed)) {
               if (parsed.type === "snapshot") {
                 state.lastSeq = parsed.seq;
-              } else if (state.lastSeq >= 0 && parsed.seq !== state.lastSeq + 1) {
-                throw new Error(`Seq gap: expected ${state.lastSeq + 1}, got ${parsed.seq}`);
+              } else if (
+                state.lastSeq >= 0 &&
+                parsed.seq !== state.lastSeq + 1
+              ) {
+                throw new Error(
+                  `Seq gap: expected ${state.lastSeq + 1}, got ${parsed.seq}`,
+                );
               } else {
                 state.lastSeq = parsed.seq;
               }
@@ -124,5 +129,11 @@ function isValidTaskEventEnvelope(data: unknown): data is TaskEventEnvelope {
   const obj = data as Record<string, unknown>;
   if (typeof obj.seq !== "number") return false;
   if (typeof obj.type !== "string") return false;
-  return ["snapshot", "task_created", "task_updated", "task_deleted", "board_changed"].includes(obj.type);
+  return [
+    "snapshot",
+    "task_created",
+    "task_updated",
+    "task_deleted",
+    "board_changed",
+  ].includes(obj.type);
 }

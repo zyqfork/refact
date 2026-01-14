@@ -4,7 +4,9 @@ use tokio::sync::RwLock as ARwLock;
 
 use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_or_a_good_error};
 use crate::files_blocklist::reload_indexing_everywhere_if_needed;
-use crate::files_correction::{canonicalize_normalized_path, correct_to_nearest_dir_path, get_project_dirs_with_code_workdir};
+use crate::files_correction::{
+    canonicalize_normalized_path, correct_to_nearest_dir_path, get_project_dirs_with_code_workdir,
+};
 use crate::files_in_workspace::ls_files;
 use crate::global_context::GlobalContext;
 
@@ -72,10 +74,14 @@ pub async fn resolve_scope(
             if workdir.exists() {
                 let indexing_everywhere = reload_indexing_everywhere_if_needed(gcx.clone()).await;
                 let files = ls_files(&indexing_everywhere, workdir, true).unwrap_or_default();
-                return Ok(files.into_iter().map(|f| f.to_string_lossy().to_string()).collect());
+                return Ok(files
+                    .into_iter()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .collect());
             }
         }
-        return Ok(get_workspace_files(gcx).await
+        return Ok(get_workspace_files(gcx)
+            .await
             .into_iter()
             .map(|f| f.to_string_lossy().to_string())
             .collect());
@@ -120,7 +126,8 @@ pub async fn resolve_scope(
         } else {
             format!("{}{}", dir_path, std::path::MAIN_SEPARATOR)
         };
-        return Ok(get_workspace_files(gcx).await
+        return Ok(get_workspace_files(gcx)
+            .await
             .into_iter()
             .filter(|f| {
                 f.to_string_lossy().starts_with(&dir_path_with_sep)
@@ -163,7 +170,8 @@ pub async fn resolve_scope(
                     } else {
                         format!("{}{}", dir_path, std::path::MAIN_SEPARATOR)
                     };
-                    Ok(get_workspace_files(gcx).await
+                    Ok(get_workspace_files(gcx)
+                        .await
                         .into_iter()
                         .filter(|f| {
                             f.to_string_lossy().starts_with(&dir_path_with_sep)

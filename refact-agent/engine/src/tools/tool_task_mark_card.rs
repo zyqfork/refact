@@ -11,12 +11,17 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
 use crate::tasks::types::StatusUpdate;
 
-async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>, args: &HashMap<String, Value>) -> Result<String, String> {
+async fn get_task_id(
+    ccx: &Arc<AMutex<AtCommandsContext>>,
+    args: &HashMap<String, Value>,
+) -> Result<String, String> {
     if let Some(id) = args.get("task_id").and_then(|v| v.as_str()) {
         return Ok(id.to_string());
     }
     let ccx_lock = ccx.lock().await;
-    ccx_lock.task_meta.as_ref()
+    ccx_lock
+        .task_meta
+        .as_ref()
         .map(|m| m.task_id.clone())
         .ok_or_else(|| "Missing 'task_id' (and chat is not bound to a task)".to_string())
 }
@@ -25,16 +30,22 @@ pub struct ToolTaskMarkCardDone;
 pub struct ToolTaskMarkCardFailed;
 
 impl ToolTaskMarkCardDone {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl ToolTaskMarkCardFailed {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Tool for ToolTaskMarkCardDone {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -70,9 +81,13 @@ impl Tool for ToolTaskMarkCardDone {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let task_id = get_task_id(&ccx, args).await?;
-        let card_id = args.get("card_id").and_then(|v| v.as_str())
+        let card_id = args
+            .get("card_id")
+            .and_then(|v| v.as_str())
             .ok_or("Missing 'card_id'")?;
-        let report = args.get("report").and_then(|v| v.as_str())
+        let report = args
+            .get("report")
+            .and_then(|v| v.as_str())
             .ok_or("Missing 'report'")?;
 
         let gcx = ccx.lock().await.global_context.clone();
@@ -82,7 +97,8 @@ impl Tool for ToolTaskMarkCardDone {
             let report_owned = report.to_string();
 
             let (board, _) = storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
-                let card = board.get_card_mut(&card_id_owned)
+                let card = board
+                    .get_card_mut(&card_id_owned)
                     .ok_or(format!("Card {} not found", card_id_owned))?;
 
                 if card.column == "done" {
@@ -97,29 +113,43 @@ impl Tool for ToolTaskMarkCardDone {
                     message: "Manually marked as done by planner".to_string(),
                 });
                 Ok(())
-            }).await?;
+            })
+            .await?;
 
             storage::update_task_stats(gcx.clone(), &task_id).await?;
-            board.get_card(card_id).map(|c| c.title.clone()).unwrap_or_default()
+            board
+                .get_card(card_id)
+                .map(|c| c.title.clone())
+                .unwrap_or_default()
         };
 
-        let result = format!("✅ **Card marked as done:** {}\n\n**Report:**\n{}", card_title, report);
+        let result = format!(
+            "✅ **Card marked as done:** {}\n\n**Report:**\n{}",
+            card_title, report
+        );
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 #[async_trait]
 impl Tool for ToolTaskMarkCardFailed {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -155,9 +185,13 @@ impl Tool for ToolTaskMarkCardFailed {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let task_id = get_task_id(&ccx, args).await?;
-        let card_id = args.get("card_id").and_then(|v| v.as_str())
+        let card_id = args
+            .get("card_id")
+            .and_then(|v| v.as_str())
             .ok_or("Missing 'card_id'")?;
-        let reason = args.get("reason").and_then(|v| v.as_str())
+        let reason = args
+            .get("reason")
+            .and_then(|v| v.as_str())
             .ok_or("Missing 'reason'")?;
 
         let gcx = ccx.lock().await.global_context.clone();
@@ -167,7 +201,8 @@ impl Tool for ToolTaskMarkCardFailed {
             let reason_owned = reason.to_string();
 
             let (board, _) = storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
-                let card = board.get_card_mut(&card_id_owned)
+                let card = board
+                    .get_card_mut(&card_id_owned)
                     .ok_or(format!("Card {} not found", card_id_owned))?;
 
                 if card.column == "failed" {
@@ -182,22 +217,34 @@ impl Tool for ToolTaskMarkCardFailed {
                     message: format!("Manually marked as failed: {}", reason_owned),
                 });
                 Ok(())
-            }).await?;
+            })
+            .await?;
 
             storage::update_task_stats(gcx.clone(), &task_id).await?;
-            board.get_card(card_id).map(|c| c.title.clone()).unwrap_or_default()
+            board
+                .get_card(card_id)
+                .map(|c| c.title.clone())
+                .unwrap_or_default()
         };
 
-        let result = format!("❌ **Card marked as failed:** {}\n\n**Reason:**\n{}", card_title, reason);
+        let result = format!(
+            "❌ **Card marked as failed:** {}\n\n**Reason:**\n{}",
+            card_title, reason
+        );
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
 }

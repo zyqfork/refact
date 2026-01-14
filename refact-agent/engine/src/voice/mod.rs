@@ -2,9 +2,9 @@ pub mod models;
 pub mod types;
 
 #[cfg(feature = "voice")]
-pub mod transcribe;
-#[cfg(feature = "voice")]
 pub mod audio_decode;
+#[cfg(feature = "voice")]
+pub mod transcribe;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,9 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch, RwLock as ARwLock, Mutex as AMutex, mpsc, oneshot};
 use tracing::info;
 
-use crate::voice::types::{TranscribeRequest, TranscribeResult, VoiceStreamEvent, StreamingTranscriptEvent};
+use crate::voice::types::{
+    TranscribeRequest, TranscribeResult, VoiceStreamEvent, StreamingTranscriptEvent,
+};
 use crate::voice::models::WhisperModel;
 
 const DEBOUNCE_MS: u64 = 300;
@@ -115,7 +117,9 @@ impl VoiceService {
         let session_id_for_worker = session_id.to_string();
 
         tokio::spawn(async move {
-            service_for_worker.session_worker(session_id_for_worker, session_for_worker).await;
+            service_for_worker
+                .session_worker(session_id_for_worker, session_for_worker)
+                .await;
         });
 
         session
@@ -152,7 +156,10 @@ impl VoiceService {
                 } else if is_final {
                     session.audio_buffer.clone()
                 } else {
-                    let start = session.audio_buffer.len().saturating_sub(LIVE_WINDOW_SAMPLES);
+                    let start = session
+                        .audio_buffer
+                        .len()
+                        .saturating_sub(LIVE_WINDOW_SAMPLES);
                     session.audio_buffer[start..].to_vec()
                 };
 
@@ -160,7 +167,10 @@ impl VoiceService {
             };
 
             if !buffer_snapshot.is_empty() {
-                match self.transcribe_buffer(&buffer_snapshot, language.as_deref()).await {
+                match self
+                    .transcribe_buffer(&buffer_snapshot, language.as_deref())
+                    .await
+                {
                     Ok(text) => {
                         let clean_text = text.replace("[BLANK_AUDIO]", "").trim().to_string();
                         let session = session_arc.lock().await;
@@ -201,7 +211,11 @@ impl VoiceService {
     }
 
     #[cfg(feature = "voice")]
-    pub async fn transcribe_buffer(&self, samples: &[f32], language: Option<&str>) -> Result<String, String> {
+    pub async fn transcribe_buffer(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+    ) -> Result<String, String> {
         self.ensure_model_loaded().await?;
         let ctx_guard = self.ctx.read().await;
         let ctx = ctx_guard.as_ref().ok_or("Model not loaded")?;
@@ -234,7 +248,11 @@ impl VoiceService {
     }
 
     #[cfg(not(feature = "voice"))]
-    pub async fn transcribe_buffer(&self, _samples: &[f32], _language: Option<&str>) -> Result<String, String> {
+    pub async fn transcribe_buffer(
+        &self,
+        _samples: &[f32],
+        _language: Option<&str>,
+    ) -> Result<String, String> {
         Err("Voice feature not enabled".to_string())
     }
 
@@ -249,11 +267,16 @@ impl VoiceService {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.queue_tx
-            .send(QueuedTranscription { request, response_tx })
+            .send(QueuedTranscription {
+                request,
+                response_tx,
+            })
             .await
             .map_err(|_| "Voice service queue full".to_string())?;
 
-        response_rx.await.map_err(|_| "Transcription cancelled".to_string())?
+        response_rx
+            .await
+            .map_err(|_| "Transcription cancelled".to_string())?
     }
 
     #[cfg(feature = "voice")]
@@ -298,7 +321,8 @@ impl VoiceService {
         let progress_ref = &self.download_progress;
         let result = models::download_model(whisper_model, |p| {
             progress_ref.store(p, Ordering::SeqCst);
-        }).await;
+        })
+        .await;
 
         self.is_downloading.store(false, Ordering::SeqCst);
 

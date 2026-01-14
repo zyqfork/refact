@@ -68,8 +68,12 @@ mod background_tasks_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let mut holder = BackgroundTasksHolder::new(vec![
-                tokio::spawn(async { tokio::time::sleep(tokio::time::Duration::from_secs(10)).await }),
-                tokio::spawn(async { tokio::time::sleep(tokio::time::Duration::from_secs(10)).await }),
+                tokio::spawn(async {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await
+                }),
+                tokio::spawn(async {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await
+                }),
             ]);
             assert_eq!(holder.len(), 2, "Should start with 2 tasks");
             holder.abort().await;
@@ -119,10 +123,22 @@ mod task_types_tests {
                 schema_version: 1,
                 rev: 0,
                 columns: vec![
-                    BoardColumn { id: "planned".into(), title: "Planned".into() },
-                    BoardColumn { id: "doing".into(), title: "Doing".into() },
-                    BoardColumn { id: "done".into(), title: "Done".into() },
-                    BoardColumn { id: "failed".into(), title: "Failed".into() },
+                    BoardColumn {
+                        id: "planned".into(),
+                        title: "Planned".into(),
+                    },
+                    BoardColumn {
+                        id: "doing".into(),
+                        title: "Doing".into(),
+                    },
+                    BoardColumn {
+                        id: "done".into(),
+                        title: "Done".into(),
+                    },
+                    BoardColumn {
+                        id: "failed".into(),
+                        title: "Failed".into(),
+                    },
                 ],
                 cards: vec![],
             }
@@ -137,7 +153,9 @@ mod task_types_tests {
             let mut completed = vec![];
             let mut failed = vec![];
 
-            let done_cards: HashSet<_> = self.cards.iter()
+            let done_cards: HashSet<_> = self
+                .cards
+                .iter()
                 .filter(|c| c.column == "done")
                 .map(|c| c.id.as_str())
                 .collect();
@@ -148,7 +166,9 @@ mod task_types_tests {
                     "failed" => failed.push(card.id.clone()),
                     "doing" => in_progress.push(card.id.clone()),
                     "planned" => {
-                        let deps_satisfied = card.depends_on.iter()
+                        let deps_satisfied = card
+                            .depends_on
+                            .iter()
                             .all(|dep| done_cards.contains(dep.as_str()));
                         if deps_satisfied {
                             ready.push(card.id.clone());
@@ -160,7 +180,13 @@ mod task_types_tests {
                 }
             }
 
-            ReadyCardsResult { ready, blocked, in_progress, completed, failed }
+            ReadyCardsResult {
+                ready,
+                blocked,
+                in_progress,
+                completed,
+                failed,
+            }
         }
 
         fn get_card(&self, card_id: &str) -> Option<&BoardCard> {
@@ -173,11 +199,11 @@ mod task_types_tests {
                 None => return vec![],
             };
 
-            card.depends_on.iter()
+            card.depends_on
+                .iter()
                 .filter_map(|dep_id| {
-                    self.get_card(dep_id).map(|dep_card| {
-                        (dep_card.title.clone(), "report".to_string())
-                    })
+                    self.get_card(dep_id)
+                        .map(|dep_card| (dep_card.title.clone(), "report".to_string()))
                 })
                 .collect()
         }
@@ -186,7 +212,10 @@ mod task_types_tests {
     #[test]
     fn test_taskboard_default() {
         let board = TaskBoard::default();
-        assert_eq!(board.schema_version, 1, "Default schema version should be 1");
+        assert_eq!(
+            board.schema_version, 1,
+            "Default schema version should be 1"
+        );
         assert_eq!(board.rev, 0, "Default rev should be 0");
         assert_eq!(board.columns.len(), 4, "Should have 4 default columns");
         assert_eq!(board.cards.len(), 0, "Default board should have no cards");
@@ -195,18 +224,19 @@ mod task_types_tests {
     #[test]
     fn test_get_ready_cards_no_deps() {
         let mut board = TaskBoard::default();
-        board.cards = vec![
-            BoardCard {
-                id: "card1".into(),
-                title: "Task 1".into(),
-                column: "planned".into(),
-                depends_on: vec![],
-            },
-        ];
+        board.cards = vec![BoardCard {
+            id: "card1".into(),
+            title: "Task 1".into(),
+            column: "planned".into(),
+            depends_on: vec![],
+        }];
 
         let result = board.get_ready_cards();
         assert_eq!(result.ready.len(), 1, "Card with no deps should be ready");
-        assert!(result.ready.contains(&"card1".to_string()), "card1 should be in ready");
+        assert!(
+            result.ready.contains(&"card1".to_string()),
+            "card1 should be in ready"
+        );
         assert_eq!(result.blocked.len(), 0, "Should have no blocked cards");
     }
 
@@ -229,8 +259,15 @@ mod task_types_tests {
         ];
 
         let result = board.get_ready_cards();
-        assert_eq!(result.ready.len(), 1, "Card with satisfied deps should be ready");
-        assert!(result.ready.contains(&"card2".to_string()), "card2 should be in ready");
+        assert_eq!(
+            result.ready.len(),
+            1,
+            "Card with satisfied deps should be ready"
+        );
+        assert!(
+            result.ready.contains(&"card2".to_string()),
+            "card2 should be in ready"
+        );
         assert_eq!(result.completed.len(), 1, "Should have one completed card");
     }
 
@@ -254,9 +291,15 @@ mod task_types_tests {
 
         let result = board.get_ready_cards();
         assert_eq!(result.ready.len(), 1, "Only card1 should be ready");
-        assert!(result.ready.contains(&"card1".to_string()), "card1 should be ready");
+        assert!(
+            result.ready.contains(&"card1".to_string()),
+            "card1 should be ready"
+        );
         assert_eq!(result.blocked.len(), 1, "card2 should be blocked");
-        assert!(result.blocked.contains(&"card2".to_string()), "card2 should be blocked");
+        assert!(
+            result.blocked.contains(&"card2".to_string()),
+            "card2 should be blocked"
+        );
     }
 
     #[test]
@@ -284,8 +327,15 @@ mod task_types_tests {
         ];
 
         let result = board.get_ready_cards();
-        assert_eq!(result.ready.len(), 1, "card3 should be ready (transitive deps satisfied)");
-        assert!(result.ready.contains(&"card3".to_string()), "card3 should be ready");
+        assert_eq!(
+            result.ready.len(),
+            1,
+            "card3 should be ready (transitive deps satisfied)"
+        );
+        assert!(
+            result.ready.contains(&"card3".to_string()),
+            "card3 should be ready"
+        );
         assert_eq!(result.completed.len(), 2, "Should have 2 completed cards");
     }
 
@@ -322,14 +372,12 @@ mod task_types_tests {
     #[test]
     fn test_get_card_found() {
         let mut board = TaskBoard::default();
-        board.cards = vec![
-            BoardCard {
-                id: "card1".into(),
-                title: "Task 1".into(),
-                column: "planned".into(),
-                depends_on: vec![],
-            },
-        ];
+        board.cards = vec![BoardCard {
+            id: "card1".into(),
+            title: "Task 1".into(),
+            column: "planned".into(),
+            depends_on: vec![],
+        }];
 
         let card = board.get_card("card1");
         assert!(card.is_some(), "Should find existing card");
@@ -339,17 +387,19 @@ mod task_types_tests {
     #[test]
     fn test_get_ready_cards_with_missing_dependency() {
         let mut board = TaskBoard::default();
-        board.cards = vec![
-            BoardCard {
-                id: "card1".into(),
-                title: "Task 1".into(),
-                column: "planned".into(),
-                depends_on: vec!["nonexistent".into()],
-            },
-        ];
+        board.cards = vec![BoardCard {
+            id: "card1".into(),
+            title: "Task 1".into(),
+            column: "planned".into(),
+            depends_on: vec!["nonexistent".into()],
+        }];
 
         let result = board.get_ready_cards();
-        assert_eq!(result.ready.len(), 0, "Card with missing dependency should be blocked");
+        assert_eq!(
+            result.ready.len(),
+            0,
+            "Card with missing dependency should be blocked"
+        );
         assert_eq!(result.blocked.len(), 1, "Card should be in blocked list");
     }
 
@@ -372,7 +422,11 @@ mod task_types_tests {
         ];
 
         let result = board.get_ready_cards();
-        assert_eq!(result.ready.len(), 0, "Circular deps should result in no ready cards");
+        assert_eq!(
+            result.ready.len(),
+            0,
+            "Circular deps should result in no ready cards"
+        );
         assert_eq!(result.blocked.len(), 2, "Both cards should be blocked");
     }
 
@@ -389,7 +443,10 @@ mod task_types_tests {
             message: "Started work".into(),
         };
 
-        assert!(!update.timestamp.is_empty(), "Timestamp should not be empty");
+        assert!(
+            !update.timestamp.is_empty(),
+            "Timestamp should not be empty"
+        );
         assert!(!update.message.is_empty(), "Message should not be empty");
     }
 }
@@ -437,9 +494,16 @@ mod trajectory_memos_tests {
         ];
 
         let result = build_chat_messages(&messages);
-        assert_eq!(result.len(), 2, "Should filter out context_file and cd_instruction");
+        assert_eq!(
+            result.len(),
+            2,
+            "Should filter out context_file and cd_instruction"
+        );
         assert_eq!(result[0].0, "user", "First message should be user");
-        assert_eq!(result[1].0, "assistant", "Second message should be assistant");
+        assert_eq!(
+            result[1].0, "assistant",
+            "Second message should be assistant"
+        );
     }
 
     #[test]
@@ -457,13 +521,15 @@ mod trajectory_memos_tests {
 
     #[test]
     fn test_build_chat_messages_array_content() {
-        let messages = vec![
-            json!({"role": "user", "content": [{"text": "Part 1"}, {"text": "Part 2"}]}),
-        ];
+        let messages =
+            vec![json!({"role": "user", "content": [{"text": "Part 1"}, {"text": "Part 2"}]})];
 
         let result = build_chat_messages(&messages);
         assert_eq!(result.len(), 1, "Should handle array content");
-        assert_eq!(result[0].1, "Part 1\nPart 2", "Should join array parts with newline");
+        assert_eq!(
+            result[0].1, "Part 1\nPart 2",
+            "Should join array parts with newline"
+        );
     }
 }
 
@@ -491,8 +557,14 @@ mod error_handling_tests {
         assert_eq!(meta.schema_version, 1, "Schema version should be 1");
         assert!(!meta.id.is_empty(), "ID should not be empty");
         assert!(!meta.name.is_empty(), "Name should not be empty");
-        assert!(!meta.created_at.is_empty(), "Created_at should not be empty");
-        assert!(!meta.updated_at.is_empty(), "Updated_at should not be empty");
+        assert!(
+            !meta.created_at.is_empty(),
+            "Created_at should not be empty"
+        );
+        assert!(
+            !meta.updated_at.is_empty(),
+            "Updated_at should not be empty"
+        );
     }
 
     #[test]
@@ -536,7 +608,10 @@ mod error_handling_tests {
             Ok(())
         }
 
-        assert!(validate_task_id("valid-task-id").is_ok(), "Valid ID should pass");
+        assert!(
+            validate_task_id("valid-task-id").is_ok(),
+            "Valid ID should pass"
+        );
     }
 
     #[test]
@@ -556,7 +631,11 @@ mod error_handling_tests {
 
         let result = validate_task_id("");
         assert!(result.is_err(), "Empty ID should fail");
-        assert_eq!(result.unwrap_err(), "Task ID cannot be empty", "Error message should match");
+        assert_eq!(
+            result.unwrap_err(),
+            "Task ID cannot be empty",
+            "Error message should match"
+        );
     }
 
     #[test]
@@ -574,9 +653,18 @@ mod error_handling_tests {
             Ok(())
         }
 
-        assert!(validate_task_id("../../../etc/passwd").is_err(), "Path traversal should fail");
-        assert!(validate_task_id("task/id").is_err(), "Forward slash should fail");
-        assert!(validate_task_id("task\\id").is_err(), "Backslash should fail");
+        assert!(
+            validate_task_id("../../../etc/passwd").is_err(),
+            "Path traversal should fail"
+        );
+        assert!(
+            validate_task_id("task/id").is_err(),
+            "Forward slash should fail"
+        );
+        assert!(
+            validate_task_id("task\\id").is_err(),
+            "Backslash should fail"
+        );
     }
 
     #[test]
@@ -595,9 +683,15 @@ mod error_handling_tests {
         }
 
         let long_id = "a".repeat(101);
-        assert!(validate_task_id(&long_id).is_err(), "ID longer than 100 chars should fail");
+        assert!(
+            validate_task_id(&long_id).is_err(),
+            "ID longer than 100 chars should fail"
+        );
 
         let valid_id = "a".repeat(100);
-        assert!(validate_task_id(&valid_id).is_ok(), "ID with exactly 100 chars should pass");
+        assert!(
+            validate_task_id(&valid_id).is_ok(),
+            "ID with exactly 100 chars should pass"
+        );
     }
 }

@@ -123,7 +123,8 @@ pub async fn enrich_knowledge_metadata(
 
     let result = run_subchat_once(gcx, "kg_enrich", messages).await?;
 
-    let response = result.messages
+    let response = result
+        .messages
         .last()
         .map(|m| m.content.content_text_only())
         .unwrap_or_default();
@@ -184,7 +185,8 @@ pub async fn check_deprecation(
 
     let result = run_subchat_once(gcx, "kg_deprecate", messages).await?;
 
-    let response = result.messages
+    let response = result
+        .messages
         .last()
         .map(|m| m.content.content_text_only())
         .unwrap_or_default();

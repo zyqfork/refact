@@ -8,9 +8,7 @@ use tokio::sync::RwLock as ARwLock;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use crate::subchat::{run_subchat_once, resolve_subchat_params, resolve_subchat_model};
-use crate::tools::tools_description::{
-    Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::call_validation::{
     ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile,
     PostprocessSettings,
@@ -20,7 +18,8 @@ use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_o
 use crate::caps::resolve_chat_model;
 use crate::custom_error::ScratchError;
 use crate::files_correction::{
-    canonicalize_normalized_path, get_project_dirs_with_code_workdir, preprocess_path_for_normalization,
+    canonicalize_normalized_path, get_project_dirs_with_code_workdir,
+    preprocess_path_for_normalization,
 };
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
@@ -65,10 +64,17 @@ async fn send_entertainment_message(
             "content": message_text
         }
     });
-    tracing::info!("strategic_planning: sending entertainment message: tool_call_id={}, subchat_id={}", tool_call_id, message_text);
+    tracing::info!(
+        "strategic_planning: sending entertainment message: tool_call_id={}, subchat_id={}",
+        tool_call_id,
+        message_text
+    );
     match subchat_tx.lock().await.send(entertainment_msg) {
         Ok(_) => tracing::info!("strategic_planning: entertainment message sent successfully"),
-        Err(e) => tracing::error!("strategic_planning: failed to send entertainment message: {}", e),
+        Err(e) => tracing::error!(
+            "strategic_planning: failed to send entertainment message: {}",
+            e
+        ),
     }
 }
 
@@ -221,10 +227,21 @@ async fn _make_prompt(
 async fn _execute_subchat_iteration(
     gcx: Arc<ARwLock<GlobalContext>>,
     history: Vec<ChatMessage>,
-) -> Result<(Vec<ChatMessage>, ChatMessage, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<
+    (
+        Vec<ChatMessage>,
+        ChatMessage,
+        ChatUsage,
+        serde_json::Map<String, serde_json::Value>,
+    ),
+    String,
+> {
     let result = run_subchat_once(gcx, "strategic_planning", history).await?;
 
-    let reply = result.messages.last().cloned()
+    let reply = result
+        .messages
+        .last()
+        .cloned()
         .ok_or("No response from strategic planning")?;
 
     Ok((result.messages, reply, result.usage, result.metering))
@@ -236,7 +253,14 @@ async fn execute_strategic_planning(
     important_paths: Vec<PathBuf>,
     external_messages: Vec<ChatMessage>,
     tool_call_id: String,
-) -> Result<(String, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<
+    (
+        String,
+        ChatUsage,
+        serde_json::Map<String, serde_json::Value>,
+    ),
+    String,
+> {
     let subchat_tx = ccx_subchat.lock().await.subchat_tx.clone();
 
     send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
@@ -247,17 +271,21 @@ async fn execute_strategic_planning(
 
     let ccx_for_prompt = {
         let ccx_lock = ccx_subchat.lock().await;
-        Arc::new(AMutex::new(AtCommandsContext::new(
-            ccx_lock.global_context.clone(),
-            subchat_params.subchat_n_ctx,
-            0,
-            false,
-            external_messages.clone(),
-            ccx_lock.chat_id.clone(),
-            ccx_lock.should_execute_remotely,
-            ccx_lock.current_model.clone(),
-            ccx_lock.task_meta.clone(), None,
-        ).await))
+        Arc::new(AMutex::new(
+            AtCommandsContext::new(
+                ccx_lock.global_context.clone(),
+                subchat_params.subchat_n_ctx,
+                0,
+                false,
+                external_messages.clone(),
+                ccx_lock.chat_id.clone(),
+                ccx_lock.should_execute_remotely,
+                ccx_lock.current_model.clone(),
+                ccx_lock.task_meta.clone(),
+                None,
+            )
+            .await,
+        ))
     };
 
     let prompt = _make_prompt(
@@ -296,7 +324,13 @@ async fn execute_strategic_planning(
         base_title: Some("Strategic Plan".to_string()),
     };
 
-    let memory_note = match memories_add_enriched(ccx_subchat.clone(), &solution_content, enrichment_params).await {
+    let memory_note = match memories_add_enriched(
+        ccx_subchat.clone(),
+        &solution_content,
+        enrichment_params,
+    )
+    .await
+    {
         Ok(path) => {
             tracing::info!(
                 "Created enriched memory from strategic planning: {:?}",
@@ -356,7 +390,10 @@ impl Tool for ToolStrategicPlanning {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
         let project_dirs = get_project_dirs_with_code_workdir(gcx.clone(), &code_workdir).await;
         let important_paths = match args.get("important_paths") {
@@ -388,7 +425,12 @@ impl Tool for ToolStrategicPlanning {
                 }
                 paths
             }
-            Some(v) => return Err(format!("argument `important_paths` is not a string: {:?}", v)),
+            Some(v) => {
+                return Err(format!(
+                    "argument `important_paths` is not a string: {:?}",
+                    v
+                ))
+            }
             None => return Err("Missing argument `important_paths`".to_string()),
         };
 
@@ -401,7 +443,10 @@ impl Tool for ToolStrategicPlanning {
             ccx_lock.messages.clone()
         };
 
-        tracing::info!("Starting strategic planning for {} files", important_paths.len());
+        tracing::info!(
+            "Starting strategic planning for {} files",
+            important_paths.len()
+        );
 
         let (final_message, usage_collector, metering) = execute_strategic_planning(
             gcx,
@@ -409,25 +454,29 @@ impl Tool for ToolStrategicPlanning {
             important_paths.clone(),
             external_messages,
             tool_call_id.clone(),
-        ).await?;
+        )
+        .await?;
 
-        Ok((false, vec![
-            ContextEnum::ChatMessage(ChatMessage {
-                role: "tool".to_string(),
-                content: ChatContent::SimpleText(final_message),
-                tool_calls: None,
-                tool_call_id: tool_call_id.clone(),
-                usage: Some(usage_collector),
-                extra: metering,
-                output_filter: Some(OutputFilter::no_limits()),
-                ..Default::default()
-            }),
-            ContextEnum::ChatMessage(ChatMessage {
-                role: "cd_instruction".to_string(),
-                content: ChatContent::SimpleText(GUARDRAILS_PROMPT.to_string()),
-                ..Default::default()
-            }),
-        ]))
+        Ok((
+            false,
+            vec![
+                ContextEnum::ChatMessage(ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText(final_message),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id.clone(),
+                    usage: Some(usage_collector),
+                    extra: metering,
+                    output_filter: Some(OutputFilter::no_limits()),
+                    ..Default::default()
+                }),
+                ContextEnum::ChatMessage(ChatMessage {
+                    role: "cd_instruction".to_string(),
+                    content: ChatContent::SimpleText(GUARDRAILS_PROMPT.to_string()),
+                    ..Default::default()
+                }),
+            ],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

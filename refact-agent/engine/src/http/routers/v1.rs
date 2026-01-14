@@ -75,15 +75,13 @@ use crate::http::routers::v1::voice::{
     handle_v1_voice_stream_subscribe, handle_v1_voice_stream_chunk,
 };
 use crate::http::routers::v1::tasks::{
-    handle_list_tasks, handle_create_task, handle_get_task, handle_delete_task,
-    handle_get_board, handle_patch_board, handle_get_planner_instructions,
-    handle_set_planner_instructions, handle_get_ready_cards, handle_update_task_status,
-    handle_update_task_meta, handle_list_task_trajectories, handle_create_planner_chat,
-    handle_tasks_subscribe,
+    handle_list_tasks, handle_create_task, handle_get_task, handle_delete_task, handle_get_board,
+    handle_patch_board, handle_get_planner_instructions, handle_set_planner_instructions,
+    handle_get_ready_cards, handle_update_task_status, handle_update_task_meta,
+    handle_list_task_trajectories, handle_create_planner_chat, handle_tasks_subscribe,
 };
 use crate::http::routers::v1::trajectory_ops::{
-    handle_transform_preview, handle_transform_apply,
-    handle_handoff_preview, handle_handoff_apply,
+    handle_transform_preview, handle_transform_apply, handle_handoff_preview, handle_handoff_apply,
 };
 
 mod ast;
@@ -111,6 +109,7 @@ pub mod snippet_accepted;
 pub mod status;
 pub mod sync_files;
 pub mod system_prompt;
+pub mod tasks;
 pub mod telemetry_chat;
 pub mod telemetry_network;
 mod trajectory_ops;
@@ -118,7 +117,6 @@ mod v1_integrations;
 pub mod vecdb;
 pub mod voice;
 mod workspace;
-pub mod tasks;
 
 pub fn make_v1_router() -> Router {
     let builder = Router::new()
@@ -230,8 +228,14 @@ pub fn make_v1_router() -> Router {
         .route("/vdb-search", post(handle_v1_vecdb_search))
         .route("/vdb-status", get(handle_v1_vecdb_status))
         .route("/knowledge-graph", get(handle_v1_knowledge_graph))
-        .route("/knowledge/update-memory", post(handle_v1_knowledge_update_memory))
-        .route("/knowledge/delete-memory", post(handle_v1_knowledge_delete_memory))
+        .route(
+            "/knowledge/update-memory",
+            post(handle_v1_knowledge_update_memory),
+        )
+        .route(
+            "/knowledge/delete-memory",
+            post(handle_v1_knowledge_delete_memory),
+        )
         .route("/trajectory-compress", post(handle_v1_trajectory_compress))
         .route("/trajectories", get(handle_v1_trajectories_list))
         .route("/trajectories/all", get(handle_v1_trajectories_all))
@@ -244,31 +248,63 @@ pub fn make_v1_router() -> Router {
         .route("/trajectories/:id", delete(handle_v1_trajectories_delete))
         .route("/chats/subscribe", get(handle_v1_chat_subscribe))
         .route("/chats/:chat_id/commands", post(handle_v1_chat_command))
-        .route("/chats/:chat_id/queue/:client_request_id", delete(handle_v1_chat_cancel_queued))
+        .route(
+            "/chats/:chat_id/queue/:client_request_id",
+            delete(handle_v1_chat_cancel_queued),
+        )
         .route("/voice/transcribe", post(handle_v1_voice_transcribe))
         .route("/voice/download", post(handle_v1_voice_download))
         .route("/voice/status", get(handle_v1_voice_status))
-        .route("/voice/stream/:session_id/subscribe", get(handle_v1_voice_stream_subscribe))
-        .route("/voice/stream/:session_id/chunk", post(handle_v1_voice_stream_chunk))
+        .route(
+            "/voice/stream/:session_id/subscribe",
+            get(handle_v1_voice_stream_subscribe),
+        )
+        .route(
+            "/voice/stream/:session_id/chunk",
+            post(handle_v1_voice_stream_chunk),
+        )
         .route("/tasks", get(handle_list_tasks))
         .route("/tasks", post(handle_create_task))
         .route("/tasks/subscribe", get(handle_tasks_subscribe))
         .route("/tasks/:task_id", get(handle_get_task))
         .route("/tasks/:task_id", delete(handle_delete_task))
-         .route("/tasks/:task_id/status", post(handle_update_task_status))
-         .route("/tasks/:task_id/meta", patch(handle_update_task_meta))
+        .route("/tasks/:task_id/status", post(handle_update_task_status))
+        .route("/tasks/:task_id/meta", patch(handle_update_task_meta))
         .route("/tasks/:task_id/board", get(handle_get_board))
         .route("/tasks/:task_id/board", post(handle_patch_board))
         .route("/tasks/:task_id/board/ready", get(handle_get_ready_cards))
-        .route("/tasks/:task_id/planner-instructions", get(handle_get_planner_instructions))
-        .route("/tasks/:task_id/planner-instructions", put(handle_set_planner_instructions))
-        .route("/tasks/:task_id/trajectories/:role", get(handle_list_task_trajectories))
-        .route("/tasks/:task_id/planner-chats", post(handle_create_planner_chat))
-        .route("/chats/:chat_id/trajectory/transform/preview", post(handle_transform_preview))
-        .route("/chats/:chat_id/trajectory/transform/apply", post(handle_transform_apply))
-        .route("/chats/:chat_id/trajectory/handoff/preview", post(handle_handoff_preview))
-        .route("/chats/:chat_id/trajectory/handoff/apply", post(handle_handoff_apply));
+        .route(
+            "/tasks/:task_id/planner-instructions",
+            get(handle_get_planner_instructions),
+        )
+        .route(
+            "/tasks/:task_id/planner-instructions",
+            put(handle_set_planner_instructions),
+        )
+        .route(
+            "/tasks/:task_id/trajectories/:role",
+            get(handle_list_task_trajectories),
+        )
+        .route(
+            "/tasks/:task_id/planner-chats",
+            post(handle_create_planner_chat),
+        )
+        .route(
+            "/chats/:chat_id/trajectory/transform/preview",
+            post(handle_transform_preview),
+        )
+        .route(
+            "/chats/:chat_id/trajectory/transform/apply",
+            post(handle_transform_apply),
+        )
+        .route(
+            "/chats/:chat_id/trajectory/handoff/preview",
+            post(handle_handoff_preview),
+        )
+        .route(
+            "/chats/:chat_id/trajectory/handoff/apply",
+            post(handle_handoff_apply),
+        );
 
-    builder
-        .layer(axum::middleware::from_fn(telemetry_middleware))
+    builder.layer(axum::middleware::from_fn(telemetry_middleware))
 }

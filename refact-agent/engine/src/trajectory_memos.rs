@@ -285,7 +285,8 @@ async fn extract_memos_and_meta(
         .await
         .map_err(|e| e.to_string())?;
 
-    let response_text = result.messages
+    let response_text = result
+        .messages
         .last()
         .and_then(|m| match &m.content {
             ChatContent::SimpleText(t) => Some(t.clone()),

@@ -18,6 +18,7 @@ import {
   LayersIcon,
   PauseIcon,
 } from "@radix-ui/react-icons";
+import { ChatLoading } from "../../components/ChatContent/ChatLoading";
 import { ScrollArea } from "../../components/ScrollArea";
 import { CloseButton } from "../../components/Buttons/Buttons";
 import { useAppDispatch } from "../../hooks";
@@ -258,11 +259,7 @@ export const TaskList: React.FC = () => {
   );
 
   if (isLoading) {
-    return (
-      <Flex align="center" justify="center" style={{ height: "100%" }}>
-        <Text color="gray">Loading tasks...</Text>
-      </Flex>
-    );
+    return <ChatLoading />;
   }
 
   return (

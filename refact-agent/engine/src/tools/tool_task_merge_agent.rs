@@ -13,12 +13,16 @@ use crate::tasks::storage;
 pub struct ToolTaskMergeAgent;
 
 impl ToolTaskMergeAgent {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Tool for ToolTaskMergeAgent {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
@@ -59,18 +63,19 @@ impl Tool for ToolTaskMergeAgent {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let ccx_lock = ccx.lock().await;
-        
-        let is_planner = ccx_lock.task_meta.as_ref()
+
+        let is_planner = ccx_lock
+            .task_meta
+            .as_ref()
             .map(|m| m.role == "planner")
             .unwrap_or(false);
 
         if !is_planner {
-            return Err(
-                "task_merge_agent can only be called by the task planner. \
-                 Switch to the planner chat to merge agent work.".to_string()
-            );
+            return Err("task_merge_agent can only be called by the task planner. \
+                 Switch to the planner chat to merge agent work."
+                .to_string());
         }
-        
+
         let task_id = if let Some(id) = args.get("task_id").and_then(|v| v.as_str()) {
             id.to_string()
         } else if let Some(ref meta) = ccx_lock.task_meta {
@@ -79,10 +84,13 @@ impl Tool for ToolTaskMergeAgent {
             return Err("Missing 'task_id' (and chat is not bound to a task)".to_string());
         };
 
-        let card_id = args.get("card_id").and_then(|v| v.as_str())
+        let card_id = args
+            .get("card_id")
+            .and_then(|v| v.as_str())
             .ok_or("Missing 'card_id'")?;
 
-        let strategy = args.get("strategy")
+        let strategy = args
+            .get("strategy")
             .and_then(|v| v.as_str())
             .unwrap_or("merge");
 
@@ -93,7 +101,10 @@ impl Tool for ToolTaskMergeAgent {
         };
 
         if strategy != "merge" && strategy != "squash" {
-            return Err(format!("Invalid strategy '{}', must be 'merge' or 'squash'", strategy));
+            return Err(format!(
+                "Invalid strategy '{}', must be 'merge' or 'squash'",
+                strategy
+            ));
         }
 
         let gcx = ccx_lock.global_context.clone();
@@ -107,16 +118,23 @@ impl Tool for ToolTaskMergeAgent {
         }
 
         let board = storage::load_board(gcx.clone(), &task_id).await?;
-        let card = board.get_card(card_id)
+        let card = board
+            .get_card(card_id)
             .ok_or(format!("Card {} not found", card_id))?;
 
-        let agent_branch = card.agent_branch.as_ref()
+        let agent_branch = card
+            .agent_branch
+            .as_ref()
             .ok_or(format!("Card {} has no agent branch", card_id))?;
-        let agent_worktree = card.agent_worktree.as_ref()
+        let agent_worktree = card
+            .agent_worktree
+            .as_ref()
             .ok_or(format!("Card {} has no agent worktree", card_id))?;
 
         let task_meta = storage::load_task_meta(gcx.clone(), &task_id).await?;
-        let base_branch = task_meta.base_branch.as_ref()
+        let base_branch = task_meta
+            .base_branch
+            .as_ref()
             .ok_or("Task has no base branch set")?;
 
         let run_git = |args: &[&str]| -> Result<String, String> {
@@ -133,11 +151,15 @@ impl Tool for ToolTaskMergeAgent {
             }
         };
 
-        let commits_ahead = run_git(&["rev-list", "--count", &format!("{}..{}", base_branch, agent_branch)])
-            .unwrap_or_default()
-            .trim()
-            .parse::<u32>()
-            .unwrap_or(0);
+        let commits_ahead = run_git(&[
+            "rev-list",
+            "--count",
+            &format!("{}..{}", base_branch, agent_branch),
+        ])
+        .unwrap_or_default()
+        .trim()
+        .parse::<u32>()
+        .unwrap_or(0);
 
         if commits_ahead == 0 {
             let worktree_status = if let Some(wt) = card.agent_worktree.as_ref() {
@@ -182,28 +204,38 @@ impl Tool for ToolTaskMergeAgent {
         let merge_result = if strategy == "squash" {
             run_git(&["merge", "--squash", agent_branch])
         } else {
-            run_git(&["merge", agent_branch, "-m", &format!("Merge agent work from {}", agent_branch)])
+            run_git(&[
+                "merge",
+                agent_branch,
+                "-m",
+                &format!("Merge agent work from {}", agent_branch),
+            ])
         };
 
         if let Err(e) = merge_result {
             let status = run_git(&["status", "--porcelain"]).unwrap_or_default();
             let has_conflicts = status.lines().any(|l| {
                 let chars: Vec<char> = l.chars().take(2).collect();
-                chars.len() >= 2 && (chars[0] == 'U' || chars[1] == 'U' ||
-                    (chars[0] == 'A' && chars[1] == 'A') ||
-                    (chars[0] == 'D' && chars[1] == 'D'))
+                chars.len() >= 2
+                    && (chars[0] == 'U'
+                        || chars[1] == 'U'
+                        || (chars[0] == 'A' && chars[1] == 'A')
+                        || (chars[0] == 'D' && chars[1] == 'D'))
             });
 
             if has_conflicts {
                 let _ = run_git(&["merge", "--abort"]);
                 let _ = run_git(&["reset", "--merge"]);
 
-                let conflict_files: Vec<String> = status.lines()
+                let conflict_files: Vec<String> = status
+                    .lines()
                     .filter(|l| {
                         let chars: Vec<char> = l.chars().take(2).collect();
-                        chars.len() >= 2 && (chars[0] == 'U' || chars[1] == 'U' ||
-                            (chars[0] == 'A' && chars[1] == 'A') ||
-                            (chars[0] == 'D' && chars[1] == 'D'))
+                        chars.len() >= 2
+                            && (chars[0] == 'U'
+                                || chars[1] == 'U'
+                                || (chars[0] == 'A' && chars[1] == 'A')
+                                || (chars[0] == 'D' && chars[1] == 'D'))
                     })
                     .filter_map(|l| l.get(3..).map(|s| s.to_string()))
                     .collect();
@@ -213,19 +245,26 @@ impl Tool for ToolTaskMergeAgent {
                     conflict_files.join("\n")
                 );
 
-                return Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-                    role: "tool".to_string(),
-                    content: ChatContent::SimpleText(error_msg),
-                    tool_calls: None,
-                    tool_call_id: tool_call_id.clone(),
-                    ..Default::default()
-                })]));
+                return Ok((
+                    false,
+                    vec![ContextEnum::ChatMessage(ChatMessage {
+                        role: "tool".to_string(),
+                        content: ChatContent::SimpleText(error_msg),
+                        tool_calls: None,
+                        tool_call_id: tool_call_id.clone(),
+                        ..Default::default()
+                    })],
+                ));
             }
             return Err(format!("Merge failed: {}", e));
         }
 
         if strategy == "squash" {
-            let commit_result = run_git(&["commit", "-m", &format!("Squash merge agent work from {}", agent_branch)]);
+            let commit_result = run_git(&[
+                "commit",
+                "-m",
+                &format!("Squash merge agent work from {}", agent_branch),
+            ]);
             if let Err(e) = commit_result {
                 if !e.contains("nothing to commit") {
                     return Err(format!("Failed to commit squash merge: {}", e));
@@ -234,19 +273,22 @@ impl Tool for ToolTaskMergeAgent {
         }
 
         if delete_worktree {
-            let worktree_removed = run_git(&["worktree", "remove", agent_worktree, "--force"]).is_ok();
+            let worktree_removed =
+                run_git(&["worktree", "remove", agent_worktree, "--force"]).is_ok();
             let branch_deleted = run_git(&["branch", "-D", agent_branch]).is_ok();
 
             if worktree_removed || branch_deleted {
                 let card_id_owned = card_id.to_string();
-                let (_board, _) = storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
-                    if let Some(card) = board.get_card_mut(&card_id_owned) {
-                        card.agent_branch = None;
-                        card.agent_worktree = None;
-                        card.agent_worktree_name = None;
-                    }
-                    Ok(())
-                }).await?;
+                let (_board, _) =
+                    storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
+                        if let Some(card) = board.get_card_mut(&card_id_owned) {
+                            card.agent_branch = None;
+                            card.agent_worktree = None;
+                            card.agent_worktree_name = None;
+                        }
+                        Ok(())
+                    })
+                    .await?;
             }
         }
 
@@ -262,14 +304,19 @@ The agent's work has been successfully merged back to the main branch."#,
             card_id, strategy, agent_branch, delete_worktree
         );
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(result_message),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(result_message),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
-    fn tool_depends_on(&self) -> Vec<String> { vec![] }
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
 }

@@ -87,9 +87,13 @@ impl Tool for ToolCreateTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
-        let (_, _, chunks, _summary) = tool_create_text_doc_exec(gcx, args, false, &code_workdir).await?;
+        let (_, _, chunks, _summary) =
+            tool_create_text_doc_exec(gcx, args, false, &code_workdir).await?;
         Ok((
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
@@ -109,7 +113,10 @@ impl Tool for ToolCreateTextDoc {
     ) -> Result<MatchConfirmDeny, String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
         let can_exec = parse_args(gcx.clone(), args, &code_workdir).await.is_ok();
         let msgs_len = ccx.lock().await.messages.len();

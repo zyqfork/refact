@@ -85,7 +85,9 @@ async fn enrich_task_with_session_state(gcx: Arc<ARwLock<GlobalContext>>, task: 
     }
 }
 
-async fn list_tasks_with_session_state(gcx: Arc<ARwLock<GlobalContext>>) -> Result<Vec<TaskMeta>, String> {
+async fn list_tasks_with_session_state(
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> Result<Vec<TaskMeta>, String> {
     let mut tasks = storage::list_tasks(gcx.clone()).await?;
     for task in &mut tasks {
         enrich_task_with_session_state(gcx.clone(), task).await;
@@ -96,7 +98,8 @@ async fn list_tasks_with_session_state(gcx: Arc<ARwLock<GlobalContext>>) -> Resu
 pub async fn handle_list_tasks(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
 ) -> Result<Json<Vec<TaskMeta>>, (StatusCode, String)> {
-    let tasks = list_tasks_with_session_state(gcx).await
+    let tasks = list_tasks_with_session_state(gcx)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(tasks))
 }
@@ -105,7 +108,8 @@ pub async fn handle_create_task(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Json(req): Json<CreateTaskRequest>,
 ) -> Result<Json<TaskMeta>, (StatusCode, String)> {
-    let meta = storage::create_task(gcx, &req.name).await
+    let meta = storage::create_task(gcx, &req.name)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(meta))
 }
@@ -114,9 +118,11 @@ pub async fn handle_get_task(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let meta = storage::load_task_meta(gcx.clone(), &task_id).await
+    let meta = storage::load_task_meta(gcx.clone(), &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
-    let board = storage::load_board(gcx.clone(), &task_id).await
+    let board = storage::load_board(gcx.clone(), &task_id)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let ready = board.get_ready_cards();
 
@@ -134,7 +140,8 @@ pub async fn handle_delete_task(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    storage::delete_task(gcx, &task_id).await
+    storage::delete_task(gcx, &task_id)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(json!({"deleted": true})))
 }
@@ -143,7 +150,8 @@ pub async fn handle_get_board(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<TaskBoard>, (StatusCode, String)> {
-    let board = storage::load_board(gcx, &task_id).await
+    let board = storage::load_board(gcx, &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(Json(board))
 }
@@ -153,19 +161,35 @@ pub async fn handle_patch_board(
     Path(task_id): Path<String>,
     Json(req): Json<UpdateBoardRequest>,
 ) -> Result<Json<TaskBoard>, (StatusCode, String)> {
-    let mut board = storage::load_board(gcx.clone(), &task_id).await
+    let mut board = storage::load_board(gcx.clone(), &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
 
     if board.rev != req.rev {
-        return Err((StatusCode::CONFLICT, format!("Board rev mismatch: expected {}, got {}", board.rev, req.rev)));
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "Board rev mismatch: expected {}, got {}",
+                board.rev, req.rev
+            ),
+        ));
     }
 
     let now = Utc::now().to_rfc3339();
 
     match req.patch {
-        BoardPatch::CreateCard { id, title, priority, depends_on, instructions } => {
+        BoardPatch::CreateCard {
+            id,
+            title,
+            priority,
+            depends_on,
+            instructions,
+        } => {
             if board.cards.iter().any(|c| c.id == id) {
-                return Err((StatusCode::BAD_REQUEST, format!("Card {} already exists", id)));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Card {} already exists", id),
+                ));
             }
             board.cards.push(BoardCard {
                 id,
@@ -186,20 +210,39 @@ pub async fn handle_patch_board(
                 agent_worktree_name: None,
             });
         }
-        BoardPatch::UpdateCard { id, title, priority, depends_on, instructions } => {
-            let card = board.get_card_mut(&id)
+        BoardPatch::UpdateCard {
+            id,
+            title,
+            priority,
+            depends_on,
+            instructions,
+        } => {
+            let card = board
+                .get_card_mut(&id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Card {} not found", id)))?;
-            if let Some(t) = title { card.title = t; }
-            if let Some(p) = priority { card.priority = p; }
-            if let Some(d) = depends_on { card.depends_on = d; }
-            if let Some(i) = instructions { card.instructions = i; }
+            if let Some(t) = title {
+                card.title = t;
+            }
+            if let Some(p) = priority {
+                card.priority = p;
+            }
+            if let Some(d) = depends_on {
+                card.depends_on = d;
+            }
+            if let Some(i) = instructions {
+                card.instructions = i;
+            }
         }
         BoardPatch::MoveCard { id, column } => {
-            let card = board.get_card_mut(&id)
+            let card = board
+                .get_card_mut(&id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Card {} not found", id)))?;
             let valid_columns = ["planned", "doing", "done", "failed"];
             if !valid_columns.contains(&column.as_str()) {
-                return Err((StatusCode::BAD_REQUEST, format!("Invalid column: {}", column)));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid column: {}", column),
+                ));
             }
             if column == "doing" && card.started_at.is_none() {
                 card.started_at = Some(now.clone());
@@ -209,8 +252,13 @@ pub async fn handle_patch_board(
             }
             card.column = column;
         }
-        BoardPatch::AssignAgent { card_id, agent_id, agent_chat_id } => {
-            let card = board.get_card_mut(&card_id)
+        BoardPatch::AssignAgent {
+            card_id,
+            agent_id,
+            agent_chat_id,
+        } => {
+            let card = board
+                .get_card_mut(&card_id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Card {} not found", card_id)))?;
             card.assignee = Some(agent_id);
             card.agent_chat_id = Some(agent_chat_id);
@@ -219,7 +267,8 @@ pub async fn handle_patch_board(
             }
         }
         BoardPatch::AddStatusUpdate { card_id, message } => {
-            let card = board.get_card_mut(&card_id)
+            let card = board
+                .get_card_mut(&card_id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Card {} not found", card_id)))?;
             card.status_updates.push(StatusUpdate {
                 timestamp: now.clone(),
@@ -227,7 +276,8 @@ pub async fn handle_patch_board(
             });
         }
         BoardPatch::SetFinalReport { card_id, report } => {
-            let card = board.get_card_mut(&card_id)
+            let card = board
+                .get_card_mut(&card_id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Card {} not found", card_id)))?;
             card.final_report = Some(report);
         }
@@ -237,16 +287,22 @@ pub async fn handle_patch_board(
     }
 
     board.rev += 1;
-    storage::save_board(gcx.clone(), &task_id, &board).await
+    storage::save_board(gcx.clone(), &task_id, &board)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    crate::tasks::events::emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
-        task_id: task_id.clone(),
-        rev: board.rev,
-        board: board.clone(),
-    }).await;
+    crate::tasks::events::emit_task_event(
+        gcx.clone(),
+        TaskEvent::BoardChanged {
+            task_id: task_id.clone(),
+            rev: board.rev,
+            board: board.clone(),
+        },
+    )
+    .await;
 
-    storage::update_task_stats(gcx, &task_id).await
+    storage::update_task_stats(gcx, &task_id)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok(Json(board))
@@ -256,7 +312,8 @@ pub async fn handle_get_planner_instructions(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let content = storage::load_planner_instructions(gcx, &task_id).await
+    let content = storage::load_planner_instructions(gcx, &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(Json(json!({"content": content})))
 }
@@ -271,7 +328,8 @@ pub async fn handle_set_planner_instructions(
     Path(task_id): Path<String>,
     Json(req): Json<SetPlannerInstructionsRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    storage::save_planner_instructions(gcx, &task_id, &req.content).await
+    storage::save_planner_instructions(gcx, &task_id, &req.content)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(json!({"saved": true})))
 }
@@ -280,7 +338,8 @@ pub async fn handle_get_ready_cards(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let board = storage::load_board(gcx, &task_id).await
+    let board = storage::load_board(gcx, &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     let ready = board.get_ready_cards();
     Ok(Json(json!(ready)))
@@ -291,16 +350,22 @@ pub async fn handle_update_task_status(
     Path(task_id): Path<String>,
     Json(req): Json<UpdateTaskStatusRequest>,
 ) -> Result<Json<TaskMeta>, (StatusCode, String)> {
-    let mut meta = storage::load_task_meta(gcx.clone(), &task_id).await
+    let mut meta = storage::load_task_meta(gcx.clone(), &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     meta.status = req.status;
     meta.updated_at = Utc::now().to_rfc3339();
-    storage::save_task_meta(gcx.clone(), &task_id, &meta).await
+    storage::save_task_meta(gcx.clone(), &task_id, &meta)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    crate::tasks::events::emit_task_event(gcx, TaskEvent::TaskUpdated {
-        task_id,
-        meta: meta.clone(),
-    }).await;
+    crate::tasks::events::emit_task_event(
+        gcx,
+        TaskEvent::TaskUpdated {
+            task_id,
+            meta: meta.clone(),
+        },
+    )
+    .await;
     Ok(Json(meta))
 }
 
@@ -326,7 +391,8 @@ pub async fn handle_update_task_meta(
     Path(task_id): Path<String>,
     Json(req): Json<UpdateTaskMetaRequest>,
 ) -> Result<Json<TaskMeta>, (StatusCode, String)> {
-    let mut meta = storage::load_task_meta(gcx.clone(), &task_id).await
+    let mut meta = storage::load_task_meta(gcx.clone(), &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     if let Some(name) = req.name {
         meta.name = name;
@@ -341,12 +407,17 @@ pub async fn handle_update_task_meta(
         meta.default_agent_model = Some(model);
     }
     meta.updated_at = Utc::now().to_rfc3339();
-    storage::save_task_meta(gcx.clone(), &task_id, &meta).await
+    storage::save_task_meta(gcx.clone(), &task_id, &meta)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    crate::tasks::events::emit_task_event(gcx, TaskEvent::TaskUpdated {
-        task_id,
-        meta: meta.clone(),
-    }).await;
+    crate::tasks::events::emit_task_event(
+        gcx,
+        TaskEvent::TaskUpdated {
+            task_id,
+            meta: meta.clone(),
+        },
+    )
+    .await;
     Ok(Json(meta))
 }
 
@@ -354,7 +425,8 @@ pub async fn handle_list_task_trajectories(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path((task_id, role)): Path<(String, String)>,
 ) -> Result<Json<Vec<TrajectoryInfo>>, (StatusCode, String)> {
-    let trajectories = storage::list_task_trajectories(gcx, &task_id, &role, None).await
+    let trajectories = storage::list_task_trajectories(gcx, &task_id, &role, None)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(trajectories))
 }
@@ -363,10 +435,12 @@ pub async fn handle_create_planner_chat(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let _ = storage::load_task_meta(gcx.clone(), &task_id).await
+    let _ = storage::load_task_meta(gcx.clone(), &task_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
 
-    let existing = storage::list_task_trajectories(gcx.clone(), &task_id, "planner", None).await
+    let existing = storage::list_task_trajectories(gcx.clone(), &task_id, "planner", None)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let max_num = existing
@@ -381,7 +455,8 @@ pub async fn handle_create_planner_chat(
     let new_num = max_num + 1;
     let chat_id = format!("planner-{}-{}", task_id, new_num);
 
-    crate::chat::trajectories::save_initial_planner_trajectory(gcx, &task_id, &chat_id).await
+    crate::chat::trajectories::save_initial_planner_trajectory(gcx, &task_id, &chat_id)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok(Json(json!({"chat_id": chat_id})))
@@ -402,10 +477,15 @@ pub async fn handle_tasks_subscribe(
             }
         };
         let seq_counter = gcx_locked.task_events_seq.clone().ok_or_else(|| {
-            ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "Task events seq not available".to_string())
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Task events seq not available".to_string(),
+            )
         })?;
         drop(gcx_locked);
-        let tasks = list_tasks_with_session_state(gcx.clone()).await.unwrap_or_default();
+        let tasks = list_tasks_with_session_state(gcx.clone())
+            .await
+            .unwrap_or_default();
         (rx, seq_counter, tasks)
     };
 

@@ -72,7 +72,8 @@ pub async fn generate_code_edit(
         .await
         .map_err(|e| format!("Error generating code edit: {}", e))?;
 
-    let edited_code = result.messages
+    let edited_code = result
+        .messages
         .last()
         .and_then(|msg| match &msg.content {
             ChatContent::SimpleText(text) => Some(text.clone()),

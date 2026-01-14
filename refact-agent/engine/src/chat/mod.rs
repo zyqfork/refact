@@ -19,7 +19,10 @@ pub mod trajectories;
 pub mod trajectory_ops;
 pub mod types;
 
-pub use session::{SessionsMap, create_sessions_map, start_session_cleanup_task, get_or_create_session_with_trajectory};
+pub use session::{
+    SessionsMap, create_sessions_map, start_session_cleanup_task,
+    get_or_create_session_with_trajectory,
+};
 pub use queue::process_command_queue;
 pub use trajectories::{
     start_trajectory_watcher, TrajectoryEvent, handle_v1_trajectories_list,

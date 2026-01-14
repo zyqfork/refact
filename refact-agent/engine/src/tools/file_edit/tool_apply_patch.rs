@@ -241,7 +241,10 @@ impl Tool for ToolApplyPatch {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
         let (_, _, chunks, _) = tool_apply_patch_exec(gcx, args, false, &code_workdir).await?;
         Ok((
@@ -263,7 +266,10 @@ impl Tool for ToolApplyPatch {
     ) -> Result<MatchConfirmDeny, String> {
         let (gcx, code_workdir) = {
             let ccx_locked = ccx.lock().await;
-            (ccx_locked.global_context.clone(), ccx_locked.code_workdir.clone())
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.code_workdir.clone(),
+            )
         };
         let can_exec = parse_args(gcx, args, &code_workdir).await.is_ok();
         let msgs_len = ccx.lock().await.messages.len();

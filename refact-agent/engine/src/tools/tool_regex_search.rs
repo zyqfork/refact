@@ -240,7 +240,10 @@ impl Tool for ToolRegexSearch {
 
         let (gcx, code_workdir) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.global_context.clone(), ccx_lock.code_workdir.clone())
+            (
+                ccx_lock.global_context.clone(),
+                ccx_lock.code_workdir.clone(),
+            )
         };
 
         let files_in_scope = resolve_scope(gcx.clone(), &code_workdir, &scope)
@@ -295,7 +298,8 @@ impl Tool for ToolRegexSearch {
             }
         }
 
-        let search_results = search_files_with_regex(gcx.clone(), &code_workdir, &pattern, &scope).await?;
+        let search_results =
+            search_files_with_regex(gcx.clone(), &code_workdir, &pattern, &scope).await?;
         all_content.push_str("\nText matches inside files:\n");
         if search_results.is_empty() {
             all_content.push_str("  No text matches found in any file.\n");

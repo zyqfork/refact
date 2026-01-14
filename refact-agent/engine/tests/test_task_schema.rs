@@ -1,4 +1,3 @@
-use serde_yaml;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskMeta {

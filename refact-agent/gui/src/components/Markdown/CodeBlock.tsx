@@ -78,6 +78,7 @@ const _MarkdownCodeBlock: React.FC<MarkdownCodeBlockProps> = ({
           CodeTag={(props) => (
             <Code
               {...props}
+              variant="ghost"
               className={classNames(
                 styles.code,
                 styles.code_block,
@@ -98,6 +99,7 @@ const _MarkdownCodeBlock: React.FC<MarkdownCodeBlockProps> = ({
 
   return (
     <Code
+      variant="ghost"
       className={classNames(styles.code, styles.code_inline, className)}
       color={color}
     >

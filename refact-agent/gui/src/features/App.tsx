@@ -10,6 +10,7 @@ import {
   useEventsBusForIDE,
   useTrajectoriesSubscription,
   useTasksSubscription,
+  useAllChatsSubscription,
 } from "../hooks";
 import { FIMDebug } from "./FIM";
 import { store, persistor, RootState } from "../app/store";
@@ -76,6 +77,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   usePatchesAndDiffsEventsForIDE();
   useTrajectoriesSubscription();
   useTasksSubscription();
+  useAllChatsSubscription();
 
   const [isPaddingApplied, setIsPaddingApplied] = useState<boolean>(false);
 

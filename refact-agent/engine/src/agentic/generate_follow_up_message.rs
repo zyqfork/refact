@@ -79,7 +79,8 @@ pub async fn generate_follow_up_message(
 ) -> Result<FollowUpResponse, String> {
     let result = run_subchat_once(gcx, "follow_up", _make_conversation(&messages)).await?;
 
-    let response = result.messages
+    let response = result
+        .messages
         .last()
         .and_then(|last_m| match &last_m.content {
             ChatContent::SimpleText(text) => Some(text.clone()),

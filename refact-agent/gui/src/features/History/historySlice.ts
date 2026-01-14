@@ -361,8 +361,12 @@ export const {
   clearHistory,
   upsertToolCallIntoHistory,
 } = historySlice.actions;
-export const { selectHistoryIsLoading, getChatById, getHistory, getHistoryTree } =
-  historySlice.selectors;
+export const {
+  selectHistoryIsLoading,
+  getChatById,
+  getHistory,
+  getHistoryTree,
+} = historySlice.selectors;
 
 export const historyMiddleware = createListenerMiddleware();
 const startHistoryListening = historyMiddleware.startListening.withTypes<

@@ -21,12 +21,12 @@ mod tool_web;
 
 pub mod file_edit;
 mod tool_create_knowledge;
-mod tool_task_init;
-mod tool_task_board;
 mod tool_task_agent;
-mod tool_task_spawn_agent;
-mod tool_task_check_agents;
 mod tool_task_agent_finish;
+mod tool_task_board;
+mod tool_task_check_agents;
+mod tool_task_init;
 mod tool_task_mark_card;
-mod tool_task_merge_agent;
 pub mod tool_task_memory;
+mod tool_task_merge_agent;
+mod tool_task_spawn_agent;

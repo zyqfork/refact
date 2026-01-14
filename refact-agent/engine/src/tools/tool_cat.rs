@@ -180,8 +180,14 @@ impl Tool for ToolCat {
         let (paths, path_line_ranges, symbols) = parse_cat_args(args)?;
         let code_workdir = ccx.lock().await.code_workdir.clone();
         let (filenames_present, symbols_not_found, not_found_messages, context_enums, multimodal) =
-            paths_and_symbols_to_cat_with_path_ranges(ccx.clone(), paths, path_line_ranges, symbols, &code_workdir)
-                .await;
+            paths_and_symbols_to_cat_with_path_ranges(
+                ccx.clone(),
+                paths,
+                path_line_ranges,
+                symbols,
+                &code_workdir,
+            )
+            .await;
 
         let mut content = "".to_string();
         if !filenames_present.is_empty() {
@@ -377,8 +383,10 @@ pub async fn paths_and_symbols_to_cat_with_path_ranges(
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
 
         // both not fuzzy
-        let candidates_file = file_repair_candidates(gcx.clone(), &resolved_path_str, top_n, false).await;
-        let candidates_dir = correct_to_nearest_dir_path(gcx.clone(), &resolved_path_str, false, top_n).await;
+        let candidates_file =
+            file_repair_candidates(gcx.clone(), &resolved_path_str, top_n, false).await;
+        let candidates_dir =
+            correct_to_nearest_dir_path(gcx.clone(), &resolved_path_str, false, top_n).await;
 
         if !candidates_file.is_empty() || candidates_dir.is_empty() {
             let file_path = match return_one_candidate_or_a_good_error(

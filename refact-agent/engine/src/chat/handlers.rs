@@ -127,7 +127,8 @@ pub async fn handle_v1_chat_command(
 
     if let ChatCommand::SetParams { ref patch } = request.command {
         let old_model = session.thread.model.clone();
-        let (changed, sanitized_patch) = super::queue::apply_setparams_patch(&mut session.thread, patch);
+        let (changed, sanitized_patch) =
+            super::queue::apply_setparams_patch(&mut session.thread, patch);
         if session.thread.model != old_model {
             sanitize_messages_for_model_switch(&mut session.messages);
         }
@@ -140,10 +141,15 @@ pub async fn handle_v1_chat_command(
             if session.thread.is_title_generated != is_gen {
                 session.thread.is_title_generated = is_gen;
                 let title = session.thread.title.clone();
-                session.emit(ChatEvent::TitleUpdated { title, is_generated: is_gen });
+                session.emit(ChatEvent::TitleUpdated {
+                    title,
+                    is_generated: is_gen,
+                });
             }
         }
-        session.emit(ChatEvent::ThreadUpdated { params: sanitized_patch });
+        session.emit(ChatEvent::ThreadUpdated {
+            params: sanitized_patch,
+        });
         if changed {
             session.increment_version();
             session.touch();
@@ -220,7 +226,8 @@ pub async fn handle_v1_chat_command(
     }
 
     if request.priority {
-        let insert_pos = session.command_queue
+        let insert_pos = session
+            .command_queue
             .iter()
             .position(|r| !r.priority)
             .unwrap_or(session.command_queue.len());
@@ -267,7 +274,9 @@ pub async fn handle_v1_chat_cancel_queued(
     let mut session = session_arc.lock().await;
 
     let initial_len = session.command_queue.len();
-    session.command_queue.retain(|r| r.client_request_id != client_request_id);
+    session
+        .command_queue
+        .retain(|r| r.client_request_id != client_request_id);
 
     if session.command_queue.len() < initial_len {
         session.touch();

@@ -25,7 +25,8 @@ const AGENT_STUCK_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const MONITOR_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Detect if a session error should cause task agent failure
-pub async fn handle_agent_streaming_error(    gcx: Arc<ARwLock<GlobalContext>>,
+pub async fn handle_agent_streaming_error(
+    gcx: Arc<ARwLock<GlobalContext>>,
     task_meta: &TaskMeta,
     error_message: &str,
 ) {
@@ -65,10 +66,8 @@ async fn mark_agent_as_failed(
     let reason_clone = reason.to_string();
     let expected_agent_id_owned = expected_agent_id.map(|s| s.to_string());
 
-    let (board, (_card_title, all_finished)) = storage::update_board_atomic(
-        gcx.clone(),
-        task_id,
-        move |board| {
+    let (board, (_card_title, all_finished)) =
+        storage::update_board_atomic(gcx.clone(), task_id, move |board| {
             let card = board
                 .get_card_mut(&card_id_owned)
                 .ok_or(format!("Card {} not found", card_id_owned))?;
@@ -134,17 +133,12 @@ async fn mark_agent_as_failed(
             let all_finished = agents_active_after == 0;
 
             Ok((card_title, all_finished))
-        },
-    )
-    .await?;
+        })
+        .await?;
 
     storage::update_task_stats(gcx.clone(), task_id).await?;
 
-    tracing::info!(
-        "Marked agent for card {} as failed: {}",
-        card_id,
-        reason
-    );
+    tracing::info!("Marked agent for card {} as failed: {}", card_id, reason);
 
     // Notify planner if all agents are done
     if all_finished {
@@ -241,7 +235,8 @@ pub async fn start_agent_monitor(gcx: Arc<ARwLock<GlobalContext>>) {
 }
 
 /// Check all active tasks for stuck agents
-async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), String> {    let task_metas = storage::list_tasks(gcx.clone()).await?;
+async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), String> {
+    let task_metas = storage::list_tasks(gcx.clone()).await?;
 
     for task_meta in task_metas {
         if task_meta.status != crate::tasks::types::TaskStatus::Active {
@@ -260,7 +255,9 @@ async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), 
                 continue;
             }
 
-            let last_activity_timestamp = card.status_updates.last()
+            let last_activity_timestamp = card
+                .status_updates
+                .last()
                 .map(|u| u.timestamp.as_str())
                 .or(card.started_at.as_deref())
                 .unwrap_or(&card.created_at);
@@ -268,15 +265,18 @@ async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), 
             let agent_chat_id = match &card.agent_chat_id {
                 Some(id) => id,
                 None => {
-                    if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(last_activity_timestamp) {
-                        let elapsed = Utc::now().signed_duration_since(last_time.with_timezone(&Utc));
+                    if let Ok(last_time) =
+                        chrono::DateTime::parse_from_rfc3339(last_activity_timestamp)
+                    {
+                        let elapsed =
+                            Utc::now().signed_duration_since(last_time.with_timezone(&Utc));
                         if elapsed.num_seconds() as u64 > AGENT_STUCK_TIMEOUT.as_secs() {
                             tracing::warn!(
                                 "Agent for card {} has no agent_chat_id but is doing, stuck for {} ago",
                                 card.id,
                                 humantime::format_duration(Duration::from_secs(elapsed.num_seconds() as u64))
                             );
-                            
+
                             mark_agent_as_failed(
                                 gcx.clone(),
                                 task_id,
@@ -300,15 +300,18 @@ async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), 
             };
 
             let Some(session_arc) = session_arc else {
-                if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(last_activity_timestamp) {
+                if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(last_activity_timestamp)
+                {
                     let elapsed = Utc::now().signed_duration_since(last_time.with_timezone(&Utc));
                     if elapsed.num_seconds() as u64 > AGENT_STUCK_TIMEOUT.as_secs() {
                         tracing::warn!(
                             "Agent for card {} appears stuck (no session, last update {} ago)",
                             card.id,
-                            humantime::format_duration(Duration::from_secs(elapsed.num_seconds() as u64))
+                            humantime::format_duration(Duration::from_secs(
+                                elapsed.num_seconds() as u64
+                            ))
                         );
-                        
+
                         mark_agent_as_failed(
                             gcx.clone(),
                             task_id,
@@ -335,9 +338,9 @@ async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), 
                     .as_deref()
                     .unwrap_or("Unknown error")
                     .to_string();
-                
+
                 drop(session);
-                
+
                 tracing::warn!(
                     "Agent for card {} is in Error state: {}",
                     card.id,
@@ -358,14 +361,14 @@ async fn check_for_stuck_agents(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), 
             // Check for stuck agents (no activity for too long)
             let last_activity = session.last_activity;
             let elapsed = last_activity.elapsed();
-            
+
             // If agent is idle and hasn't done anything in a long time, might be stuck
             if session.runtime.state == SessionState::Idle
                 && session.command_queue.is_empty()
                 && elapsed > AGENT_STUCK_TIMEOUT
             {
                 drop(session);
-                
+
                 tracing::warn!(
                     "Agent for card {} appears stuck (idle for {:?})",
                     card.id,
@@ -447,29 +450,33 @@ mod tests {
     #[test]
     fn test_timestamp_fallback_logic() {
         let mut card = create_test_card("T-1", "doing", Some("agent-1".to_string()));
-        
+
         card.status_updates.push(StatusUpdate {
             timestamp: "2024-01-01T10:00:00Z".to_string(),
             message: "Test update".to_string(),
         });
-        
-        let last_activity = card.status_updates.last()
+
+        let last_activity = card
+            .status_updates
+            .last()
             .map(|u| u.timestamp.as_str())
             .or(card.started_at.as_deref())
             .unwrap_or(&card.created_at);
-        
+
         assert_eq!(last_activity, "2024-01-01T10:00:00Z");
     }
 
     #[test]
     fn test_timestamp_fallback_to_started_at() {
         let card = create_test_card("T-1", "doing", Some("agent-1".to_string()));
-        
-        let last_activity = card.status_updates.last()
+
+        let last_activity = card
+            .status_updates
+            .last()
             .map(|u| u.timestamp.as_str())
             .or(card.started_at.as_deref())
             .unwrap_or(&card.created_at);
-        
+
         assert_eq!(last_activity, card.started_at.as_ref().unwrap());
     }
 
@@ -477,12 +484,14 @@ mod tests {
     fn test_timestamp_fallback_to_created_at() {
         let mut card = create_test_card("T-1", "doing", Some("agent-1".to_string()));
         card.started_at = None;
-        
-        let last_activity = card.status_updates.last()
+
+        let last_activity = card
+            .status_updates
+            .last()
             .map(|u| u.timestamp.as_str())
             .or(card.started_at.as_deref())
             .unwrap_or(&card.created_at);
-        
+
         assert_eq!(last_activity, &card.created_at);
     }
 
@@ -505,11 +514,12 @@ mod tests {
     fn test_elapsed_time_calculation() {
         let old_time = chrono::Utc::now() - chrono::Duration::seconds(25 * 60);
         let old_timestamp = old_time.to_rfc3339();
-        
+
         if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&old_timestamp) {
-            let elapsed = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
+            let elapsed =
+                chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
             let elapsed_secs = elapsed.num_seconds() as u64;
-            
+
             assert!(elapsed_secs >= 25 * 60 - 5);
             assert!(elapsed_secs > AGENT_STUCK_TIMEOUT.as_secs());
         } else {
@@ -521,7 +531,7 @@ mod tests {
     fn test_assignee_mismatch_detection() {
         let card = create_test_card("T-1", "doing", Some("agent-123".to_string()));
         let expected_agent = "agent-456";
-        
+
         let mismatch = card.assignee.as_ref() != Some(&expected_agent.to_string());
         assert!(mismatch);
     }
@@ -530,9 +540,8 @@ mod tests {
     fn test_assignee_match() {
         let card = create_test_card("T-1", "doing", Some("agent-123".to_string()));
         let expected_agent = "agent-123";
-        
+
         let matches = card.assignee.as_ref() == Some(&expected_agent.to_string());
         assert!(matches);
     }
 }
-

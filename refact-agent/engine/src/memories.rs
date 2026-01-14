@@ -176,10 +176,11 @@ pub async fn load_memories_by_tags(
                 continue;
             }
 
-            let text = match get_file_text_from_memory_or_disk(gcx.clone(), &path.to_path_buf()).await {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+            let text =
+                match get_file_text_from_memory_or_disk(gcx.clone(), &path.to_path_buf()).await {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
 
             let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
             if frontmatter.is_archived() || frontmatter.is_deprecated() {
@@ -188,12 +189,16 @@ pub async fn load_memories_by_tags(
 
             let has_matching_tag = frontmatter.tags.iter().any(|tag| {
                 let tag_lower = tag.to_lowercase();
-                allowed_tags.iter().any(|allowed| tag_lower.contains(&allowed.to_lowercase()))
+                allowed_tags
+                    .iter()
+                    .any(|allowed| tag_lower.contains(&allowed.to_lowercase()))
             });
 
             let kind_matches = frontmatter.kind.as_ref().map_or(false, |k| {
                 let kind_lower = k.to_lowercase();
-                allowed_tags.iter().any(|allowed| kind_lower.contains(&allowed.to_lowercase()))
+                allowed_tags
+                    .iter()
+                    .any(|allowed| kind_lower.contains(&allowed.to_lowercase()))
             });
 
             if !has_matching_tag && !kind_matches {
@@ -297,7 +302,8 @@ pub async fn memories_search(
         } else if path_str.contains(".refact/trajectories/") && path_str.ends_with(".json") {
             // Skip current trajectory to avoid self-referential enrichment
             if let Some(exclude_id) = exclude_trajectory_id {
-                let traj_id = rec.file_path
+                let traj_id = rec
+                    .file_path
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
