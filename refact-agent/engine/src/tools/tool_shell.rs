@@ -299,7 +299,7 @@ fn spawn_output_streaming_task(
     stderr: tokio::process::ChildStderr,
     cancel_token: tokio_util::sync::CancellationToken,
     output_collector: Arc<AMutex<OutputCollector>>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -363,7 +363,7 @@ fn spawn_output_streaming_task(
                 }
             }
         }
-    });
+    })
 }
 
 pub async fn execute_shell_command_with_streaming(
@@ -427,7 +427,7 @@ pub async fn execute_shell_command_with_streaming(
         Arc::new(AMutex::new(OutputCollector::new()));
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
-    spawn_output_streaming_task(
+    let streaming_handle = spawn_output_streaming_task(
         subchat_tx.clone(),
         tool_call_id.to_string(),
         stdout,
@@ -439,16 +439,17 @@ pub async fn execute_shell_command_with_streaming(
     let timeout_duration = tokio::time::Duration::from_secs(timeout);
     let wait_result = tokio::time::timeout(timeout_duration, child.wait()).await;
 
-    cancel_token.cancel();
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    let duration = t0.elapsed();
-    tracing::info!("SHELL: /finished in {:.3}s", duration.as_secs_f64());
-
     let exit_status = match wait_result {
-        Ok(Ok(status)) => status,
-        Ok(Err(e)) => return Err(format!("Failed to wait for command: {}", e)),
+        Ok(Ok(status)) => {
+            let _ = streaming_handle.await;
+            status
+        }
+        Ok(Err(e)) => {
+            cancel_token.cancel();
+            return Err(format!("Failed to wait for command: {}", e));
+        }
         Err(_) => {
+            cancel_token.cancel();
             let _ = child.kill().await;
             return Err(format!(
                 "Command '{}' timed out after {} seconds",
@@ -456,6 +457,9 @@ pub async fn execute_shell_command_with_streaming(
             ));
         }
     };
+
+    let duration = t0.elapsed();
+    tracing::info!("SHELL: /finished in {:.3}s", duration.as_secs_f64());
 
     let (stdout_str, stderr_str) = {
         let mut collector = output_collector.lock().await;

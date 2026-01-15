@@ -356,6 +356,16 @@ function processToolCalls(
     return processToolCalls(tail, toolResults, features, [...processed, elem]);
   }
 
+  if (head.function.name === "shell_service") {
+    const elem = (
+      <ShellServiceTool
+        key={`shell-service-tool-${processed.length}`}
+        toolCall={head}
+      />
+    );
+    return processToolCalls(tail, toolResults, features, [...processed, elem]);
+  }
+
   if (head.function.name === "subagent") {
     const elem = (
       <SubagentTool key={`subagent-tool-${processed.length}`} toolCall={head} />
@@ -1701,6 +1711,111 @@ const ShellTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
                   <Text weight="light" size="1">
                     $ {command}
                   </Text>
+                  {args.workdir && (
+                    <Text weight="light" size="1" color="gray">
+                      in {args.workdir}
+                    </Text>
+                  )}
+                  {currentStep && (
+                    <Text weight="light" size="1" color="gray">
+                      {currentStep}
+                    </Text>
+                  )}
+                </Flex>
+              </Flex>
+              <Chevron open={open} />
+            </Flex>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            {maybeResult?.content &&
+              typeof maybeResult.content === "string" && (
+                <Result onClose={handleHide}>{maybeResult.content}</Result>
+              )}
+          </Collapsible.Content>
+        </Collapsible.Root>
+      </AnimatedText>
+    </Container>
+  );
+};
+
+interface ShellServiceArgs {
+  service_name?: string;
+  action?: string;
+  command?: string;
+  workdir?: string;
+}
+
+const ACTION_ICONS: Record<string, string> = {
+  start: "▶️",
+  stop: "⏹️",
+  restart: "🔄",
+  status: "📊",
+  logs: "📋",
+};
+
+const ShellServiceTool: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = useRef(null);
+  const scrollOnHide = useHideScroll(ref);
+
+  const maybeResult = useAppSelector((state) =>
+    selectToolResultById(state, toolCall.id),
+  );
+
+  const inProgress = !maybeResult;
+
+  const args = useMemo<ShellServiceArgs>(() => {
+    try {
+      return JSON.parse(toolCall.function.arguments) as ShellServiceArgs;
+    } catch {
+      return {};
+    }
+  }, [toolCall.function.arguments]);
+
+  const handleHide = useCallback(() => {
+    setOpen(false);
+    scrollOnHide();
+  }, [scrollOnHide]);
+
+  const action = args.action ?? "unknown";
+  const serviceName = args.service_name ?? "service";
+  const actionIcon = ACTION_ICONS[action] ?? "🔧";
+
+  const subchatLog: string[] = toolCall.subchat_log ?? [];
+  const currentStep = subchatLog.slice(-1)[0];
+
+  return (
+    <Container py="1">
+      <AnimatedText as="div" weight="light" size="1" animating={inProgress}>
+        <Collapsible.Root open={open} onOpenChange={setOpen}>
+          <Collapsible.Trigger asChild>
+            <Flex
+              gap="2"
+              align="end"
+              onClick={() => setOpen((prev) => !prev)}
+              ref={ref}
+            >
+              <Flex
+                gap="2"
+                align="start"
+                style={{ cursor: "pointer", flex: 1 }}
+              >
+                {inProgress ? (
+                  <Spinner size="1" />
+                ) : (
+                  <Text weight="light" size="1">
+                    {actionIcon}
+                  </Text>
+                )}
+                <Flex gap="1" align="start" direction="column">
+                  <Text weight="light" size="1">
+                    {action} {serviceName}
+                  </Text>
+                  {args.command && (
+                    <Text weight="light" size="1" color="gray">
+                      $ {args.command}
+                    </Text>
+                  )}
                   {args.workdir && (
                     <Text weight="light" size="1" color="gray">
                       in {args.workdir}
