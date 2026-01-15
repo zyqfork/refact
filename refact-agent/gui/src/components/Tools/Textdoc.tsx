@@ -85,6 +85,16 @@ export const TextDocTool: React.FC<{
   return false;
 };
 
+function getToolCallPath(toolCall: TextDocToolCall): string | null {
+  if (isApplyPatchToolCall(toolCall)) {
+    const match = toolCall.function.arguments.patch.match(
+      /^[-+]{3}\s+[ab]\/(.+)$/m,
+    );
+    return match ? match[1] : null;
+  }
+  return (toolCall.function.arguments as { path?: string }).path ?? null;
+}
+
 type TextDocHeaderProps = { toolCall: TextDocToolCall };
 const TextDocHeader = forwardRef<HTMLDivElement, TextDocHeaderProps>(
   ({ toolCall }, ref) => {
@@ -96,15 +106,16 @@ const TextDocHeader = forwardRef<HTMLDivElement, TextDocHeaderProps>(
     const canPaste = useAppSelector(selectCanPaste);
     const chatId = useAppSelector(selectChatId);
 
+    const toolCallPath = useMemo(() => getToolCallPath(toolCall), [toolCall]);
+
     const clearErrorMessage = useCallback(() => setErrorMessage(""), []);
 
-    // move this
     const handleOpenFile = useCallback(async () => {
-      if (!toolCall.function.arguments.path) return;
+      if (!toolCallPath) return;
       await queryPathThenOpenFile({
-        file_path: toolCall.function.arguments.path as string,
+        file_path: toolCallPath,
       });
-    }, [toolCall.function.arguments.path, queryPathThenOpenFile]);
+    }, [toolCallPath, queryPathThenOpenFile]);
 
     const handleReplace = useCallback(
       (content: string) => {
@@ -166,7 +177,7 @@ const TextDocHeader = forwardRef<HTMLDivElement, TextDocHeaderProps>(
                 void handleOpenFile();
               }}
             >
-              {toolCall.function.arguments.path}
+              {toolCallPath ?? "apply_patch"}
             </Link>
           </TruncateLeft>{" "}
           <div style={{ flexGrow: 1 }} />
