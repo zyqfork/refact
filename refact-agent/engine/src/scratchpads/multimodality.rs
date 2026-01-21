@@ -387,6 +387,12 @@ impl ChatMessage {
         if let Some(reasoning_content) = self.reasoning_content.clone() {
             dict.insert("reasoning_content".to_string(), json!(reasoning_content));
         }
+        if !self.citations.is_empty() {
+            dict.insert("citations".to_string(), json!(self.citations));
+        }
+        for (key, val) in &self.extra {
+            dict.insert(key.clone(), val.clone());
+        }
 
         Value::Object(dict)
     }
