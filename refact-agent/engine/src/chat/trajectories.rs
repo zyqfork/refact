@@ -2023,6 +2023,7 @@ mod tests {
             external_reload_pending: false,
             last_prompt_messages: Vec::new(),
             task_agent_error: None,
+            trajectory_events_tx: None,
         };
 
         let snapshot = TrajectorySnapshot::from_session(&session);

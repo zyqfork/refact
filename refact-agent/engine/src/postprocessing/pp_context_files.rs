@@ -519,21 +519,26 @@ pub async fn postprocess_context_files(
     single_file_mode: bool,
     settings: &PostprocessSettings,
 ) -> (Vec<ContextFile>, Vec<String>) {
-    assert!(settings.max_files_n > 0);
-    let files_marked_up = if settings.use_ast_based_pp {
+    let mut pp_settings = settings.clone();
+    if pp_settings.max_files_n == 0 {
+        warn!("postprocess_context_files called with max_files_n=0, clamping to 1");
+        pp_settings.max_files_n = 1;
+    }
+
+    let files_marked_up = if pp_settings.use_ast_based_pp {
         pp_ast_markup_files(gcx.clone(), context_file_vec).await
     } else {
         pp_load_files_without_ast(gcx.clone(), context_file_vec).await
     };
 
-    let mut lines_in_files = pp_color_lines(context_file_vec, files_marked_up, settings).await;
+    let mut lines_in_files = pp_color_lines(context_file_vec, files_marked_up, &pp_settings).await;
 
     pp_limit_and_merge(
         &mut lines_in_files,
         tokenizer,
         tokens_limit,
         single_file_mode,
-        settings,
+        &pp_settings,
     )
     .await
 }

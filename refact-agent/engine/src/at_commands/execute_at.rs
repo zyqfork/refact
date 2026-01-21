@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex as AMutex;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::json;
 use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
@@ -38,7 +38,7 @@ pub async fn run_at_commands_locally(
     let reserve_for_context = max_tokens_for_rag_chat(n_ctx, maxgen);
     info!("reserve_for_context {} tokens", reserve_for_context);
 
-    let any_context_produced = false;
+    let mut any_context_produced = false;
 
     let mut user_msg_starts = original_messages.len();
     let mut messages_with_at: usize = 0;
@@ -173,18 +173,14 @@ pub async fn run_at_commands_locally(
             .await;
             let (post_processed_files, _notes) = post_processed;
             if !post_processed_files.is_empty() {
-                let json_vec = post_processed_files
-                    .iter()
-                    .map(|p| json!(p))
-                    .collect::<Vec<Value>>();
-                if !json_vec.is_empty() {
-                    let message = ChatMessage::new(
-                        "context_file".to_string(),
-                        serde_json::to_string(&json_vec).unwrap_or("".to_string()),
-                    );
-                    stream_back_to_user.push_in_json(json!(message));
-                    new_messages.push(message);
-                }
+                any_context_produced = true;
+                let message = ChatMessage {
+                    role: "context_file".to_string(),
+                    content: ChatContent::ContextFiles(post_processed_files),
+                    ..Default::default()
+                };
+                stream_back_to_user.push_in_json(json!(message));
+                new_messages.push(message);
             }
             info!(
                 "postprocess_plain_text_messages + postprocess_context_files {:.3}s",
@@ -333,22 +329,20 @@ impl AtCommandMember {
 }
 
 pub fn parse_words_from_line(line: &String) -> Vec<(String, usize, usize)> {
-    fn trim_punctuation(s: &str) -> String {
-        s.trim_end_matches(&['!', '.', ',', '?'][..]).to_string()
+    fn trim_punctuation(s: &str) -> &str {
+        s.trim_end_matches(&['!', '.', ',', '?'][..])
     }
 
-    // let word_regex = Regex::new(r#"(@?[^ !?@\n]*)"#).expect("Invalid regex");
-    // let word_regex = Regex::new(r#"(@?[^ !?@\n]+|\n|@)"#).expect("Invalid regex");
-    let word_regex = Regex::new(r#"(@?\S*)"#).expect("Invalid regex"); // fixed windows
+    let word_regex = Regex::new(r"@?\S+").expect("Invalid regex");
 
     let mut results = vec![];
-    for cap in word_regex.captures_iter(line) {
-        if let Some(matched) = cap.get(1) {
-            let trimmed_match = trim_punctuation(&matched.as_str().to_string());
+    for m in word_regex.find_iter(line) {
+        let trimmed = trim_punctuation(m.as_str());
+        if !trimmed.is_empty() {
             results.push((
-                trimmed_match.clone(),
-                matched.start(),
-                matched.start() + trimmed_match.len(),
+                trimmed.to_string(),
+                m.start(),
+                m.start() + trimmed.len(),
             ));
         }
     }
@@ -372,5 +366,34 @@ mod tests {
         if let Some((word, _start, _end)) = link {
             assert_eq!(word, "https://doc.rust-lang.org/book/ch03-04-comments.html");
         }
+    }
+
+    #[test]
+    fn test_parse_words_from_line_no_empty_tokens() {
+        let line = "hello  world    test @file".to_string();
+        let parsed_words = parse_words_from_line(&line);
+
+        for (word, _, _) in parsed_words.iter() {
+            assert!(!word.is_empty(), "No empty tokens should be produced");
+        }
+    }
+
+    #[test]
+    fn test_parse_words_from_line_long_input() {
+        let line = (0..1000).map(|i| format!("word{} ", i)).collect::<String>();
+        let parsed_words = parse_words_from_line(&line);
+
+        assert!(parsed_words.len() < 2000, "Performance regression: too many tokens for long input");
+        assert!(parsed_words.iter().all(|(w, _, _)| !w.is_empty()), "No empty tokens");
+    }
+
+    #[test]
+    fn test_parse_words_from_line_punctuation_trimming() {
+        let line = "@file.txt, src/main.rs! code?".to_string();
+        let parsed_words = parse_words_from_line(&line);
+
+        assert_eq!(parsed_words[0].0, "@file.txt");
+        assert_eq!(parsed_words[1].0, "src/main.rs");
+        assert_eq!(parsed_words[2].0, "code");
     }
 }

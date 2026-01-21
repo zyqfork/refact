@@ -294,10 +294,11 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
         info!(" -- /post fim {}ms-- ", fim_ms);
 
         if use_rag && rag_tokens_n > 0 {
-            let pp_settings = {
+            let mut pp_settings = {
                 let ccx_locked = ccx.lock().await;
                 ccx_locked.postprocess_parameters.clone()
             };
+            pp_settings.max_files_n = pp_settings.max_files_n.max(1);
 
             // NOTE: why do we need this loop?
             // postprocess_context_files doesn't care about additional tokens after lines skip

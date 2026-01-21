@@ -14,7 +14,7 @@ use tracing::info;
 
 use crate::at_commands::execute_at::run_at_commands_locally;
 use crate::indexing_utils::wait_for_indexing_if_needed;
-use crate::postprocessing::pp_utils::pp_resolve_ctx_file_paths;
+use crate::postprocessing::pp_context_files::postprocess_context_files;
 use crate::tokens;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::execute_at::{execute_at_commands_in_query, parse_words_from_line};
@@ -226,7 +226,7 @@ pub async fn handle_v1_command_preview(
             model_rec.base.n_ctx,
             crate::constants::CHAT_TOP_N,
             true,
-            vec![],
+            messages,
             "".to_string(),
             None,
             model_rec.base.id.clone(),
@@ -241,38 +241,45 @@ pub async fn handle_v1_command_preview(
 
     let mut preview: Vec<ChatMessage> = vec![];
     for exec_result in messages_for_postprocessing.iter() {
-        // at commands exec() can produce both role="user" and role="assistant" messages
         if let ContextEnum::ChatMessage(raw_msg) = exec_result {
             preview.push(raw_msg.clone());
         }
     }
 
-    let mut pp_settings = {
-        let ccx_locked = ccx.lock().await;
-        ccx_locked.postprocess_parameters.clone()
-    };
-    if pp_settings.max_files_n == 0 {
-        pp_settings.max_files_n = crate::constants::CHAT_TOP_N;
-    }
-
     let mut context_files =
         filter_only_context_file_from_context_tool(&messages_for_postprocessing);
-    let ctx_file_paths =
-        pp_resolve_ctx_file_paths(global_context.clone(), &mut context_files).await;
-    for (context_file, (_, short_path)) in context_files.iter_mut().zip(ctx_file_paths.into_iter())
-    {
-        context_file.file_name = short_path;
-    }
 
     if !context_files.is_empty() {
-        let message = ChatMessage {
-            role: "context_file".to_string(),
-            content: ChatContent::SimpleText(serde_json::to_string(&context_files).unwrap()),
-            tool_calls: None,
-            tool_call_id: "".to_string(),
-            ..Default::default()
+        let (gcx, mut pp_settings) = {
+            let ccx_locked = ccx.lock().await;
+            (
+                ccx_locked.global_context.clone(),
+                ccx_locked.postprocess_parameters.clone(),
+            )
         };
-        preview.push(message.clone());
+
+        pp_settings.max_files_n = pp_settings.max_files_n.max(1);
+        pp_settings.use_ast_based_pp = false;
+
+        let tokens_limit = (model_rec.base.n_ctx / 4).max(256);
+        let (post_processed_files, _notes) = postprocess_context_files(
+            gcx.clone(),
+            &mut context_files,
+            tokenizer_arc.clone(),
+            tokens_limit,
+            false,
+            &pp_settings,
+        )
+        .await;
+
+        if !post_processed_files.is_empty() {
+            let message = ChatMessage {
+                role: "context_file".to_string(),
+                content: ChatContent::ContextFiles(post_processed_files),
+                ..Default::default()
+            };
+            preview.push(message);
+        }
     }
 
     let mut highlights = vec![];
@@ -346,7 +353,7 @@ pub async fn handle_v1_at_command_execute(
         post.n_ctx,
         crate::constants::CHAT_TOP_N,
         true,
-        vec![],
+        post.messages.clone(),
         "".to_string(),
         None,
         model_rec.base.id.clone(),

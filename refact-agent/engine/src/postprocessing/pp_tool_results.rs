@@ -216,34 +216,45 @@ fn find_coverage_in_history(cf: &ContextFile, messages: &[ChatMessage]) -> Optio
         if msg.role != "context_file" {
             continue;
         }
-        if let ChatContent::ContextFiles(files) = &msg.content {
-            for existing in files {
-                if canonical_path(&existing.file_name) != cf_canonical {
-                    continue;
-                }
-                let same_rev = matches!(
-                    (&cf.file_rev, &existing.file_rev),
-                    (Some(a), Some(b)) if a == b
-                );
-                if !same_rev {
-                    continue;
-                }
-                if has_truncation_markers(&existing.file_content) {
-                    continue;
-                }
-                let ex_start = if existing.line1 == 0 {
-                    1
+        
+        let files_to_check: Vec<ContextFile> = match &msg.content {
+            ChatContent::ContextFiles(files) => files.clone(),
+            ChatContent::SimpleText(text) => {
+                if let Ok(parsed) = serde_json::from_str::<Vec<ContextFile>>(text) {
+                    parsed
                 } else {
-                    existing.line1
-                };
-                let ex_end = if existing.line2 == 0 {
-                    usize::MAX
-                } else {
-                    existing.line2
-                };
-                if ex_start <= cf_start && ex_end >= cf_end {
-                    return Some((idx, msg.tool_call_id.clone()));
+                    continue;
                 }
+            }
+            _ => continue,
+        };
+
+        for existing in files_to_check {
+            if canonical_path(&existing.file_name) != cf_canonical {
+                continue;
+            }
+            let same_rev = matches!(
+                (&cf.file_rev, &existing.file_rev),
+                (Some(a), Some(b)) if a == b
+            );
+            if !same_rev {
+                continue;
+            }
+            if has_truncation_markers(&existing.file_content) {
+                continue;
+            }
+            let ex_start = if existing.line1 == 0 {
+                1
+            } else {
+                existing.line1
+            };
+            let ex_end = if existing.line2 == 0 {
+                usize::MAX
+            } else {
+                existing.line2
+            };
+            if ex_start <= cf_start && ex_end >= cf_end {
+                return Some((idx, msg.tool_call_id.clone()));
             }
         }
     }
