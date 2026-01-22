@@ -98,11 +98,7 @@ pub async fn run_at_commands_locally(
             messages_exec_output.extend(res);
         }
 
-        let mut context_file_pp = if context_limit > MIN_RAG_CONTEXT_LIMIT {
-            filter_only_context_file_from_context_tool(&messages_exec_output)
-        } else {
-            Vec::new()
-        };
+        let mut context_file_pp = filter_only_context_file_from_context_tool(&messages_exec_output);
 
         let mut plain_text_messages = vec![];
         for exec_result in messages_exec_output.into_iter() {
@@ -118,14 +114,13 @@ pub async fn run_at_commands_locally(
             }
         }
 
-        // TODO: reduce context_limit by tokens(messages_exec_output)
-
-        if context_limit > MIN_RAG_CONTEXT_LIMIT {
+        if !plain_text_messages.is_empty() || !context_file_pp.is_empty() {
+            let effective_context_limit = context_limit.max(MIN_RAG_CONTEXT_LIMIT);
             let (tokens_limit_plain, mut tokens_limit_files) = {
                 if context_file_pp.is_empty() {
-                    (context_limit, 0)
+                    (effective_context_limit, 0)
                 } else {
-                    (context_limit / 2, context_limit / 2)
+                    (effective_context_limit / 2, effective_context_limit / 2)
                 }
             };
             info!(

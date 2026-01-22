@@ -1,7 +1,7 @@
 import {
-  Button,
   DropdownMenu,
   Flex,
+  HoverCard,
   IconButton,
   Spinner,
   TabNav,
@@ -119,9 +119,11 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const { openSettings, openHotKeys } = useEventsBusForIDE();
   const [createTask] = useCreateTaskMutation();
 
-  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
-  const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
-  const [newTitle, setNewTitle] = useState<string | null>(null);
+  const [renameState, setRenameState] = useState<{
+    kind: "chat" | "task";
+    id: string;
+    value: string;
+  } | null>(null);
   const [updateTaskMeta] = useUpdateTaskMetaMutation();
 
   const handleNavigation = useCallback(
@@ -193,7 +195,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   );
 
   const onCreateNewChat = useCallback(() => {
-    setRenamingTabId(null);
+    setRenameState(null);
 
     const currentThread = allThreads[currentChatId] as
       | { thread: { messages: unknown[] } }
@@ -322,51 +324,61 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
     [dispatch, activeTab, goToTab],
   );
 
-  const handleChatThreadRenaming = useCallback((tabId: string) => {
-    setRenamingTabId(tabId);
-  }, []);
+  const handleChatThreadRenaming = useCallback(
+    (tabId: string, currentTitle: string) => {
+      setRenameState({ kind: "chat", id: tabId, value: currentTitle });
+    },
+    [],
+  );
 
   const handleKeyUpOnRename = useCallback(
     (event: KeyboardEvent<HTMLInputElement>, tabId: string) => {
       if (event.code === "Escape") {
-        setRenamingTabId(null);
+        setRenameState(null);
       }
       if (event.code === "Enter") {
-        setRenamingTabId(null);
-        if (!newTitle || newTitle.trim() === "") return;
+        const title = renameState?.value.trim();
+        setRenameState(null);
+        if (!title) return;
         dispatch(
           saveTitle({
             id: tabId,
-            title: newTitle,
+            title,
             isTitleGenerated: true,
           }),
         );
-        dispatch(updateChatTitleById({ chatId: tabId, newTitle: newTitle }));
+        dispatch(updateChatTitleById({ chatId: tabId, newTitle: title }));
       }
     },
-    [dispatch, newTitle],
+    [dispatch, renameState],
   );
 
-  const handleTaskRenaming = useCallback((taskId: string) => {
-    setRenamingTaskId(taskId);
-  }, []);
+  const handleTaskRenaming = useCallback(
+    (taskId: string, currentName: string) => {
+      setRenameState({ kind: "task", id: taskId, value: currentName });
+    },
+    [],
+  );
 
   const handleKeyUpOnTaskRename = useCallback(
     (event: KeyboardEvent<HTMLInputElement>, taskId: string) => {
       if (event.code === "Escape") {
-        setRenamingTaskId(null);
+        setRenameState(null);
       }
       if (event.code === "Enter") {
-        setRenamingTaskId(null);
-        if (!newTitle || newTitle.trim() === "") return;
-        void updateTaskMeta({ taskId, name: newTitle });
+        const name = renameState?.value.trim();
+        setRenameState(null);
+        if (!name) return;
+        void updateTaskMeta({ taskId, name });
       }
     },
-    [newTitle, updateTaskMeta],
+    [renameState, updateTaskMeta],
   );
 
-  const handleChatTitleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    setNewTitle(event.target.value);
+  const handleRenameChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setRenameState((prev) =>
+      prev ? { ...prev, value: event.target.value } : null,
+    );
   };
 
   const handleCloseTab = useCallback(
@@ -400,26 +412,32 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
     <Flex align="center" m="4px" gap="4px" style={{ alignSelf: "stretch" }}>
       <Flex
         flexGrow="1"
-        align="start"
+        align="center"
         maxHeight="40px"
         overflowY="hidden"
         onWheel={handleWheel}
         style={{ minWidth: 0, position: "relative", display: "flex" }}
       >
         <div className={styles.homeButtonWrapper}>
-          <TabNav.Root>
-            <TabNav.Link
-              active={isDashboardTab(activeTab)}
-              ref={(x) => refs.setBack(x)}
-              onClick={() => {
-                setRenamingTabId(null);
-                goToTab({ type: "dashboard" });
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              {windowWidth < 400 || shouldCollapse ? <HomeIcon /> : "Home"}
-            </TabNav.Link>
-          </TabNav.Root>
+          <HoverCard.Root>
+            <HoverCard.Trigger>
+              <IconButton
+                variant={isDashboardTab(activeTab) ? "soft" : "outline"}
+                ref={(x) => refs.setBack(x)}
+                onClick={() => {
+                  setRenameState(null);
+                  goToTab({ type: "dashboard" });
+                }}
+              >
+                <HomeIcon />
+              </IconButton>
+            </HoverCard.Trigger>
+            <HoverCard.Content size="1" side="bottom">
+              <Text as="p" size="2">
+                Home
+              </Text>
+            </HoverCard.Content>
+          </HoverCard.Root>
         </div>
 
         <div ref={scrollContainerRef} className={styles.scrollContainer}>
@@ -432,7 +450,8 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
               const isActive =
                 isTaskTab(activeTab) && activeTab.taskId === task.id;
               const taskName = task.name.trim() || "Task";
-              const isRenaming = renamingTaskId === task.id;
+              const isRenaming =
+                renameState?.kind === "task" && renameState.id === task.id;
 
               if (isRenaming) {
                 return (
@@ -441,11 +460,11 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                     key={`task-${task.id}`}
                     autoComplete="off"
                     onKeyUp={(e) => handleKeyUpOnTaskRename(e, task.id)}
-                    onBlur={() => setRenamingTaskId(null)}
+                    onBlur={() => setRenameState(null)}
                     autoFocus
                     size="2"
-                    defaultValue={taskName}
-                    onChange={handleChatTitleChange}
+                    value={renameState.value}
+                    onChange={handleRenameChange}
                     className={styles.RenameInput}
                   />
                 );
@@ -490,7 +509,9 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                           style={{ minWidth: 110 }}
                         >
                           <DropdownMenu.Item
-                            onClick={() => handleTaskRenaming(task.id)}
+                            onClick={() =>
+                              handleTaskRenaming(task.id, taskName)
+                            }
                           >
                             Rename
                           </DropdownMenu.Item>
@@ -512,7 +533,8 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
             })}
             {tabs.map((tab) => {
               const isActive = isChatTab(activeTab) && activeTab.id === tab.id;
-              const isRenaming = renamingTabId === tab.id;
+              const isRenaming =
+                renameState?.kind === "chat" && renameState.id === tab.id;
 
               if (isRenaming) {
                 return (
@@ -521,11 +543,11 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                     key={tab.id}
                     autoComplete="off"
                     onKeyUp={(e) => handleKeyUpOnRename(e, tab.id)}
-                    onBlur={() => setRenamingTabId(null)}
+                    onBlur={() => setRenameState(null)}
                     autoFocus
                     size="2"
-                    defaultValue={tab.title}
-                    onChange={handleChatTitleChange}
+                    value={renameState.value}
+                    onChange={handleRenameChange}
                     className={styles.RenameInput}
                   />
                 );
@@ -571,7 +593,9 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                           style={{ minWidth: 110 }}
                         >
                           <DropdownMenu.Item
-                            onClick={() => handleChatThreadRenaming(tab.id)}
+                            onClick={() =>
+                              handleChatThreadRenaming(tab.id, tab.title)
+                            }
                           >
                             Rename
                           </DropdownMenu.Item>
@@ -600,41 +624,36 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
           </TabNav.Root>
         </div>
       </Flex>
-      {windowWidth < 400 ? (
-        <>
-          <IconButton
-            variant="outline"
-            onClick={onCreateNewTask}
-            title="New Task"
-          >
+      <ConnectionStatusIndicator />
+      <HoverCard.Root>
+        <HoverCard.Trigger>
+          <IconButton variant="outline" onClick={onCreateNewTask}>
             <CheckboxIcon />
           </IconButton>
+        </HoverCard.Trigger>
+        <HoverCard.Content size="1" side="bottom">
+          <Text as="p" size="2">
+            New Task
+          </Text>
+        </HoverCard.Content>
+      </HoverCard.Root>
+      <HoverCard.Root>
+        <HoverCard.Trigger>
           <IconButton
-            variant="outline"
-            ref={(x) => refs.setNewChat(x)}
-            onClick={onCreateNewChat}
-          >
-            <PlusIcon />
-          </IconButton>
-        </>
-      ) : (
-        <>
-          <Button variant="outline" onClick={onCreateNewTask}>
-            <CheckboxIcon />
-            <Text>New Task</Text>
-          </Button>
-          <Button
             variant="outline"
             ref={(x) => refs.setNewChat(x)}
             onClick={onCreateNewChat}
             disabled={!newChatEnabled}
           >
             <PlusIcon />
-            <Text>New chat</Text>
-          </Button>
-        </>
-      )}
-      <ConnectionStatusIndicator />
+          </IconButton>
+        </HoverCard.Trigger>
+        <HoverCard.Content size="1" side="bottom">
+          <Text as="p" size="2">
+            New chat
+          </Text>
+        </HoverCard.Content>
+      </HoverCard.Root>
       <Dropdown handleNavigation={handleNavigation} />
     </Flex>
   );

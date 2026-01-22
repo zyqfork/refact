@@ -15,6 +15,43 @@ use crate::files_correction::{
 };
 use crate::global_context::GlobalContext;
 
+pub async fn resolve_file_path_directly(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    path_with_colon: &str,
+) -> Option<String> {
+    let mut path_str = path_with_colon.to_string();
+    let colon_range = colon_lines_range_from_arg(&mut path_str);
+
+    let path = PathBuf::from(&path_str);
+
+    if path.is_absolute() {
+        if path.is_file() {
+            let mut result = path.to_string_lossy().to_string();
+            put_colon_back_to_arg(&mut result, &colon_range);
+            return Some(result);
+        }
+        return None;
+    }
+
+    let project_dirs = get_project_dirs(gcx.clone()).await;
+    let mut matches = Vec::new();
+
+    for pd in &project_dirs {
+        let full_path = pd.join(&path);
+        if full_path.is_file() {
+            matches.push(full_path);
+        }
+    }
+
+    if matches.len() == 1 {
+        let mut result = matches[0].to_string_lossy().to_string();
+        put_colon_back_to_arg(&mut result, &colon_range);
+        return Some(result);
+    }
+
+    None
+}
+
 pub struct AtFile {
     pub params: Vec<Box<dyn AtParam>>,
 }
@@ -246,8 +283,19 @@ impl AtParamFilePath {
 
 #[async_trait]
 impl AtParam for AtParamFilePath {
-    async fn is_value_valid(&self, _ccx: Arc<AMutex<AtCommandsContext>>, _value: &String) -> bool {
-        return true;
+    async fn is_value_valid(&self, _ccx: Arc<AMutex<AtCommandsContext>>, value: &String) -> bool {
+        if value.is_empty() {
+            return false;
+        }
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed == ":" {
+            return false;
+        }
+        let re = Regex::new(r"^:(\d+)?-(\d+)?$").unwrap();
+        if re.is_match(trimmed) {
+            return false;
+        }
+        true
     }
 
     async fn param_completion(
@@ -357,37 +405,67 @@ impl AtCommand for AtFile {
         cmd: &mut AtCommandMember,
         args: &mut Vec<AtCommandMember>,
     ) -> Result<(Vec<ContextEnum>, String), String> {
-        let mut arg0 = match args.iter().filter(|x| !x.text.trim().is_empty()).next() {
+        let (gcx, top_n, is_preview) = {
+            let ccx_lock = ccx.lock().await;
+            (
+                ccx_lock.global_context.clone(),
+                ccx_lock.top_n,
+                ccx_lock.is_preview,
+            )
+        };
+
+        let mut arg0 = match args.iter().find(|x| !x.text.trim().is_empty()) {
             Some(x) => x.clone(),
             None => {
                 cmd.ok = false;
                 cmd.reason = Some("no file provided".to_string());
                 args.clear();
-                if ccx.lock().await.is_preview {
+                if is_preview {
                     return Ok((vec![], "".to_string()));
                 }
                 return Err("Cannot execute @file: no file provided".to_string());
             }
         };
-        correct_at_arg(ccx.clone(), &self.params[0], &mut arg0).await;
+
         args.clear();
         args.push(arg0.clone());
 
-        if !arg0.ok {
-            return Err(format!(
-                "arg0 is incorrect: {:?}. Reason: {:?}",
-                arg0.text, arg0.reason
-            ));
+        if let Some(resolved) = resolve_file_path_directly(gcx.clone(), &arg0.text).await {
+            arg0.text = resolved.clone();
+            arg0.ok = true;
+            args[0] = arg0.clone();
+
+            match context_file_from_file_path(gcx.clone(), resolved).await {
+                Ok(context_file) => {
+                    let replacement_text = if cmd.pos1 == 0 {
+                        "".to_string()
+                    } else {
+                        arg0.text.clone()
+                    };
+                    return Ok((vec_context_file_to_context_tools(vec![context_file]), replacement_text));
+                }
+                Err(e) => {
+                    if is_preview {
+                        cmd.ok = false;
+                        cmd.reason = Some(e);
+                        return Ok((vec![], "".to_string()));
+                    }
+                    return Err(e);
+                }
+            }
         }
 
-        let (gcx, top_n) = {
-            let ccx_lock = ccx.lock().await;
-            (ccx_lock.global_context.clone(), ccx_lock.top_n)
-        };
+        correct_at_arg(ccx.clone(), &self.params[0], &mut arg0).await;
+        args[0] = arg0.clone();
 
-        // This is just best-behavior, since user has already submitted their request
-
-        // TODO: use project paths as candidates, check file on disk
+        if !arg0.ok {
+            if is_preview {
+                cmd.ok = false;
+                cmd.reason = arg0.reason.clone();
+                return Ok((vec![], "".to_string()));
+            }
+            return Err(format!("arg0 is incorrect: {:?}. Reason: {:?}", arg0.text, arg0.reason));
+        }
 
         let candidates = {
             let candidates_fuzzy0 =
@@ -399,11 +477,27 @@ impl AtCommand for AtFile {
             }
         };
 
-        if candidates.len() == 0 {
+        if candidates.is_empty() {
+            if is_preview {
+                cmd.ok = false;
+                cmd.reason = Some(format!("cannot find {:?}", arg0.text));
+                return Ok((vec![], "".to_string()));
+            }
             return Err(format!("cannot find {:?}", arg0.text));
         }
 
-        let context_file = context_file_from_file_path(gcx.clone(), candidates[0].clone()).await?;
+        let context_file = match context_file_from_file_path(gcx.clone(), candidates[0].clone()).await {
+            Ok(cf) => cf,
+            Err(e) => {
+                if is_preview {
+                    cmd.ok = false;
+                    cmd.reason = Some(e);
+                    return Ok((vec![], "".to_string()));
+                }
+                return Err(e);
+            }
+        };
+
         let replacement_text = if cmd.pos1 == 0 {
             "".to_string()
         } else {

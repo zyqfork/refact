@@ -839,52 +839,6 @@ fn _derived_from(ast_index: Arc<AstDB>) -> Result<IndexMap<String, Vec<String>>,
     Ok(all_derived_from)
 }
 
-/// The best way to get full_official_path is to call definitions() first
-pub fn usages(
-    ast_index: Arc<AstDB>,
-    full_official_path: String,
-    limit_n: usize,
-) -> Result<Vec<(Arc<AstDefinition>, usize)>, String> {
-    let mut usages = Vec::new();
-    let u_prefix1 = format!("u|{} ", full_official_path); // this one has space
-    let u_prefix2 = format!("u|{}", full_official_path);
-
-    let txn = ast_index
-        .db_env
-        .read_txn()
-        .map_err(|e| format!("Failed to create read transaction: {:?}", e))?;
-
-    let mut cursor = ast_index
-        .db
-        .prefix_iter(&txn, &u_prefix1)
-        .map_err(|e| format!("Failed to create prefix iterator: {:?}", e))?;
-
-    while let Some(Ok((u_key, u_value))) = cursor.next() {
-        if usages.len() >= limit_n {
-            break;
-        }
-
-        let parts: Vec<&str> = u_key.split(" ⚡ ").collect();
-        if parts.len() == 2 && parts[0] == u_prefix2 {
-            let full_path = parts[1].trim();
-            let d_key = format!("d|{}", full_path);
-
-            if let Ok(Some(d_value)) = ast_index.db.get(&txn, &d_key) {
-                let uline = serde_cbor::from_slice::<usize>(&u_value).unwrap_or(0);
-
-                match serde_cbor::from_slice::<AstDefinition>(&d_value) {
-                    Ok(defintion) => usages.push((Arc::new(defintion), uline)),
-                    Err(e) => tracing::error!("Failed to deserialize value for {}: {:?}", d_key, e),
-                }
-            }
-        } else if parts.len() != 2 {
-            tracing::error!("usage record has more than two ⚡ key was: {}", u_key);
-        }
-    }
-
-    Ok(usages)
-}
-
 pub fn definitions(
     ast_index: Arc<AstDB>,
     double_colon_path: &str,
@@ -1225,28 +1179,12 @@ mod tests {
         assert!(goat_def.len() == 1);
 
         let animalage_defs = definitions(ast_index.clone(), animal_age_location).unwrap();
-        let animalage_def0 = animalage_defs.first().unwrap();
-        let animalage_usage = usages(ast_index.clone(), animalage_def0.path(), 100).unwrap();
-        let mut animalage_usage_str = String::new();
-        for (used_at_def, used_at_uline) in animalage_usage.iter() {
-            animalage_usage_str.push_str(&format!("{:}:{}\n", used_at_def.cpath, used_at_uline));
-        }
-        println!("animalage_usage_str:\n{}", animalage_usage_str);
-        assert!(animalage_usage.len() == 5);
 
         let goat_defs = definitions(
             ast_index.clone(),
             format!("{}_goat_library::Goat", language).as_str(),
         )
         .unwrap();
-        let goat_def0 = goat_defs.first().unwrap();
-        let goat_usage = usages(ast_index.clone(), goat_def0.path(), 100).unwrap();
-        let mut goat_usage_str = String::new();
-        for (used_at_def, used_at_uline) in goat_usage.iter() {
-            goat_usage_str.push_str(&format!("{:}:{}\n", used_at_def.cpath, used_at_uline));
-        }
-        println!("goat_usage:\n{}", goat_usage_str);
-        assert!(goat_usage.len() == 1 || goat_usage.len() == 2); // derived from generates usages (new style: py) or not (old style)
 
         doc_remove(ast_index.clone(), &library_file_path.to_string());
         doc_remove(ast_index.clone(), &main_file_path.to_string());

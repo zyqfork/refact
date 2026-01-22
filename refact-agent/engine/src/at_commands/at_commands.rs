@@ -17,7 +17,6 @@ use crate::global_context::GlobalContext;
 
 use crate::at_commands::at_file::AtFile;
 use crate::at_commands::at_ast_definition::AtAstDefinition;
-use crate::at_commands::at_ast_reference::AtAstReference;
 use crate::at_commands::at_tree::AtTree;
 use crate::at_commands::at_web::AtWeb;
 use crate::at_commands::execute_at::AtCommandMember;
@@ -96,7 +95,7 @@ impl AtCommandsContext {
             global_context: global_context.clone(),
             n_ctx,
             top_n,
-            tokens_for_rag: 0,
+            tokens_for_rag: (n_ctx / 4).max(64).min(n_ctx),
             messages,
             is_preview,
             pp_skeleton: true,
@@ -156,10 +155,6 @@ pub async fn at_commands_dict(
         (
             "@definition".to_string(),
             Arc::new(AtAstDefinition::new()) as Arc<dyn AtCommand + Send>,
-        ),
-        (
-            "@references".to_string(),
-            Arc::new(AtAstReference::new()) as Arc<dyn AtCommand + Send>,
         ),
         // ("@local-notes-to-self".to_string(), Arc::new(AtLocalNotesToSelf::new()) as Arc<dyn AtCommand + Send>),
         (

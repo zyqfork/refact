@@ -188,32 +188,72 @@ export type ChatSubscriptionCallbacks = {
   onActivity?: () => void;
 };
 
-export type SubscriptionOptions = Record<string, never>;
+export type SubscriptionOptions = {
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
+};
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 75_000;
 
 export function subscribeToChatEvents(
   chatId: string,
   port: number,
   callbacks: ChatSubscriptionCallbacks,
   apiKey?: string,
+  options: SubscriptionOptions = {},
 ): () => void {
   const url = `http://127.0.0.1:${port}/v1/chats/subscribe?chat_id=${encodeURIComponent(
     chatId,
   )}`;
 
+  const connectTimeoutMs =
+    options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+
   const abortController = new AbortController();
   const state = { connected: false };
+  let abortReason: string | null = null;
+  let connectTimer: ReturnType<typeof setTimeout> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const headers: Record<string, string> = {};
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
-  const disconnect = () => {
-    if (state.connected) {
-      state.connected = false;
-      callbacks.onDisconnected?.();
+  const clearTimers = () => {
+    if (connectTimer) {
+      clearTimeout(connectTimer);
+      connectTimer = null;
+    }
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
     }
   };
+
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      abortReason = abortReason ?? "SSE idle timeout";
+      abortController.abort();
+    }, idleTimeoutMs);
+  };
+
+  const disconnect = (notify: boolean) => {
+    if (state.connected) {
+      state.connected = false;
+      if (notify) callbacks.onDisconnected?.();
+    }
+  };
+
+  connectTimer = setTimeout(() => {
+    if (!state.connected) {
+      abortReason = abortReason ?? "SSE connect timeout";
+      abortController.abort();
+    }
+  }, connectTimeoutMs);
 
   void fetch(url, {
     method: "GET",
@@ -229,8 +269,10 @@ export function subscribeToChatEvents(
         throw new Error("Response body is null");
       }
 
+      clearTimers();
       state.connected = true;
       callbacks.onConnected?.();
+      armIdleTimer();
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -240,6 +282,7 @@ export function subscribeToChatEvents(
         const { done, value } = await reader.read();
         if (done) break;
 
+        armIdleTimer();
         callbacks.onActivity?.();
         buffer += decoder.decode(value, { stream: true });
         buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -248,7 +291,9 @@ export function subscribeToChatEvents(
         buffer = blocks.pop() ?? "";
 
         for (const block of blocks) {
-          if (!block.trim()) continue;
+          const trimmed = block.trim();
+          if (!trimmed) continue;
+          if (trimmed.startsWith(":")) continue;
 
           const dataLines: string[] = [];
           for (const rawLine of block.split("\n")) {
@@ -269,24 +314,42 @@ export function subscribeToChatEvents(
             normalizeSeq(parsed);
             callbacks.onEvent(parsed);
           } catch {
-            // Parse error, skip this event
+            continue;
           }
         }
       }
 
-      disconnect();
+      clearTimers();
+      if (abortController.signal.aborted && abortReason) {
+        callbacks.onError(new Error(abortReason));
+        abortReason = null;
+        disconnect(false);
+        return;
+      }
+      disconnect(true);
     })
     .catch((err: unknown) => {
+      clearTimers();
       const error = err as Error;
-      if (error.name !== "AbortError") {
-        callbacks.onError(error);
-        disconnect();
+
+      if (error.name === "AbortError") {
+        if (abortReason) {
+          callbacks.onError(new Error(abortReason));
+        }
+        abortReason = null;
+        disconnect(false);
+        return;
       }
+
+      callbacks.onError(error);
+      disconnect(false);
     });
 
   return () => {
+    abortReason = null;
+    clearTimers();
     abortController.abort();
-    disconnect();
+    disconnect(false);
   };
 }
 

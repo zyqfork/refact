@@ -22,6 +22,9 @@ pub struct ToolTree {
 }
 
 fn preformat_path(path: &String) -> String {
+    if path == "/" || path == "\\" {
+        return path.clone();
+    }
     path.trim_end_matches(&['/', '\\'][..]).to_string()
 }
 

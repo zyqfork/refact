@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use git2::Repository;
 use tokio::sync::{RwLock as ARwLock, Mutex as AMutex};
 use tokio::fs;
 use tracing::warn;
@@ -203,6 +204,30 @@ pub async fn save_planner_instructions(
     fs::write(&path, content).await.map_err(|e| e.to_string())
 }
 
+fn detect_git_branch_and_commit(workspace_root: &Path) -> (Option<String>, Option<String>) {
+    let repo = match Repository::open(workspace_root) {
+        Ok(r) => r,
+        Err(_) => return (None, None),
+    };
+
+    let branch = match repo.head() {
+        Ok(head) => head.shorthand().map(|s| s.to_string()),
+        Err(_) => None,
+    };
+
+    let commit = match repo.head() {
+        Ok(head) => {
+            match head.peel_to_commit() {
+                Ok(c) => Some(c.id().to_string()),
+                Err(_) => None,
+            }
+        }
+        Err(_) => None,
+    };
+
+    (branch, commit)
+}
+
 pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result<TaskMeta, String> {
     let tasks_dir = ensure_tasks_dir(gcx.clone()).await?;
     let task_id = Uuid::new_v4().to_string();
@@ -217,6 +242,11 @@ pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result
     fs::create_dir_all(task_dir.join("trajectories").join("agents"))
         .await
         .map_err(|e| e.to_string())?;
+
+    let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
+    let (base_branch, base_commit) = project_dirs.first()
+        .map(|p| detect_git_branch_and_commit(p))
+        .unwrap_or((None, None));
 
     let now = Utc::now().to_rfc3339();
     let has_user_provided_name = !name.trim().is_empty() && name.to_lowercase() != "new task";
@@ -235,10 +265,10 @@ pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result
         cards_done: 0,
         cards_failed: 0,
         agents_active: 0,
-        base_branch: None,
-        base_commit: None,
+        base_branch,
+        base_commit,
         default_agent_model: None,
-        is_name_generated: has_user_provided_name,
+        is_name_generated: !has_user_provided_name,
         planner_session_state: None,
     };
 

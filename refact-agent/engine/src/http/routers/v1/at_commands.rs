@@ -25,6 +25,7 @@ use crate::global_context::try_load_caps_quickly_if_not_present;
 use crate::global_context::GlobalContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, deserialize_messages_from_post};
 use crate::at_commands::at_commands::filter_only_context_file_from_context_tool;
+use crate::chat::get_or_create_session_with_trajectory;
 use crate::scratchpads::scratchpad_utils::HasRagResults;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -348,13 +349,15 @@ pub async fn handle_v1_at_command_execute(
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    let effective_n_ctx = post.n_ctx.min(model_rec.base.n_ctx).max(1);
+
     let mut ccx = AtCommandsContext::new(
         global_context.clone(),
-        post.n_ctx,
+        effective_n_ctx,
         crate::constants::CHAT_TOP_N,
-        true,
+        false,
         post.messages.clone(),
-        "".to_string(),
+        post.chat_id.clone(),
         None,
         model_rec.base.id.clone(),
         None,
@@ -370,11 +373,26 @@ pub async fn handle_v1_at_command_execute(
         ccx_arc.clone(),
         tokenizer.clone(),
         post.maxgen,
-        post.messages,
+        post.messages.clone(),
         &mut has_rag_results,
     )
     .await;
     let messages_to_stream_back = has_rag_results.in_json;
+
+    if !post.chat_id.is_empty() && any_context_produced {
+        let sessions = global_context.read().await.chat_sessions.clone();
+        let session_arc = get_or_create_session_with_trajectory(
+            global_context.clone(),
+            &sessions,
+            &post.chat_id,
+        ).await;
+        let mut session = session_arc.lock().await;
+        let original_len = post.messages.len();
+        for msg in messages.iter().skip(original_len) {
+            session.add_message(msg.clone());
+        }
+    }
+
     let undroppable_msg_number = messages
         .iter()
         .rposition(|msg| msg.role == "user")

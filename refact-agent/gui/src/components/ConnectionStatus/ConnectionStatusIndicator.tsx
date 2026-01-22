@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Flex, Text, Tooltip, Spinner } from "@radix-ui/themes";
+import { Flex, HoverCard, Spinner, Text } from "@radix-ui/themes";
 import {
   CheckCircledIcon,
   CrossCircledIcon,
@@ -34,23 +34,23 @@ export const ConnectionStatusIndicator: React.FC = () => {
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
+    const trajQuery = dispatch(
+      trajectoriesApi.endpoints.listTrajectoriesPaginated.initiate(
+        { limit: 50 },
+        { forceRefetch: true },
+      ),
+    );
+    const tasksQuery = dispatch(
+      tasksApi.endpoints.listTasks.initiate(undefined, {
+        forceRefetch: true,
+      }),
+    );
     try {
       if (currentThreadId) {
         dispatch(requestSseRefresh({ chatId: currentThreadId }));
       }
-      const [trajectoriesResult] = await Promise.all([
-        dispatch(
-          trajectoriesApi.endpoints.listTrajectoriesPaginated.initiate(
-            { limit: 50 },
-            { forceRefetch: true },
-          ),
-        ).unwrap(),
-        dispatch(
-          tasksApi.endpoints.listTasks.initiate(undefined, {
-            forceRefetch: true,
-          }),
-        ),
-      ]);
+      const trajectoriesResult = await trajQuery.unwrap();
+      await tasksQuery.unwrap();
       dispatch(hydrateHistoryFromMeta(trajectoriesResult.items));
       dispatch(
         setPagination({
@@ -59,6 +59,8 @@ export const ConnectionStatusIndicator: React.FC = () => {
         }),
       );
     } finally {
+      trajQuery.unsubscribe();
+      tasksQuery.unsubscribe();
       setIsRefreshing(false);
     }
   }, [dispatch, currentThreadId]);
@@ -68,34 +70,35 @@ export const ConnectionStatusIndicator: React.FC = () => {
 
   if (isConnected) {
     return (
-      <Tooltip content="Connected - Click to refresh">
-        <button
-          type="button"
-          onClick={() => void handleRefresh()}
-          disabled={isRefreshing}
-          className={styles.statusButton}
-        >
-          <Flex align="center" gap="1" className={styles.indicator}>
-            {isRefreshing ? (
-              <Spinner size="1" />
-            ) : (
-              <CheckCircledIcon className={styles.iconConnected} />
-            )}
-          </Flex>
-        </button>
-      </Tooltip>
+      <HoverCard.Root>
+        <HoverCard.Trigger>
+          <button
+            type="button"
+            onClick={() => void handleRefresh()}
+            disabled={isRefreshing}
+            className={styles.statusButton}
+          >
+            <Flex align="center" gap="1" className={styles.indicator}>
+              {isRefreshing ? (
+                <Spinner size="1" />
+              ) : (
+                <CheckCircledIcon className={styles.iconConnected} />
+              )}
+            </Flex>
+          </button>
+        </HoverCard.Trigger>
+        <HoverCard.Content size="1" side="bottom">
+          <Text as="p" size="2">
+            Connected - Click to refresh
+          </Text>
+        </HoverCard.Content>
+      </HoverCard.Root>
     );
   }
 
   return (
-    <Flex align="center" gap="1">
-      <Tooltip
-        content={
-          isReconnecting
-            ? "Reconnecting..."
-            : `${problem ?? "Disconnected"} - Click to retry`
-        }
-      >
+    <HoverCard.Root>
+      <HoverCard.Trigger>
         <button
           type="button"
           onClick={() => void handleRefresh()}
@@ -112,13 +115,15 @@ export const ConnectionStatusIndicator: React.FC = () => {
             )}
           </Flex>
         </button>
-      </Tooltip>
-      {problem && !isReconnecting && (
-        <Text size="1" color="gray" className={styles.problemText}>
-          {problem}
+      </HoverCard.Trigger>
+      <HoverCard.Content size="1" side="bottom">
+        <Text as="p" size="2">
+          {isReconnecting
+            ? "Reconnecting..."
+            : `${problem ?? "Disconnected"} - Click to retry`}
         </Text>
-      )}
-    </Flex>
+      </HoverCard.Content>
+    </HoverCard.Root>
   );
 };
 

@@ -428,6 +428,18 @@ pub async fn run_llm_generation(
     {
         let mut session = session_arc.lock().await;
         session.last_prompt_messages = prepared.limited_messages.clone();
+        let last_user_idx = session.messages.iter().rposition(|m| m.role == "user");
+        if let Some(insert_idx) = last_user_idx {
+            let mut offset = 0;
+            for rag_msg_json in &prepared.rag_results {
+                if let Ok(msg) = serde_json::from_value::<ChatMessage>(rag_msg_json.clone()) {
+                    if msg.role == "context_file" || msg.role == "plain_text" {
+                        session.insert_message(insert_idx + offset, msg);
+                        offset += 1;
+                    }
+                }
+            }
+        }
     }
 
     run_streaming_generation(

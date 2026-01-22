@@ -150,6 +150,17 @@ impl ChatSession {
         self.touch();
     }
 
+    pub fn insert_message(&mut self, index: usize, mut message: ChatMessage) {
+        if message.message_id.is_empty() {
+            message.message_id = Uuid::new_v4().to_string();
+        }
+        let insert_idx = index.min(self.messages.len());
+        self.messages.insert(insert_idx, message.clone());
+        self.emit(ChatEvent::MessageAdded { message, index: insert_idx });
+        self.increment_version();
+        self.touch();
+    }
+
     pub fn update_message(&mut self, message_id: &str, message: ChatMessage) -> Option<usize> {
         if let Some(idx) = self
             .messages

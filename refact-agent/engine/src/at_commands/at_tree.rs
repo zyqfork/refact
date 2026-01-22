@@ -242,7 +242,13 @@ fn print_files_tree(
     }
 
     let mut result = String::new();
-    for (name, node) in &tree.children {
+    let mut sorted_roots: Vec<_> = tree.children.iter().collect();
+    sorted_roots.sort_by(|a, b| {
+        let a_is_dir = a.1.is_dir();
+        let b_is_dir = b.1.is_dir();
+        b_is_dir.cmp(&a_is_dir).then(a.0.cmp(b.0))
+    });
+    for (name, node) in sorted_roots {
         if let Some(output) = traverse(
             node,
             PathBuf::from(name),
@@ -265,8 +271,13 @@ fn print_files_tree_with_budget(
     max_files: usize,
     is_root_query: bool,
 ) -> String {
-    let mut good_enough = String::new();
-    for maxdepth in 1..20 {
+    let depth1_output = print_files_tree(tree, ast_db.clone(), 1, max_files, is_root_query);
+    if depth1_output.len() > char_limit {
+        let truncated: String = depth1_output.chars().take(char_limit.saturating_sub(20)).collect();
+        return format!("{}...[truncated]", truncated);
+    }
+    let mut good_enough = depth1_output;
+    for maxdepth in 2..20 {
         let bigger = print_files_tree(tree, ast_db.clone(), maxdepth, max_files, is_root_query);
         if bigger.len() > char_limit {
             break;
@@ -287,8 +298,8 @@ pub async fn tree_for_tools(
         let ccx_locked = ccx.lock().await;
         (ccx_locked.global_context.clone(), ccx_locked.tokens_for_rag)
     };
-    const SYMBOLS_PER_TOKEN: f32 = 3.5;
-    let char_limit = tokens_for_rag * SYMBOLS_PER_TOKEN as usize;
+    const CHARS_PER_TOKEN: f32 = 3.5;
+    let char_limit = ((tokens_for_rag as f32) * CHARS_PER_TOKEN) as usize;
 
     let ast_db = if use_ast {
         if let Some(ast_module) = gcx.read().await.ast_service.clone() {

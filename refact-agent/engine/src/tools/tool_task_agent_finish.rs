@@ -59,6 +59,13 @@ fn auto_commit_worktree(
         .output()
         .map_err(|e| format!("Failed to check git status: {}", e))?;
 
+    if !status_output.status.success() {
+        return Err(format!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&status_output.stderr)
+        ));
+    }
+
     let status = String::from_utf8_lossy(&status_output.stdout);
     if status.trim().is_empty() {
         return Ok(None);
@@ -190,8 +197,11 @@ impl Tool for ToolTaskAgentFinish {
                 match auto_commit_worktree(wt_path, &card_id, &card_title_for_commit) {
                     Ok(hash) => hash,
                     Err(e) => {
-                        tracing::warn!("Auto-commit failed for card {}: {}", card_id, e);
-                        None
+                        return Err(format!(
+                            "Auto-commit failed: {}. Please ensure your changes are committed before calling task_agent_finish(success=true). \
+                            You can run `git add -A && git commit -m 'your message'` in the worktree, or investigate the error.",
+                            e
+                        ));
                     }
                 }
             } else {

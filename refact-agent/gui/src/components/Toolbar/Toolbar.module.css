@@ -34,10 +34,8 @@
   position: relative;
   z-index: 10;
   margin-right: var(--space-2);
-}
-
-.homeButtonWrapper :global(.rt-TabNavLink) {
-  margin-right: 0 !important;
+  display: flex;
+  align-items: center;
 }
 
 .scrollContainer {

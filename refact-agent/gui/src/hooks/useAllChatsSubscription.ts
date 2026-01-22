@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useAppDispatch } from "./useAppDispatch";
 import { useAppSelector } from "./useAppSelector";
 import {
@@ -6,7 +6,6 @@ import {
   clearSseRefreshRequest,
 } from "../features/Chat/Thread/actions";
 import {
-  selectOpenThreadIds,
   selectCurrentThreadId,
   selectSseRefreshRequested,
 } from "../features/Chat/Thread/selectors";
@@ -24,7 +23,6 @@ export function useAllChatsSubscription() {
   const dispatch = useAppDispatch();
   const port = useAppSelector(selectLspPort);
   const apiKey = useAppSelector(selectApiKey);
-  const openThreadIds = useAppSelector(selectOpenThreadIds);
   const currentThreadId = useAppSelector(selectCurrentThreadId);
   const sseRefreshRequested = useAppSelector(selectSseRefreshRequested);
 
@@ -43,13 +41,7 @@ export function useAllChatsSubscription() {
 
   const ACTIVITY_THROTTLE_MS = 500;
 
-  const allChatIds = useMemo(() => {
-    const ids = new Set(openThreadIds);
-    if (currentThreadId) {
-      ids.add(currentThreadId);
-    }
-    return Array.from(ids);
-  }, [openThreadIds, currentThreadId]);
+  const activeChatId = currentThreadId;
 
   const clearPendingTimeout = useCallback((chatId: string) => {
     const existingTimeout = timeoutRef.current.get(chatId);
@@ -211,31 +203,30 @@ export function useAllChatsSubscription() {
 
     if (!port) return;
 
-    const currentIds = new Set(allChatIds);
-    desiredIdsRef.current = currentIds;
-    const subscribedIds = new Set(subscriptionsRef.current.keys());
-
-    for (const id of currentIds) {
-      if (!subscribedIds.has(id)) {
-        subscribe(id);
-      }
-    }
+    const desiredId = activeChatId;
+    desiredIdsRef.current = desiredId ? new Set([desiredId]) : new Set();
+    const subscribedIds = Array.from(subscriptionsRef.current.keys());
 
     for (const id of subscribedIds) {
-      if (!currentIds.has(id)) {
+      if (id !== desiredId) {
         unsubscribe(id);
       }
     }
-  }, [allChatIds, port, apiKey, subscribe, unsubscribe, unsubscribeAll]);
+
+    if (desiredId && !subscriptionsRef.current.has(desiredId)) {
+      subscribe(desiredId);
+    }
+  }, [activeChatId, port, apiKey, subscribe, unsubscribe, unsubscribeAll]);
 
   useEffect(() => {
-    if (sseRefreshRequested) {
-      dispatch(clearSseRefreshRequest());
-      const chatId = sseRefreshRequested;
-      unsubscribe(chatId);
-      setTimeout(() => subscribe(chatId), 50);
-    }
-  }, [sseRefreshRequested, dispatch, subscribe, unsubscribe]);
+    if (!sseRefreshRequested) return;
+    if (!activeChatId || sseRefreshRequested !== activeChatId) return;
+    if (!portRef.current) return;
+
+    dispatch(clearSseRefreshRequest());
+    unsubscribe(activeChatId);
+    setTimeout(() => subscribe(activeChatId), 50);
+  }, [sseRefreshRequested, activeChatId, dispatch, subscribe, unsubscribe]);
 
   useEffect(() => {
     return () => {
@@ -246,11 +237,10 @@ export function useAllChatsSubscription() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        for (const chatId of desiredIdsRef.current) {
-          if (!subscriptionsRef.current.has(chatId)) {
-            retryCountRef.current.set(chatId, 0);
-            subscribe(chatId);
-          }
+        const chatId = Array.from(desiredIdsRef.current)[0];
+        if (chatId && !subscriptionsRef.current.has(chatId)) {
+          retryCountRef.current.set(chatId, 0);
+          subscribe(chatId);
         }
       }
     };

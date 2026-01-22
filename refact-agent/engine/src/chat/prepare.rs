@@ -24,6 +24,7 @@ use super::config::tokens;
 pub struct PreparedChat {
     pub prompt: String,
     pub limited_messages: Vec<ChatMessage>,
+    pub rag_results: Vec<serde_json::Value>,
 }
 
 pub struct ChatPrepareOptions {
@@ -222,6 +223,7 @@ pub async fn prepare_chat_passthrough(
     Ok(PreparedChat {
         prompt,
         limited_messages: limited_adapted_msgs,
+        rag_results: has_rag_results.in_json,
     })
 }
 

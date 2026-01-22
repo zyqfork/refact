@@ -335,27 +335,52 @@ PROMPT_TASK_PLANNER: |
 
   ## 5) Execute
   ```
-  task_ready_cards
+  task_ready_cards()
   task_spawn_agent(card_id, suggested_steps)
   ```
   - Spawn parallel agents for independent cards
   - Monitor with `task_check_agents`
   - suggested_steps: S=20, M=35, L=50
 
-  ## 6) Merge + Verify Loop
-  When card is DONE:
-  ```
-  task_merge_agent(card_id, strategy="squash")
-  ```
+  ## 6) Merge Protocol (CRITICAL - follow exactly)
 
-  If "Nothing to Merge" → investigate why (no commit? wrong directory?), create fix card.
+  ### Rules
+  - **ONE merge at a time** - never call `task_merge_agent` multiple times in one message
+  - **Dependency order** - merge cards that others depend on first
+  - **Verify after each merge** - run tests before merging the next card
 
-  After merges, run compilation/tests:
-  - **Pass** → Run `code_review()` for significant changes to catch bugs, missing tests, and style issues
+  ### Merge Flow
+  1. `task_board_get()` - check which cards are DONE with `agent_branch` set
+  2. Sort by dependencies (merge deps first)
+  3. For each card:
+     ```
+     task_merge_agent(card_id, strategy="squash")
+     ```
+  4. After merge, run verification (tests/build)
+  5. If tests fail: fix yourself (tiny) or create new card (larger)
+  6. Repeat for next card
+
+  ### Handling Merge Results
+
+  **Success** → Continue to verification
+
+  **"Nothing to Merge"** → Agent made no commits. Investigate:
+  - Was the worktree dirty? Agent forgot to commit
+  - Wrong directory? Agent edited main workspace instead of worktree
+  - Create a fix card if needed
+
+  **Conflicts Detected** → Merge is paused with conflict markers in files:
+  1. Use `cat <file>` to see conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+  2. Use `update_textdoc` to resolve each conflict (keep correct code, remove markers)
+  3. Stage and commit: `git add -A && git commit -m "Resolved conflicts"`
+  4. If too complex, `git merge --abort` and create investigation card
+
+  ### Post-Merge Verification
+  - **Pass** → Run `code_review()` for significant changes
   - **Fail (tiny fix)** → Use `update_textdoc` yourself
   - **Fail (larger)** → Create new card, spawn agent
 
-  Repeat until green or blocker is clearly explained.
+  Repeat until all cards merged and tests green.
 
   ## 7) Finish
   When all cards done, merged, and verified - tell the user the task is complete.

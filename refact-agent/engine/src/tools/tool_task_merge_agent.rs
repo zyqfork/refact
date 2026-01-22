@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::process::Command;
 use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
@@ -9,6 +9,11 @@ use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, Too
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
+
+static GIT_MERGE_LOCK: OnceLock<AMutex<()>> = OnceLock::new();
+fn git_merge_lock() -> &'static AMutex<()> {
+    GIT_MERGE_LOCK.get_or_init(|| AMutex::new(()))
+}
 
 pub struct ToolTaskMergeAgent;
 
@@ -113,7 +118,13 @@ impl Tool for ToolTaskMergeAgent {
         let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
         let workspace_root = project_dirs.first().ok_or("No workspace folder found")?;
 
-        if !workspace_root.join(".git").exists() {
+        let is_git_repo = Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(workspace_root)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !is_git_repo {
             return Err("Workspace is not a git repository".to_string());
         }
 
@@ -151,15 +162,23 @@ impl Tool for ToolTaskMergeAgent {
             }
         };
 
-        let commits_ahead = run_git(&[
+        let commits_ahead_result = run_git(&[
             "rev-list",
             "--count",
             &format!("{}..{}", base_branch, agent_branch),
-        ])
-        .unwrap_or_default()
-        .trim()
-        .parse::<u32>()
-        .unwrap_or(0);
+        ]);
+        let commits_ahead = match commits_ahead_result {
+            Ok(output) => output.trim().parse::<u32>().map_err(|e| {
+                format!("Failed to parse commits ahead count: {}", e)
+            })?,
+            Err(e) => {
+                return Err(format!(
+                    "Failed to count commits ahead (base: {}, agent: {}): {}. \
+                    Check that both branches exist and are valid.",
+                    base_branch, agent_branch, e
+                ));
+            }
+        };
 
         if commits_ahead == 0 {
             let worktree_status = if let Some(wt) = card.agent_worktree.as_ref() {
@@ -186,17 +205,115 @@ impl Tool for ToolTaskMergeAgent {
                 "Both main workspace and agent worktree are clean. Agent may not have made any changes."
             };
 
+            let mut cleanup_status = Vec::new();
+            if delete_worktree && agent_branch != base_branch {
+                let _guard = git_merge_lock().lock().await;
+                let worktree_removed = run_git(&["worktree", "remove", agent_worktree, "--force"]).is_ok();
+                let branch_deleted = run_git(&["branch", "-D", agent_branch]).is_ok();
+                drop(_guard);
+
+                if worktree_removed {
+                    cleanup_status.push("worktree removed");
+                }
+                if branch_deleted {
+                    cleanup_status.push("branch deleted");
+                }
+
+                if worktree_removed || branch_deleted {
+                    let card_id_owned = card_id.to_string();
+                    let clear_worktree = worktree_removed;
+                    let clear_branch = branch_deleted;
+                    let _ = storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
+                        if let Some(card) = board.get_card_mut(&card_id_owned) {
+                            if clear_branch {
+                                card.agent_branch = None;
+                            }
+                            if clear_worktree {
+                                card.agent_worktree = None;
+                                card.agent_worktree_name = None;
+                            }
+                        }
+                        Ok(())
+                    }).await;
+                }
+            }
+
+            let cleanup_msg = if cleanup_status.is_empty() {
+                "No cleanup performed.".to_string()
+            } else {
+                format!("Cleanup: {}.", cleanup_status.join(", "))
+            };
+
             return Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
                 role: "tool".to_string(),
                 content: ChatContent::SimpleText(format!(
-                    "# Nothing to Merge\n\n**Card:** {}\n**Branch:** {}\n**Commits ahead of base:** 0\n\n**Diagnostic:** {}\n\nNo merge performed.",
-                    card_id, agent_branch, diagnostic
+                    "# Nothing to Merge\n\n**Card:** {}\n**Branch:** {}\n**Commits ahead of base:** 0\n\n**Diagnostic:** {}\n\n{}",
+                    card_id, agent_branch, diagnostic, cleanup_msg
                 )),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
                 ..Default::default()
             })]));
         }
+
+        let merge_in_progress = run_git(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok();
+        if merge_in_progress {
+            let status = run_git(&["status", "--porcelain"]).unwrap_or_default();
+            let conflict_files: Vec<String> = status
+                .lines()
+                .filter(|l| {
+                    let bytes = l.as_bytes();
+                    bytes.len() >= 2
+                        && (bytes[0] == b'U'
+                            || bytes[1] == b'U'
+                            || (bytes[0] == b'A' && bytes[1] == b'A')
+                            || (bytes[0] == b'D' && bytes[1] == b'D'))
+                })
+                .filter_map(|l| l.get(3..).map(|s| s.to_string()))
+                .collect();
+
+            let conflict_msg = format!(
+                r#"# Merge Already In Progress
+
+A previous merge is still in progress with unresolved conflicts.
+
+## Conflicting Files
+{}
+
+## How to Resolve
+
+### Option 1: Resolve conflicts
+1. Use `cat <file>` to see conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+2. Use `update_textdoc` to resolve each conflict
+3. Stage and commit: `git add -A && git commit -m "Resolved conflicts"`
+
+### Option 2: Abort and retry
+```
+git merge --abort
+```
+Then call `task_merge_agent` again."#,
+                if conflict_files.is_empty() {
+                    "None detected (check `git status`)".to_string()
+                } else {
+                    conflict_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                }
+            );
+
+            return Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(conflict_msg),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })]));
+        }
+
+        let main_status = run_git(&["status", "--porcelain"]).unwrap_or_default();
+        if !main_status.trim().is_empty() {
+            return Err("Main workspace has uncommitted changes. Please commit or stash before merging.".to_string());
+        }
+
+        let _guard = git_merge_lock().lock().await;
 
         run_git(&["checkout", base_branch])
             .map_err(|e| format!("Failed to checkout base branch: {}", e))?;
@@ -214,42 +331,71 @@ impl Tool for ToolTaskMergeAgent {
 
         if let Err(e) = merge_result {
             let status = run_git(&["status", "--porcelain"]).unwrap_or_default();
-            let has_conflicts = status.lines().any(|l| {
-                let chars: Vec<char> = l.chars().take(2).collect();
-                chars.len() >= 2
-                    && (chars[0] == 'U'
-                        || chars[1] == 'U'
-                        || (chars[0] == 'A' && chars[1] == 'A')
-                        || (chars[0] == 'D' && chars[1] == 'D'))
-            });
+            let is_conflict_line = |l: &str| {
+                let bytes = l.as_bytes();
+                bytes.len() >= 2
+                    && (bytes[0] == b'U'
+                        || bytes[1] == b'U'
+                        || (bytes[0] == b'A' && bytes[1] == b'A')
+                        || (bytes[0] == b'D' && bytes[1] == b'D'))
+            };
+            let has_conflicts = status.lines().any(is_conflict_line);
 
             if has_conflicts {
-                let _ = run_git(&["merge", "--abort"]);
-                let _ = run_git(&["reset", "--merge"]);
-
                 let conflict_files: Vec<String> = status
                     .lines()
-                    .filter(|l| {
-                        let chars: Vec<char> = l.chars().take(2).collect();
-                        chars.len() >= 2
-                            && (chars[0] == 'U'
-                                || chars[1] == 'U'
-                                || (chars[0] == 'A' && chars[1] == 'A')
-                                || (chars[0] == 'D' && chars[1] == 'D'))
-                    })
+                    .filter(|l| is_conflict_line(l))
                     .filter_map(|l| l.get(3..).map(|s| s.to_string()))
                     .collect();
 
-                let error_msg = format!(
-                    "Merge conflicts detected:\n{}\n\nMerge aborted. Please resolve conflicts manually or retry.",
-                    conflict_files.join("\n")
+                let conflict_msg = format!(
+                    r#"# Merge Conflicts Detected
+
+**Card:** {}
+**Branch:** {} → {}
+**Strategy:** {}
+
+## Conflicting Files
+{}
+
+## Current State
+The merge is **in progress** with conflict markers in the files above.
+
+## How to Resolve
+
+### Option 1: Resolve manually
+1. Open each conflicting file
+2. Look for conflict markers: `<<<<<<<`, `=======`, `>>>>>>>`
+3. Edit to keep the correct code (remove markers)
+4. Stage resolved files: `git add <file>`
+5. Complete merge: `git commit -m "Resolved conflicts from {}"`
+
+### Option 2: Accept one side entirely
+- Keep base branch version: `git checkout --ours <file>`
+- Keep agent branch version: `git checkout --theirs <file>`
+- Then: `git add <file>` and `git commit`
+
+### Option 3: Abort and retry
+```
+git merge --abort
+```
+Then investigate why conflicts occurred and create a fix card.
+
+## Conflict Details
+Use `cat <file>` to see conflict markers in each file."#,
+                    card_id,
+                    agent_branch,
+                    base_branch,
+                    strategy,
+                    conflict_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n"),
+                    agent_branch
                 );
 
                 return Ok((
                     false,
                     vec![ContextEnum::ChatMessage(ChatMessage {
                         role: "tool".to_string(),
-                        content: ChatContent::SimpleText(error_msg),
+                        content: ChatContent::SimpleText(conflict_msg),
                         tool_calls: None,
                         tool_call_id: tool_call_id.clone(),
                         ..Default::default()
@@ -272,36 +418,56 @@ impl Tool for ToolTaskMergeAgent {
             }
         }
 
-        if delete_worktree {
-            let worktree_removed =
-                run_git(&["worktree", "remove", agent_worktree, "--force"]).is_ok();
-            let branch_deleted = run_git(&["branch", "-D", agent_branch]).is_ok();
+        let (worktree_removed, branch_deleted) = if delete_worktree && agent_branch != base_branch {
+            let wr = run_git(&["worktree", "remove", agent_worktree, "--force"]).is_ok();
+            let bd = run_git(&["branch", "-D", agent_branch]).is_ok();
+            (wr, bd)
+        } else {
+            (false, false)
+        };
 
-            if worktree_removed || branch_deleted {
-                let card_id_owned = card_id.to_string();
-                let (_board, _) =
-                    storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
-                        if let Some(card) = board.get_card_mut(&card_id_owned) {
-                            card.agent_branch = None;
-                            card.agent_worktree = None;
-                            card.agent_worktree_name = None;
-                        }
-                        Ok(())
-                    })
-                    .await?;
-            }
+        drop(_guard);
+
+        if worktree_removed || branch_deleted {
+            let card_id_owned = card_id.to_string();
+            let clear_worktree = worktree_removed;
+            let clear_branch = branch_deleted;
+            let _ = storage::update_board_atomic(gcx.clone(), &task_id, move |board| {
+                if let Some(card) = board.get_card_mut(&card_id_owned) {
+                    if clear_branch {
+                        card.agent_branch = None;
+                    }
+                    if clear_worktree {
+                        card.agent_worktree = None;
+                        card.agent_worktree_name = None;
+                    }
+                }
+                Ok(())
+            })
+            .await?;
         }
+
+        let cleanup_info = if delete_worktree && agent_branch != base_branch {
+            match (worktree_removed, branch_deleted) {
+                (true, true) => "Worktree and branch cleaned up.".to_string(),
+                (true, false) => "Worktree removed, branch deletion failed.".to_string(),
+                (false, true) => "Worktree removal failed, branch deleted.".to_string(),
+                (false, false) => "Cleanup failed (worktree and branch still exist).".to_string(),
+            }
+        } else {
+            "No cleanup requested.".to_string()
+        };
 
         let result_message = format!(
             r#"# Agent Work Merged
 
 **Card:** {}
 **Strategy:** {}
-**Branch:** {}
-**Worktree Deleted:** {}
+**Branch:** {} → {}
+**Cleanup:** {}
 
 The agent's work has been successfully merged back to the main branch."#,
-            card_id, strategy, agent_branch, delete_worktree
+            card_id, strategy, agent_branch, base_branch, cleanup_info
         );
 
         Ok((
