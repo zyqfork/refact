@@ -24,7 +24,7 @@
 
 .circularProgressBg {
   fill: none;
-  stroke: var(--gray-a5);
+  stroke: transparent;
 }
 
 .circularProgressFill {

@@ -209,6 +209,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
           renderedPage.name === "integrations page" && isPaddingApplied,
       })}
     >
+      {activeTab && <Toolbar activeTab={activeTab} />}
       <PageWrapper
         host={config.host}
         style={{
@@ -218,7 +219,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
       >
         <UserSurvey />
         {renderedPage.name === "login page" && <LoginPage />}
-        {activeTab && <Toolbar activeTab={activeTab} />}
         {pageSwitching && <ChatLoading />}
         {!pageSwitching && renderedPage.name === "welcome" && (
           <Welcome onPressNext={startTour} />

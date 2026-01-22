@@ -1,22 +1,10 @@
 .toolbar {
-  position: relative;
   display: flex;
   align-items: center;
-  background: var(--gray-1);
+  background: transparent;
   height: 36px;
   padding: 0 var(--space-2);
   gap: 0;
-}
-
-.toolbar::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -5px;
-  height: 5px;
-  background: linear-gradient(to bottom, var(--gray-a2), transparent);
-  pointer-events: none;
 }
 
 .toolbarSection {
@@ -96,13 +84,6 @@
   background: var(--gray-a5);
   pointer-events: none;
   transition: opacity 0.15s ease;
-}
-
-.tabWrap:hover::after,
-.tabWrap:has(+ .tabWrap:hover)::after,
-.tabWrap:has(.tabButtonActive)::after,
-.tabWrap:has(+ .tabWrap .tabButtonActive)::after {
-  opacity: 0;
 }
 
 .tabButton {

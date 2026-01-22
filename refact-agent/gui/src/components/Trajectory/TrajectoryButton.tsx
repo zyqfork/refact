@@ -25,9 +25,9 @@ export const TrajectoryButton: React.FC<TrajectoryButtonProps> = ({
 
   return (
     <Popover.Root open={open} onOpenChange={handleOpenChange}>
-      <Popover.Trigger>
-        <HoverCard.Root>
-          <HoverCard.Trigger>
+      <HoverCard.Root>
+        <HoverCard.Trigger>
+          <Popover.Trigger>
             <IconButton
               variant="ghost"
               size="1"
@@ -36,14 +36,14 @@ export const TrajectoryButton: React.FC<TrajectoryButtonProps> = ({
             >
               <ArchiveIcon />
             </IconButton>
-          </HoverCard.Trigger>
-          <HoverCard.Content size="1" side="bottom">
-            <Text as="p" size="2">
-              Compress or Handoff
-            </Text>
-          </HoverCard.Content>
-        </HoverCard.Root>
-      </Popover.Trigger>
+          </Popover.Trigger>
+        </HoverCard.Trigger>
+        <HoverCard.Content size="1" side="bottom">
+          <Text as="p" size="2">
+            Compress or Handoff
+          </Text>
+        </HoverCard.Content>
+      </HoverCard.Root>
       <TrajectoryPopoverContent onClose={() => handleOpenChange(false)} />
     </Popover.Root>
   );

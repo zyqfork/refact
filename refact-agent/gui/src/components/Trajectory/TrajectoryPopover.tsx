@@ -59,12 +59,7 @@ export const TrajectoryPopoverContent: React.FC<
   };
 
   return (
-    <Popover.Content
-      side="top"
-      align="end"
-      sideOffset={8}
-      className={styles.popoverContent}
-    >
+    <Popover.Content side="top" align="end" sideOffset={8}>
       <Tabs.Root value={activeTab} onValueChange={handleTabChange}>
         <Tabs.List className={styles.tabsList}>
           <Tabs.Trigger value="compress" className={styles.tabsTrigger}>
