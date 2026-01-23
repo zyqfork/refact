@@ -424,10 +424,7 @@ export function applyDeltaOps(
         break;
 
       case "add_citation":
-        if (!updated.citations) {
-          updated.citations = [];
-        }
-        updated.citations.push(op.citation);
+        updated.citations = [...(updated.citations ?? []), op.citation];
         break;
 
       case "set_usage":

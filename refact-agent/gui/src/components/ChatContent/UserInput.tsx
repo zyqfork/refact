@@ -10,7 +10,7 @@ import {
   UserMessageContentWithImage,
   type UserMessage,
 } from "../../services/refact";
-import { takeWhile } from "../../utils";
+
 import { RetryForm } from "../ChatForm";
 import { DialogImage } from "../DialogImage";
 import { Markdown } from "../Markdown";
@@ -144,40 +144,63 @@ function process(items: UserInputProps["children"]) {
   return processLines(items.split("\n"));
 }
 
-function processLines(
-  lines: string[],
-  processedLinesMemo: JSX.Element[] = [],
-): JSX.Element[] {
-  if (lines.length === 0) return processedLinesMemo;
+function processLines(lines: string[]): JSX.Element[] {
+  const result: JSX.Element[] = [];
+  let i = 0;
 
-  const [head, ...tail] = lines;
-  const nextBackTicksIndex = tail.findIndex((l) => l.startsWith("```"));
-  const key = `line-${processedLinesMemo.length + 1}`;
+  while (i < lines.length) {
+    const line = lines[i];
+    const key = `line-${result.length + 1}`;
 
-  if (!head.startsWith("```") || nextBackTicksIndex === -1) {
-    const processedLines = processedLinesMemo.concat(
-      <Text
-        size="2"
-        as="div"
-        key={key}
-        wrap="balance"
-        className={styles.break_word}
-      >
-        {head}
-      </Text>,
-    );
-    return processLines(tail, processedLines);
+    if (!line.startsWith("```")) {
+      result.push(
+        <Text
+          size="2"
+          as="div"
+          key={key}
+          wrap="balance"
+          className={styles.break_word}
+        >
+          {line}
+        </Text>,
+      );
+      i++;
+      continue;
+    }
+
+    let endIndex = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].startsWith("```")) {
+        endIndex = j;
+        break;
+      }
+    }
+
+    if (endIndex === -1) {
+      result.push(
+        <Text
+          size="2"
+          as="div"
+          key={key}
+          wrap="balance"
+          className={styles.break_word}
+        >
+          {line}
+        </Text>,
+      );
+      i++;
+      continue;
+    }
+
+    const codeLines: string[] = [];
+    for (let j = i; j <= endIndex; j++) {
+      codeLines.push(lines[j]);
+    }
+    result.push(<Markdown key={key}>{codeLines.join("\n")}</Markdown>);
+    i = endIndex + 1;
   }
 
-  const endIndex = nextBackTicksIndex + 1;
-
-  const code = [head].concat(tail.slice(0, endIndex)).join("\n");
-  const processedLines = processedLinesMemo.concat(
-    <Markdown key={key}>{code}</Markdown>,
-  );
-
-  const next = tail.slice(endIndex);
-  return processLines(next, processedLines);
+  return result;
 }
 
 function isUserContentImage(
@@ -194,45 +217,63 @@ function processUserInputArray(
     | UserMessageContentWithImage
     | ProcessedUserMessageContentWithImages
   )[],
-  memo: JSX.Element[] = [],
-) {
-  if (items.length === 0) return memo;
-  const [head, ...tail] = items;
+): JSX.Element[] {
+  const result: JSX.Element[] = [];
+  let i = 0;
 
-  if ("type" in head && head.type === "text") {
-    const processedLines = processLines(head.text.split("\n"));
-    return processUserInputArray(tail, memo.concat(processedLines));
+  while (i < items.length) {
+    const head = items[i];
+
+    if ("type" in head && head.type === "text") {
+      const processedLines = processLines(head.text.split("\n"));
+      for (const el of processedLines) result.push(el);
+      i++;
+      continue;
+    }
+
+    if ("m_type" in head && head.m_type === "text") {
+      const processedLines = processLines(head.m_content.split("\n"));
+      for (const el of processedLines) result.push(el);
+      i++;
+      continue;
+    }
+
+    if (!isUserContentImage(head)) {
+      i++;
+      continue;
+    }
+
+    const images: typeof items = [head];
+    let j = i + 1;
+    while (j < items.length && isUserContentImage(items[j])) {
+      images.push(items[j]);
+      j++;
+    }
+
+    result.push(
+      <Flex
+        key={`user-image-images-${result.length}`}
+        gap="2"
+        wrap="wrap"
+        my="2"
+      >
+        {images.map((image, index) => {
+          if ("type" in image && image.type === "image_url") {
+            const key = `user-input${result.length}-${image.type}-${index}`;
+            const content = image.image_url.url;
+            return <DialogImage src={content} key={key} />;
+          }
+          if ("m_type" in image && image.m_type.startsWith("image/")) {
+            const key = `user-input${result.length}-${image.m_type}-${index}`;
+            const content = `data:${image.m_type};base64,${image.m_content}`;
+            return <DialogImage src={content} key={key} />;
+          }
+          return null;
+        })}
+      </Flex>,
+    );
+    i = j;
   }
 
-  if ("m_type" in head && head.m_type === "text") {
-    const processedLines = processLines(head.m_content.split("\n"));
-    return processUserInputArray(tail, memo.concat(processedLines));
-  }
-
-  const isImage = isUserContentImage(head);
-
-  if (!isImage) return processUserInputArray(tail, memo);
-
-  const imagesInTail = takeWhile(tail, isUserContentImage);
-  const nextTail = tail.slice(imagesInTail.length);
-  const images = [head, ...imagesInTail];
-  const elem = (
-    <Flex key={`user-image-images-${memo.length}`} gap="2" wrap="wrap" my="2">
-      {images.map((image, index) => {
-        if ("type" in image && image.type === "image_url") {
-          const key = `user-input${memo.length}-${image.type}-${index}`;
-          const content = image.image_url.url;
-          return <DialogImage src={content} key={key} />;
-        }
-        if ("m_type" in image && image.m_type.startsWith("image/")) {
-          const key = `user-input${memo.length}-${image.m_type}-${index}`;
-          const content = `data:${image.m_type};base64,${image.m_content}`;
-          return <DialogImage src={content} key={key} />;
-        }
-        return null;
-      })}
-    </Flex>
-  );
-
-  return processUserInputArray(nextTail, memo.concat(elem));
+  return result;
 }

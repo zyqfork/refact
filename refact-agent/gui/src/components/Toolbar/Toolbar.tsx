@@ -223,14 +223,19 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
 
   const goToTab = useCallback(
     (tab: Tab) => {
+      const isSameTab =
+        (isChatTab(tab) && isChatTab(activeTab) && tab.id === activeTab.id) ||
+        (isTaskTab(tab) &&
+          isTaskTab(activeTab) &&
+          tab.taskId === activeTab.taskId);
+
+      if (isSameTab) {
+        return;
+      }
+
       if (isChatTab(activeTab)) {
         const currentThread = allThreads[activeTab.id];
-        const isNavigatingToSameTab = isChatTab(tab) && tab.id === activeTab.id;
-        if (
-          !isNavigatingToSameTab &&
-          currentThread &&
-          currentThread.thread.messages.length === 0
-        ) {
+        if (currentThread && currentThread.thread.messages.length === 0) {
           dispatch(closeThread({ id: activeTab.id }));
         }
       }

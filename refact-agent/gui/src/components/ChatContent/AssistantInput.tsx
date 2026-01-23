@@ -133,6 +133,16 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
                     (citation, idx, arr) =>
                       arr.findIndex((c) => c.url === citation.url) === idx,
                   )
+                  .filter((citation) => {
+                    try {
+                      const url = new URL(citation.url);
+                      return (
+                        url.protocol === "http:" || url.protocol === "https:"
+                      );
+                    } catch {
+                      return false;
+                    }
+                  })
                   .map((citation, idx) => (
                     <Link
                       key={idx}

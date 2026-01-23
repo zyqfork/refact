@@ -18,7 +18,7 @@ import {
 
 const EMPTY_MESSAGES: ChatMessages = [];
 const EMPTY_QUEUED: QueuedItem[] = [];
-const EMPTY_PAUSE_REASONS: string[] = [];
+const EMPTY_PAUSE_REASONS: ThreadConfirmation["pause_reasons"] = [];
 const EMPTY_IMAGES: ImageFile[] = [];
 const DEFAULT_NEW_CHAT_SUGGESTED = { wasSuggested: false } as const;
 const DEFAULT_CONFIRMATION: ThreadConfirmation = {
@@ -184,13 +184,17 @@ export const selectToolResultById = createSelector(
   [toolMessagesSelector, (_, id?: string) => id],
   (messages, id) => {
     if (!id) return undefined;
-    const msg = [...messages].reverse().find((m) => m.tool_call_id === id);
-    if (!msg) return undefined;
-    return {
-      tool_call_id: msg.tool_call_id,
-      content: msg.content,
-      tool_failed: msg.tool_failed,
-    } as ToolResult;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.tool_call_id === id) {
+        return {
+          tool_call_id: m.tool_call_id,
+          content: m.content,
+          tool_failed: m.tool_failed,
+        } as ToolResult;
+      }
+    }
+    return undefined;
   },
 );
 export const selectManyToolResultsByIds = (ids: string[]) =>

@@ -109,7 +109,7 @@ export const StreamingTokenCounter: React.FC = () => {
 
   const contextPercentage = useMemo(() => {
     if (!maxContextTokens || maxContextTokens === 0) return 0;
-    return Math.round((contextTokens / maxContextTokens) * 100);
+    return Math.min(999, Math.round((contextTokens / maxContextTokens) * 100));
   }, [contextTokens, maxContextTokens]);
 
   const hasAnyOutput = allText.length > 0 || outputTokens > 0;
@@ -140,6 +140,13 @@ export const StreamingTokenCounter: React.FC = () => {
     }
 
     setVisible(false);
+
+    return () => {
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
   }, [isStreaming, isWaiting, hasAnyOutput, hasFinalUsage]);
 
   useEffect(() => {

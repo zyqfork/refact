@@ -61,7 +61,7 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
   const chatId = useAppSelector(selectChatId);
 
   const commands = pauseReasons.map((reason) => reason.command);
-  const rules = pauseReasons.map((reason) => reason.rule);
+  const rules = [...new Set(pauseReasons.map((reason) => reason.rule))];
   const types = pauseReasons.map((reason) => reason.type);
   const toolCallIds = pauseReasons.map((reason) => reason.tool_call_id);
 
@@ -227,8 +227,6 @@ const PatchConfirmation: React.FC<PatchConfirmationProps> = ({
       return "Apply changes";
     }
   }, [toolCalls]);
-
-  if (!toolCalls || toolCalls.length === 0) return null;
 
   return (
     <Card className={styles.ToolConfirmationCard}>

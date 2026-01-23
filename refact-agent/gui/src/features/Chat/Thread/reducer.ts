@@ -906,8 +906,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
             msg as Parameters<typeof applyDeltaOps>[0],
             event.ops,
           );
-          // Increment version to force component re-renders
-          state.stream_version += 1;
+          state.stream_version = (state.stream_version + 1) % 1_000_000;
         }
         break;
       }
@@ -934,6 +933,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
         rt.confirmation.pause = true;
         rt.confirmation.pause_reasons =
           event.reasons as ToolConfirmationPauseReason[];
+        rt.confirmation.status.wasInteracted = false;
+        rt.confirmation.status.confirmationStatus = false;
         rt.streaming = false;
         rt.waiting_for_response = false;
         break;
@@ -943,6 +944,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
         if (!rt) break;
         rt.confirmation.pause = false;
         rt.confirmation.pause_reasons = [];
+        rt.confirmation.status.wasInteracted = false;
+        rt.confirmation.status.confirmationStatus = true;
         break;
       }
 

@@ -125,15 +125,13 @@ export const DiffTitle: React.FC<{
       (diff) => diff.file_action === "rename" && diff.file_name_rename,
     );
 
-    let addLength = 0;
-    let removeLength = 0;
+    let addCount = 0;
+    let removeCount = 0;
     for (const diff of diffForFile) {
-      if (diff.lines_add) addLength += diff.lines_add.split("\n").length;
+      if (diff.lines_add) addCount += diff.lines_add.split("\n").length;
       if (diff.lines_remove)
-        removeLength += diff.lines_remove.split("\n").length;
+        removeCount += diff.lines_remove.split("\n").length;
     }
-    const adds = "+".repeat(addLength);
-    const removes = "-".repeat(removeLength);
 
     if (nodes.length > 0) {
       nodes.push(", ");
@@ -158,13 +156,9 @@ export const DiffTitle: React.FC<{
           style={{ display: "inline-block" }}
           key={fullPath + "-" + diffForFile.length}
         >
-          {name}{" "}
-          <Text color="red" wrap="wrap" style={{ wordBreak: "break-all" }}>
-            {removes}
-          </Text>
-          <Text color="green" wrap="wrap" style={{ wordBreak: "break-all" }}>
-            {adds}
-          </Text>
+          {name} {addCount > 0 && <Text color="green">+{addCount}</Text>}
+          {addCount > 0 && removeCount > 0 && " "}
+          {removeCount > 0 && <Text color="red">-{removeCount}</Text>}
         </Text>,
       );
     }

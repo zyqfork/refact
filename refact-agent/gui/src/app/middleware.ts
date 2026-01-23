@@ -72,11 +72,7 @@ const startListening = listenerMiddleware.startListening.withTypes<
 >();
 
 startListening({
-  matcher: isAnyOf(
-    (d: unknown): d is ReturnType<typeof newChatAction> =>
-      newChatAction.match(d),
-    (d: unknown): d is ReturnType<typeof restoreChat> => restoreChat.match(d),
-  ),
+  actionCreator: newChatAction,
   effect: (_action, listenerApi) => {
     const state = listenerApi.getState();
     const chatId = state.chat.current_thread_id;
@@ -96,6 +92,23 @@ startListening({
         confirmationStatus: true,
       }),
     );
+    listenerApi.dispatch(clearError());
+  },
+});
+
+startListening({
+  actionCreator: restoreChat,
+  effect: (_action, listenerApi) => {
+    const state = listenerApi.getState();
+    const chatId = state.chat.current_thread_id;
+
+    [
+      statisticsApi.util.resetApiState(),
+      toolsApi.util.resetApiState(),
+      commandsApi.util.resetApiState(),
+    ].forEach((api) => listenerApi.dispatch(api));
+
+    listenerApi.dispatch(resetThreadImages({ id: chatId }));
     listenerApi.dispatch(clearError());
   },
 });
