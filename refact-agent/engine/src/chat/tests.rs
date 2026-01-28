@@ -3,7 +3,7 @@ mod tests {
     use serde_json::json;
     use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ChatToolCall, ChatToolFunction};
     use crate::scratchpads::multimodality::MultimodalElement;
-    use crate::chat::types::{ChatEvent, DeltaOp, SessionState, PauseReason};
+    use crate::chat::types::{ChatEvent, DeltaOp, SessionState, PauseReason, QueuedItem};
 
     fn extract_extra_fields(
         json_val: &serde_json::Value,

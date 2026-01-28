@@ -125,6 +125,7 @@ pub struct LoadedTrajectory {
     pub messages: Vec<ChatMessage>,
     pub thread: ThreadParams,
     pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone)]
@@ -343,10 +344,17 @@ pub async fn load_trajectory_for_chat(
         .unwrap_or(&chrono::Utc::now().to_rfc3339())
         .to_string();
 
+    let updated_at = t
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&created_at)
+        .to_string();
+
     Some(LoadedTrajectory {
         messages,
         thread,
         created_at,
+        updated_at,
     })
 }
 
@@ -721,7 +729,7 @@ async fn process_trajectory_change(
                 let coins = calculate_total_coins_from_chat_messages(&t.messages);
                 let (lines_added, lines_removed) = calculate_line_changes_from_chat_messages(&t.messages);
                 (
-                    Some(chrono::Utc::now().to_rfc3339()),
+                    Some(t.updated_at),
                     Some(t.thread.title),
                     Some(t.thread.is_title_generated),
                     Some(t.messages.len()),

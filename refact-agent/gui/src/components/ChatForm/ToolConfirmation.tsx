@@ -8,6 +8,7 @@ import { push } from "../../features/Pages/pagesSlice";
 import {
   isAssistantMessage,
   ToolConfirmationPauseReason,
+  ToolCall,
 } from "../../services/refact";
 import {
   selectChatId,
@@ -21,66 +22,111 @@ type ToolConfirmationProps = {
 };
 
 const getConfirmationMessage = (
-  commands: string[],
+  toolNames: string[],
   rules: string[],
   types: string[],
-  confirmationCommands: string[],
-  denialCommands: string[],
+  confirmationToolNames: string[],
+  denialToolNames: string[],
 ) => {
-  const ruleText = `${rules.join(", ")}`;
+  const normalizedRules = rules.filter((r) => r.trim().length > 0);
+  const ruleText = normalizedRules.map((r) => `\`${r}\``).join(", ");
+  const ruleClause =
+    normalizedRules.length > 0
+      ? ` due to ${ruleText} ${normalizedRules.length > 1 ? "rules" : "rule"}`
+      : "";
+
   if (types.every((type) => type === "confirmation")) {
     return `${
-      commands.length > 1 ? "Commands need" : "Command needs"
-    } confirmation due to \`\`\`${ruleText}\`\`\` ${
-      rules.length > 1 ? "rules" : "rule"
-    }.`;
+      toolNames.length > 1 ? "Commands need" : "Command needs"
+    } confirmation${ruleClause}.`;
   } else if (types.every((type) => type === "denial")) {
     return `${
-      commands.length > 1 ? "Commands were" : "Command was"
-    } denied due to \`\`\`${ruleText}\`\`\` ${
-      rules.length > 1 ? "rules" : "rule"
-    }.`;
+      toolNames.length > 1 ? "Commands were" : "Command was"
+    } denied${ruleClause}.`;
   } else {
     return `${
-      confirmationCommands.length > 1 ? "Commands need" : "Command needs"
-    } confirmation: ${confirmationCommands.join(", ")}.\n\nFollowing ${
-      denialCommands.length > 1 ? "commands were" : "command was"
-    } denied: ${denialCommands.join(
-      ", ",
-    )}.\n\nAll due to \`\`\`${ruleText}\`\`\` ${
-      rules.length > 1 ? "rules" : "rule"
-    }.`;
+      confirmationToolNames.length > 1 ? "Commands need" : "Command needs"
+    } confirmation: ${confirmationToolNames.join(", ")}.\n\nFollowing ${
+      denialToolNames.length > 1 ? "commands were" : "command was"
+    } denied: ${denialToolNames.join(", ")}.${
+      ruleClause ? `\n\nAll${ruleClause}.` : ""
+    }`;
   }
+};
+
+type ResolvedPauseReason = {
+  tool_call_id: string;
+  type: string;
+  toolName: string;
+  rule: string;
+  integr_config_path: string | null;
 };
 
 export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
   pauseReasons,
 }) => {
   const dispatch = useAppDispatch();
-
+  const messages = useAppSelector(selectMessages);
   const chatId = useAppSelector(selectChatId);
 
-  const commands = pauseReasons.map((reason) => reason.command);
-  const rules = [...new Set(pauseReasons.map((reason) => reason.rule))];
-  const types = pauseReasons.map((reason) => reason.type);
-  const toolCallIds = pauseReasons.map((reason) => reason.tool_call_id);
+  const toolCallsById = useMemo(() => {
+    const map = new Map<string, ToolCall>();
+    for (const m of messages) {
+      if (!isAssistantMessage(m) || !m.tool_calls) continue;
+      for (const tc of m.tool_calls) {
+        if (tc.id) map.set(tc.id, tc);
+      }
+    }
+    return map;
+  }, [messages]);
 
-  const isPatchConfirmation = commands.some((command) =>
-    PATCH_LIKE_FUNCTIONS.includes(command),
+  const resolvedReasons = useMemo((): ResolvedPauseReason[] => {
+    return pauseReasons.map((r) => {
+      let toolName = toolCallsById.get(r.tool_call_id)?.function.name;
+      if (!toolName) {
+        const cmd = r.command.trim();
+        if (cmd) {
+          const firstWord = cmd.split(/\s+/)[0];
+          if (firstWord && /^[a-z_]+$/.test(firstWord)) {
+            toolName = firstWord;
+          }
+        }
+      }
+      return {
+        tool_call_id: r.tool_call_id,
+        type: r.type,
+        toolName: toolName ?? "unknown",
+        rule: r.rule,
+        integr_config_path: r.integr_config_path,
+      };
+    });
+  }, [pauseReasons, toolCallsById]);
+
+  const toolCallIds = useMemo(
+    () => [...new Set(resolvedReasons.map((r) => r.tool_call_id))],
+    [resolvedReasons],
+  );
+  const toolNames = resolvedReasons.map((r) => r.toolName);
+  const types = resolvedReasons.map((r) => r.type);
+  const rules = [...new Set(resolvedReasons.map((r) => r.rule))];
+
+  const isPatchConfirmation = resolvedReasons.some((r) =>
+    PATCH_LIKE_FUNCTIONS.includes(r.toolName),
   );
 
-  const integrationPaths = pauseReasons.map(
-    (reason) => reason.integr_config_path,
-  );
+  const maybeIntegrationPath = resolvedReasons.find(
+    (r) => r.integr_config_path !== null,
+  )?.integr_config_path;
 
-  // assuming that at least one path out of all objects is not null so we can show up the link
-  const maybeIntegrationPath = integrationPaths.find((path) => path !== null);
-
-  const allConfirmation = types.every((type) => type === "confirmation");
-  const confirmationCommands = commands.filter(
-    (_, i) => types[i] === "confirmation",
+  const allConfirmation = resolvedReasons.every(
+    (r) => r.type === "confirmation",
   );
-  const denialCommands = commands.filter((_, i) => types[i] === "denial");
+  const confirmationToolNames = resolvedReasons
+    .filter((r) => r.type === "confirmation")
+    .map((r) => r.toolName);
+  const denialToolNames = resolvedReasons
+    .filter((r) => r.type === "denial")
+    .map((r) => r.toolName);
 
   const { respondToTools } = useChatActions();
 
@@ -110,16 +156,18 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
   }, [rejectToolUsage]);
 
   const message = getConfirmationMessage(
-    commands,
+    toolNames,
     rules,
     types,
-    confirmationCommands,
-    denialCommands,
+    confirmationToolNames,
+    denialToolNames,
   );
 
   if (isPatchConfirmation && allConfirmation) {
     return (
       <PatchConfirmation
+        pauseReasons={pauseReasons}
+        toolCallsById={toolCallsById}
         handleAllowForThisChat={handleAllowForThisChat}
         rejectToolUsage={handleReject}
         confirmToolUsage={confirmToolUsage}
@@ -145,10 +193,8 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
             <Text as="span">⚠️</Text>
             <Text>Model {allConfirmation ? "wants" : "tried"} to run:</Text>
           </Flex>
-          {commands.map((command, i) => (
-            <Markdown
-              key={toolCallIds[i]}
-            >{`${"```bash\n"}${command}${"\n```"}`}</Markdown>
+          {resolvedReasons.map((r) => (
+            <Markdown key={r.tool_call_id}>{`\`${r.toolName}\``}</Markdown>
           ))}
           <Text className={styles.ToolConfirmationText}>
             <Markdown color="indigo">{message.concat("\n\n")}</Markdown>
@@ -199,34 +245,39 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
 };
 
 type PatchConfirmationProps = {
+  pauseReasons: ToolConfirmationPauseReason[];
+  toolCallsById: Map<string, ToolCall>;
   handleAllowForThisChat: () => void;
   rejectToolUsage: () => void;
   confirmToolUsage: () => void;
 };
 
 const PatchConfirmation: React.FC<PatchConfirmationProps> = ({
+  pauseReasons,
+  toolCallsById,
   handleAllowForThisChat,
   confirmToolUsage,
   rejectToolUsage,
 }) => {
-  const messages = useAppSelector(selectMessages);
-  const assistantMessages = messages.filter(isAssistantMessage);
-  const lastAssistantMessage = assistantMessages.at(-1);
-  const toolCalls = lastAssistantMessage?.tool_calls;
-
   const messageForPatch = useMemo(() => {
-    if (!toolCalls || toolCalls.length === 0) return "Apply changes";
-    try {
-      const parsed = JSON.parse(toolCalls[0].function.arguments) as {
-        path?: string;
-      };
-      if (!parsed.path) return "Apply changes";
-      const parts = parsed.path.split(/[/\\]/);
-      return "Patch `" + parts[parts.length - 1] + "`";
-    } catch {
-      return "Apply changes";
+    const filenames: string[] = [];
+    for (const reason of pauseReasons) {
+      const tc = toolCallsById.get(reason.tool_call_id);
+      if (!tc) continue;
+      try {
+        const parsed = JSON.parse(tc.function.arguments) as { path?: string };
+        if (parsed.path) {
+          const parts = parsed.path.split(/[/\\]/);
+          filenames.push(parts[parts.length - 1]);
+        }
+      } catch {
+        continue;
+      }
     }
-  }, [toolCalls]);
+    if (filenames.length === 0) return "Apply changes";
+    const uniqueFilenames = [...new Set(filenames)];
+    return `Patch ${uniqueFilenames.map((f) => `\`${f}\``).join(", ")}`;
+  }, [pauseReasons, toolCallsById]);
 
   return (
     <Card className={styles.ToolConfirmationCard}>

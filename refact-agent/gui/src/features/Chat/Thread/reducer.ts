@@ -509,6 +509,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
     if (sessionState === "paused") {
       rt.confirmation.pause = true;
+      if (rt.confirmation.pause_reasons.length === 0) {
+        state.sse_refresh_requested = action.payload.id;
+      }
     } else if (sessionState === "idle" || sessionState === "error") {
       rt.confirmation.pause = false;
       rt.confirmation.pause_reasons = [];
@@ -838,6 +841,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
             if (isAssistantMessage(existing) && isAssistantMessage(msg)) {
               const merged: AssistantMessage = {
                 ...msg,
+                tool_calls: msg.tool_calls ?? existing.tool_calls,
                 reasoning_content:
                   msg.reasoning_content ?? existing.reasoning_content,
                 thinking_blocks:
@@ -941,6 +945,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
       case "pause_required": {
         if (!rt) break;
+        rt.streaming = false;
+        rt.waiting_for_response = false;
         rt.confirmation.pause = true;
         rt.confirmation.pause_reasons =
           event.reasons as ToolConfirmationPauseReason[];

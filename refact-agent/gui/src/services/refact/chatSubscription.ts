@@ -343,7 +343,7 @@ export function subscribeToChatEvents(
           callbacks.onError(new Error(abortReason));
         }
         abortReason = null;
-        disconnect(false);
+        disconnect(true);
         return;
       }
 
