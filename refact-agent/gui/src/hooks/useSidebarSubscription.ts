@@ -27,7 +27,7 @@ import {
 } from "../services/refact/trajectories";
 import { useAppSelector } from "./useAppSelector";
 
-const RECONNECT_DELAY_MS = 5000;
+const RECONNECT_DELAY_MS = 500;
 const MIGRATION_KEY = "refact-trajectories-migrated";
 
 function getLegacyHistory(): ChatHistoryItem[] {
@@ -329,6 +329,7 @@ export function useSidebarSubscription() {
       }));
 
       dispatch(hydrateHistoryFromMeta(trajectoryItems));
+      dispatch(setHistoryLoadError(null));
       dispatch(setHistoryLoading(false));
 
       dispatch(
@@ -430,6 +431,11 @@ export function useSidebarSubscription() {
 
     const port = config.lspPort;
     const apiKey = config.apiKey ?? null;
+
+    if (port <= 0 || port > 65535) {
+      scheduleReconnect();
+      return;
+    }
 
     const onEvent = (envelope: SidebarEventEnvelope) => {
       if (envelope.category === "snapshot") {
