@@ -335,7 +335,8 @@ export const ModeForm: React.FC<ModeFormProps> = ({
                 <Switch
                   size="1"
                   checked={
-                    typeof threadDefaults.auto_approve_editing_tools === "boolean"
+                    typeof threadDefaults.auto_approve_editing_tools ===
+                    "boolean"
                       ? threadDefaults.auto_approve_editing_tools
                       : false
                   }

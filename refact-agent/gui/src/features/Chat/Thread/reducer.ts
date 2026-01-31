@@ -857,7 +857,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
           "auto_approve_editing_tools" in params &&
           typeof params.auto_approve_editing_tools === "boolean"
         )
-          rt.thread.auto_approve_editing_tools = params.auto_approve_editing_tools;
+          rt.thread.auto_approve_editing_tools =
+            params.auto_approve_editing_tools;
         if (
           "auto_approve_dangerous_commands" in params &&
           typeof params.auto_approve_dangerous_commands === "boolean"

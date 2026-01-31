@@ -872,7 +872,14 @@ startListening({
     const state = listenerApi.getState();
     const threads = state.chat.threads as Record<
       string,
-      { thread: { task_meta?: { task_id: string }; is_task_chat?: boolean; id: string } } | undefined
+      | {
+          thread: {
+            task_meta?: { task_id: string };
+            is_task_chat?: boolean;
+            id: string;
+          };
+        }
+      | undefined
     >;
 
     for (const [threadId, runtime] of Object.entries(threads)) {

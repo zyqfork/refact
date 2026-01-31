@@ -24,10 +24,13 @@ const normalizeTaskStatus = (status: unknown): TodoItem["status"] | null => {
 };
 
 const sanitizeText = (text: string, maxLen: number): string => {
-  return text
-    .replace(/[\x00-\x1F\x7F]/g, "")
-    .trim()
-    .slice(0, maxLen);
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1F\x7F]/g, "")
+      .trim()
+      .slice(0, maxLen)
+  );
 };
 
 const parseTasksFromArgs = (argsStr: string): TodoItem[] | null => {
@@ -97,10 +100,10 @@ const deriveTasksFromMessages = (
 
     for (let j = msg.tool_calls.length - 1; j >= 0; j--) {
       const tc = msg.tool_calls[j];
-      if (tc.function?.name !== "tasks_set" || !tc.id) continue;
+      if (tc.function.name !== "tasks_set" || !tc.id) continue;
       if (!successfulToolIds.has(tc.id)) continue;
 
-      const parsed = parseTasksFromArgs(tc.function.arguments ?? "");
+      const parsed = parseTasksFromArgs(tc.function.arguments);
       if (parsed !== null) return parsed;
     }
   }
@@ -404,7 +407,7 @@ describe("parseTasksFromArgs", () => {
 });
 
 describe("deriveTasksFromMessages", () => {
-  const makeAssistantMsg = (toolCalls: Array<{ id: string; args: string }>) => ({
+  const makeAssistantMsg = (toolCalls: { id: string; args: string }[]) => ({
     role: "assistant" as const,
     content: "Response",
     tool_calls: toolCalls.map((tc, index) => ({
@@ -415,10 +418,7 @@ describe("deriveTasksFromMessages", () => {
     })),
   });
 
-  const makeToolMsg = (
-    toolCallId: string,
-    failed = false,
-  ): ToolMessage => ({
+  const makeToolMsg = (toolCallId: string, failed = false): ToolMessage => ({
     role: "tool",
     tool_call_id: toolCallId,
     tool_failed: failed,

@@ -83,7 +83,8 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
 
   const resolvedReasons = useMemo((): ResolvedPauseReason[] => {
     return pauseReasons.map((r) => {
-      let toolName = r.tool_name || toolCallsById.get(r.tool_call_id)?.function.name;
+      let toolName =
+        r.tool_name || toolCallsById.get(r.tool_call_id)?.function.name;
       if (!toolName) {
         const cmd = r.command.trim();
         if (cmd) {
@@ -153,7 +154,9 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
   const handleAllowForThisChat = useCallback(async () => {
     setIsSettingAutoApprove(true);
     try {
-      const { sendChatCommand } = await import("../../services/refact/chatCommands");
+      const { sendChatCommand } = await import(
+        "../../services/refact/chatCommands"
+      );
       const state = (await import("../../app/store")).store.getState();
       const port = state.config.lspPort;
       const apiKey = state.config.apiKey;
@@ -217,8 +220,14 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
             <Flex key={r.tool_call_id} direction="column" gap="1">
               <Markdown>{`\`${r.toolName}\``}</Markdown>
               {r.command && r.command !== r.toolName && (
-                <Text size="1" color="gray" style={{ fontFamily: "monospace", wordBreak: "break-all" }}>
-                  {r.command.length > 200 ? r.command.slice(0, 200) + "..." : r.command}
+                <Text
+                  size="1"
+                  color="gray"
+                  style={{ fontFamily: "monospace", wordBreak: "break-all" }}
+                >
+                  {r.command.length > 200
+                    ? r.command.slice(0, 200) + "..."
+                    : r.command}
                 </Text>
               )}
             </Flex>
@@ -274,7 +283,7 @@ export const ToolConfirmation: React.FC<ToolConfirmationProps> = ({
 type PatchConfirmationProps = {
   pauseReasons: ToolConfirmationPauseReason[];
   toolCallsById: Map<string, ToolCall>;
-  handleAllowForThisChat: () => void;
+  handleAllowForThisChat: () => Promise<void>;
   rejectToolUsage: () => void;
   confirmToolUsage: () => void;
   isSettingAutoApprove?: boolean;
@@ -336,7 +345,7 @@ const PatchConfirmation: React.FC<PatchConfirmationProps> = ({
               color="grass"
               variant="surface"
               size="1"
-              onClick={handleAllowForThisChat}
+              onClick={() => void handleAllowForThisChat()}
               disabled={isSettingAutoApprove}
             >
               {isSettingAutoApprove ? "Setting..." : "Allow for This Chat"}

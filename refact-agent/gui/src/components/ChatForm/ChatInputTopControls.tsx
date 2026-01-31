@@ -18,7 +18,9 @@ export const ChatInputTopControls: React.FC = () => {
   const dispatch = useAppDispatch();
   const chatId = useAppSelector(selectCurrentThreadId);
   const autoApproveEditing = useAppSelector(selectAutoApproveEditingTools);
-  const autoApproveDangerous = useAppSelector(selectAutoApproveDangerousCommands);
+  const autoApproveDangerous = useAppSelector(
+    selectAutoApproveDangerousCommands,
+  );
   const includeProjectInfo = useAppSelector(selectIncludeProjectInfo);
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -80,7 +82,10 @@ export const ChatInputTopControls: React.FC = () => {
         </Flex>
       </Flex>
 
-      <ProjectInformationDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <ProjectInformationDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+      />
     </>
   );
 };

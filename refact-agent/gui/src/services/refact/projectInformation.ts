@@ -63,7 +63,11 @@ const DEFAULT_CONFIG: ProjectInformationConfig = {
     detected_environments: { enabled: true, max_items: 50 },
     git_info: { enabled: true, max_chars: 6000 },
     project_tree: { enabled: true, max_depth: 4, max_chars: 16000 },
-    instruction_files: { enabled: true, max_items: 20, max_chars_per_item: 8000 },
+    instruction_files: {
+      enabled: true,
+      max_items: 20,
+      max_chars_per_item: 8000,
+    },
     project_configs: { enabled: true, max_items: 30, max_chars_per_item: 4000 },
     memories: { enabled: true, max_items: 30, max_chars_per_item: 2000 },
   },
@@ -85,7 +89,7 @@ export const projectInformationApi = createApi({
   }),
   tagTypes: ["ProjectInformation"],
   endpoints: (builder) => ({
-    getProjectInformation: builder.query<ProjectInformationConfig, void>({
+    getProjectInformation: builder.query<ProjectInformationConfig, undefined>({
       queryFn: async (_args, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
@@ -98,11 +102,17 @@ export const projectInformationApi = createApi({
         if (result.error) {
           return { error: result.error };
         }
-        return { data: (result.data as ProjectInformationConfig | null) ?? DEFAULT_CONFIG };
+        return {
+          data:
+            (result.data as ProjectInformationConfig | null) ?? DEFAULT_CONFIG,
+        };
       },
       providesTags: ["ProjectInformation"],
     }),
-    saveProjectInformation: builder.mutation<void, ProjectInformationConfig>({
+    saveProjectInformation: builder.mutation<
+      undefined,
+      ProjectInformationConfig
+    >({
       queryFn: async (config, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;

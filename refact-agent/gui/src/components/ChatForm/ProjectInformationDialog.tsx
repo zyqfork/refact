@@ -11,7 +11,10 @@ import {
   Separator,
   Badge,
 } from "@radix-ui/themes";
-import { ExclamationTriangleIcon, CheckCircledIcon } from "@radix-ui/react-icons";
+import {
+  ExclamationTriangleIcon,
+  CheckCircledIcon,
+} from "@radix-ui/react-icons";
 import {
   useGetProjectInformationQuery,
   useSaveProjectInformationMutation,
@@ -36,14 +39,62 @@ type SectionMeta = {
 };
 
 const SECTION_META: Record<string, SectionMeta> = {
-  system_info: { label: "System Information", field: "max_chars", min: 500, max: 8000, step: 500 },
-  environment_instructions: { label: "Environment Instructions", field: "max_chars", min: 1000, max: 16000, step: 1000 },
-  detected_environments: { label: "Detected Environments", field: "max_items", min: 5, max: 100, step: 5 },
-  git_info: { label: "Git Information", field: "max_chars", min: 1000, max: 16000, step: 1000 },
-  project_tree: { label: "Project Tree", field: "max_chars", min: 2000, max: 32000, step: 2000 },
-  instruction_files: { label: "Instruction Files (AGENTS.md, etc.)", field: "max_chars_per_item", min: 1000, max: 16000, step: 1000 },
-  project_configs: { label: "Project Configs (.refact/)", field: "max_chars_per_item", min: 1000, max: 8000, step: 500 },
-  memories: { label: "Memories", field: "max_chars_per_item", min: 500, max: 8000, step: 500 },
+  system_info: {
+    label: "System Information",
+    field: "max_chars",
+    min: 500,
+    max: 8000,
+    step: 500,
+  },
+  environment_instructions: {
+    label: "Environment Instructions",
+    field: "max_chars",
+    min: 1000,
+    max: 16000,
+    step: 1000,
+  },
+  detected_environments: {
+    label: "Detected Environments",
+    field: "max_items",
+    min: 5,
+    max: 100,
+    step: 5,
+  },
+  git_info: {
+    label: "Git Information",
+    field: "max_chars",
+    min: 1000,
+    max: 16000,
+    step: 1000,
+  },
+  project_tree: {
+    label: "Project Tree",
+    field: "max_chars",
+    min: 2000,
+    max: 32000,
+    step: 2000,
+  },
+  instruction_files: {
+    label: "Instruction Files (AGENTS.md, etc.)",
+    field: "max_chars_per_item",
+    min: 1000,
+    max: 16000,
+    step: 1000,
+  },
+  project_configs: {
+    label: "Project Configs (.refact/)",
+    field: "max_chars_per_item",
+    min: 1000,
+    max: 8000,
+    step: 500,
+  },
+  memories: {
+    label: "Memories",
+    field: "max_chars_per_item",
+    min: 500,
+    max: 8000,
+    step: 500,
+  },
 };
 
 const estimateTokens = (chars: number): number => Math.ceil(chars / 4);
@@ -64,7 +115,9 @@ const SectionRow: React.FC<SectionRowProps> = ({
   onFieldChange,
 }) => {
   const meta = SECTION_META[sectionKey];
-  const sectionBlocks = blocks.filter((b) => b.section === sectionKey && b.enabled);
+  const sectionBlocks = blocks.filter(
+    (b) => b.section === sectionKey && b.enabled,
+  );
   const totalChars = sectionBlocks.reduce((sum, b) => sum + b.char_count, 0);
   const tokens = estimateTokens(totalChars);
 
@@ -91,7 +144,9 @@ const SectionRow: React.FC<SectionRowProps> = ({
       {config.enabled && (
         <Flex direction="column" gap="1" pl="6">
           <Flex align="center" gap="2">
-            <Text size="1" color="gray">{fieldLabel}:</Text>
+            <Text size="1" color="gray">
+              {fieldLabel}:
+            </Text>
             <Slider
               size="1"
               value={[currentValue]}
@@ -101,11 +156,14 @@ const SectionRow: React.FC<SectionRowProps> = ({
               onValueChange={([v]) => onFieldChange(meta.field, v)}
               style={{ width: 120 }}
             />
-            <Text size="1" color="gray">{currentValue.toLocaleString()}</Text>
+            <Text size="1" color="gray">
+              {currentValue.toLocaleString()}
+            </Text>
           </Flex>
           {sectionBlocks.length > 0 && (
             <Text size="1" color="gray">
-              {sectionBlocks.length} item(s), {totalChars.toLocaleString()} chars
+              {sectionBlocks.length} item(s), {totalChars.toLocaleString()}{" "}
+              chars
             </Text>
           )}
         </Flex>
@@ -114,11 +172,18 @@ const SectionRow: React.FC<SectionRowProps> = ({
   );
 };
 
-export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }) => {
-  const { data: savedConfig, isLoading } = useGetProjectInformationQuery(undefined, {
-    skip: !open,
-  });
-  const [saveConfig, { isLoading: isSaving }] = useSaveProjectInformationMutation();
+export const ProjectInformationDialog: React.FC<Props> = ({
+  open,
+  onOpenChange,
+}) => {
+  const { data: savedConfig, isLoading } = useGetProjectInformationQuery(
+    undefined,
+    {
+      skip: !open,
+    },
+  );
+  const [saveConfig, { isLoading: isSaving }] =
+    useSaveProjectInformationMutation();
   const [triggerPreview, { data: previewData, isLoading: isPreviewing }] =
     useGetProjectInformationPreviewMutation();
 
@@ -142,15 +207,18 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
   }, [open]);
 
   useEffect(() => {
-    if (open && localConfig) {
+    if (open) {
       const timeoutId = setTimeout(() => {
-        triggerPreview(localConfig);
+        void triggerPreview(localConfig);
       }, 200);
       return () => clearTimeout(timeoutId);
     }
   }, [open, localConfig, triggerPreview]);
 
-  const blocks = previewData?.blocks ?? [];
+  const blocks = useMemo(
+    () => previewData?.blocks ?? [],
+    [previewData?.blocks],
+  );
 
   const totalTokens = useMemo(() => {
     const enabledBlocks = blocks.filter((b) => b.enabled);
@@ -159,7 +227,10 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
   }, [blocks]);
 
   const updateSection = useCallback(
-    (sectionKey: keyof ProjectInformationConfig["sections"], updates: Partial<SectionConfig>) => {
+    (
+      sectionKey: keyof ProjectInformationConfig["sections"],
+      updates: Partial<SectionConfig>,
+    ) => {
       setLocalConfig((prev) => ({
         ...prev,
         sections: {
@@ -182,7 +253,9 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
       setSaveSuccess(true);
       setTimeout(() => onOpenChange(false), 500);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save configuration");
+      setSaveError(
+        err instanceof Error ? err.message : "Failed to save configuration",
+      );
     }
   }, [saveConfig, localConfig, onOpenChange]);
 
@@ -208,8 +281,8 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
       <Dialog.Content maxWidth="600px">
         <Dialog.Title>Project Information</Dialog.Title>
         <Dialog.Description size="2" color="gray" mb="4">
-          Configure what project information is included in chat context.
-          Token counts are approximate (~4 chars/token).
+          Configure what project information is included in chat context. Token
+          counts are approximate (~4 chars/token).
         </Dialog.Description>
 
         {saveError && (
@@ -250,24 +323,24 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
 
         <ScrollArea style={{ maxHeight: 400 }}>
           <Flex direction="column" gap="1">
-            {(Object.keys(SECTION_META) as Array<keyof typeof SECTION_META>).map(
-              (sectionKey) => (
+            {Object.keys(SECTION_META).map((sectionKey) => {
+              const key =
+                sectionKey as keyof ProjectInformationConfig["sections"];
+              return (
                 <React.Fragment key={sectionKey}>
                   <SectionRow
                     sectionKey={sectionKey}
-                    config={localConfig.sections[sectionKey as keyof ProjectInformationConfig["sections"]]}
+                    config={localConfig.sections[key]}
                     blocks={blocks}
-                    onToggle={(enabled) =>
-                      updateSection(sectionKey as keyof ProjectInformationConfig["sections"], { enabled })
-                    }
+                    onToggle={(enabled) => updateSection(key, { enabled })}
                     onFieldChange={(field, value) =>
-                      updateSection(sectionKey as keyof ProjectInformationConfig["sections"], { [field]: value })
+                      updateSection(key, { [field]: value })
                     }
                   />
                   <Separator size="4" />
                 </React.Fragment>
-              ),
-            )}
+              );
+            })}
           </Flex>
         </ScrollArea>
 
@@ -277,8 +350,10 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
               <ExclamationTriangleIcon />
             </Callout.Icon>
             <Callout.Text>
-              {previewData.warnings.length} warning(s): {previewData.warnings[0]}
-              {previewData.warnings.length > 1 && ` (+${previewData.warnings.length - 1} more)`}
+              {previewData.warnings.length} warning(s):{" "}
+              {previewData.warnings[0]}
+              {previewData.warnings.length > 1 &&
+                ` (+${previewData.warnings.length - 1} more)`}
             </Callout.Text>
           </Callout.Root>
         )}
@@ -292,7 +367,7 @@ export const ProjectInformationDialog: React.FC<Props> = ({ open, onOpenChange }
               Cancel
             </Button>
           </Dialog.Close>
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button onClick={() => void handleSave()} disabled={isSaving}>
             {isSaving ? "Saving..." : "Save"}
           </Button>
         </Flex>

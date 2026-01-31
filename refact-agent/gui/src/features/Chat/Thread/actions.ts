@@ -298,13 +298,15 @@ export const setBoostReasoning = createAction<PayloadWithChatAndBoolean>(
   "chatThread/setBoostReasoning",
 );
 
-export const setAutoApproveEditingTools = createAction<PayloadWithChatAndBoolean>(
-  "chatThread/setAutoApproveEditingTools",
-);
+export const setAutoApproveEditingTools =
+  createAction<PayloadWithChatAndBoolean>(
+    "chatThread/setAutoApproveEditingTools",
+  );
 
-export const setAutoApproveDangerousCommands = createAction<PayloadWithChatAndBoolean>(
-  "chatThread/setAutoApproveDangerousCommands",
-);
+export const setAutoApproveDangerousCommands =
+  createAction<PayloadWithChatAndBoolean>(
+    "chatThread/setAutoApproveDangerousCommands",
+  );
 
 export const saveTitle = createAction<PayloadWithIdAndTitle>(
   "chatThread/saveTitle",

@@ -50,7 +50,9 @@ export const selectCurrentThreadId = (state: RootState) =>
   state.chat.current_thread_id;
 export const selectOpenThreadIds = (state: RootState) =>
   state.chat.open_thread_ids;
-export const selectAllThreads = (state: RootState): Record<string, ChatThreadRuntime | undefined> => state.chat.threads;
+export const selectAllThreads = (
+  state: RootState,
+): Record<string, ChatThreadRuntime | undefined> => state.chat.threads;
 
 export type TabDisplayData = {
   id: string;
@@ -370,10 +372,13 @@ export const selectStreamVersion = (state: RootState): number =>
 // Task Progress Widget selectors
 
 export const selectTaskWidgetExpanded = (state: RootState) =>
-  state.chat.threads[state.chat.current_thread_id]?.task_widget_expanded ?? false;
+  state.chat.threads[state.chat.current_thread_id]?.task_widget_expanded ??
+  false;
 
-export const selectTaskWidgetExpandedById = (state: RootState, chatId: string) =>
-  state.chat.threads[chatId]?.task_widget_expanded ?? false;
+export const selectTaskWidgetExpandedById = (
+  state: RootState,
+  chatId: string,
+) => state.chat.threads[chatId]?.task_widget_expanded ?? false;
 
 function normalizeTaskStatus(status: unknown): TodoStatus | null {
   if (typeof status !== "string") return null;
@@ -397,10 +402,13 @@ function normalizeTaskStatus(status: unknown): TodoStatus | null {
 }
 
 function sanitizeText(text: string, maxLen: number): string {
-  return text
-    .replace(/[\x00-\x1F\x7F]/g, "")
-    .trim()
-    .slice(0, maxLen);
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1F\x7F]/g, "")
+      .trim()
+      .slice(0, maxLen)
+  );
 }
 
 function parseTasksFromArgs(argsStr: string): TodoItem[] | null {
@@ -462,10 +470,10 @@ function deriveTasksFromMessages(
 
     for (let j = msg.tool_calls.length - 1; j >= 0; j--) {
       const tc = msg.tool_calls[j];
-      if (tc.function?.name !== "tasks_set" || !tc.id) continue;
+      if (tc.function.name !== "tasks_set" || !tc.id) continue;
       if (!successfulToolIds.has(tc.id)) continue;
 
-      const parsed = parseTasksFromArgs(tc.function.arguments ?? "");
+      const parsed = parseTasksFromArgs(tc.function.arguments);
       if (parsed !== null) return parsed;
     }
   }
@@ -500,7 +508,11 @@ export const selectTasksEverUsed = createSelector(
     for (const msg of messages) {
       if (!isAssistantMessage(msg) || !msg.tool_calls) continue;
       for (const tc of msg.tool_calls) {
-        if (tc.function?.name === "tasks_set" && tc.id && successfulToolIds.has(tc.id)) {
+        if (
+          tc.function.name === "tasks_set" &&
+          tc.id &&
+          successfulToolIds.has(tc.id)
+        ) {
           return true;
         }
       }

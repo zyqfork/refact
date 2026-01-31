@@ -75,10 +75,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ done, total }) => {
 
   return (
     <Box className={styles.progressBar}>
-      <Box
-        className={styles.progressFill}
-        style={{ width: `${percent}%` }}
-      />
+      <Box className={styles.progressFill} style={{ width: `${percent}%` }} />
     </Box>
   );
 };
@@ -111,13 +108,7 @@ export const TaskProgressWidget: React.FC = () => {
     <Box className={styles.widget}>
       <Collapsible.Root open={isExpanded} onOpenChange={handleOpenChange}>
         <Collapsible.Trigger asChild>
-          <Flex
-            className={styles.header}
-            align="center"
-            gap="3"
-            px="3"
-            py="2"
-          >
+          <Flex className={styles.header} align="center" gap="3" px="3" py="2">
             <AnimatedText as="div" size="1" animating={isAnimating}>
               <Flex align="center" gap="2" style={{ flex: 1 }}>
                 <Text>📋</Text>
@@ -129,7 +120,9 @@ export const TaskProgressWidget: React.FC = () => {
                         <StatusIcon
                           key={task.id}
                           status={task.status}
-                          showSpinner={task.status === "in_progress" && isStreaming}
+                          showSpinner={
+                            task.status === "in_progress" && isStreaming
+                          }
                         />
                       ))}
                     </Flex>
