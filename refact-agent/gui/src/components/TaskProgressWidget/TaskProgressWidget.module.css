@@ -1,0 +1,46 @@
+.widget {
+  border-top: 1px solid var(--gray-6);
+  background: var(--color-panel-solid);
+}
+
+.header {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.header:hover {
+  background: var(--gray-2);
+}
+
+.taskRow {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-2);
+  border-left: 2px solid transparent;
+}
+
+.taskRow.active {
+  background: var(--accent-2);
+  border-left-color: var(--accent-9);
+}
+
+.progressBar {
+  flex: 1;
+  max-width: 120px;
+  height: 4px;
+  background: var(--gray-4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent-9);
+  transition: width 0.3s ease;
+}
+
+.activeHint {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

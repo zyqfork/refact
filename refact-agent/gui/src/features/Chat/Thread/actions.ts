@@ -403,3 +403,8 @@ export const requestSseRefresh = createAction<{ chatId: string }>(
 export const clearSseRefreshRequest = createAction(
   "chatThread/clearSseRefreshRequest",
 );
+
+export const setTaskWidgetExpanded = createAction<{
+  id: string;
+  expanded: boolean;
+}>("chatThread/setTaskWidgetExpanded");

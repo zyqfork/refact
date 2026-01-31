@@ -77,6 +77,7 @@ const MockedStore: React.FC<{
             status: { wasInteracted: false, confirmationStatus: true },
           },
           snapshot_received: true,
+          task_widget_expanded: false,
         },
       },
       tool_use: "agent",

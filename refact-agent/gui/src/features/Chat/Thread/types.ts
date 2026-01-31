@@ -19,6 +19,15 @@ export type ToolConfirmationStatus = {
   confirmationStatus: boolean;
 };
 
+// Task Progress Widget types
+export type TodoStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export type TodoItem = {
+  id: string;
+  content: string;
+  status: TodoStatus;
+};
+
 export type QueuedItem = {
   client_request_id: string;
   priority: boolean;
@@ -121,6 +130,8 @@ export type ChatThreadRuntime = {
   confirmation: ThreadConfirmation;
   /** Whether the initial snapshot has been received from the backend */
   snapshot_received: boolean;
+  /** Task progress widget expanded/collapsed state */
+  task_widget_expanded: boolean;
 };
 
 export type Chat = {

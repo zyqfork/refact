@@ -63,6 +63,7 @@ const Template: React.FC<{
             status: { wasInteracted: false, confirmationStatus: true },
           },
           snapshot_received: true,
+          task_widget_expanded: false,
         },
       },
       max_new_tokens: 4096,

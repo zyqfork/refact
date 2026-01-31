@@ -183,6 +183,9 @@ async fn get_builtin_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
         Box::new(crate::tools::tool_subagent::ToolSubagent {
             config_path: config_path.clone(),
         }),
+        Box::new(crate::tools::tool_tasks::ToolTasksSet {
+            config_path: config_path.clone(),
+        }),
     ];
 
     let knowledge_tools: Vec<Box<dyn Tool + Send>> = vec![

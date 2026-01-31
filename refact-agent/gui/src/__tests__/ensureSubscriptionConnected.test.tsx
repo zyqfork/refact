@@ -27,6 +27,7 @@ const createThreadRuntime = (
     pause_reasons: [],
     status: { wasInteracted: false, confirmationStatus: true },
   },
+  task_widget_expanded: false,
   ...overrides,
 });
 

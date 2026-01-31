@@ -60,6 +60,7 @@ import {
   applyChatEvent,
   requestSseRefresh,
   clearSseRefreshRequest,
+  setTaskWidgetExpanded,
 } from "./actions";
 import { applyDeltaOps } from "../../../services/refact/chatSubscription";
 import {
@@ -124,6 +125,7 @@ const createThreadRuntime = (
       },
     },
     snapshot_received: false,
+    task_widget_expanded: false,
   };
 };
 
@@ -363,6 +365,11 @@ export const chatReducer = createReducer(initialState, (builder) => {
     if (rt) rt.thread.boost_reasoning = action.payload.value;
   });
 
+  builder.addCase(setTaskWidgetExpanded, (state, action) => {
+    const rt = getRuntime(state, action.payload.id);
+    if (rt) rt.task_widget_expanded = action.payload.expanded;
+  });
+
   builder.addCase(setLastUserMessageId, (state, action) => {
     const rt = getRuntime(state, action.payload.chatId);
     if (rt) rt.thread.last_user_message_id = action.payload.messageId;
@@ -435,6 +442,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
         },
       },
       snapshot_received: false,
+      task_widget_expanded: false,
     };
 
     state.threads[action.payload.id] = newRuntime;
@@ -797,6 +805,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
             },
           },
           snapshot_received: true,
+          task_widget_expanded: existingRuntime?.task_widget_expanded ?? false,
         };
 
         state.threads[chat_id] = newRt;

@@ -13,6 +13,7 @@ import {
 import { DropzoneProvider } from "../Dropzone";
 import { useCheckpoints } from "../../hooks/useCheckpoints";
 import { Checkpoints } from "../../features/Checkpoints";
+import { TaskProgressWidget } from "../TaskProgressWidget";
 
 export type ChatProps = {
   host: Config["host"];
@@ -81,6 +82,8 @@ export const Chat: React.FC<ChatProps> = ({
         </Flex>
 
         <Flex direction="column" style={{ flex: "0 0 auto" }}>
+          <TaskProgressWidget />
+
           {shouldCheckpointsPopupBeShown && <Checkpoints />}
 
           {!isStreaming && preventSend && unCalledTools && (

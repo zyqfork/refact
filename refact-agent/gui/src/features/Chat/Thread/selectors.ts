@@ -7,6 +7,7 @@ import {
   isUserMessage,
   ChatMessages,
   ToolResult,
+  ToolMessage,
 } from "../../../services/refact/types";
 import { takeFromLast } from "../../../utils/takeFromLast";
 import {
@@ -14,6 +15,8 @@ import {
   QueuedItem,
   ThreadConfirmation,
   ImageFile,
+  TodoItem,
+  TodoStatus,
 } from "./types";
 import type { SessionState } from "../../../utils/sessionStatus";
 
@@ -363,3 +366,158 @@ export const selectSseRefreshRequested = (state: RootState) =>
 
 export const selectStreamVersion = (state: RootState): number =>
   state.chat.stream_version;
+
+// Task Progress Widget selectors
+
+export const selectTaskWidgetExpanded = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.task_widget_expanded ?? false;
+
+export const selectTaskWidgetExpandedById = (state: RootState, chatId: string) =>
+  state.chat.threads[chatId]?.task_widget_expanded ?? false;
+
+function normalizeTaskStatus(status: unknown): TodoStatus | null {
+  if (typeof status !== "string") return null;
+  switch (status.toLowerCase()) {
+    case "pending":
+      return "pending";
+    case "in_progress":
+    case "in-progress":
+    case "inprogress":
+      return "in_progress";
+    case "completed":
+    case "done":
+    case "complete":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
+function sanitizeText(text: string, maxLen: number): string {
+  return text
+    .replace(/[\x00-\x1F\x7F]/g, "")
+    .trim()
+    .slice(0, maxLen);
+}
+
+function parseTasksFromArgs(argsStr: string): TodoItem[] | null {
+  try {
+    const args = JSON.parse(argsStr) as unknown;
+    if (!args || typeof args !== "object") return null;
+    const tasksArray = (args as Record<string, unknown>).tasks;
+    if (!Array.isArray(tasksArray)) return null;
+
+    if (tasksArray.length === 0) return [];
+
+    const result: TodoItem[] = [];
+    const seenIds = new Set<string>();
+
+    for (const item of tasksArray) {
+      if (!item || typeof item !== "object") continue;
+      const t = item as Record<string, unknown>;
+
+      const rawId =
+        typeof t.id === "string"
+          ? t.id
+          : typeof t.id === "number"
+            ? String(t.id)
+            : null;
+      if (!rawId) continue;
+
+      const id = sanitizeText(rawId, 50);
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+
+      const rawContent = typeof t.content === "string" ? t.content : null;
+      if (!rawContent) continue;
+
+      const content = sanitizeText(rawContent, 500);
+      if (!content) continue;
+
+      const status = normalizeTaskStatus(t.status);
+      if (!status) continue;
+
+      result.push({ id, content, status });
+    }
+    return result.length > 0 ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+function deriveTasksFromMessages(
+  messages: ChatMessages,
+  toolMessages: ToolMessage[],
+): TodoItem[] {
+  const successfulToolIds = new Set(
+    toolMessages.filter((m) => !m.tool_failed).map((m) => m.tool_call_id),
+  );
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!isAssistantMessage(msg) || !msg.tool_calls) continue;
+
+    for (let j = msg.tool_calls.length - 1; j >= 0; j--) {
+      const tc = msg.tool_calls[j];
+      if (tc.function?.name !== "tasks_set" || !tc.id) continue;
+      if (!successfulToolIds.has(tc.id)) continue;
+
+      const parsed = parseTasksFromArgs(tc.function.arguments ?? "");
+      if (parsed !== null) return parsed;
+    }
+  }
+
+  return [];
+}
+
+export const selectCurrentTasks = createSelector(
+  [selectMessages, toolMessagesSelector],
+  (messages, toolMessages): TodoItem[] =>
+    deriveTasksFromMessages(messages, toolMessages),
+);
+
+export const selectCurrentTasksById = (state: RootState, chatId: string) => {
+  const messages = selectMessagesById(state, chatId);
+  const toolMessages = messages.filter(isToolMessage);
+  return deriveTasksFromMessages(messages, toolMessages);
+};
+
+export const selectHasTasks = createSelector(
+  [selectCurrentTasks],
+  (tasks) => tasks.length > 0,
+);
+
+export const selectTasksEverUsed = createSelector(
+  [selectMessages, toolMessagesSelector],
+  (messages, toolMessages): boolean => {
+    const successfulToolIds = new Set(
+      toolMessages.filter((m) => !m.tool_failed).map((m) => m.tool_call_id),
+    );
+
+    for (const msg of messages) {
+      if (!isAssistantMessage(msg) || !msg.tool_calls) continue;
+      for (const tc of msg.tool_calls) {
+        if (tc.function?.name === "tasks_set" && tc.id && successfulToolIds.has(tc.id)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  },
+);
+
+export const selectTaskProgress = createSelector(
+  [selectCurrentTasks],
+  (tasks): { done: number; total: number; activeTitle?: string } => {
+    const done = tasks.filter((t) => t.status === "completed").length;
+    const active = tasks.find((t) => t.status === "in_progress");
+    return {
+      done,
+      total: tasks.length,
+      activeTitle: active?.content,
+    };
+  },
+);

@@ -45,6 +45,7 @@ const createTestThreadRuntime = (): ChatThreadRuntime => {
       },
     },
     snapshot_received: true,
+    task_widget_expanded: false,
   };
 };
 
