@@ -197,6 +197,27 @@ pub fn apply_setparams_patch(
             }
         }
     }
+    if let Some(parent_id) = patch.get("parent_id").and_then(|v| v.as_str()) {
+        let new_val = if parent_id.is_empty() { None } else { Some(parent_id.to_string()) };
+        if thread.parent_id != new_val {
+            thread.parent_id = new_val;
+            changed = true;
+        }
+    }
+    if let Some(link_type) = patch.get("link_type").and_then(|v| v.as_str()) {
+        let new_val = if link_type.is_empty() { None } else { Some(link_type.to_string()) };
+        if thread.link_type != new_val {
+            thread.link_type = new_val;
+            changed = true;
+        }
+    }
+    if let Some(root_chat_id) = patch.get("root_chat_id").and_then(|v| v.as_str()) {
+        let new_val = if root_chat_id.is_empty() { None } else { Some(root_chat_id.to_string()) };
+        if thread.root_chat_id != new_val {
+            thread.root_chat_id = new_val;
+            changed = true;
+        }
+    }
 
     let mut sanitized_patch = patch.clone();
     if let Some(obj) = sanitized_patch.as_object_mut() {
@@ -492,7 +513,94 @@ pub async fn process_command_queue(
             ChatCommand::Regenerate {} => {
                 start_generation(gcx.clone(), session_arc.clone()).await;
             }
+            ChatCommand::RestoreMessages { messages } => {
+                let mut session = session_arc.lock().await;
+                for msg_value in messages {
+                    if let Ok(msg) = serde_json::from_value::<ChatMessage>(msg_value) {
+                        if !is_allowed_role_for_restore(&msg.role) {
+                            continue;
+                        }
+                        let sanitized = sanitize_message_for_restore(&msg);
+                        session.add_message(sanitized);
+                    }
+                }
+                drop(session);
+                maybe_save_trajectory(gcx.clone(), session_arc.clone()).await;
+            }
+            ChatCommand::BranchFromChat { source_chat_id, up_to_message_id } => {
+                if let Err(e) = super::trajectories::validate_trajectory_id(&source_chat_id) {
+                    warn!("BranchFromChat: invalid source_chat_id: {}", e);
+                    continue;
+                }
+
+                let sessions = {
+                    let gcx_locked = gcx.read().await;
+                    gcx_locked.chat_sessions.clone()
+                };
+
+                let source_session_arc = super::session::get_or_create_session_with_trajectory(
+                    gcx.clone(),
+                    &sessions,
+                    &source_chat_id,
+                ).await;
+
+                let (messages_to_copy, root_id) = {
+                    let source_session = source_session_arc.lock().await;
+                    let mut msgs = Vec::new();
+                    let mut found = false;
+                    for m in &source_session.messages {
+                        if is_allowed_role_for_restore(&m.role) {
+                            msgs.push(sanitize_message_for_restore(m));
+                        }
+                        if m.message_id == up_to_message_id {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        warn!("BranchFromChat: up_to_message_id '{}' not found in source chat", up_to_message_id);
+                        continue;
+                    }
+                    let root = source_session.thread.root_chat_id.clone()
+                        .unwrap_or_else(|| source_chat_id.clone());
+                    (msgs, root)
+                };
+
+                let mut session = session_arc.lock().await;
+                session.thread.parent_id = Some(source_chat_id.clone());
+                session.thread.link_type = Some("branch".to_string());
+                session.thread.root_chat_id = Some(root_id);
+
+                for msg in messages_to_copy {
+                    session.add_message(msg);
+                }
+                drop(session);
+                maybe_save_trajectory(gcx.clone(), session_arc.clone()).await;
+            }
         }
+    }
+}
+
+fn is_allowed_role_for_restore(role: &str) -> bool {
+    matches!(role, "user" | "assistant" | "system")
+}
+
+fn sanitize_message_for_restore(msg: &ChatMessage) -> ChatMessage {
+    ChatMessage {
+        message_id: Uuid::new_v4().to_string(),
+        role: msg.role.clone(),
+        content: msg.content.clone(),
+        tool_calls: None,
+        tool_call_id: String::new(),
+        tool_failed: None,
+        usage: None,
+        checkpoints: vec![],
+        reasoning_content: msg.reasoning_content.clone(),
+        thinking_blocks: msg.thinking_blocks.clone(),
+        citations: vec![],
+        finish_reason: None,
+        extra: serde_json::Map::new(),
+        output_filter: None,
     }
 }
 

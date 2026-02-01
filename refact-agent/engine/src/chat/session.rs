@@ -190,10 +190,33 @@ impl ChatSession {
             .iter()
             .position(|m| m.message_id == message_id)
         {
+            let msg = &self.messages[idx];
+            let role = msg.role.clone();
+            let tool_call_ids: Vec<String> = msg.tool_calls
+                .as_ref()
+                .map(|tcs| tcs.iter().map(|tc| tc.id.clone()).collect())
+                .unwrap_or_default();
+
             self.messages.remove(idx);
             self.emit(ChatEvent::MessageRemoved {
                 message_id: message_id.to_string(),
             });
+
+            if role == "assistant" && !tool_call_ids.is_empty() {
+                let tool_msg_ids: Vec<String> = self.messages
+                    .iter()
+                    .filter(|m| m.role == "tool" && tool_call_ids.contains(&m.tool_call_id))
+                    .map(|m| m.message_id.clone())
+                    .collect();
+
+                for tid in tool_msg_ids {
+                    if let Some(tool_idx) = self.messages.iter().position(|m| m.message_id == tid) {
+                        self.messages.remove(tool_idx);
+                        self.emit(ChatEvent::MessageRemoved { message_id: tid });
+                    }
+                }
+            }
+
             self.increment_version();
             self.touch();
             return Some(idx);

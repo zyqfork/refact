@@ -55,6 +55,11 @@ export type ChatCommandBase =
     }
   | {
       type: "regenerate";
+    }
+  | {
+      type: "branch_from_chat";
+      source_chat_id: string;
+      up_to_message_id: string;
     };
 
 export type ChatCommand = ChatCommandBase & {
@@ -216,6 +221,20 @@ export async function removeMessage(
     type: "remove_message",
     message_id: messageId,
     regenerate,
+  } as ChatCommandBase);
+}
+
+export async function branchFromChat(
+  targetChatId: string,
+  sourceChatId: string,
+  upToMessageId: string,
+  port: number,
+  apiKey?: string,
+): Promise<void> {
+  await sendChatCommand(targetChatId, port, apiKey, {
+    type: "branch_from_chat",
+    source_chat_id: sourceChatId,
+    up_to_message_id: upToMessageId,
   } as ChatCommandBase);
 }
 

@@ -333,6 +333,13 @@ pub enum ChatCommand {
         regenerate: bool,
     },
     Regenerate {},
+    RestoreMessages {
+        messages: Vec<serde_json::Value>,
+    },
+    BranchFromChat {
+        source_chat_id: String,
+        up_to_message_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,6 +393,12 @@ impl CommandRequest {
                 ("remove_message".to_string(), message_id.clone())
             }
             ChatCommand::Regenerate {} => ("regenerate".to_string(), String::new()),
+            ChatCommand::RestoreMessages { messages } => {
+                ("restore_messages".to_string(), format!("{} messages", messages.len()))
+            }
+            ChatCommand::BranchFromChat { source_chat_id, .. } => {
+                ("branch_from_chat".to_string(), source_chat_id.clone())
+            }
         };
         QueuedItem {
             client_request_id: self.client_request_id.clone(),

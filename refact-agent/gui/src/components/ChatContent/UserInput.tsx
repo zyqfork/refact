@@ -1,5 +1,11 @@
-import { Pencil2Icon } from "@radix-ui/react-icons";
+import {
+  Pencil2Icon,
+  CopyIcon,
+  CornerTopRightIcon,
+  TrashIcon,
+} from "@radix-ui/react-icons";
 import { Button, Container, Flex, IconButton, Text } from "@radix-ui/themes";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import React, { useCallback, useMemo, useState } from "react";
 import { selectMessages } from "../../features/Chat";
 import { CheckpointButton } from "../../features/Checkpoints";
@@ -27,22 +33,59 @@ import { Reveal } from "../Reveal";
 export type UserInputProps = {
   children: UserMessage["content"];
   messageIndex: number;
-  // maybe add images argument ?
+  messageId?: string;
   onRetry: (index: number, question: UserMessage["content"]) => void;
-  // disableRetry?: boolean;
+  onBranch?: (messageId: string) => void;
+  onDelete?: (messageId: string) => void;
 };
 
 export const UserInput: React.FC<UserInputProps> = ({
   messageIndex,
+  messageId,
   children,
   onRetry,
+  onBranch,
+  onDelete,
 }) => {
   const messages = useAppSelector(selectMessages);
   const host = useAppSelector(selectHost);
   const { queryPathThenOpenFile } = useEventsBusForIDE();
+  const copyToClipboard = useCopyToClipboard();
 
   const [showTextArea, setShowTextArea] = useState(false);
   const [isEditButtonVisible, setIsEditButtonVisible] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    const text =
+      typeof children === "string"
+        ? children
+        : children
+            .filter((c) => {
+              if ("type" in c && c.type === "text") return true;
+              if ("m_type" in c && c.m_type === "text") return true;
+              return false;
+            })
+            .map((c) => {
+              if ("text" in c) return c.text;
+              if ("m_content" in c) return String(c.m_content);
+              return "";
+            })
+            .filter(Boolean)
+            .join("\n");
+    copyToClipboard(text);
+  }, [children, copyToClipboard]);
+
+  const handleBranch = useCallback(() => {
+    if (onBranch && messageId) {
+      onBranch(messageId);
+    }
+  }, [messageId, onBranch]);
+
+  const handleDelete = useCallback(() => {
+    if (onDelete && messageId) {
+      onDelete(messageId);
+    }
+  }, [messageId, onDelete]);
 
   const handleSubmit = useCallback(
     (value: UserMessage["content"]) => {
@@ -124,6 +167,35 @@ export const UserInput: React.FC<UserInputProps> = ({
               transition: "opacity 0.15s, visibility 0.15s",
             }}
           >
+            <IconButton
+              title="Copy message"
+              variant="soft"
+              size="2"
+              onClick={handleCopy}
+            >
+              <CopyIcon width={15} height={15} />
+            </IconButton>
+            {onBranch && messageId && (
+              <IconButton
+                title="Branch from here"
+                variant="soft"
+                size="2"
+                onClick={handleBranch}
+              >
+                <CornerTopRightIcon width={15} height={15} />
+              </IconButton>
+            )}
+            {onDelete && messageId && (
+              <IconButton
+                title="Delete message"
+                variant="soft"
+                size="2"
+                color="red"
+                onClick={handleDelete}
+              >
+                <TrashIcon width={15} height={15} />
+              </IconButton>
+            )}
             {checkpointsFromMessage && checkpointsFromMessage.length > 0 && (
               <CheckpointButton
                 checkpoints={checkpointsFromMessage}
@@ -133,7 +205,7 @@ export const UserInput: React.FC<UserInputProps> = ({
             <IconButton
               title="Edit message"
               variant="soft"
-              size={"2"}
+              size="2"
               onClick={() => handleShowTextArea(true)}
             >
               <Pencil2Icon width={15} height={15} />

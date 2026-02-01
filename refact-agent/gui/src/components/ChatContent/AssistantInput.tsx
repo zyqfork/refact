@@ -1,7 +1,16 @@
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Markdown } from "../Markdown";
 
-import { Container, Box, Flex, Text, Link, Card } from "@radix-ui/themes";
+import {
+  Container,
+  Box,
+  Flex,
+  Text,
+  Link,
+  Card,
+  IconButton,
+} from "@radix-ui/themes";
+import { CopyIcon, CornerTopRightIcon, TrashIcon } from "@radix-ui/react-icons";
 import {
   ThinkingBlock,
   ToolCall,
@@ -19,6 +28,9 @@ type ChatInputProps = {
   toolCalls?: ToolCall[] | null;
   serverExecutedTools?: ToolCall[] | null;
   citations?: WebSearchCitation[] | null;
+  messageId?: string;
+  onBranch?: (messageId: string) => void;
+  onDelete?: (messageId: string) => void;
 };
 
 export const AssistantInput: React.FC<ChatInputProps> = ({
@@ -28,7 +40,11 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
   toolCalls,
   serverExecutedTools,
   citations,
+  messageId,
+  onBranch,
+  onDelete,
 }) => {
+  const [isHovered, setIsHovered] = useState(false);
   const [sendTelemetryEvent] =
     telemetryApi.useLazySendTelemetryChatEventQuery();
 
@@ -92,8 +108,68 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
     return null;
   }, [reasoningContent, thinkingBlocks]);
 
+  const handleCopyMessage = useCallback(() => {
+    if (message) {
+      handleCopy(message);
+    }
+  }, [message, handleCopy]);
+
+  const handleBranch = useCallback(() => {
+    if (messageId && onBranch) {
+      onBranch(messageId);
+    }
+  }, [messageId, onBranch]);
+
+  const handleDelete = useCallback(() => {
+    if (messageId && onDelete) {
+      onDelete(messageId);
+    }
+  }, [messageId, onDelete]);
+
   return (
-    <Container position="relative">
+    <Container
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <Flex
+        justify="end"
+        gap="1"
+        style={{
+          opacity: isHovered ? 1 : 0,
+          visibility: isHovered ? "visible" : "hidden",
+          transition: "opacity 0.15s, visibility 0.15s",
+        }}
+      >
+        <IconButton
+          title="Copy message"
+          variant="soft"
+          size="2"
+          onClick={handleCopyMessage}
+        >
+          <CopyIcon width={15} height={15} />
+        </IconButton>
+        {onBranch && messageId && (
+          <IconButton
+            title="Branch from here"
+            variant="soft"
+            size="2"
+            onClick={handleBranch}
+          >
+            <CornerTopRightIcon width={15} height={15} />
+          </IconButton>
+        )}
+        {onDelete && messageId && (
+          <IconButton
+            title="Delete message"
+            variant="soft"
+            size="2"
+            color="red"
+            onClick={handleDelete}
+          >
+            <TrashIcon width={15} height={15} />
+          </IconButton>
+        )}
+      </Flex>
       {combinedReasoning && (
         <ReasoningContent
           reasoningContent={combinedReasoning}

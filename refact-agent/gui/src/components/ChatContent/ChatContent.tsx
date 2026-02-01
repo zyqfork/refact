@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useEffect, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 import {
   ChatMessages,
   DiffMessage,
@@ -29,6 +30,10 @@ import {
   selectChatId,
   selectThreadPauseById,
 } from "../../features/Chat/Thread/selectors";
+import {
+  createChatWithId,
+  switchToThread,
+} from "../../features/Chat/Thread/actions";
 import { GroupedDiffs } from "./DiffContent";
 import { popBackTo } from "../../features/Pages/pagesSlice";
 import { ChatLinks, UncommittedChangesWarning } from "../ChatLinks";
@@ -37,6 +42,8 @@ import { QueuedMessage } from "./QueuedMessage";
 import { selectSseConnectionForChat } from "../../features/Connection";
 import { LogoAnimation } from "../LogoAnimation/LogoAnimation.tsx";
 import { ChatLoading } from "./ChatLoading";
+import { removeMessage, branchFromChat } from "../../services/refact/chatCommands";
+import { selectLspPort, selectApiKey } from "../../features/Config/configSlice";
 
 export type ChatContentProps = {
   onRetry: (index: number, question: UserMessage["content"]) => void;
@@ -82,6 +89,48 @@ export const ChatContent: React.FC<ChatContentProps> = ({
   const integrationMeta = useAppSelector(selectIntegration);
   const isWaitingForConfirmation = useAppSelector((s) =>
     selectThreadPauseById(s, renderChatId),
+  );
+  const lspPort = useAppSelector(selectLspPort);
+  const apiKey = useAppSelector(selectApiKey);
+
+  const handleBranch = useCallback(
+    (messageId: string) => {
+      const newChatId = uuidv4();
+      const title = `[branched] ${thread?.title ?? "Chat"}`;
+
+      dispatch(
+        createChatWithId({
+          id: newChatId,
+          title,
+        }),
+      );
+
+      dispatch(switchToThread({ id: newChatId }));
+
+      void branchFromChat(
+        newChatId,
+        renderChatId,
+        messageId,
+        lspPort,
+        apiKey ?? undefined,
+      ).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error("Failed to branch chat:", err);
+      });
+    },
+    [dispatch, thread?.title, renderChatId, lspPort, apiKey],
+  );
+
+  const handleDelete = useCallback(
+    (messageId: string) => {
+      void removeMessage(renderChatId, messageId, lspPort, apiKey ?? undefined).catch(
+        (err) => {
+          // eslint-disable-next-line no-console
+          console.error("Failed to delete message:", err);
+        },
+      );
+    },
+    [renderChatId, lspPort, apiKey],
   );
 
   const onRetryWrapper = useCallback(
@@ -143,7 +192,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
         )}
         {!showLoading &&
           messages.length > 0 &&
-          renderMessagesFast(messages, onRetryWrapper)}
+          renderMessagesFast(messages, onRetryWrapper, handleBranch, handleDelete)}
         <Container>
           <UncommittedChangesWarning />
         </Container>
@@ -212,6 +261,8 @@ function getMessageKey(message: ChatMessages[number], index: number): string {
 function renderMessagesFast(
   messages: ChatMessages,
   onRetry: (index: number, question: UserMessage["content"]) => void,
+  onBranch: (messageId: string) => void,
+  onDelete: (messageId: string) => void,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   if (messages.length === 0) return nodes;
@@ -286,6 +337,9 @@ function renderMessagesFast(
           toolCalls={head.tool_calls}
           serverExecutedTools={head.server_executed_tools}
           citations={head.citations}
+          messageId={head.message_id}
+          onBranch={onBranch}
+          onDelete={onDelete}
         />,
       );
 
@@ -329,7 +383,14 @@ function renderMessagesFast(
       }
 
       nodes.push(
-        <UserInput onRetry={onRetry} key={key} messageIndex={i}>
+        <UserInput
+          onRetry={onRetry}
+          key={key}
+          messageIndex={i}
+          messageId={head.message_id}
+          onBranch={onBranch}
+          onDelete={onDelete}
+        >
           {head.content}
         </UserInput>,
       );
