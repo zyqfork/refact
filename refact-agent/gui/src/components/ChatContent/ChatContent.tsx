@@ -302,8 +302,11 @@ function renderMessagesFast(
       const key = getMessageKey(head, i);
       const contextFilesAfter: React.ReactNode[] = [];
       const diffMessagesAfter: DiffMessage[] = [];
-      const contextFilesByToolId: Record<string, ChatContextFile[]> = {};
-      const diffsByToolId: Record<string, DiffChunk[]> = {};
+      const contextFilesByToolId: Record<
+        string,
+        ChatContextFile[] | undefined
+      > = {};
+      const diffsByToolId: Record<string, DiffChunk[] | undefined> = {};
 
       const READ_TOOLS = new Set([
         "cat",
@@ -382,9 +385,8 @@ function renderMessagesFast(
           }
 
           if (targetToolId) {
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
             contextFilesByToolId[targetToolId] = (
-              contextFilesByToolId[targetToolId] || []
+              contextFilesByToolId[targetToolId] ?? []
             ).concat(nextMsg.content);
           } else {
             const ctxKey = getMessageKey(nextMsg, j);
@@ -402,9 +404,8 @@ function renderMessagesFast(
 
         if (isDiffMessage(nextMsg)) {
           if (nextMsg.tool_call_id && editToolIds.has(nextMsg.tool_call_id)) {
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
             diffsByToolId[nextMsg.tool_call_id] = (
-              diffsByToolId[nextMsg.tool_call_id] || []
+              diffsByToolId[nextMsg.tool_call_id] ?? []
             ).concat(nextMsg.content);
           } else {
             diffMessagesAfter.push(nextMsg);
