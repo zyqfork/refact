@@ -4,26 +4,19 @@ import { ChatContextFile } from "../../services/refact";
 import * as Collapsible from "@radix-ui/react-collapsible";
 import { Link } from "../Link";
 import ReactMarkDown from "react-markdown";
-import { MarkdownCodeBlock } from "../Markdown/CodeBlock";
+import { ShikiCodeBlock } from "../Markdown/ShikiCodeBlock";
 import { Chevron } from "../Collapsible";
 import { filename } from "../../utils";
 import { useEventsBusForIDE } from "../../hooks";
 
 export const Markdown: React.FC<{
   children: string;
-  startingLineNumber?: number;
-}> = ({ startingLineNumber, ...props }) => {
+}> = (props) => {
   return (
     <ReactMarkDown
       components={{
         code({ style: _style, color: _color, ...codeProps }) {
-          return (
-            <MarkdownCodeBlock
-              {...codeProps}
-              showLineNumbers={false}
-              startingLineNumber={startingLineNumber}
-            />
-          );
+          return <ShikiCodeBlock {...codeProps} showLineNumbers={false} />;
         },
       }}
       {...props}
@@ -294,7 +287,6 @@ const FileCard: React.FC<{
 }> = ({ file, onOpenFile, variant }) => {
   const [showContent, setShowContent] = React.useState(false);
   const extension = getExtensionFromName(file.file_name);
-  const start = file.line1 || 1;
 
   const displayName =
     variant === "enrichment"
@@ -346,7 +338,7 @@ const FileCard: React.FC<{
       </Flex>
       {showContent && (
         <Box mt="2" style={{ maxHeight: "300px", overflow: "auto" }}>
-          <Markdown startingLineNumber={start}>
+          <Markdown>
             {"```" + extension + "\n" + file.file_content + "\n```"}
           </Markdown>
         </Box>

@@ -38,7 +38,7 @@ import { selectCanPaste, selectChatId } from "../../features/Chat";
 import { toolsApi } from "../../services/refact";
 import { ErrorCallout } from "../Callout";
 import { isRTKResponseErrorWithDetailMessage } from "../../utils";
-import { MarkdownCodeBlock } from "../Markdown/CodeBlock";
+import { ShikiCodeBlock } from "../Markdown/ShikiCodeBlock";
 import classNames from "classnames";
 
 export const TextDocTool: React.FC<{
@@ -236,9 +236,9 @@ const CreateTextDoc: React.FC<{
       <TextDocHeader toolCall={toolCall} ref={ref} />
 
       <Reveal isRevealingCode defaultOpen={lineCount < 9} onClose={handleClose}>
-        <MarkdownCodeBlock onCopyClick={handleCopy} className={className}>
+        <ShikiCodeBlock onCopyClick={handleCopy} className={className}>
           {toolCall.function.arguments.content}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       </Reveal>
     </Box>
   );
@@ -270,9 +270,9 @@ const ReplaceTextDoc: React.FC<{
     <Box className={styles.textdoc}>
       <TextDocHeader toolCall={toolCall} ref={ref} />
       <Reveal isRevealingCode defaultOpen={lineCount < 9} onClose={handleClose}>
-        <MarkdownCodeBlock onCopyClick={handleCopy} className={className}>
+        <ShikiCodeBlock onCopyClick={handleCopy} className={className}>
           {toolCall.function.arguments.replacement}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       </Reveal>
     </Box>
   );
@@ -305,7 +305,7 @@ const UpdateRegexTextDoc: React.FC<{
     <Box className={styles.textdoc}>
       <TextDocHeader toolCall={toolCall} ref={ref} />
       <Reveal isRevealingCode defaultOpen={lineCount < 9} onClose={handleClose}>
-        <MarkdownCodeBlock className="language-py">{code}</MarkdownCodeBlock>
+        <ShikiCodeBlock className="language-py">{code}</ShikiCodeBlock>
       </Reveal>
     </Box>
   );
@@ -335,9 +335,9 @@ const UpdateTextDoc: React.FC<{
     <Box className={styles.textdoc}>
       <TextDocHeader toolCall={toolCall} ref={ref} />
       <Reveal isRevealingCode defaultOpen={lineCount < 9} onClose={handleClose}>
-        <MarkdownCodeBlock onCopyClick={handleCopy} className={className}>
+        <ShikiCodeBlock onCopyClick={handleCopy} className={className}>
           {toolCall.function.arguments.replacement}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       </Reveal>
     </Box>
   );
@@ -367,9 +367,9 @@ const UpdateTextDocByLines: React.FC<{
     <Box className={styles.textdoc}>
       <TextDocHeader toolCall={toolCall} ref={ref} />
       <Reveal isRevealingCode defaultOpen={lineCount < 9} onClose={handleClose}>
-        <MarkdownCodeBlock onCopyClick={handleCopy} className={className}>
+        <ShikiCodeBlock onCopyClick={handleCopy} className={className}>
           {toolCall.function.arguments.content}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       </Reveal>
     </Box>
   );
@@ -410,9 +410,9 @@ const UpdateTextDocAnchored: React.FC<{
         <span style={{ fontSize: "11px", opacity: 0.7 }}>{modeLabel}</span>
       </Box>
       <Reveal isRevealingCode defaultOpen={lineCount < 9} onClose={handleClose}>
-        <MarkdownCodeBlock onCopyClick={handleCopy} className={className}>
+        <ShikiCodeBlock onCopyClick={handleCopy} className={className}>
           {toolCall.function.arguments.content}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       </Reveal>
     </Box>
   );
@@ -437,9 +437,9 @@ const ApplyPatch: React.FC<{
         defaultOpen={lineCount < 15}
         onClose={handleClose}
       >
-        <MarkdownCodeBlock className="language-diff">
+        <ShikiCodeBlock className="language-diff">
           {toolCall.function.arguments.patch}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       </Reveal>
     </Box>
   );

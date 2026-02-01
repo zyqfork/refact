@@ -67,6 +67,7 @@ function getBadgeForNode(
   }
   if (linkType === "subagent") return "Subagent";
   if (linkType === "handoff") return "Handoff";
+  if (linkType === "branch") return "Branched";
   if (isHandoffParent) return "Original";
   return undefined;
 }

@@ -2,13 +2,12 @@ import React, { Key, useMemo } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import classNames from "classnames";
-// import "./highlightjs.css";
 import styles from "./Markdown.module.css";
 import {
-  MarkdownCodeBlock,
-  type MarkdownCodeBlockProps,
+  ShikiCodeBlock,
+  type ShikiCodeBlockProps,
   type MarkdownControls,
-} from "./CodeBlock";
+} from "./ShikiCodeBlock";
 import {
   Text,
   Heading,
@@ -35,14 +34,7 @@ export type MarkdownProps = Pick<
   React.ComponentProps<typeof ReactMarkdown>,
   "children" | "allowedElements" | "unwrapDisallowed"
 > &
-  Pick<
-    MarkdownCodeBlockProps,
-    | "startingLineNumber"
-    | "showLineNumbers"
-    | "useInlineStyles"
-    | "style"
-    | "color"
-  > & {
+  Pick<ShikiCodeBlockProps, "showLineNumbers" | "color"> & {
     canHaveInteractiveElements?: boolean;
     wrap?: boolean;
   } & Partial<MarkdownControls>;
@@ -87,7 +79,9 @@ const _Markdown: React.FC<MarkdownProps> = ({
   unwrapDisallowed,
   canHaveInteractiveElements,
   color,
-  ...rest
+  showLineNumbers,
+  wrap,
+  onCopyClick,
 }) => {
   const internalLinkContext = useInternalLinkHandler();
 
@@ -103,8 +97,19 @@ const _Markdown: React.FC<MarkdownProps> = ({
           <ul {...props} className={classNames(styles.list, props.className)} />
         );
       },
+      li({ color: _color, ref: _ref, node: _node, ...props }) {
+        return <li {...props} className={classNames(styles.list_item, props.className)} />;
+      },
       code({ style: _style, color: _color, ...props }) {
-        return <MarkdownCodeBlock color={color} {...props} {...rest} />;
+        return (
+          <ShikiCodeBlock
+            color={color}
+            showLineNumbers={showLineNumbers}
+            wrap={wrap}
+            onCopyClick={onCopyClick}
+            {...props}
+          />
+        );
       },
       p({ color: _color, ref: _ref, node: _node, ...props }) {
         if (canHaveInteractiveElements) {
@@ -142,8 +147,14 @@ const _Markdown: React.FC<MarkdownProps> = ({
       a({ color: _color, ref: _ref, node: _node, ...props }) {
         const href = props.href ?? "";
         const isInternalLink = href.startsWith("refact://");
-        const shouldTargetBeBlank =
+        const isHttpLink =
           href.startsWith("http://") || href.startsWith("https://");
+        const isMailtoLink = href.startsWith("mailto:");
+        const isSafeProtocol = isInternalLink || isHttpLink || isMailtoLink;
+
+        if (!isSafeProtocol && href.includes(":")) {
+          return <span>{props.children}</span>;
+        }
 
         if (isInternalLink) {
           return (
@@ -162,7 +173,8 @@ const _Markdown: React.FC<MarkdownProps> = ({
         return (
           <Link
             {...props}
-            target={shouldTargetBeBlank ? "_blank" : undefined}
+            target={isHttpLink ? "_blank" : undefined}
+            rel={isHttpLink ? "noopener noreferrer" : undefined}
           />
         );
       },
@@ -197,7 +209,7 @@ const _Markdown: React.FC<MarkdownProps> = ({
         return <Table.Cell {...props} />;
       },
     };
-  }, [rest, canHaveInteractiveElements, color, internalLinkContext]);
+  }, [canHaveInteractiveElements, color, internalLinkContext, showLineNumbers, wrap, onCopyClick]);
   return (
     <ReactMarkdown
       className={styles.markdown}

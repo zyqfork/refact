@@ -134,6 +134,7 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
       <Flex
         justify="end"
         gap="1"
+        align="center"
         style={{
           opacity: isHovered ? 1 : 0,
           visibility: isHovered ? "visible" : "hidden",
@@ -142,31 +143,34 @@ export const AssistantInput: React.FC<ChatInputProps> = ({
       >
         <IconButton
           title="Copy message"
-          variant="soft"
-          size="2"
+          variant="ghost"
+          size="1"
+          style={{ width: 20, height: 20 }}
           onClick={handleCopyMessage}
         >
-          <CopyIcon width={15} height={15} />
+          <CopyIcon width={12} height={12} />
         </IconButton>
         {onBranch && messageId && (
           <IconButton
             title="Branch from here"
-            variant="soft"
-            size="2"
+            variant="ghost"
+            size="1"
+            style={{ width: 20, height: 20 }}
             onClick={handleBranch}
           >
-            <CornerTopRightIcon width={15} height={15} />
+            <CornerTopRightIcon width={12} height={12} />
           </IconButton>
         )}
         {onDelete && messageId && (
           <IconButton
             title="Delete message"
-            variant="soft"
-            size="2"
+            variant="ghost"
+            size="1"
             color="red"
+            style={{ width: 20, height: 20 }}
             onClick={handleDelete}
           >
-            <TrashIcon width={15} height={15} />
+            <TrashIcon width={12} height={12} />
           </IconButton>
         )}
       </Flex>

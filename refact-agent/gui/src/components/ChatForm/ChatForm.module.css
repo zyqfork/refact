@@ -10,8 +10,59 @@
   background-color: var(--color-surface);
 }
 
-.chatForm__form :global(.rt-TextAreaRoot) {
-  background-color: unset;
+/* Main chat input - transparent/subtle appearance */
+.chatFormMain {
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* Remove the blue focus border - keep border consistent */
+.chatFormMain:focus-within {
+  border-color: var(--gray-a3);
+  box-shadow: none;
+}
+
+/* Remove Radix's internal focus ring/chrome that creates thick border effect */
+.chatFormMain :global(.rt-TextAreaRoot),
+.chatFormMain :global(.rt-TextAreaRoot:focus),
+.chatFormMain :global(.rt-TextAreaRoot:focus-within),
+.chatFormMain :global(.rt-TextAreaRoot:focus-visible) {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.chatFormMain :global(.rt-TextAreaInput),
+.chatFormMain :global(.rt-TextAreaInput:focus),
+.chatFormMain :global(.rt-TextAreaInput:focus-visible) {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Remove any ScrollArea focus rings */
+.chatFormMain :global(.rt-ScrollAreaViewportFocusRing) {
+  display: none !important;
+}
+
+/* Make TextArea transparent - override Radix variant-surface background */
+.chatForm :global(.rt-TextAreaRoot),
+.chatForm :global(.rt-TextAreaRoot.rt-variant-surface),
+.chatForm__form :global(.rt-TextAreaRoot),
+.chatForm__form :global(.rt-TextAreaRoot.rt-variant-surface),
+.textareaWrapper :global(.rt-TextAreaRoot),
+.textareaWrapper :global(.rt-TextAreaRoot.rt-variant-surface) {
+  background-color: transparent !important;
+  background: transparent !important;
+  --text-area-background-color: transparent !important;
+  --color-surface: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* Thinner border for edit mode (RetryForm) - matches user message bubble style */
+.chatFormCompact {
+  border: 1px solid var(--gray-a3);
+  border-radius: var(--radius-3);
 }
 
 .textareaWrapper {

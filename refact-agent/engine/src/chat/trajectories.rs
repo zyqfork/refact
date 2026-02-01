@@ -70,6 +70,12 @@ pub struct TrajectoryEvent {
     pub total_lines_added: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_lines_removed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks_total: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks_done: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks_failed: Option<i32>,
 }
 
 pub async fn get_session_state_for_chat(
@@ -656,6 +662,7 @@ pub async fn save_trajectory_snapshot(
         let (session_state, session_error) = get_session_state_for_chat(&sessions, &snapshot.chat_id).await;
         let total_coins = calculate_total_coins_from_chat_messages(&snapshot.messages);
         let (total_lines_added, total_lines_removed) = calculate_line_changes_from_chat_messages(&snapshot.messages);
+        let (tasks_total, tasks_done, tasks_failed) = calculate_task_progress_from_chat_messages(&snapshot.messages);
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let event = TrajectoryEvent {
                 event_type: "updated".to_string(),
@@ -674,6 +681,9 @@ pub async fn save_trajectory_snapshot(
                 total_coins,
                 total_lines_added: Some(total_lines_added),
                 total_lines_removed: Some(total_lines_removed),
+                tasks_total: Some(tasks_total),
+                tasks_done: Some(tasks_done),
+                tasks_failed: Some(tasks_failed),
             };
             let _ = tx.send(event);
         }
@@ -796,15 +806,19 @@ async fn process_trajectory_change(
                 total_coins: None,
                 total_lines_added: None,
                 total_lines_removed: None,
+                tasks_total: None,
+                tasks_done: None,
+                tasks_failed: None,
             });
         }
     } else {
         let loaded = load_trajectory_for_chat(gcx.clone(), chat_id).await;
-        let (updated_at, title, is_title_generated, message_count, parent_id, link_type, root_chat_id, model, mode, total_coins, total_lines_added, total_lines_removed) =
+        let (updated_at, title, is_title_generated, message_count, parent_id, link_type, root_chat_id, model, mode, total_coins, total_lines_added, total_lines_removed, tasks_total, tasks_done, tasks_failed) =
             loaded.map(|t| {
                 let effective_root = t.thread.root_chat_id.clone().unwrap_or_else(|| t.thread.id.clone());
                 let coins = calculate_total_coins_from_chat_messages(&t.messages);
                 let (lines_added, lines_removed) = calculate_line_changes_from_chat_messages(&t.messages);
+                let (t_total, t_done, t_failed) = calculate_task_progress_from_chat_messages(&t.messages);
                 (
                     Some(t.updated_at),
                     Some(t.thread.title),
@@ -818,8 +832,11 @@ async fn process_trajectory_change(
                     coins,
                     Some(lines_added),
                     Some(lines_removed),
+                    Some(t_total),
+                    Some(t_done),
+                    Some(t_failed),
                 )
-            }).unwrap_or((None, None, None, None, None, None, None, None, None, None, None, None));
+            }).unwrap_or((None, None, None, None, None, None, None, None, None, None, None, None, None, None, None));
         let (session_state, session_error) = get_session_state_for_chat(&sessions, chat_id).await;
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let _ = tx.send(TrajectoryEvent {
@@ -839,6 +856,9 @@ async fn process_trajectory_change(
                 total_coins,
                 total_lines_added,
                 total_lines_removed,
+                tasks_total,
+                tasks_done,
+                tasks_failed,
             });
         }
     }
@@ -1272,6 +1292,9 @@ fn spawn_title_generation_task(
             total_coins: None,
             total_lines_added: None,
             total_lines_removed: None,
+            tasks_total: None,
+            tasks_done: None,
+            tasks_failed: None,
         };
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let _ = tx.send(event);
@@ -1520,6 +1543,66 @@ fn calculate_total_coins_from_chat_messages(messages: &[ChatMessage]) -> Option<
     }
 
     if found_any { Some(total) } else { None }
+}
+
+fn calculate_task_progress_from_chat_messages(messages: &[ChatMessage]) -> (i32, i32, i32) {
+    // Build a set of successful tool call IDs (tool messages without tool_failed=true)
+    let mut successful_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for msg in messages {
+        if msg.role != "tool" {
+            continue;
+        }
+        let tool_failed = msg.tool_failed.unwrap_or(false);
+        if !tool_failed && !msg.tool_call_id.is_empty() {
+            successful_tool_ids.insert(msg.tool_call_id.clone());
+        }
+    }
+
+    // Find the last successful tasks_set tool call (iterate in reverse)
+    for msg in messages.iter().rev() {
+        if msg.role != "assistant" {
+            continue;
+        }
+
+        let tool_calls = match &msg.tool_calls {
+            Some(tc) => tc,
+            None => continue,
+        };
+
+        // Iterate tool_calls in reverse to find the last tasks_set
+        for tc in tool_calls.iter().rev() {
+            if tc.function.name != "tasks_set" {
+                continue;
+            }
+
+            if tc.id.is_empty() || !successful_tool_ids.contains(&tc.id) {
+                continue;
+            }
+
+            // Parse the arguments
+            if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+                if let Some(tasks) = args.get("tasks").and_then(|t| t.as_array()) {
+                    let mut total = 0i32;
+                    let mut done = 0i32;
+                    let mut failed = 0i32;
+
+                    for task in tasks {
+                        total += 1;
+                        let status = task.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                        match status.to_lowercase().as_str() {
+                            "completed" | "done" | "complete" => done += 1,
+                            "failed" | "error" => failed += 1,
+                            _ => {}
+                        }
+                    }
+
+                    return (total, done, failed);
+                }
+            }
+        }
+    }
+
+    (0, 0, 0)
 }
 
 fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
@@ -1965,6 +2048,7 @@ pub async fn handle_v1_trajectories_save(
     let (session_state, session_error) = get_session_state_for_chat(&sessions, &id).await;
     let total_coins = calculate_total_coins_from_messages(&data.messages);
     let (total_lines_added, total_lines_removed) = calculate_line_changes_from_messages(&data.messages);
+    let (tasks_total, tasks_done, tasks_failed) = calculate_task_progress_from_messages(&data.messages);
     let event = TrajectoryEvent {
         event_type: if is_new {
             "created".to_string()
@@ -1986,6 +2070,9 @@ pub async fn handle_v1_trajectories_save(
         total_coins,
         total_lines_added: Some(total_lines_added),
         total_lines_removed: Some(total_lines_removed),
+        tasks_total: Some(tasks_total),
+        tasks_done: Some(tasks_done),
+        tasks_failed: Some(tasks_failed),
     };
     if let Some(tx) = &gcx.read().await.trajectory_events_tx {
         let _ = tx.send(event);
@@ -2035,6 +2122,9 @@ pub async fn handle_v1_trajectories_delete(
         total_coins: None,
         total_lines_added: None,
         total_lines_removed: None,
+        tasks_total: None,
+        tasks_done: None,
+        tasks_failed: None,
     };
     if let Some(tx) = &gcx.read().await.trajectory_events_tx {
         let _ = tx.send(event);
@@ -2388,6 +2478,9 @@ mod tests {
             total_coins: Some(1.5),
             total_lines_added: Some(100),
             total_lines_removed: Some(50),
+            tasks_total: Some(5),
+            tasks_done: Some(3),
+            tasks_failed: Some(1),
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "updated");
@@ -2400,6 +2493,9 @@ mod tests {
         assert_eq!(json["total_coins"], 1.5);
         assert_eq!(json["total_lines_added"], 100);
         assert_eq!(json["total_lines_removed"], 50);
+        assert_eq!(json["tasks_total"], 5);
+        assert_eq!(json["tasks_done"], 3);
+        assert_eq!(json["tasks_failed"], 1);
     }
 
     #[test]

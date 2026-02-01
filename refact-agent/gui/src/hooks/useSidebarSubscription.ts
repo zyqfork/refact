@@ -116,7 +116,10 @@ export function useSidebarSubscription() {
         event.mode !== undefined ||
         event.total_coins !== undefined ||
         event.total_lines_added !== undefined ||
-        event.total_lines_removed !== undefined;
+        event.total_lines_removed !== undefined ||
+        event.tasks_total !== undefined ||
+        event.tasks_done !== undefined ||
+        event.tasks_failed !== undefined;
 
       if (existsInHistory && hasMetaUpdate) {
         const metaPatch: Record<string, unknown> = { id: event.id };
@@ -143,6 +146,12 @@ export function useSidebarSubscription() {
           metaPatch.total_lines_removed = event.total_lines_removed;
         if (event.model !== undefined) metaPatch.model = event.model;
         if (event.mode !== undefined) metaPatch.mode = event.mode;
+        if (event.tasks_total !== undefined)
+          metaPatch.tasks_total = event.tasks_total;
+        if (event.tasks_done !== undefined)
+          metaPatch.tasks_done = event.tasks_done;
+        if (event.tasks_failed !== undefined)
+          metaPatch.tasks_failed = event.tasks_failed;
         dispatch(
           updateChatMetaById(
             metaPatch as Parameters<typeof updateChatMetaById>[0],

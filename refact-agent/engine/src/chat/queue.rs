@@ -582,24 +582,26 @@ pub async fn process_command_queue(
 }
 
 fn is_allowed_role_for_restore(role: &str) -> bool {
-    matches!(role, "user" | "assistant" | "system")
+    matches!(role, "user" | "assistant" | "system" | "tool")
 }
 
+/// Sanitize message for branching - preserves conversation structure (tool_calls, tool results)
+/// but strips transient metadata (usage, checkpoints, citations, etc.)
 fn sanitize_message_for_restore(msg: &ChatMessage) -> ChatMessage {
     ChatMessage {
         message_id: Uuid::new_v4().to_string(),
         role: msg.role.clone(),
         content: msg.content.clone(),
-        tool_calls: None,
-        tool_call_id: String::new(),
-        tool_failed: None,
-        usage: None,
-        checkpoints: vec![],
+        tool_calls: msg.tool_calls.clone(),  // Preserve tool calls for conversation context
+        tool_call_id: msg.tool_call_id.clone(),  // Preserve for tool messages
+        tool_failed: msg.tool_failed,  // Preserve tool execution status
+        usage: None,  // Strip metering data
+        checkpoints: vec![],  // Strip checkpoint data
         reasoning_content: msg.reasoning_content.clone(),
         thinking_blocks: msg.thinking_blocks.clone(),
-        citations: vec![],
-        finish_reason: None,
-        extra: serde_json::Map::new(),
+        citations: vec![],  // Strip citations
+        finish_reason: None,  // Strip finish reason
+        extra: serde_json::Map::new(),  // Strip extra provider-specific data
         output_filter: None,
     }
 }

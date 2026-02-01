@@ -291,6 +291,9 @@ impl ChatSession {
                 total_coins: None,
                 total_lines_added: None,
                 total_lines_removed: None,
+                tasks_total: None,
+                tasks_done: None,
+                tasks_failed: None,
             };
             let _ = tx.send(event);
         }
@@ -516,6 +519,9 @@ impl ChatSession {
                 total_coins: None,
                 total_lines_added: None,
                 total_lines_removed: None,
+                tasks_total: None,
+                tasks_done: None,
+                tasks_failed: None,
             };
             let _ = tx.send(event);
         }

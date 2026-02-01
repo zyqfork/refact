@@ -423,6 +423,9 @@ export const historySlice = createSlice({
         total_lines_removed?: number;
         model?: string;
         mode?: string;
+        tasks_total?: number;
+        tasks_done?: number;
+        tasks_failed?: number;
       }>,
     ) => {
       if (!(action.payload.id in state.chats)) return;
@@ -465,6 +468,15 @@ export const historySlice = createSlice({
       }
       if (action.payload.mode !== undefined) {
         chat.mode = action.payload.mode as ChatHistoryItem["mode"];
+      }
+      if (action.payload.tasks_total !== undefined) {
+        chat.tasks_total = action.payload.tasks_total;
+      }
+      if (action.payload.tasks_done !== undefined) {
+        chat.tasks_done = action.payload.tasks_done;
+      }
+      if (action.payload.tasks_failed !== undefined) {
+        chat.tasks_failed = action.payload.tasks_failed;
       }
     },
 

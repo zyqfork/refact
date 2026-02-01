@@ -506,6 +506,7 @@ export const ChatForm: React.FC<ChatFormProps> = ({
           className={classNames(
             styles.chatForm,
             styles.chatForm__form,
+            styles.chatFormMain,
             className,
           )}
           onSubmit={() => handleSubmit("after_flow")}

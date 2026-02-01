@@ -24,13 +24,57 @@
   flex-direction: column;
   gap: 0;
   text-align: left;
-  cursor: default;
+  cursor: pointer;
   user-select: auto;
   max-width: calc(100% - var(--space-2) * 4.5);
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   min-height: var(--base-button-height);
   height: auto;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Mimic Button variant="soft" appearance */
+  background-color: var(--accent-a3);
+  border-radius: var(--radius-3);
+}
+
+.userInput:hover {
+  background-color: var(--accent-a4);
+}
+
+/* Reset Markdown margins inside user messages - override Radix styles */
+.userInput :global(.rt-Text),
+.userInput :global(.rt-Heading),
+.userInput :global(p),
+.userInput :global(h1),
+.userInput :global(h2),
+.userInput :global(h3),
+.userInput :global(h4),
+.userInput :global(h5),
+.userInput :global(h6),
+.userInput :global(ul),
+.userInput :global(ol),
+.userInput :global(pre) {
+  margin: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+/* Add small spacing between consecutive elements */
+.userInput :global(.rt-Text + .rt-Text),
+.userInput :global(.rt-Text + pre),
+.userInput :global(pre + .rt-Text),
+.userInput :global(p + p),
+.userInput :global(p + pre),
+.userInput :global(pre + p) {
+  margin-top: var(--space-1) !important;
+}
+
+/* Proper spacing between list items */
+.userInput :global(li) {
+  margin-bottom: 2px;
+}
+.userInput :global(li:last-child) {
+  margin-bottom: 0;
 }
 
 .break_word {

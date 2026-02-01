@@ -36,10 +36,9 @@ import { RootState } from "../../app/store";
 import { selectFeatures } from "../../features/Config/configSlice";
 import { isRawTextDocToolCall } from "../Tools/types";
 import { TextDocTool } from "../Tools/Textdoc";
-import { MarkdownCodeBlock } from "../Markdown/CodeBlock";
+import { ShikiCodeBlock } from "../Markdown/ShikiCodeBlock";
 import { Markdown } from "../Markdown";
 import classNames from "classnames";
-import resultStyle from "react-syntax-highlighter/dist/esm/styles/hljs/arta";
 import { FadedButton } from "../Buttons";
 import { AnimatedText } from "../Text";
 
@@ -90,16 +89,13 @@ const Result: React.FC<ResultProps> = ({ children, onClose }) => {
               styles.tool_result_markdown,
             )}
           >
-            <Markdown style={resultStyle}>{children}</Markdown>
+            <Markdown>{children}</Markdown>
           </Box>
         </Text>
       ) : (
-        <MarkdownCodeBlock
-          className={classNames(styles.tool_result)}
-          style={resultStyle}
-        >
+        <ShikiCodeBlock className={classNames(styles.tool_result)}>
           {children}
-        </MarkdownCodeBlock>
+        </ShikiCodeBlock>
       )}
     </Reveal>
   );
