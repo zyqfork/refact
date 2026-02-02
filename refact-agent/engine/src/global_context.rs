@@ -685,6 +685,7 @@ pub mod tests {
             trajectory_events_tx: Some(tokio::sync::broadcast::channel(1024).0),
             task_events_tx: Some(tokio::sync::broadcast::channel(1024).0),
             task_events_seq: Some(Arc::new(std::sync::atomic::AtomicU64::new(0))),
+            notification_events_tx: Some(tokio::sync::broadcast::channel(256).0),
             chat_sessions: crate::chat::create_sessions_map(),
             voice_service: crate::voice::VoiceService::new(),
             project_registry_cache: Arc::new(StdRwLock::new(RegistryCacheManager::new())),

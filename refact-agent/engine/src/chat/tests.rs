@@ -1180,6 +1180,7 @@ mod tests {
                 ToolStepOutcome::NoToolCalls => false,
                 ToolStepOutcome::Paused => false,
                 ToolStepOutcome::Continue => true,
+                ToolStepOutcome::Stop => false,
             }
         }
 
@@ -1205,6 +1206,7 @@ mod tests {
                     ToolStepOutcome::NoToolCalls => break,
                     ToolStepOutcome::Paused => break,
                     ToolStepOutcome::Continue => continue,
+                    ToolStepOutcome::Stop => break,
                 }
             }
             cycles
