@@ -5,19 +5,31 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Button, Flex, Box, IconButton } from "@radix-ui/themes";
+import {
+  Button,
+  Flex,
+  Box,
+  IconButton,
+  Popover,
+  Text,
+  Separator,
+  Badge,
+} from "@radix-ui/themes";
 import { FileRejection, useDropzone } from "react-dropzone";
 import { TextArea } from "../TextArea";
 import { useAppSelector, useCapsForToolUse } from "../../hooks";
+
 import {
   ProcessedUserMessageContentWithImages,
   UserImage,
   UserMessage,
 } from "../../services/refact";
-import { Cross2Icon, CheckIcon, PlusIcon } from "@radix-ui/react-icons";
+import { Cross2Icon, CheckIcon, PlusIcon, ChevronDownIcon } from "@radix-ui/react-icons";
 import { useAttachedImages } from "../../hooks/useAttachedImages";
 import { selectIsStreaming, selectIsWaiting } from "../../features/Chat";
+import { enrichAndGroupModels } from "../../utils/enrichModels";
 import styles from "./ChatForm.module.css";
+import dropdownStyles from "./ChatSettingsDropdown.module.css";
 import classNames from "classnames";
 import { DialogImage } from "../DialogImage";
 
@@ -219,6 +231,7 @@ export const RetryForm: React.FC<{
 
           <Box flexGrow="1" />
 
+          <RetryModelSelector disabled={disableInput} />
           {isMultimodalitySupportedForCurrentModel && (
             <RetryDropzone addImage={addImage} />
           )}
@@ -338,5 +351,147 @@ const RetryImage: React.FC<{ image: string; onRemove: () => void }> = ({
         <Cross2Icon width={10} height={10} />
       </IconButton>
     </Box>
+  );
+};
+
+const RetryModelSelector: React.FC<{ disabled?: boolean }> = ({ disabled }) => {
+  const caps = useCapsForToolUse();
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedModelRef = useRef<HTMLButtonElement>(null);
+  const modelListRef = useRef<HTMLDivElement>(null);
+
+  const currentModelName = caps.currentModel || "Select model";
+
+  const groupedModels = useMemo(() => {
+    return enrichAndGroupModels(caps.usableModelsForPlan, caps.data);
+  }, [caps.usableModelsForPlan, caps.data]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const scrollToSelected = () => {
+      const container = modelListRef.current;
+      const selected = selectedModelRef.current;
+      if (container && selected && container.clientHeight > 0) {
+        const containerHeight = container.clientHeight;
+        const selectedTop = selected.offsetTop;
+        const selectedHeight = selected.offsetHeight;
+        container.scrollTop =
+          selectedTop - containerHeight / 2 + selectedHeight / 2;
+        return true;
+      }
+      return false;
+    };
+
+    let attempts = 0;
+    const maxAttempts = 10;
+    const tryScroll = () => {
+      if (scrollToSelected() || attempts >= maxAttempts) return;
+      attempts++;
+      requestAnimationFrame(tryScroll);
+    };
+
+    requestAnimationFrame(tryScroll);
+  }, [isOpen]);
+
+  const handleModelSelect = useCallback(
+    (modelValue: string) => {
+      caps.setCapModel(modelValue);
+      setIsOpen(false);
+    },
+    [caps],
+  );
+
+  if (caps.loading) {
+    return null;
+  }
+
+  return (
+    <Popover.Root open={isOpen} onOpenChange={setIsOpen}>
+      <Popover.Trigger>
+        <button
+          className={classNames(dropdownStyles.trigger, {
+            [dropdownStyles.disabled]: disabled,
+          })}
+          disabled={disabled}
+          type="button"
+        >
+          <Flex align="center" gap="1" className={dropdownStyles.triggerContent}>
+            <Text size="1" className={dropdownStyles.modelName}>
+              {currentModelName}
+            </Text>
+            <ChevronDownIcon className={dropdownStyles.chevron} />
+          </Flex>
+        </button>
+      </Popover.Trigger>
+
+      <Popover.Content
+        className={dropdownStyles.content}
+        side="top"
+        align="end"
+        sideOffset={8}
+      >
+        <div className={dropdownStyles.section}>
+          <div className={dropdownStyles.modelList} ref={modelListRef}>
+            {groupedModels.map((group, groupIndex) => (
+              <React.Fragment key={group.provider}>
+                {groupIndex > 0 && (
+                  <Separator size="4" className={dropdownStyles.groupSeparator} />
+                )}
+                <Text size="1" color="gray" className={dropdownStyles.groupHeader}>
+                  {group.displayName}
+                </Text>
+                {group.models.map((model) => {
+                  const isSelected = caps.currentModel === model.value;
+                  return (
+                    <button
+                      key={model.value}
+                      ref={isSelected ? selectedModelRef : undefined}
+                      className={classNames(dropdownStyles.item, {
+                        [dropdownStyles.itemSelected]: isSelected,
+                        [dropdownStyles.itemDisabled]: model.disabled,
+                      })}
+                      onClick={() => handleModelSelect(model.value)}
+                      disabled={disabled || model.disabled}
+                      type="button"
+                    >
+                      <Flex align="center" gap="1">
+                        <Text
+                          size="1"
+                          weight="medium"
+                          className={dropdownStyles.itemModelName}
+                        >
+                          {model.value}
+                        </Text>
+                        {model.isDefault && (
+                          <Badge
+                            size="1"
+                            color="blue"
+                            variant="soft"
+                            className={dropdownStyles.badge}
+                          >
+                            Default
+                          </Badge>
+                        )}
+                        {model.isThinking && (
+                          <Badge
+                            size="1"
+                            color="purple"
+                            variant="soft"
+                            className={dropdownStyles.badge}
+                          >
+                            Reasoning
+                          </Badge>
+                        )}
+                      </Flex>
+                    </button>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      </Popover.Content>
+    </Popover.Root>
   );
 };

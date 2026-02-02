@@ -141,7 +141,7 @@ fn get_file_changes_from_nested_repos<'a>(
         .workdir()
         .ok_or("Failed to get workdir.".to_string())?;
     let mut file_changes_per_repo = Vec::new();
-    let mut file_changes_flatened = Vec::new();
+    let mut file_changes_flattened = Vec::new();
 
     for nested_repo in nested_repos {
         let (_, nested_repo_changes) =
@@ -154,7 +154,7 @@ fn get_file_changes_from_nested_repos<'a>(
             .map_err_to_string()?;
 
         for change in &nested_repo_changes {
-            file_changes_flatened.push(FileChange {
+            file_changes_flattened.push(FileChange {
                 relative_path: nested_repo_rel_path.join(&change.relative_path),
                 absolute_path: change.absolute_path.clone(),
                 status: change.status.clone(),
@@ -163,7 +163,7 @@ fn get_file_changes_from_nested_repos<'a>(
         file_changes_per_repo.push((nested_repo, nested_repo_changes));
     }
 
-    Ok((file_changes_per_repo, file_changes_flatened))
+    Ok((file_changes_per_repo, file_changes_flattened))
 }
 
 pub async fn create_workspace_checkpoint(
@@ -199,9 +199,9 @@ pub async fn create_workspace_checkpoint(
 
         let (_, mut file_changes) = get_diff_statuses(git2::StatusShow::Workdir, &repo, false)?;
 
-        let (nested_file_changes, flatened_nested_file_changes) =
+        let (nested_file_changes, flattened_nested_file_changes) =
             get_file_changes_from_nested_repos(&repo, &nested_repos, false)?;
-        file_changes.extend(flatened_nested_file_changes);
+        file_changes.extend(flattened_nested_file_changes);
 
         stage_changes(&repo, &file_changes, &abort_flag)?;
         let commit_oid = commit(
@@ -294,29 +294,33 @@ pub async fn restore_workspace_checkpoint(
     )?;
 
     for nested_repo in &nested_repos {
+        let nested_workdir = match nested_repo.workdir() {
+            Some(wd) => wd.to_path_buf(),
+            None => {
+                tracing::error!("Failed to get workdir for nested repo");
+                continue;
+            }
+        };
+
         let reset_index_result = nested_repo.index().and_then(|mut index| {
             index.add_all(
                 ["*"],
                 IndexAddOption::DEFAULT,
                 Some(&mut |path, _| {
-                    if path.as_os_str().as_encoded_bytes().last() == Some(&b'/')
-                        && path.join(".git").exists()
-                    {
-                        1
+                    // path is relative to the workdir, so we need to build absolute path
+                    let abs_path = nested_workdir.join(path);
+                    // Skip directories that contain a .git folder (nested git repos)
+                    if abs_path.is_dir() && abs_path.join(".git").exists() {
+                        1 // skip
                     } else {
-                        0
+                        0 // include
                     }
                 }),
             )?;
             index.write()
         });
         if let Err(e) = reset_index_result {
-            let workdir = nested_repo
-                .workdir()
-                .unwrap_or(&PathBuf::new())
-                .to_string_lossy()
-                .to_string();
-            tracing::error!("Failed to reset index for {workdir}: {e}");
+            tracing::error!("Failed to reset index for {}: {e}", nested_workdir.display());
         }
     }
 

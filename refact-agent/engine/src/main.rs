@@ -86,7 +86,7 @@ async fn main() {
 
     let cpu_num = std::thread::available_parallelism().unwrap().get();
     rayon::ThreadPoolBuilder::new()
-        .num_threads(cpu_num / 2)
+        .num_threads(std::cmp::max(1, cpu_num / 2))
         .build_global()
         .unwrap();
     let home_dir = canonical_path(

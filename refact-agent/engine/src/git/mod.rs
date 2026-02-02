@@ -1,7 +1,5 @@
 pub mod checkpoints;
 pub mod cleanup;
-#[cfg(test)]
-pub mod cleanup_tests;
 pub mod commit_info;
 pub mod operations;
 

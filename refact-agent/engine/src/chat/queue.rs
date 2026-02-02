@@ -46,13 +46,26 @@ pub async fn inject_priority_messages_if_any(
             attachments,
         } = request.command
         {
-            let mut session = session_arc.lock().await;
-            let parsed_content = parse_content_with_attachments(&content, &attachments);
-            let checkpoints = if session.thread.checkpoints_enabled {
-                create_checkpoint_for_message(gcx.clone(), &session).await
+            // Extract data needed for checkpoint creation while holding the lock briefly
+            let (checkpoints_enabled, chat_id, latest_checkpoint) = {
+                let session = session_arc.lock().await;
+                (
+                    session.thread.checkpoints_enabled,
+                    session.chat_id.clone(),
+                    find_latest_checkpoint(&session),
+                )
+            };
+
+            // Create checkpoint without holding the session lock (can be slow)
+            let checkpoints = if checkpoints_enabled {
+                create_checkpoint_async(gcx.clone(), latest_checkpoint.as_ref(), &chat_id).await
             } else {
                 Vec::new()
             };
+
+            // Reacquire lock to add the message
+            let mut session = session_arc.lock().await;
+            let parsed_content = parse_content_with_attachments(&content, &attachments);
             let user_message = ChatMessage {
                 message_id: Uuid::new_v4().to_string(),
                 role: "user".to_string(),
@@ -337,14 +350,27 @@ pub async fn process_command_queue(
                     Vec::new()
                 };
 
+                // Extract data needed for checkpoint creation while holding the lock briefly
+                let (checkpoints_enabled, chat_id, latest_checkpoint) = {
+                    let session = session_arc.lock().await;
+                    (
+                        session.thread.checkpoints_enabled,
+                        session.chat_id.clone(),
+                        find_latest_checkpoint(&session),
+                    )
+                };
+
+                // Create checkpoint without holding the session lock (can be slow)
+                let checkpoints = if checkpoints_enabled {
+                    create_checkpoint_async(gcx.clone(), latest_checkpoint.as_ref(), &chat_id).await
+                } else {
+                    Vec::new()
+                };
+
+                // Reacquire lock to add messages
                 {
                     let mut session = session_arc.lock().await;
                     let parsed_content = parse_content_with_attachments(&content, &attachments);
-                    let checkpoints = if session.thread.checkpoints_enabled {
-                        create_checkpoint_for_message(gcx.clone(), &session).await
-                    } else {
-                        Vec::new()
-                    };
                     let user_message = ChatMessage {
                         message_id: Uuid::new_v4().to_string(),
                         role: "user".to_string(),
@@ -748,24 +774,29 @@ async fn handle_tool_decisions(
     }
 }
 
-async fn create_checkpoint_for_message(
-    gcx: Arc<ARwLock<GlobalContext>>,
-    session: &ChatSession,
-) -> Vec<crate::git::checkpoints::Checkpoint> {
-    use crate::git::checkpoints::create_workspace_checkpoint;
-
-    let latest_checkpoint = session
+/// Extract the latest checkpoint from session messages (call while holding lock)
+fn find_latest_checkpoint(session: &ChatSession) -> Option<crate::git::checkpoints::Checkpoint> {
+    session
         .messages
         .iter()
         .rev()
         .find(|msg| msg.role == "user" && !msg.checkpoints.is_empty())
-        .and_then(|msg| msg.checkpoints.first().cloned());
+        .and_then(|msg| msg.checkpoints.first().cloned())
+}
 
-    match create_workspace_checkpoint(gcx, latest_checkpoint.as_ref(), &session.chat_id).await {
+/// Create checkpoint without holding session lock (async, potentially slow)
+async fn create_checkpoint_async(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    latest_checkpoint: Option<&crate::git::checkpoints::Checkpoint>,
+    chat_id: &str,
+) -> Vec<crate::git::checkpoints::Checkpoint> {
+    use crate::git::checkpoints::create_workspace_checkpoint;
+
+    match create_workspace_checkpoint(gcx, latest_checkpoint, chat_id).await {
         Ok((checkpoint, _)) => {
             tracing::info!(
                 "Checkpoint created for chat {}: {:?}",
-                session.chat_id,
+                chat_id,
                 checkpoint
             );
             vec![checkpoint]
@@ -773,7 +804,7 @@ async fn create_checkpoint_for_message(
         Err(e) => {
             warn!(
                 "Failed to create checkpoint for chat {}: {}",
-                session.chat_id, e
+                chat_id, e
             );
             Vec::new()
         }
