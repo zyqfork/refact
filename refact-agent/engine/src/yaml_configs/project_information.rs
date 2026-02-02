@@ -207,11 +207,11 @@ pub fn to_relative_path(absolute_path: &str, project_roots: &[PathBuf]) -> Optio
         if let Ok(root_canonical) = root.canonicalize() {
             if let Ok(path_canonical) = abs_path.canonicalize() {
                 if let Ok(relative) = path_canonical.strip_prefix(&root_canonical) {
-                    return Some(relative.to_string_lossy().to_string());
+                    return Some(relative.to_string_lossy().replace('\\', "/"));
                 }
             }
             if let Ok(relative) = abs_path.strip_prefix(root) {
-                return Some(relative.to_string_lossy().to_string());
+                return Some(relative.to_string_lossy().replace('\\', "/"));
             }
         }
     }
