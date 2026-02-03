@@ -8,7 +8,11 @@ use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmResponse, LlmStr
 pub struct OpenAiResponsesAdapter;
 
 impl LlmWireAdapter for OpenAiResponsesAdapter {
-    fn build_http(&self, req: &LlmRequest, settings: &AdapterSettings) -> Result<HttpParts, String> {
+    fn build_http(
+        &self,
+        req: &LlmRequest,
+        settings: &AdapterSettings,
+    ) -> Result<HttpParts, String> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if !settings.api_key.is_empty() {
@@ -101,10 +105,11 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
 
         if let Some(error) = json.get("error") {
             return Err(StreamParseError::FatalError(
-                error.get("message")
+                error
+                    .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("unknown error")
-                    .to_string()
+                    .to_string(),
             ));
         }
 
@@ -114,44 +119,74 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
         match event_type {
             "response.output_text.delta" => {
                 if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                    deltas.push(LlmStreamDelta::AppendContent { text: delta.to_string() });
+                    deltas.push(LlmStreamDelta::AppendContent {
+                        text: delta.to_string(),
+                    });
                 }
             }
             "response.reasoning.delta" => {
                 if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                    deltas.push(LlmStreamDelta::AppendReasoning { text: delta.to_string() });
+                    deltas.push(LlmStreamDelta::AppendReasoning {
+                        text: delta.to_string(),
+                    });
+                }
+            }
+            "response.output_item.added" => {
+                if let Some(item) = json.get("item") {
+                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                        if let Some(tc) = extract_tool_call_from_item(item, &json) {
+                            deltas.push(LlmStreamDelta::SetToolCalls {
+                                tool_calls: vec![tc],
+                            });
+                        }
+                    }
                 }
             }
             "response.function_call_arguments.delta" => {
                 if let Some(tc) = extract_tool_call_delta(&json) {
-                    deltas.push(LlmStreamDelta::SetToolCalls { tool_calls: vec![tc] });
+                    deltas.push(LlmStreamDelta::SetToolCalls {
+                        tool_calls: vec![tc],
+                    });
                 }
             }
             "response.function_call_arguments.done" => {
                 if let Some(tc) = extract_tool_call_done(&json) {
-                    deltas.push(LlmStreamDelta::SetToolCalls { tool_calls: vec![tc] });
+                    deltas.push(LlmStreamDelta::SetToolCalls {
+                        tool_calls: vec![tc],
+                    });
                 }
             }
-            "response.output_text.done" | "response.reasoning.done" => {
+            "response.output_item.done" => {
+                if let Some(item) = json.get("item") {
+                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                        if let Some(tc) = extract_tool_call_from_item(item, &json) {
+                            deltas.push(LlmStreamDelta::SetToolCalls {
+                                tool_calls: vec![tc],
+                            });
+                        }
+                    }
+                }
             }
+            "response.output_text.done" | "response.reasoning.done" => {}
             "response.completed" => {
-                deltas.push(LlmStreamDelta::SetFinishReason { reason: "stop".to_string() });
+                deltas.push(LlmStreamDelta::SetFinishReason {
+                    reason: "stop".to_string(),
+                });
                 if let Some(usage) = extract_usage(&json) {
                     deltas.push(LlmStreamDelta::SetUsage { usage });
                 }
                 deltas.push(LlmStreamDelta::Done);
             }
             "response.failed" => {
-                let error_msg = json.get("error")
+                let error_msg = json
+                    .get("error")
                     .and_then(|e| e.get("message"))
                     .and_then(|m| m.as_str())
                     .unwrap_or("response failed");
                 return Err(StreamParseError::FatalError(error_msg.to_string()));
             }
-            "response.created" | "response.in_progress" => {
-            }
-            _ => {
-            }
+            "response.created" | "response.in_progress" => {}
+            _ => {}
         }
 
         Ok(deltas)
@@ -159,7 +194,8 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
 
     fn parse_response(&self, json: Value) -> Result<LlmResponse, String> {
         if let Some(error) = json.get("error") {
-            return Err(error.get("message")
+            return Err(error
+                .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown error")
                 .to_string());
@@ -206,7 +242,10 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             }
         }
 
-        let status = json.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
+        let status = json
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("unknown");
         let finish_reason = match status {
             "completed" => Some("stop".to_string()),
             "failed" => Some("error".to_string()),
@@ -227,7 +266,9 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
     }
 }
 
-fn convert_to_responses_format(messages: &[crate::call_validation::ChatMessage]) -> (Value, Option<String>) {
+fn convert_to_responses_format(
+    messages: &[crate::call_validation::ChatMessage],
+) -> (Value, Option<String>) {
     let mut instructions = None;
     let mut input_messages = Vec::new();
 
@@ -294,25 +335,28 @@ fn msg_content_to_responses(content: &crate::call_validation::ChatContent) -> Ve
         crate::call_validation::ChatContent::SimpleText(text) => {
             vec![json!({"type": "input_text", "text": text})]
         }
-        crate::call_validation::ChatContent::Multimodal(elements) => {
-            elements
-                .iter()
-                .map(|el| {
-                    if el.is_image() {
-                        json!({
-                            "type": "input_image",
-                            "image_url": format!("data:{};base64,{}", el.m_type, el.m_content)
-                        })
-                    } else {
-                        json!({"type": "input_text", "text": el.m_content})
-                    }
-                })
-                .collect()
-        }
+        crate::call_validation::ChatContent::Multimodal(elements) => elements
+            .iter()
+            .map(|el| {
+                if el.is_image() {
+                    json!({
+                        "type": "input_image",
+                        "image_url": format!("data:{};base64,{}", el.m_type, el.m_content)
+                    })
+                } else {
+                    json!({"type": "input_text", "text": el.m_content})
+                }
+            })
+            .collect(),
         crate::call_validation::ChatContent::ContextFiles(files) => {
             let text = files
                 .iter()
-                .map(|f| format!("{}:{}-{}\n```\n{}```", f.file_name, f.line1, f.line2, f.file_content))
+                .map(|f| {
+                    format!(
+                        "{}:{}-{}\n```\n{}```",
+                        f.file_name, f.line1, f.line2, f.file_content
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             vec![json!({"type": "input_text", "text": text})]
@@ -345,10 +389,30 @@ fn tool_choice_to_responses(choice: &CanonicalToolChoice) -> Value {
     }
 }
 
-fn extract_tool_call_delta(json: &Value) -> Option<Value> {
+fn extract_tool_call_from_item(item: &Value, event: &Value) -> Option<Value> {
+    let call_id = item.get("call_id")?;
+    let output_index = event
+        .get("output_index")
+        .and_then(|i| i.as_u64())
+        .unwrap_or(0);
     Some(json!({
-        "index": json.get("output_index")?,
-        "id": json.get("item_id"),
+        "index": output_index,
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": item.get("name"),
+            "arguments": item.get("arguments").and_then(|a| a.as_str()).unwrap_or("")
+        }
+    }))
+}
+
+fn extract_tool_call_delta(json: &Value) -> Option<Value> {
+    let output_index = json
+        .get("output_index")
+        .and_then(|i| i.as_u64())
+        .unwrap_or(0);
+    Some(json!({
+        "index": output_index,
         "type": "function",
         "function": {
             "arguments": json.get("delta")?
@@ -357,9 +421,12 @@ fn extract_tool_call_delta(json: &Value) -> Option<Value> {
 }
 
 fn extract_tool_call_done(json: &Value) -> Option<Value> {
+    let output_index = json
+        .get("output_index")
+        .and_then(|i| i.as_u64())
+        .unwrap_or(0);
     Some(json!({
-        "index": json.get("output_index")?,
-        "id": json.get("item_id"),
+        "index": output_index,
         "type": "function",
         "function": {
             "name": json.get("name")?,
@@ -369,11 +436,33 @@ fn extract_tool_call_done(json: &Value) -> Option<Value> {
 }
 
 fn extract_usage(json: &Value) -> Option<ChatUsage> {
-    let usage = json.get("usage")?;
+    let usage = json
+        .get("usage")
+        .or_else(|| json.get("response").and_then(|r| r.get("usage")))?;
+    let prompt_tokens = usage
+        .get("input_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let completion_tokens = usage
+        .get("output_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(|t| t.as_u64())
+        .map(|t| t as usize)
+        .unwrap_or_else(|| prompt_tokens + completion_tokens);
+    let cache_read = usage
+        .get("input_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|t| t.as_u64())
+        .map(|v| v as usize);
     Some(ChatUsage {
-        prompt_tokens: usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize,
-        completion_tokens: usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize,
-        total_tokens: usage.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_creation_tokens: None,
+        cache_read_tokens: cache_read,
     })
 }
 
@@ -402,6 +491,7 @@ mod tests {
             model_name: "gpt-4.1".to_string(),
             supports_tools: true,
             supports_reasoning: true,
+            supports_max_completion_tokens: false,
         }
     }
 
@@ -453,12 +543,28 @@ mod tests {
     #[test]
     fn test_parse_stream_chunk_completed() {
         let adapter = OpenAiResponsesAdapter;
-        let chunk = r#"{"type":"response.completed","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let chunk =
+            r#"{"type":"response.completed","usage":{"input_tokens":10,"output_tokens":5}}"#;
 
         let deltas = adapter.parse_stream_chunk(chunk).unwrap();
 
         assert!(deltas.iter().any(|d| matches!(d, LlmStreamDelta::Done)));
-        assert!(deltas.iter().any(|d| matches!(d, LlmStreamDelta::SetFinishReason { .. })));
+        assert!(deltas
+            .iter()
+            .any(|d| matches!(d, LlmStreamDelta::SetFinishReason { .. })));
+    }
+
+    #[test]
+    fn test_parse_stream_chunk_completed_with_response_wrapper() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":20,"output_tokens":10}}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert!(deltas.iter().any(|d| matches!(d, LlmStreamDelta::Done)));
+        assert!(deltas
+            .iter()
+            .any(|d| matches!(d, LlmStreamDelta::SetUsage { .. })));
     }
 
     #[test]
@@ -559,5 +665,106 @@ mod tests {
         assert_eq!(input_arr[1]["name"], "get_weather");
         assert_eq!(input_arr[2]["type"], "function_call_output");
         assert_eq!(input_arr[2]["call_id"], "call_123");
+    }
+
+    #[test]
+    fn test_parse_stream_tool_call_output_item_added() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_123","call_id":"call_abc123","name":"get_weather","arguments":""}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::SetToolCalls { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0]["id"], "call_abc123");
+                assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+            }
+            _ => panic!("expected SetToolCalls"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_tool_call_arguments_delta() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_123","output_index":0,"delta":"{\"loc"}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::SetToolCalls { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0]["index"], 0);
+                assert_eq!(tool_calls[0]["function"]["arguments"], "{\"loc");
+            }
+            _ => panic!("expected SetToolCalls"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_tool_call_arguments_done() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.function_call_arguments.done","item_id":"fc_123","output_index":0,"name":"get_weather","arguments":"{\"location\":\"Paris\"}"}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::SetToolCalls { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+                assert_eq!(
+                    tool_calls[0]["function"]["arguments"],
+                    "{\"location\":\"Paris\"}"
+                );
+            }
+            _ => panic!("expected SetToolCalls"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_tool_call_output_item_done() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_123","call_id":"call_abc123","name":"get_weather","arguments":"{\"location\":\"Paris\"}"}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::SetToolCalls { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0]["id"], "call_abc123");
+                assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+                assert_eq!(
+                    tool_calls[0]["function"]["arguments"],
+                    "{\"location\":\"Paris\"}"
+                );
+            }
+            _ => panic!("expected SetToolCalls"),
+        }
+    }
+
+    #[test]
+    fn test_usage_total_tokens_fallback() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk =
+            r#"{"type":"response.completed","usage":{"input_tokens":100,"output_tokens":50}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        let usage_delta = deltas
+            .iter()
+            .find(|d| matches!(d, LlmStreamDelta::SetUsage { .. }));
+        assert!(usage_delta.is_some());
+        match usage_delta.unwrap() {
+            LlmStreamDelta::SetUsage { usage } => {
+                assert_eq!(usage.prompt_tokens, 100);
+                assert_eq!(usage.completion_tokens, 50);
+                assert_eq!(usage.total_tokens, 150);
+            }
+            _ => panic!("expected SetUsage"),
+        }
     }
 }

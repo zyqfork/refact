@@ -68,7 +68,11 @@ pub fn merge_tool_call(accumulated: &mut Vec<serde_json::Value>, new_tc: serde_j
 
             if let Some(args) = func.get("arguments") {
                 if !args.is_null() {
-                    let new_args = args.as_str().unwrap_or("");
+                    let new_args = if let Some(s) = args.as_str() {
+                        s.to_string()
+                    } else {
+                        serde_json::to_string(args).unwrap_or_default()
+                    };
                     let prev_args = existing["function"]["arguments"].as_str().unwrap_or("");
                     existing["function"]["arguments"] = json!(format!("{}{}", prev_args, new_args));
                 }
@@ -264,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_tool_calls_arguments_object_treated_as_empty() {
+    fn test_merge_tool_calls_arguments_object_stringified() {
         let mut accumulated = Vec::new();
         merge_tool_call(
             &mut accumulated,
@@ -275,11 +279,11 @@ mod tests {
             }),
         );
 
-        assert_eq!(accumulated[0]["function"]["arguments"], "");
+        assert_eq!(accumulated[0]["function"]["arguments"], r#"{"key":"value"}"#);
     }
 
     #[test]
-    fn test_merge_tool_calls_arguments_number_treated_as_empty() {
+    fn test_merge_tool_calls_arguments_number_stringified() {
         let mut accumulated = Vec::new();
         merge_tool_call(
             &mut accumulated,
@@ -290,7 +294,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(accumulated[0]["function"]["arguments"], "");
+        assert_eq!(accumulated[0]["function"]["arguments"], "123");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use crate::call_validation::{ChatToolCall, ChatToolFunction, ChatUsage};
 use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError};
 use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmResponse, LlmStreamDelta};
+use crate::llm::params::CacheControl;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_THINKING_BUDGET: usize = 10000;
@@ -11,7 +12,11 @@ const DEFAULT_THINKING_BUDGET: usize = 10000;
 pub struct AnthropicAdapter;
 
 impl LlmWireAdapter for AnthropicAdapter {
-    fn build_http(&self, req: &LlmRequest, settings: &AdapterSettings) -> Result<HttpParts, String> {
+    fn build_http(
+        &self,
+        req: &LlmRequest,
+        settings: &AdapterSettings,
+    ) -> Result<HttpParts, String> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
@@ -19,7 +24,10 @@ impl LlmWireAdapter for AnthropicAdapter {
             HeaderValue::from_str(&settings.api_key)
                 .map_err(|e| format!("invalid api_key: {e}"))?,
         );
-        headers.insert("anthropic-version", HeaderValue::from_static(ANTHROPIC_VERSION));
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
 
         for (key, value) in &settings.extra_headers {
             if let (Ok(name), Ok(val)) = (
@@ -30,7 +38,7 @@ impl LlmWireAdapter for AnthropicAdapter {
             }
         }
 
-        let (system, messages) = convert_to_anthropic(&req.messages);
+        let (system, messages) = convert_to_anthropic(&req.messages, req.cache_control);
 
         let mut body = json!({
             "model": settings.model_name,
@@ -40,7 +48,7 @@ impl LlmWireAdapter for AnthropicAdapter {
         });
 
         if let Some(sys) = system {
-            body["system"] = json!(sys);
+            body["system"] = sys;
         }
 
         if let Some(temp) = req.params.temperature {
@@ -76,7 +84,11 @@ impl LlmWireAdapter for AnthropicAdapter {
             }
         }
 
-        Ok(HttpParts { url: settings.endpoint.clone(), headers, body })
+        Ok(HttpParts {
+            url: settings.endpoint.clone(),
+            headers,
+            body,
+        })
     }
 
     fn parse_stream_chunk(&self, data: &str) -> Result<Vec<LlmStreamDelta>, StreamParseError> {
@@ -90,7 +102,10 @@ impl LlmWireAdapter for AnthropicAdapter {
 
         if let Some(err) = json.get("error") {
             return Err(StreamParseError::FatalError(
-                err.get("message").and_then(|m| m.as_str()).unwrap_or("error").to_string()
+                err.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("error")
+                    .to_string(),
             ));
         }
 
@@ -104,19 +119,27 @@ impl LlmWireAdapter for AnthropicAdapter {
                     match delta_type {
                         "text_delta" => {
                             if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                deltas.push(LlmStreamDelta::AppendContent { text: text.to_string() });
+                                deltas.push(LlmStreamDelta::AppendContent {
+                                    text: text.to_string(),
+                                });
                             }
                         }
                         "thinking_delta" => {
                             if let Some(text) = delta.get("thinking").and_then(|t| t.as_str()) {
-                                deltas.push(LlmStreamDelta::AppendReasoning { text: text.to_string() });
+                                deltas.push(LlmStreamDelta::AppendReasoning {
+                                    text: text.to_string(),
+                                });
                             }
                         }
                         "input_json_delta" => {
-                            if let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str()) {
+                            if let Some(partial) =
+                                delta.get("partial_json").and_then(|p| p.as_str())
+                            {
                                 let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
                                 deltas.push(LlmStreamDelta::SetToolCalls {
-                                    tool_calls: vec![json!({"index": index, "function": {"arguments": partial}})]
+                                    tool_calls: vec![
+                                        json!({"index": index, "function": {"arguments": partial}}),
+                                    ],
                                 });
                             }
                         }
@@ -127,7 +150,9 @@ impl LlmWireAdapter for AnthropicAdapter {
             "message_delta" => {
                 if let Some(delta) = json.get("delta") {
                     if let Some(reason) = delta.get("stop_reason").and_then(|r| r.as_str()) {
-                        deltas.push(LlmStreamDelta::SetFinishReason { reason: reason.to_string() });
+                        deltas.push(LlmStreamDelta::SetFinishReason {
+                            reason: reason.to_string(),
+                        });
                     }
                 }
                 if let Some(usage) = json.get("usage") {
@@ -149,11 +174,13 @@ impl LlmWireAdapter for AnthropicAdapter {
                                 "id": cb.get("id"),
                                 "type": "function",
                                 "function": {"name": cb.get("name")}
-                            })]
+                            })],
                         });
                     }
                 }
             }
+            "content_block_stop" => {}
+            "message_start" | "ping" => {}
             _ => {}
         }
 
@@ -162,7 +189,11 @@ impl LlmWireAdapter for AnthropicAdapter {
 
     fn parse_response(&self, json: Value) -> Result<LlmResponse, String> {
         if let Some(err) = json.get("error") {
-            return Err(err.get("message").and_then(|m| m.as_str()).unwrap_or("error").to_string());
+            return Err(err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("error")
+                .to_string());
         }
 
         let content_blocks = json.get("content").and_then(|c| c.as_array());
@@ -195,23 +226,34 @@ impl LlmWireAdapter for AnthropicAdapter {
             }
         }
 
-        let finish_reason = json.get("stop_reason").and_then(|r| r.as_str()).map(|s| s.to_string());
+        let finish_reason = json
+            .get("stop_reason")
+            .and_then(|r| r.as_str())
+            .map(|s| s.to_string());
         let usage = json.get("usage").and_then(|u| parse_anthropic_usage(u));
 
         Ok(LlmResponse {
-            content, reasoning_content: reasoning, tool_calls, thinking_blocks,
-            finish_reason, usage, ..Default::default()
+            content,
+            reasoning_content: reasoning,
+            tool_calls,
+            thinking_blocks,
+            finish_reason,
+            usage,
+            ..Default::default()
         })
     }
 }
 
-fn convert_to_anthropic(messages: &[crate::call_validation::ChatMessage]) -> (Option<String>, Vec<Value>) {
-    let mut system = None;
+fn convert_to_anthropic(
+    messages: &[crate::call_validation::ChatMessage],
+    cache: CacheControl,
+) -> (Option<Value>, Vec<Value>) {
+    let mut system_text = None;
     let mut result = Vec::new();
 
     for msg in messages {
         match msg.role.as_str() {
-            "system" => system = Some(msg.content.content_text_only()),
+            "system" => system_text = Some(msg.content.content_text_only()),
             "user" | "assistant" => {
                 let content = msg_content_to_anthropic(&msg.content);
                 let mut obj = json!({"role": msg.role, "content": content});
@@ -241,6 +283,16 @@ fn convert_to_anthropic(messages: &[crate::call_validation::ChatMessage]) -> (Op
             _ => {}
         }
     }
+
+    let system = system_text.map(|text| match cache {
+        CacheControl::Ephemeral => json!([{
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral"}
+        }]),
+        CacheControl::Off => json!(text),
+    });
+
     (system, result)
 }
 
@@ -283,12 +335,28 @@ fn tool_choice_to_anthropic(choice: &CanonicalToolChoice) -> Value {
 }
 
 fn parse_anthropic_usage(usage: &Value) -> Option<ChatUsage> {
-    let prompt_tokens = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
-    let completion_tokens = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
+    let prompt_tokens = usage
+        .get("input_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let completion_tokens = usage
+        .get("output_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let cache_creation = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|t| t.as_u64())
+        .map(|v| v as usize);
+    let cache_read = usage
+        .get("cache_read_input_tokens")
+        .and_then(|t| t.as_u64())
+        .map(|v| v as usize);
     Some(ChatUsage {
         prompt_tokens,
         completion_tokens,
         total_tokens: prompt_tokens + completion_tokens,
+        cache_creation_tokens: cache_creation,
+        cache_read_tokens: cache_read,
     })
 }
 
@@ -317,6 +385,7 @@ mod tests {
             model_name: "claude-3-sonnet".to_string(),
             supports_tools: true,
             supports_reasoning: true,
+            supports_max_completion_tokens: false,
         }
     }
 
@@ -335,15 +404,29 @@ mod tests {
             ChatMessage::new("system".to_string(), "Be helpful".to_string()),
             ChatMessage::new("user".to_string(), "Hi".to_string()),
         ];
-        let (system, msgs) = convert_to_anthropic(&messages);
-        assert_eq!(system, Some("Be helpful".to_string()));
+        let (system, msgs) = convert_to_anthropic(&messages, CacheControl::Off);
+        assert_eq!(system, Some(json!("Be helpful")));
+        assert_eq!(msgs.len(), 1);
+    }
+
+    #[test]
+    fn test_system_with_cache_control() {
+        let messages = vec![
+            ChatMessage::new("system".to_string(), "Be helpful".to_string()),
+            ChatMessage::new("user".to_string(), "Hi".to_string()),
+        ];
+        let (system, msgs) = convert_to_anthropic(&messages, CacheControl::Ephemeral);
+        let expected =
+            json!([{"type": "text", "text": "Be helpful", "cache_control": {"type": "ephemeral"}}]);
+        assert_eq!(system, Some(expected));
         assert_eq!(msgs.len(), 1);
     }
 
     #[test]
     fn test_parse_stream_text_delta() {
         let adapter = AnthropicAdapter;
-        let chunk = r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}"#;
+        let chunk =
+            r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}"#;
         let deltas = adapter.parse_stream_chunk(chunk).unwrap();
         assert!(matches!(&deltas[0], LlmStreamDelta::AppendContent { text } if text == "Hello"));
     }
@@ -355,5 +438,61 @@ mod tests {
         let resp = adapter.parse_response(json).unwrap();
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].function.name, "search");
+    }
+
+    #[test]
+    fn test_parse_stream_tool_use_start() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"get_weather"}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::SetToolCalls { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0]["id"], "toolu_123");
+                assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+            }
+            _ => panic!("expected SetToolCalls"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_tool_use_input_delta() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"loc"}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::SetToolCalls { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0]["index"], 0);
+                assert_eq!(tool_calls[0]["function"]["arguments"], "{\"loc");
+            }
+            _ => panic!("expected SetToolCalls"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_content_block_stop() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_stop","index":0}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn test_parse_stream_message_stop() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"message_stop"}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        assert!(matches!(&deltas[0], LlmStreamDelta::Done));
     }
 }

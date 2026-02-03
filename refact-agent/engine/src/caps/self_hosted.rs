@@ -11,10 +11,14 @@ use crate::caps::{
     default_rejection_threshold, relative_to_full_url, normalize_string, resolve_relative_urls,
 };
 use crate::caps::providers;
+use crate::llm::WireFormat;
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SelfHostedCapsModelRecord {
     pub n_ctx: usize,
+
+    #[serde(default)]
+    pub wire_format: WireFormat,
 
     #[serde(default)]
     pub supports_scratchpads: HashMap<String, serde_json::Value>,
@@ -218,22 +222,16 @@ impl SelfHostedCapsModelRecord {
         let mut base = BaseModelRecord {
             n_ctx: self.n_ctx,
             enabled: true,
+            wire_format: self.wire_format,
             ..Default::default()
         };
 
         let (scratchpad, scratchpad_patch) = self.get_chat_scratchpad();
 
-        // Non passthrough models, don't support endpoints of `/v1/chat/completions` in openai style, only `/v1/completions`
-        let endpoint_to_use = if scratchpad == "PASSTHROUGH" {
-            &self_hosted_caps.chat.endpoint
-        } else {
-            &self_hosted_caps.completion.endpoint
-        };
-
         configure_base_model(
             &mut base,
             model_name,
-            endpoint_to_use,
+            &self_hosted_caps.chat.endpoint,
             &self_hosted_caps.cloud_name,
             &self_hosted_caps.tokenizer_endpoints,
             caps_url,
@@ -385,6 +383,7 @@ impl SelfHostedCaps {
             embedding_endpoint: self.embedding.endpoint.clone(),
             api_key: cmdline_api_key.to_string(),
             tokenizer_api_key: cmdline_api_key.to_string(),
+            extra_headers: std::collections::HashMap::new(),
             code_completion_n_ctx: 0,
             support_metadata: self.support_metadata,
             completion_models: IndexMap::new(),

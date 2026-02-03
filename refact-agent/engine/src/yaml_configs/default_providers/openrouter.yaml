@@ -10,6 +10,11 @@ running_models:
   - openai/o3-mini
   - openai/gpt-4.1
 
+embedding_model:
+  name: openai/text-embedding-3-small
+  embedding_size: 1536
+  n_ctx: 8191
+
 model_default_settings_ui:
   chat:
     tokenizer: fake

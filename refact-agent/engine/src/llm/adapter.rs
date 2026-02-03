@@ -42,6 +42,7 @@ pub struct AdapterSettings {
     pub model_name: String,
     pub supports_tools: bool,
     pub supports_reasoning: bool,
+    pub supports_max_completion_tokens: bool,
 }
 
 pub trait LlmWireAdapter: Send + Sync {

@@ -236,6 +236,8 @@ pub async fn prepare_chat_passthrough(
         tool_choice,
         parallel_tool_calls: options.parallel_tool_calls.unwrap_or(false),
         stream: true,
+        response_format: None,
+        cache_control: Default::default(),
         extra_body: None,
     };
 

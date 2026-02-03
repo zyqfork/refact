@@ -46,6 +46,8 @@ pub struct BaseModelRecord {
     #[serde(default, skip_serializing)]
     pub support_metadata: bool,
     #[serde(default, skip_serializing)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+    #[serde(default, skip_serializing)]
     pub similar_models: Vec<String>,
     #[serde(default)]
     pub tokenizer: String,
@@ -54,6 +56,11 @@ pub struct BaseModelRecord {
     pub enabled: bool,
     #[serde(default)]
     pub experimental: bool,
+
+    /// Use max_completion_tokens instead of max_tokens (required for OpenAI o1/o3 models)
+    #[serde(default)]
+    pub supports_max_completion_tokens: bool,
+
     // Fields used for Config/UI management
     #[serde(skip_deserializing)]
     pub removable: bool,

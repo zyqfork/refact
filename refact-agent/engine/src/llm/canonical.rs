@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::call_validation::{ChatMessage, ChatToolCall, ChatUsage};
-use crate::llm::params::{CommonParams, ReasoningIntent};
+use crate::llm::params::{CacheControl, CommonParams, ReasoningIntent};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
@@ -20,7 +20,26 @@ pub struct LlmRequest {
     #[serde(default)]
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
+    #[serde(default)]
+    pub cache_control: CacheControl,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<serde_json::Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    Text,
+    JsonObject,
+    JsonSchema {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        schema: Value,
+        #[serde(default)]
+        strict: bool,
+    },
 }
 
 impl LlmRequest {
@@ -34,6 +53,8 @@ impl LlmRequest {
             tool_choice: None,
             parallel_tool_calls: false,
             stream: true,
+            response_format: None,
+            cache_control: CacheControl::Off,
             extra_body: None,
         }
     }
@@ -104,14 +125,30 @@ impl LlmResponse {
 
 #[derive(Debug, Clone)]
 pub enum LlmStreamDelta {
-    AppendContent { text: String },
-    AppendReasoning { text: String },
-    SetToolCalls { tool_calls: Vec<Value> },
-    SetThinkingBlocks { blocks: Vec<Value> },
-    AddCitation { citation: Value },
-    SetUsage { usage: ChatUsage },
-    SetFinishReason { reason: String },
-    MergeExtra { extra: serde_json::Map<String, Value> },
+    AppendContent {
+        text: String,
+    },
+    AppendReasoning {
+        text: String,
+    },
+    SetToolCalls {
+        tool_calls: Vec<Value>,
+    },
+    SetThinkingBlocks {
+        blocks: Vec<Value>,
+    },
+    AddCitation {
+        citation: Value,
+    },
+    SetUsage {
+        usage: ChatUsage,
+    },
+    SetFinishReason {
+        reason: String,
+    },
+    MergeExtra {
+        extra: serde_json::Map<String, Value>,
+    },
     Done,
 }
 
@@ -122,7 +159,10 @@ mod tests {
     #[test]
     fn test_llm_request_builder() {
         let req = LlmRequest::new("gpt-4".to_string(), vec![])
-            .with_params(CommonParams { max_tokens: 1000, ..Default::default() })
+            .with_params(CommonParams {
+                max_tokens: 1000,
+                ..Default::default()
+            })
             .with_reasoning(ReasoningIntent::Medium);
 
         assert_eq!(req.model_id, "gpt-4");

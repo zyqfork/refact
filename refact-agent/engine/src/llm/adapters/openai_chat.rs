@@ -3,17 +3,20 @@ use serde_json::{json, Value};
 
 use crate::call_validation::{ChatToolCall, ChatToolFunction, ChatUsage};
 use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError};
-use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmResponse, LlmStreamDelta};
+use crate::llm::canonical::{
+    CanonicalToolChoice, LlmRequest, LlmResponse, LlmStreamDelta, ResponseFormat,
+};
 
 pub struct OpenAiChatAdapter;
 
 impl LlmWireAdapter for OpenAiChatAdapter {
-    fn build_http(&self, req: &LlmRequest, settings: &AdapterSettings) -> Result<HttpParts, String> {
+    fn build_http(
+        &self,
+        req: &LlmRequest,
+        settings: &AdapterSettings,
+    ) -> Result<HttpParts, String> {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if !settings.api_key.is_empty() {
             headers.insert(
                 AUTHORIZATION,
@@ -42,8 +45,13 @@ impl LlmWireAdapter for OpenAiChatAdapter {
             "model": settings.model_name,
             "messages": messages,
             "stream": req.stream,
-            "max_completion_tokens": req.params.max_tokens,
         });
+
+        if settings.supports_max_completion_tokens {
+            body["max_completion_tokens"] = json!(req.params.max_tokens);
+        } else {
+            body["max_tokens"] = json!(req.params.max_tokens);
+        }
 
         if req.stream {
             body["stream_options"] = json!({"include_usage": true});
@@ -84,6 +92,10 @@ impl LlmWireAdapter for OpenAiChatAdapter {
             }
         }
 
+        if let Some(ref format) = req.response_format {
+            body["response_format"] = response_format_to_openai(format);
+        }
+
         if let Some(extra) = &req.extra_body {
             if let Some(obj) = body.as_object_mut() {
                 for (k, v) in extra {
@@ -115,10 +127,11 @@ impl LlmWireAdapter for OpenAiChatAdapter {
 
         if let Some(error) = json.get("error") {
             return Err(StreamParseError::FatalError(
-                error.get("message")
+                error
+                    .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("unknown error")
-                    .to_string()
+                    .to_string(),
             ));
         }
 
@@ -129,33 +142,42 @@ impl LlmWireAdapter for OpenAiChatAdapter {
                 if let Some(delta) = choice.get("delta") {
                     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                         if !content.is_empty() {
-                            deltas.push(LlmStreamDelta::AppendContent { text: content.to_string() });
+                            deltas.push(LlmStreamDelta::AppendContent {
+                                text: content.to_string(),
+                            });
                         }
                     }
 
-                    if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
+                    if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str())
+                    {
                         if !reasoning.is_empty() {
-                            deltas.push(LlmStreamDelta::AppendReasoning { text: reasoning.to_string() });
+                            deltas.push(LlmStreamDelta::AppendReasoning {
+                                text: reasoning.to_string(),
+                            });
                         }
                     }
 
                     if let Some(tool_calls) = delta.get("tool_calls") {
                         if let Some(arr) = tool_calls.as_array() {
                             if !arr.is_empty() {
-                                deltas.push(LlmStreamDelta::SetToolCalls { tool_calls: arr.clone() });
+                                deltas.push(LlmStreamDelta::SetToolCalls {
+                                    tool_calls: arr.clone(),
+                                });
                             }
                         }
                     }
                 }
 
                 if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                    deltas.push(LlmStreamDelta::SetFinishReason { reason: reason.to_string() });
+                    deltas.push(LlmStreamDelta::SetFinishReason {
+                        reason: reason.to_string(),
+                    });
                 }
             }
         }
 
         if let Some(usage) = json.get("usage") {
-            if let Ok(u) = serde_json::from_value::<ChatUsage>(usage.clone()) {
+            if let Some(u) = parse_openai_usage(usage) {
                 deltas.push(LlmStreamDelta::SetUsage { usage: u });
             }
         }
@@ -165,43 +187,44 @@ impl LlmWireAdapter for OpenAiChatAdapter {
 
     fn parse_response(&self, json: Value) -> Result<LlmResponse, String> {
         if let Some(error) = json.get("error") {
-            return Err(error.get("message")
+            return Err(error
+                .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown error")
                 .to_string());
         }
 
-        let choices = json.get("choices")
+        let choices = json
+            .get("choices")
             .and_then(|c| c.as_array())
             .ok_or("missing choices in response")?;
 
         let choice = choices.first().ok_or("empty choices array")?;
         let message = choice.get("message").ok_or("missing message in choice")?;
 
-        let content = message.get("content")
+        let content = message
+            .get("content")
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string();
 
-        let reasoning_content = message.get("reasoning_content")
+        let reasoning_content = message
+            .get("reasoning_content")
             .and_then(|r| r.as_str())
             .map(|s| s.to_string());
 
-        let tool_calls = message.get("tool_calls")
+        let tool_calls = message
+            .get("tool_calls")
             .and_then(|tc| tc.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|tc| parse_tool_call(tc))
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|tc| parse_tool_call(tc)).collect())
             .unwrap_or_default();
 
-        let finish_reason = choice.get("finish_reason")
+        let finish_reason = choice
+            .get("finish_reason")
             .and_then(|r| r.as_str())
             .map(|s| s.to_string());
 
-        let usage = json.get("usage")
-            .and_then(|u| serde_json::from_value(u.clone()).ok());
+        let usage = json.get("usage").and_then(parse_openai_usage);
 
         Ok(LlmResponse {
             content,
@@ -256,7 +279,12 @@ fn convert_messages_to_openai(messages: &[crate::call_validation::ChatMessage]) 
                 crate::call_validation::ChatContent::ContextFiles(files) => {
                     let text = files
                         .iter()
-                        .map(|f| format!("{}:{}-{}\n```\n{}```", f.file_name, f.line1, f.line2, f.file_content))
+                        .map(|f| {
+                            format!(
+                                "{}:{}-{}\n```\n{}```",
+                                f.file_name, f.line1, f.line2, f.file_content
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n\n");
                     obj["content"] = json!(text);
@@ -301,15 +329,69 @@ fn tool_choice_to_openai(choice: &CanonicalToolChoice) -> Value {
     }
 }
 
+fn response_format_to_openai(format: &ResponseFormat) -> Value {
+    match format {
+        ResponseFormat::Text => json!({"type": "text"}),
+        ResponseFormat::JsonObject => json!({"type": "json_object"}),
+        ResponseFormat::JsonSchema {
+            name,
+            description,
+            schema,
+            strict,
+        } => {
+            let mut json_schema = json!({
+                "name": name,
+                "schema": schema,
+                "strict": strict,
+            });
+            if let Some(desc) = description {
+                json_schema["description"] = json!(desc);
+            }
+            json!({"type": "json_schema", "json_schema": json_schema})
+        }
+    }
+}
+
 fn parse_tool_call(tc: &Value) -> Option<ChatToolCall> {
     Some(ChatToolCall {
         id: tc.get("id")?.as_str()?.to_string(),
-        tool_type: tc.get("type").and_then(|t| t.as_str()).unwrap_or("function").to_string(),
+        tool_type: tc
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("function")
+            .to_string(),
         function: ChatToolFunction {
             name: tc.get("function")?.get("name")?.as_str()?.to_string(),
             arguments: tc.get("function")?.get("arguments")?.as_str()?.to_string(),
         },
         index: tc.get("index").and_then(|i| i.as_u64()).map(|i| i as usize),
+    })
+}
+
+fn parse_openai_usage(usage: &Value) -> Option<ChatUsage> {
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
+    let cache_read = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|t| t.as_u64())
+        .map(|v| v as usize);
+    Some(ChatUsage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_creation_tokens: None,
+        cache_read_tokens: cache_read,
     })
 }
 
@@ -326,6 +408,7 @@ mod tests {
             model_name: "gpt-4".to_string(),
             supports_tools: true,
             supports_reasoning: false,
+            supports_max_completion_tokens: false,
         }
     }
 
@@ -371,8 +454,7 @@ mod tests {
     fn test_build_http_tools_skipped_when_unsupported() {
         let adapter = OpenAiChatAdapter;
         let tools = vec![json!({"type": "function"})];
-        let req = LlmRequest::new("gpt-4".to_string(), vec![])
-            .with_tools(tools, None);
+        let req = LlmRequest::new("gpt-4".to_string(), vec![]).with_tools(tools, None);
         let mut settings = default_settings();
         settings.supports_tools = false;
 
@@ -470,5 +552,64 @@ mod tests {
         assert_eq!(converted.len(), 2);
         assert_eq!(converted[0]["role"], "user");
         assert_eq!(converted[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_build_http_with_response_format_json_schema() {
+        let adapter = OpenAiChatAdapter;
+        let mut req = LlmRequest::new("gpt-4".to_string(), vec![]);
+        req.response_format = Some(ResponseFormat::JsonSchema {
+            name: "person".to_string(),
+            description: Some("A person object".to_string()),
+            schema: json!({"type": "object", "properties": {"name": {"type": "string"}}}),
+            strict: true,
+        });
+        let settings = default_settings();
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        let rf = &http.body["response_format"];
+        assert_eq!(rf["type"], "json_schema");
+        assert_eq!(rf["json_schema"]["name"], "person");
+        assert_eq!(rf["json_schema"]["strict"], true);
+    }
+
+    #[test]
+    fn test_build_http_with_response_format_json_object() {
+        let adapter = OpenAiChatAdapter;
+        let mut req = LlmRequest::new("gpt-4".to_string(), vec![]);
+        req.response_format = Some(ResponseFormat::JsonObject);
+        let settings = default_settings();
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert_eq!(http.body["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn test_build_http_uses_max_tokens_by_default() {
+        let adapter = OpenAiChatAdapter;
+        let mut req = LlmRequest::new("gpt-4".to_string(), vec![]);
+        req.params.max_tokens = 500;
+        let settings = default_settings();
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert_eq!(http.body["max_tokens"], 500);
+        assert!(http.body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn test_build_http_uses_max_completion_tokens_when_supported() {
+        let adapter = OpenAiChatAdapter;
+        let mut req = LlmRequest::new("o1".to_string(), vec![]);
+        req.params.max_tokens = 500;
+        let mut settings = default_settings();
+        settings.supports_max_completion_tokens = true;
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert_eq!(http.body["max_completion_tokens"], 500);
+        assert!(http.body.get("max_tokens").is_none());
     }
 }

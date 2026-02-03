@@ -174,7 +174,11 @@ impl Default for ChatContent {
 pub struct ChatUsage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
-    pub total_tokens: usize, // TODO: remove (can produce self-contradictory data when prompt+completion != total)
+    pub total_tokens: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Clone, Default)]

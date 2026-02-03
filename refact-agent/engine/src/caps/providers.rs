@@ -46,6 +46,9 @@ pub struct CapsProvider {
     pub tokenizer_api_key: String,
 
     #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+
+    #[serde(default)]
     pub code_completion_n_ctx: usize,
 
     #[serde(default)]
@@ -264,12 +267,20 @@ const PROVIDER_TEMPLATES: &[(&str, &str)] = &[
         include_str!("../yaml_configs/default_providers/openai.yaml"),
     ),
     (
+        "openai_responses",
+        include_str!("../yaml_configs/default_providers/openai_responses.yaml"),
+    ),
+    (
         "openrouter",
         include_str!("../yaml_configs/default_providers/openrouter.yaml"),
     ),
     (
         "xai",
         include_str!("../yaml_configs/default_providers/xai.yaml"),
+    ),
+    (
+        "xai_responses",
+        include_str!("../yaml_configs/default_providers/xai_responses.yaml"),
     ),
 ];
 static PARSED_PROVIDERS: OnceLock<IndexMap<String, CapsProvider>> = OnceLock::new();
@@ -513,6 +524,7 @@ pub fn add_models_to_caps(caps: &mut CodeAssistantCaps, providers: Vec<CapsProvi
         base_model_rec.support_metadata = provider.support_metadata;
         base_model_rec.endpoint_style = provider.endpoint_style.clone();
         base_model_rec.wire_format = provider.wire_format;
+        base_model_rec.extra_headers = provider.extra_headers.clone();
     }
 
     for mut provider in providers {

@@ -1,5 +1,5 @@
-wire_format: openai_chat_completions
-chat_endpoint: "https://api.openai.com/v1/chat/completions"
+wire_format: openai_responses
+chat_endpoint: "https://api.openai.com/v1/responses"
 embedding_endpoint: "https://api.openai.com/v1/embeddings"
 supports_completion: false
 

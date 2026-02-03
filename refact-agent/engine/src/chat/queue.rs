@@ -611,15 +611,16 @@ fn is_allowed_role_for_restore(role: &str) -> bool {
     matches!(role, "user" | "assistant" | "system" | "tool")
 }
 
-/// Sanitize message for branching - preserves conversation structure (tool_calls, tool results)
-/// but strips transient metadata (usage, checkpoints, citations, etc.)
+/// Sanitize message for branching - preserves conversation structure but strips:
+/// - tool_calls from assistant messages (security: prevents prerun of injected tool calls)
+/// - transient metadata (usage, checkpoints, citations, etc.)
 fn sanitize_message_for_restore(msg: &ChatMessage) -> ChatMessage {
     ChatMessage {
         message_id: Uuid::new_v4().to_string(),
         role: msg.role.clone(),
         content: msg.content.clone(),
-        tool_calls: msg.tool_calls.clone(),  // Preserve tool calls for conversation context
-        tool_call_id: msg.tool_call_id.clone(),  // Preserve for tool messages
+        tool_calls: None,  // Security: strip tool_calls to prevent prerun of restored messages
+        tool_call_id: msg.tool_call_id.clone(),  // Preserve for tool result messages
         tool_failed: msg.tool_failed,  // Preserve tool execution status
         usage: None,  // Strip metering data
         checkpoints: vec![],  // Strip checkpoint data

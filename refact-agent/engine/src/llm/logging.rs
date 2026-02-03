@@ -97,6 +97,11 @@ fn truncate_content(content: &mut Value) {
                             }
                         }
                     }
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("input_image") {
+                        if let Some(image_url) = obj.get_mut("image_url") {
+                            *image_url = Value::String(REDACTED.to_string());
+                        }
+                    }
                     if let Some(text) = obj.get_mut("text") {
                         truncate_string(text);
                     }
@@ -207,5 +212,35 @@ mod tests {
         });
         let sanitized = sanitize_request_for_logging(&body);
         assert!(sanitized["messages"][0]["content"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_sanitize_request_redacts_responses_input_image() {
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:image/jpeg;base64,SECRETIMAGEDATA"}
+                ]
+            }]
+        });
+        let sanitized = sanitize_request_for_logging(&body);
+        let url = &sanitized["messages"][0]["content"][0]["image_url"];
+        assert_eq!(url, "[REDACTED]");
+    }
+
+    #[test]
+    fn test_sanitize_request_redacts_anthropic_images() {
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "SECRETBASE64DATA"}}
+                ]
+            }]
+        });
+        let sanitized = sanitize_request_for_logging(&body);
+        let data = &sanitized["messages"][0]["content"][0]["source"]["data"];
+        assert_eq!(data, "[REDACTED]");
     }
 }

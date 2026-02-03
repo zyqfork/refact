@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -55,6 +54,10 @@ pub async fn run_llm_stream<C: StreamCollector>(
     params: StreamRunParams,
     collector: &mut C,
 ) -> Result<Vec<ChoiceFinal>, String> {
+    if params.llm_request.params.n.unwrap_or(1) != 1 {
+        return Err("Streaming with n > 1 is not supported".to_string());
+    }
+
     let (client, slowdown_arc) = {
         let gcx_locked = gcx.read().await;
         (
@@ -72,10 +75,11 @@ pub async fn run_llm_stream<C: StreamCollector>(
     let adapter_settings = AdapterSettings {
         api_key: params.model_rec.api_key.clone(),
         endpoint: params.model_rec.endpoint.clone(),
-        extra_headers: HashMap::new(),
+        extra_headers: params.model_rec.extra_headers.clone(),
         model_name: params.model_rec.name.clone(),
         supports_tools: params.supports_tools,
         supports_reasoning: params.supports_reasoning,
+        supports_max_completion_tokens: params.model_rec.supports_max_completion_tokens,
     };
 
     // Build HTTP request using adapter
