@@ -4,12 +4,43 @@ use std::sync::atomic::Ordering;
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
+use tracing::error;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::memories::{memories_add_enriched, EnrichmentParams};
 use crate::http::routers::v1::sidebar::NotificationEvent;
+
+fn spawn_memory_enrichment_task(
+    ccx: Arc<AMutex<AtCommandsContext>>,
+    report: String,
+    summary: String,
+    files_changed: Vec<String>,
+    root_chat_id: String,
+) {
+    tokio::spawn(async move {
+        let enrichment_params = EnrichmentParams {
+            base_tags: vec!["task-report".to_string()],
+            base_filenames: files_changed,
+            base_kind: "task-report".to_string(),
+            base_title: Some(summary.clone()),
+            source_chat_id: (!root_chat_id.is_empty()).then_some(root_chat_id),
+        };
+
+        match memories_add_enriched(ccx, &report, enrichment_params).await {
+            Ok(knowledge_path) => {
+                tracing::info!(
+                    "task_done: knowledge saved to {}",
+                    knowledge_path.display()
+                );
+            }
+            Err(e) => {
+                error!("task_done: failed to save knowledge: {}", e);
+            }
+        }
+    });
+}
 
 pub struct ToolTaskDone {
     pub config_path: String,
@@ -105,16 +136,6 @@ impl Tool for ToolTaskDone {
             )
         };
 
-        let enrichment_params = EnrichmentParams {
-            base_tags: vec!["task-report".to_string()],
-            base_filenames: files_changed.clone(),
-            base_kind: "task-report".to_string(),
-            base_title: Some(summary.clone()),
-            source_chat_id: (!root_chat_id.is_empty()).then_some(root_chat_id),
-        };
-
-        let knowledge_path = memories_add_enriched(ccx.clone(), &report, enrichment_params).await?;
-
         abort_flag.store(true, Ordering::SeqCst);
 
         {
@@ -124,17 +145,24 @@ impl Tool for ToolTaskDone {
                     chat_id: chat_id.clone(),
                     tool_call_id: tool_call_id.clone(),
                     summary: summary.clone(),
-                    knowledge_path: Some(knowledge_path.display().to_string()),
+                    knowledge_path: None,
                 });
             }
         }
+
+        spawn_memory_enrichment_task(
+            ccx.clone(),
+            report.clone(),
+            summary.clone(),
+            files_changed.clone(),
+            root_chat_id.clone(),
+        );
 
         let result = serde_json::json!({
             "type": "task_done",
             "summary": summary,
             "report": report,
             "files_changed": files_changed,
-            "knowledge_path": knowledge_path.display().to_string(),
         });
 
         Ok((

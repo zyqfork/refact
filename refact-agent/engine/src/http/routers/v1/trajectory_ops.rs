@@ -11,6 +11,9 @@ use crate::chat::trajectory_ops::{
     CompressOptions, HandoffOptions, TransformStats, compress_in_place, handoff_select,
     sanitize_messages_for_new_thread,
 };
+use crate::agentic::mode_transition::{
+    analyze_mode_transition, assemble_new_chat,
+};
 use crate::chat::types::SessionState;
 use crate::chat::get_or_create_session_with_trajectory;
 use crate::chat::trajectories::TrajectorySnapshot;
@@ -50,6 +53,20 @@ pub struct HandoffPreviewResponse {
 pub struct HandoffApplyResponse {
     pub new_chat_id: String,
     pub stats: TransformStats,
+}
+
+#[derive(Deserialize)]
+pub struct ModeTransitionApplyRequest {
+    pub target_mode: String,
+    #[serde(default)]
+    pub target_mode_description: String,
+
+}
+
+#[derive(Serialize)]
+pub struct ModeTransitionApplyResponse {
+    pub new_chat_id: String,
+    pub messages_count: usize,
 }
 
 fn describe_transform_actions(opts: &CompressOptions) -> Vec<String> {
@@ -368,4 +385,97 @@ async fn save_trajectory_snapshot_with_parent(
     );
 
     Ok(())
+}
+
+pub async fn handle_mode_transition_apply(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(chat_id): Path<String>,
+    body_bytes: hyper::body::Bytes,
+) -> Result<Response<Body>, ScratchError> {
+    let req: ModeTransitionApplyRequest = serde_json::from_slice(&body_bytes)
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?;
+
+    let sessions = gcx.read().await.chat_sessions.clone();
+    let session_arc = get_or_create_session_with_trajectory(gcx.clone(), &sessions, &chat_id).await;
+
+    let (messages, thread, task_meta, session_state) = {
+        let session = session_arc.lock().await;
+        (
+            session.messages.clone(),
+            session.thread.clone(),
+            session.thread.task_meta.clone(),
+            session.runtime.state.clone(),
+        )
+    };
+
+    // Check session state - only allow when idle or error
+    if !matches!(session_state, SessionState::Idle | SessionState::Error | SessionState::Completed) {
+        return Err(ScratchError::new(
+            StatusCode::CONFLICT,
+            format!("Cannot transition chat in state '{}', must be idle, completed, or error", session_state),
+        ));
+    }
+
+    if messages.is_empty() {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            "Cannot transition an empty chat".to_string(),
+        ));
+    }
+
+    let decisions = analyze_mode_transition(
+        gcx.clone(),
+        &messages,
+        &req.target_mode,
+        &req.target_mode_description,
+    )
+    .await
+    .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let new_messages = assemble_new_chat(gcx.clone(), &messages, &decisions)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let new_messages = sanitize_messages_for_new_thread(&new_messages);
+    let new_chat_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let snapshot = TrajectorySnapshot {
+        chat_id: new_chat_id.clone(),
+        title: String::new(),
+        model: thread.model.clone(),
+        mode: req.target_mode.clone(),
+        tool_use: thread.tool_use.clone(),
+        messages: new_messages.clone(),
+        created_at: now,
+        boost_reasoning: thread.boost_reasoning,
+        checkpoints_enabled: thread.checkpoints_enabled,
+        context_tokens_cap: thread.context_tokens_cap,
+        include_project_info: thread.include_project_info,
+        is_title_generated: false,
+        auto_approve_editing_tools: thread.auto_approve_editing_tools,
+        auto_approve_dangerous_commands: thread.auto_approve_dangerous_commands,
+        version: 1,
+        task_meta,
+        parent_id: Some(chat_id.clone()),
+        link_type: Some("mode_transition".to_string()),
+        root_chat_id: thread.root_chat_id.clone().or_else(|| Some(chat_id.clone())),
+    };
+
+    save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "mode_transition")
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let response = ModeTransitionApplyResponse {
+        new_chat_id,
+        messages_count: new_messages.len(),
+    };
+
+    let body = serde_json::to_vec(&response)
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(body))
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }

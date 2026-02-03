@@ -1,13 +1,16 @@
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde_json::{json, Value};
 
-use crate::call_validation::{ChatToolCall, ChatToolFunction, ChatUsage};
-use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError};
-use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmResponse, LlmStreamDelta};
+use crate::call_validation::ChatUsage;
+use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError, extract_extra_fields, insert_extra_headers};
+use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmStreamDelta};
 use crate::llm::params::CacheControl;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_THINKING_BUDGET: usize = 10000;
+
+/// Fields that cannot be overridden via extra_body for security
+const PROTECTED_FIELDS: &[&str] = &["model", "messages", "stream", "system", "tools", "tool_choice"];
 
 pub struct AnthropicAdapter;
 
@@ -29,14 +32,7 @@ impl LlmWireAdapter for AnthropicAdapter {
             HeaderValue::from_static(ANTHROPIC_VERSION),
         );
 
-        for (key, value) in &settings.extra_headers {
-            if let (Ok(name), Ok(val)) = (
-                reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                HeaderValue::from_str(value),
-            ) {
-                headers.insert(name, val);
-            }
-        }
+        insert_extra_headers(&mut headers, &settings.extra_headers);
 
         let (system, messages) = convert_to_anthropic(&req.messages, req.cache_control);
 
@@ -73,12 +69,27 @@ impl LlmWireAdapter for AnthropicAdapter {
         if settings.supports_reasoning {
             if let Some(budget) = req.reasoning.to_anthropic_budget(DEFAULT_THINKING_BUDGET) {
                 body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                // Anthropic requires max_tokens > thinking.budget_tokens
+                let current_max = req.params.max_tokens;
+                if current_max <= budget {
+                    // Set max_tokens to budget + reasonable output buffer (at least 1024 tokens for response)
+                    let adjusted_max = budget + std::cmp::max(current_max, 1024);
+                    body["max_tokens"] = json!(adjusted_max);
+                    tracing::debug!(
+                        "Adjusted max_tokens from {} to {} (thinking budget: {})",
+                        current_max, adjusted_max, budget
+                    );
+                }
             }
         }
 
         if let Some(extra) = &req.extra_body {
             if let Some(obj) = body.as_object_mut() {
                 for (k, v) in extra {
+                    if PROTECTED_FIELDS.contains(&k.as_str()) {
+                        tracing::warn!("extra_body attempted to override protected field '{}', ignoring", k);
+                        continue;
+                    }
                     obj.insert(k.clone(), v.clone());
                 }
             }
@@ -131,6 +142,20 @@ impl LlmWireAdapter for AnthropicAdapter {
                                 });
                             }
                         }
+                        "signature_delta" => {
+                            // Anthropic signature for thinking block verification
+                            // Required for multi-turn tool calling conversations
+                            if let Some(signature) = delta.get("signature").and_then(|s| s.as_str()) {
+                                let block_index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                                deltas.push(LlmStreamDelta::SetThinkingBlocks {
+                                    blocks: vec![json!({
+                                        "index": block_index,
+                                        "type": "thinking",
+                                        "signature": signature
+                                    })],
+                                });
+                            }
+                        }
                         "input_json_delta" => {
                             if let Some(partial) =
                                 delta.get("partial_json").and_then(|p| p.as_str())
@@ -140,6 +165,20 @@ impl LlmWireAdapter for AnthropicAdapter {
                                     tool_calls: vec![
                                         json!({"index": index, "function": {"arguments": partial}}),
                                     ],
+                                });
+                            }
+                        }
+                        "citations_delta" => {
+                            // Anthropic citations streaming - citation is in delta.citation
+                            // Include content block index to preserve association
+                            if let Some(citation) = delta.get("citation") {
+                                let block_index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                                let mut enriched = citation.clone();
+                                if let Some(obj) = enriched.as_object_mut() {
+                                    obj.insert("_content_block_index".to_string(), json!(block_index));
+                                }
+                                deltas.push(LlmStreamDelta::AddCitation {
+                                    citation: enriched,
                                 });
                             }
                         }
@@ -166,81 +205,49 @@ impl LlmWireAdapter for AnthropicAdapter {
             }
             "content_block_start" => {
                 if let Some(cb) = json.get("content_block") {
-                    if cb.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                        let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
-                        deltas.push(LlmStreamDelta::SetToolCalls {
-                            tool_calls: vec![json!({
-                                "index": index,
-                                "id": cb.get("id"),
-                                "type": "function",
-                                "function": {"name": cb.get("name")}
-                            })],
-                        });
+                    let block_type = cb.get("type").and_then(|t| t.as_str());
+                    match block_type {
+                        Some("tool_use") => {
+                            if let (Some(id), Some(name)) = (
+                                cb.get("id").and_then(|v| v.as_str()),
+                                cb.get("name").and_then(|v| v.as_str()),
+                            ) {
+                                let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                                deltas.push(LlmStreamDelta::SetToolCalls {
+                                    tool_calls: vec![json!({
+                                        "index": index,
+                                        "id": id,
+                                        "type": "function",
+                                        "function": {"name": name}
+                                    })],
+                                });
+                            }
+                        }
+                        Some("thinking") => {
+                            // Anthropic thinking content is streamed incrementally via thinking_delta
+                            // which emits AppendReasoning. We don't emit SetThinkingBlocks here
+                            // because the content arrives via deltas, not as a complete block.
+                            // The thinking content accumulates in ChoiceFinal.reasoning.
+                        }
+                        _ => {}
                     }
                 }
             }
-            "content_block_stop" => {}
-            "message_start" | "ping" => {}
+            "content_block_stop" => {
+                // Note: Anthropic's content_block_stop only contains {"type":"content_block_stop","index":N}
+                // It does NOT include the content_block payload. Thinking content is already
+                // streamed via thinking_delta -> AppendReasoning, so no action needed here.
+            }
             _ => {}
         }
 
+        // Extract Refact-specific extra fields on ALL events consistently
+        let extra = extract_extra_fields(&json);
+        if !extra.is_empty() {
+            deltas.push(LlmStreamDelta::MergeExtra { extra });
+        }
+
         Ok(deltas)
-    }
-
-    fn parse_response(&self, json: Value) -> Result<LlmResponse, String> {
-        if let Some(err) = json.get("error") {
-            return Err(err
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("error")
-                .to_string());
-        }
-
-        let content_blocks = json.get("content").and_then(|c| c.as_array());
-        let mut content = String::new();
-        let mut reasoning = None;
-        let mut tool_calls = Vec::new();
-        let mut thinking_blocks = Vec::new();
-
-        if let Some(blocks) = content_blocks {
-            for block in blocks {
-                match block.get("type").and_then(|t| t.as_str()) {
-                    Some("text") => {
-                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                            content.push_str(text);
-                        }
-                    }
-                    Some("thinking") => {
-                        if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
-                            reasoning = Some(text.to_string());
-                        }
-                        thinking_blocks.push(block.clone());
-                    }
-                    Some("tool_use") => {
-                        if let Some(tc) = parse_anthropic_tool_use(block) {
-                            tool_calls.push(tc);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let finish_reason = json
-            .get("stop_reason")
-            .and_then(|r| r.as_str())
-            .map(|s| s.to_string());
-        let usage = json.get("usage").and_then(|u| parse_anthropic_usage(u));
-
-        Ok(LlmResponse {
-            content,
-            reasoning_content: reasoning,
-            tool_calls,
-            thinking_blocks,
-            finish_reason,
-            usage,
-            ..Default::default()
-        })
     }
 }
 
@@ -249,40 +256,75 @@ fn convert_to_anthropic(
     cache: CacheControl,
 ) -> (Option<Value>, Vec<Value>) {
     let mut system_text = None;
-    let mut result = Vec::new();
+    let mut result: Vec<Value> = Vec::new();
+    let mut system_count = 0;
+    let mut pending_tool_results: Vec<Value> = Vec::new();
 
     for msg in messages {
         match msg.role.as_str() {
-            "system" => system_text = Some(msg.content.content_text_only()),
+            "system" => {
+                system_count += 1;
+                if system_count > 1 {
+                    tracing::warn!(
+                        "Multiple system messages detected ({}), only the last one will be used",
+                        system_count
+                    );
+                }
+                system_text = Some(msg.content.content_text_only());
+            }
             "user" | "assistant" => {
+                flush_tool_results(&mut result, &mut pending_tool_results);
                 let content = msg_content_to_anthropic(&msg.content);
                 let mut obj = json!({"role": msg.role, "content": content});
                 if msg.role == "assistant" {
                     if let Some(tcs) = &msg.tool_calls {
-                        let blocks: Vec<Value> = tcs.iter().map(|tc| json!({
-                            "type": "tool_use", "id": tc.id,
-                            "name": tc.function.name,
-                            "input": serde_json::from_str::<Value>(&tc.function.arguments).unwrap_or(json!({}))
-                        })).collect();
-                        if let Some(arr) = obj["content"].as_array_mut() {
-                            arr.extend(blocks);
+                        let blocks: Vec<Value> = tcs.iter()
+                            .filter(|tc| !tc.id.starts_with("srvtoolu_"))  // Filter server-executed tools
+                            .map(|tc| {
+                                let input = match serde_json::from_str::<Value>(&tc.function.arguments) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Invalid JSON in tool call arguments for '{}': {} - using empty object",
+                                            tc.function.name, e
+                                        );
+                                        json!({})
+                                    }
+                                };
+                                json!({
+                                    "type": "tool_use",
+                                    "id": tc.id,
+                                    "name": tc.function.name,
+                                    "input": input
+                                })
+                            }).collect();
+                        if !blocks.is_empty() {
+                            if let Some(arr) = obj["content"].as_array_mut() {
+                                arr.extend(blocks);
+                            }
                         }
                     }
                 }
                 result.push(obj);
             }
-            "tool" => {
-                result.push(json!({
-                    "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": msg.content.content_text_only()}]
-                }));
+            "tool" | "diff" => {
+                if !msg.tool_call_id.starts_with("srvtoolu_") {  // Filter server-executed tool results
+                    pending_tool_results.push(json!({
+                        "type": "tool_result",
+                        "tool_use_id": msg.tool_call_id,
+                        "content": msg.content.content_text_only()
+                    }));
+                }
             }
             "plain_text" | "cd_instruction" => {
+                flush_tool_results(&mut result, &mut pending_tool_results);
                 result.push(json!({"role": "user", "content": [{"type": "text", "text": msg.content.content_text_only()}]}));
             }
             _ => {}
         }
     }
+
+    flush_tool_results(&mut result, &mut pending_tool_results);
 
     let system = system_text.map(|text| match cache {
         CacheControl::Ephemeral => json!([{
@@ -294,6 +336,16 @@ fn convert_to_anthropic(
     });
 
     (system, result)
+}
+
+fn flush_tool_results(result: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    result.push(json!({
+        "role": "user",
+        "content": pending.drain(..).collect::<Vec<_>>()
+    }));
 }
 
 fn msg_content_to_anthropic(content: &crate::call_validation::ChatContent) -> Vec<Value> {
@@ -360,18 +412,6 @@ fn parse_anthropic_usage(usage: &Value) -> Option<ChatUsage> {
     })
 }
 
-fn parse_anthropic_tool_use(block: &Value) -> Option<ChatToolCall> {
-    Some(ChatToolCall {
-        id: block.get("id")?.as_str()?.to_string(),
-        tool_type: "function".to_string(),
-        function: ChatToolFunction {
-            name: block.get("name")?.as_str()?.to_string(),
-            arguments: serde_json::to_string(block.get("input")?).ok()?,
-        },
-        index: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +426,7 @@ mod tests {
             supports_tools: true,
             supports_reasoning: true,
             supports_max_completion_tokens: false,
+            eof_is_done: false,
         }
     }
 
@@ -429,15 +470,6 @@ mod tests {
             r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}"#;
         let deltas = adapter.parse_stream_chunk(chunk).unwrap();
         assert!(matches!(&deltas[0], LlmStreamDelta::AppendContent { text } if text == "Hello"));
-    }
-
-    #[test]
-    fn test_parse_response_with_tool_use() {
-        let adapter = AnthropicAdapter;
-        let json = json!({"content": [{"type": "tool_use", "id": "tu_1", "name": "search", "input": {"q": "test"}}], "stop_reason": "tool_use"});
-        let resp = adapter.parse_response(json).unwrap();
-        assert_eq!(resp.tool_calls.len(), 1);
-        assert_eq!(resp.tool_calls[0].function.name, "search");
     }
 
     #[test]
@@ -494,5 +526,239 @@ mod tests {
 
         assert_eq!(deltas.len(), 1);
         assert!(matches!(&deltas[0], LlmStreamDelta::Done));
+    }
+
+    #[test]
+    fn test_parse_stream_thinking_delta() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think..."}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert_eq!(deltas.len(), 1);
+        match &deltas[0] {
+            LlmStreamDelta::AppendReasoning { text } => {
+                assert_eq!(text, "Let me think...");
+            }
+            _ => panic!("expected AppendReasoning"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_thinking_block_start() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        // Thinking blocks are NOT emitted on content_block_start - content arrives via thinking_delta
+        // which emits AppendReasoning. This is intentional to avoid empty placeholder blocks.
+        assert!(!deltas.iter().any(|d| matches!(d, LlmStreamDelta::SetThinkingBlocks { .. })));
+    }
+
+    #[test]
+    fn test_extra_body_protected_fields_ignored() {
+        let adapter = AnthropicAdapter;
+        let mut req = LlmRequest::new("claude".to_string(), vec![
+            ChatMessage::new("user".to_string(), "Hi".to_string()),
+        ]);
+        req.extra_body = Some(serde_json::Map::from_iter([
+            ("model".to_string(), json!("hacked-model")),
+            ("messages".to_string(), json!([{"role": "user", "content": "hacked"}])),
+            ("custom_field".to_string(), json!("allowed")),
+        ]));
+
+        let http = adapter.build_http(&req, &settings()).unwrap();
+
+        assert_eq!(http.body["model"], "claude-3-sonnet");
+        assert_ne!(http.body["messages"], json!([{"role": "user", "content": "hacked"}]));
+        assert_eq!(http.body["custom_field"], "allowed");
+    }
+
+    #[test]
+    fn test_multi_tool_results_grouped() {
+        use crate::call_validation::{ChatToolCall, ChatToolFunction};
+
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "Do two things".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("".to_string()),
+                tool_calls: Some(vec![
+                    ChatToolCall {
+                        id: "call_1".to_string(),
+                        tool_type: "function".to_string(),
+                        function: ChatToolFunction {
+                            name: "tool_a".to_string(),
+                            arguments: "{}".to_string(),
+                        },
+                        index: None,
+                    },
+                    ChatToolCall {
+                        id: "call_2".to_string(),
+                        tool_type: "function".to_string(),
+                        function: ChatToolFunction {
+                            name: "tool_b".to_string(),
+                            arguments: "{}".to_string(),
+                        },
+                        index: None,
+                    },
+                ]),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("Result A".to_string()),
+                tool_call_id: "call_1".to_string(),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("Result B".to_string()),
+                tool_call_id: "call_2".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let (_, msgs) = convert_to_anthropic(&messages, CacheControl::Off);
+
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(msgs[2]["role"], "user");
+
+        let tool_results = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(tool_results.len(), 2);
+        assert_eq!(tool_results[0]["type"], "tool_result");
+        assert_eq!(tool_results[0]["tool_use_id"], "call_1");
+        assert_eq!(tool_results[1]["type"], "tool_result");
+        assert_eq!(tool_results[1]["tool_use_id"], "call_2");
+    }
+
+    #[test]
+    fn test_diff_role_as_tool_result() {
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "Edit file".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("".to_string()),
+                tool_calls: Some(vec![crate::call_validation::ChatToolCall {
+                    id: "call_edit".to_string(),
+                    tool_type: "function".to_string(),
+                    function: crate::call_validation::ChatToolFunction {
+                        name: "file_edit".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                    index: None,
+                }]),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "diff".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("@@ -1 +1 @@".to_string()),
+                tool_call_id: "call_edit".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let (_, msgs) = convert_to_anthropic(&messages, CacheControl::Off);
+
+        assert_eq!(msgs.len(), 3);
+        let tool_result = &msgs[2]["content"][0];
+        assert_eq!(tool_result["type"], "tool_result");
+        assert_eq!(tool_result["tool_use_id"], "call_edit");
+    }
+
+    #[test]
+    fn test_stream_tool_use_missing_fields_skipped() {
+        let adapter = AnthropicAdapter;
+        let chunk_missing_id = r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","name":"get_weather"}}"#;
+        let chunk_missing_name = r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_123"}}"#;
+
+        let deltas1 = adapter.parse_stream_chunk(chunk_missing_id).unwrap();
+        let deltas2 = adapter.parse_stream_chunk(chunk_missing_name).unwrap();
+
+        let has_tool_calls1 = deltas1.iter().any(|d| matches!(d, LlmStreamDelta::SetToolCalls { .. }));
+        let has_tool_calls2 = deltas2.iter().any(|d| matches!(d, LlmStreamDelta::SetToolCalls { .. }));
+
+        assert!(!has_tool_calls1);
+        assert!(!has_tool_calls2);
+    }
+
+    #[test]
+    fn test_stream_citations_delta() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_delta","index":2,"delta":{"type":"citations_delta","citation":{"type":"char_location","cited_text":"Some text","document_index":0,"document_title":"doc.txt","start_char_index":0,"end_char_index":10}}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+        let has_citation = deltas.iter().any(|d| matches!(d, LlmStreamDelta::AddCitation { .. }));
+        assert!(has_citation);
+
+        // Verify citation content and block index preservation
+        if let Some(LlmStreamDelta::AddCitation { citation }) = deltas.iter().find(|d| matches!(d, LlmStreamDelta::AddCitation { .. })) {
+            assert_eq!(citation.get("type").and_then(|v| v.as_str()), Some("char_location"));
+            assert_eq!(citation.get("cited_text").and_then(|v| v.as_str()), Some("Some text"));
+            // Verify block index is preserved for multi-block association
+            assert_eq!(citation.get("_content_block_index").and_then(|v| v.as_u64()), Some(2));
+        }
+    }
+
+    #[test]
+    fn test_thinking_block_start_no_empty_blocks() {
+        let adapter = AnthropicAdapter;
+        let chunk = r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+        // Should NOT emit SetThinkingBlocks - thinking content comes via thinking_delta -> AppendReasoning
+        let has_thinking_blocks = deltas.iter().any(|d| matches!(d, LlmStreamDelta::SetThinkingBlocks { .. }));
+        assert!(!has_thinking_blocks);
+    }
+
+    #[test]
+    fn test_thinking_max_tokens_adjustment() {
+        use crate::llm::adapter::LlmWireAdapter;
+        use crate::llm::params::ReasoningIntent;
+
+        let adapter = AnthropicAdapter;
+
+        // Test with max_tokens < thinking budget (should be adjusted)
+        let mut req_low_max = LlmRequest::new(
+            "claude".to_string(),
+            vec![ChatMessage::new("user".to_string(), "test".to_string())],
+        );
+        req_low_max.params.max_tokens = 4096;  // Less than DEFAULT_THINKING_BUDGET (10000)
+        req_low_max.reasoning = ReasoningIntent::High;  // Will use DEFAULT_THINKING_BUDGET
+        req_low_max.stream = true;
+
+        let http = adapter.build_http(&req_low_max, &settings()).unwrap();
+        // Should be adjusted: 10000 + max(4096, 1024) = 14096
+        assert_eq!(http.body["max_tokens"], 14096);
+        assert_eq!(http.body["thinking"]["budget_tokens"], DEFAULT_THINKING_BUDGET);
+
+        // Test with max_tokens > thinking budget (should NOT be adjusted)
+        let mut req_high_max = LlmRequest::new(
+            "claude".to_string(),
+            vec![ChatMessage::new("user".to_string(), "test".to_string())],
+        );
+        req_high_max.params.max_tokens = 20000;  // More than DEFAULT_THINKING_BUDGET
+        req_high_max.reasoning = ReasoningIntent::High;
+        req_high_max.stream = true;
+
+        let http2 = adapter.build_http(&req_high_max, &settings()).unwrap();
+        // Should remain unchanged
+        assert_eq!(http2.body["max_tokens"], 20000);
+
+        // Test with reasoning off (no adjustment needed)
+        let mut req_no_thinking = LlmRequest::new(
+            "claude".to_string(),
+            vec![ChatMessage::new("user".to_string(), "test".to_string())],
+        );
+        req_no_thinking.params.max_tokens = 4096;
+        req_no_thinking.reasoning = ReasoningIntent::Off;
+        req_no_thinking.stream = true;
+
+        let http3 = adapter.build_http(&req_no_thinking, &settings()).unwrap();
+        assert_eq!(http3.body["max_tokens"], 4096);
+        assert!(http3.body.get("thinking").is_none());
     }
 }

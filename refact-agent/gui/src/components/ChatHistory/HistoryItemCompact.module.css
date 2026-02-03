@@ -44,6 +44,14 @@
   flex-shrink: 0;
 }
 
+.modeBadge {
+  flex-shrink: 0;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .titleSection {
   display: flex;
   align-items: center;
@@ -185,6 +193,12 @@
 
 @container (max-width: 550px) {
   .messagesCount {
+    display: none;
+  }
+}
+
+@container (max-width: 500px) {
+  .modeBadge {
     display: none;
   }
 }

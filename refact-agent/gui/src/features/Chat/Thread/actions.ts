@@ -120,6 +120,8 @@ export const createChatWithId = createAction<{
   mode?: string;
   taskMeta?: TaskMeta;
   model?: string;
+  parentId?: string;
+  linkType?: string;
 }>("chatThread/createWithId");
 
 export const newChatWithInitialMessages = createAsyncThunk(
@@ -359,6 +361,31 @@ export const setIncludeProjectInfo = createAction<PayloadWithChatAndBoolean>(
 export const setContextTokensCap = createAction<PayloadWithChatAndNumber>(
   "chatThread/setContextTokensCap",
 );
+
+export const setReasoningEffort = createAction<{
+  chatId: string;
+  value: "low" | "medium" | "high" | null;
+}>("chatThread/setReasoningEffort");
+
+export const setTemperature = createAction<{
+  chatId: string;
+  value: number | null;
+}>("chatThread/setTemperature");
+
+export const setFrequencyPenalty = createAction<{
+  chatId: string;
+  value: number | null;
+}>("chatThread/setFrequencyPenalty");
+
+export const setMaxTokens = createAction<{
+  chatId: string;
+  value: number | null;
+}>("chatThread/setMaxTokens");
+
+export const setParallelToolCalls = createAction<{
+  chatId: string;
+  value: boolean | null;
+}>("chatThread/setParallelToolCalls");
 
 export const restoreChatFromBackend = createAsyncThunk<
   undefined,

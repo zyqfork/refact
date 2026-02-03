@@ -42,6 +42,8 @@ export type IntegrationMeta = {
   shouldIntermediatePageShowUp?: boolean;
 };
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export type ChatThread = {
   id: string;
   messages: ChatMessages;
@@ -52,6 +54,16 @@ export type ChatThread = {
   tool_use?: ToolUse;
   isTitleGenerated?: boolean;
   boost_reasoning?: boolean;
+  /** Reasoning effort level: "low", "medium", or "high" */
+  reasoning_effort?: ReasoningEffort;
+  /** Temperature for sampling (0-2) */
+  temperature?: number;
+  /** Frequency penalty for sampling (-2 to 2) */
+  frequency_penalty?: number;
+  /** Maximum tokens for response */
+  max_tokens?: number;
+  /** Whether to allow parallel tool calls */
+  parallel_tool_calls?: boolean;
   integration?: IntegrationMeta | null;
   mode?: ChatModeId;
   project_name?: string;

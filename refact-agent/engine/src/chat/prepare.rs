@@ -10,6 +10,7 @@ use crate::call_validation::{ChatMessage, ChatMeta, ReasoningEffort, SamplingPar
 use crate::caps::{resolve_chat_model, ChatModelRecord};
 use crate::global_context::GlobalContext;
 use crate::llm::{LlmRequest, CanonicalToolChoice, CommonParams, ReasoningIntent};
+use crate::llm::params::CacheControl;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::scratchpads::scratchpad_utils::HasRagResults;
 use crate::tools::tools_description::ToolDesc;
@@ -33,6 +34,7 @@ pub struct ChatPrepareOptions {
     pub supports_tools: bool,
     pub tool_choice: Option<ToolChoice>,
     pub parallel_tool_calls: Option<bool>,
+    pub cache_control: CacheControl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +58,7 @@ impl Default for ChatPrepareOptions {
             supports_tools: true,
             tool_choice: None,
             parallel_tool_calls: None,
+            cache_control: CacheControl::Off,
         }
     }
 }
@@ -152,7 +155,7 @@ pub async fn prepare_chat_passthrough(
                         .collect();
                     let answered_call_ids: HashSet<String> = messages
                         .iter()
-                        .filter(|m| m.role == "tool")
+                        .filter(|m| m.role == "tool" || m.role == "diff")
                         .map(|m| m.tool_call_id.clone())
                         .collect();
                     let unanswered_calls: Vec<_> = tool_calls
@@ -214,6 +217,7 @@ pub async fn prepare_chat_passthrough(
     let common_params = CommonParams {
         max_tokens: sampling_parameters.max_new_tokens,
         temperature: sampling_parameters.temperature,
+        frequency_penalty: sampling_parameters.frequency_penalty,
         stop: sampling_parameters.stop.clone(),
         n: Some(1),
     };
@@ -227,19 +231,17 @@ pub async fn prepare_chat_passthrough(
         ToolChoice::Function { name } => CanonicalToolChoice::Function { name: name.clone() },
     });
 
-    let llm_request = LlmRequest {
-        model_id: model_id.to_string(),
-        messages: limited_adapted_msgs.clone(),
-        params: common_params,
-        reasoning,
-        tools: if openai_tools.is_empty() { None } else { Some(openai_tools) },
-        tool_choice,
-        parallel_tool_calls: options.parallel_tool_calls.unwrap_or(false),
-        stream: true,
-        response_format: None,
-        cache_control: Default::default(),
-        extra_body: None,
-    };
+    let mut llm_request = LlmRequest::new(model_id.to_string(), limited_adapted_msgs.clone())
+        .with_params(common_params)
+        .with_tools(openai_tools, tool_choice)
+        .with_reasoning(reasoning)
+        .with_parallel_tool_calls(options.parallel_tool_calls.unwrap_or(false))
+        .with_cache_control(options.cache_control);
+
+    // Add meta for Refact cloud when support_metadata is enabled
+    if model_record.base.support_metadata {
+        llm_request = llm_request.with_meta(meta.clone());
+    }
 
     Ok(PreparedChat {
         llm_request,
@@ -252,6 +254,13 @@ fn adapt_sampling_for_reasoning_models(
     sampling_parameters: &mut SamplingParameters,
     model_record: &ChatModelRecord,
 ) {
+    // Apply model's default max_tokens if user hasn't specified one (max_new_tokens == 0 means use default)
+    if sampling_parameters.max_new_tokens == 0 {
+        if let Some(default_max) = model_record.default_max_tokens {
+            sampling_parameters.max_new_tokens = default_max;
+        }
+    }
+
     let Some(ref supports_reasoning) = model_record.supports_reasoning else {
         sampling_parameters.reasoning_effort = None;
         sampling_parameters.thinking = None;
@@ -261,7 +270,10 @@ fn adapt_sampling_for_reasoning_models(
 
     match supports_reasoning.as_ref() {
         "openai" => {
-            if model_record.supports_boost_reasoning && sampling_parameters.boost_reasoning {
+            if sampling_parameters.reasoning_effort.is_none()
+                && model_record.supports_boost_reasoning
+                && sampling_parameters.boost_reasoning
+            {
                 sampling_parameters.reasoning_effort = Some(ReasoningEffort::Medium);
             }
             if sampling_parameters.max_new_tokens <= 8192 {
@@ -270,9 +282,11 @@ fn adapt_sampling_for_reasoning_models(
             // Clear incompatible reasoning fields
             sampling_parameters.thinking = None;
             sampling_parameters.enable_thinking = None;
-            // Only override temperature if model has a default
-            if let Some(temp) = model_record.default_temperature {
-                sampling_parameters.temperature = Some(temp);
+            // Only apply model default temperature if user hasn't specified one
+            if sampling_parameters.temperature.is_none() {
+                if let Some(temp) = model_record.default_temperature {
+                    sampling_parameters.temperature = Some(temp);
+                }
             }
         }
         "anthropic" => {
@@ -301,9 +315,28 @@ fn adapt_sampling_for_reasoning_models(
             // Clear incompatible reasoning fields
             sampling_parameters.reasoning_effort = None;
             sampling_parameters.thinking = None;
-            // Only override temperature if model has a default
-            if let Some(temp) = model_record.default_temperature {
-                sampling_parameters.temperature = Some(temp);
+            // Only apply model default temperature if user hasn't specified one
+            if sampling_parameters.temperature.is_none() {
+                if let Some(temp) = model_record.default_temperature {
+                    sampling_parameters.temperature = Some(temp);
+                }
+            }
+        }
+        "deepseek" => {
+            // DeepSeek reasoner models automatically include reasoning in responses
+            // No special request parameters needed, just ensure adequate tokens
+            if sampling_parameters.max_new_tokens <= 8192 {
+                sampling_parameters.max_new_tokens *= 2;
+            }
+            // Clear all reasoning fields - DeepSeek handles this automatically
+            sampling_parameters.reasoning_effort = None;
+            sampling_parameters.thinking = None;
+            sampling_parameters.enable_thinking = None;
+            // Only apply model default temperature if user hasn't specified one
+            if sampling_parameters.temperature.is_none() {
+                if let Some(temp) = model_record.default_temperature {
+                    sampling_parameters.temperature = Some(temp);
+                }
             }
         }
         _ => {
@@ -311,9 +344,11 @@ fn adapt_sampling_for_reasoning_models(
             sampling_parameters.reasoning_effort = None;
             sampling_parameters.thinking = None;
             sampling_parameters.enable_thinking = None;
-            // Only override temperature if model has a default
-            if let Some(temp) = model_record.default_temperature {
-                sampling_parameters.temperature = Some(temp);
+            // Only apply model default temperature if user hasn't specified one
+            if sampling_parameters.temperature.is_none() {
+                if let Some(temp) = model_record.default_temperature {
+                    sampling_parameters.temperature = Some(temp);
+                }
             }
         }
     };
@@ -324,7 +359,13 @@ fn sampling_params_to_reasoning_intent(
     model_record: &ChatModelRecord,
 ) -> ReasoningIntent {
     // If model doesn't support reasoning, return Off
-    if model_record.supports_reasoning.is_none() {
+    let Some(ref reasoning_type) = model_record.supports_reasoning else {
+        return ReasoningIntent::Off;
+    };
+
+    // DeepSeek handles reasoning automatically in responses - never send reasoning_effort
+    // This prevents accidentally sending OpenAI-style params that DeepSeek may reject
+    if reasoning_type == "deepseek" {
         return ReasoningIntent::Off;
     }
 
@@ -352,7 +393,8 @@ fn sampling_params_to_reasoning_intent(
         return ReasoningIntent::Medium;
     }
 
-    // Check boost_reasoning flag
+    // Check boost_reasoning flag (only for providers that support it via API params)
+    // DeepSeek is already handled above
     if sampling_parameters.boost_reasoning && model_record.supports_boost_reasoning {
         return ReasoningIntent::Medium;
     }
@@ -521,10 +563,32 @@ mod tests {
     fn test_adapt_sampling_openai_boost_reasoning() {
         let mut params = make_sampling_params();
         params.boost_reasoning = true;
+        params.temperature = None; // User didn't set temperature
         let model = make_model_record(Some("openai"));
         adapt_sampling_for_reasoning_models(&mut params, &model);
         assert_eq!(params.reasoning_effort, Some(ReasoningEffort::Medium));
-        assert_eq!(params.temperature, Some(0.7));
+        assert_eq!(params.temperature, Some(0.7)); // Model default applied
+    }
+
+    #[test]
+    fn test_adapt_sampling_openai_preserves_user_temperature() {
+        let mut params = make_sampling_params();
+        params.boost_reasoning = true;
+        params.temperature = Some(0.3); // User explicitly set temperature
+        let model = make_model_record(Some("openai"));
+        adapt_sampling_for_reasoning_models(&mut params, &model);
+        assert_eq!(params.reasoning_effort, Some(ReasoningEffort::Medium));
+        assert_eq!(params.temperature, Some(0.3)); // User value preserved
+    }
+
+    #[test]
+    fn test_adapt_sampling_openai_reasoning_effort_takes_precedence() {
+        let mut params = make_sampling_params();
+        params.boost_reasoning = true;
+        params.reasoning_effort = Some(ReasoningEffort::High); // User set reasoning_effort
+        let model = make_model_record(Some("openai"));
+        adapt_sampling_for_reasoning_models(&mut params, &model);
+        assert_eq!(params.reasoning_effort, Some(ReasoningEffort::High)); // User value preserved, not overwritten to Medium
     }
 
     #[test]
@@ -584,10 +648,22 @@ mod tests {
     fn test_adapt_sampling_qwen_enable_thinking() {
         let mut params = make_sampling_params();
         params.boost_reasoning = true;
+        params.temperature = None; // User didn't set temperature
         let model = make_model_record(Some("qwen"));
         adapt_sampling_for_reasoning_models(&mut params, &model);
         assert_eq!(params.enable_thinking, Some(true));
-        assert_eq!(params.temperature, Some(0.7));
+        assert_eq!(params.temperature, Some(0.7)); // Model default applied
+    }
+
+    #[test]
+    fn test_adapt_sampling_qwen_preserves_user_temperature() {
+        let mut params = make_sampling_params();
+        params.boost_reasoning = true;
+        params.temperature = Some(0.5); // User explicitly set temperature
+        let model = make_model_record(Some("qwen"));
+        adapt_sampling_for_reasoning_models(&mut params, &model);
+        assert_eq!(params.enable_thinking, Some(true));
+        assert_eq!(params.temperature, Some(0.5)); // User value preserved
     }
 
     #[test]
@@ -616,10 +692,55 @@ mod tests {
     fn test_adapt_sampling_unknown_provider() {
         let mut params = make_sampling_params();
         params.boost_reasoning = true;
+        params.temperature = None; // User didn't set temperature
         let model = make_model_record(Some("unknown_provider"));
         adapt_sampling_for_reasoning_models(&mut params, &model);
-        assert_eq!(params.temperature, Some(0.7));
+        assert_eq!(params.temperature, Some(0.7)); // Model default applied
         assert!(params.reasoning_effort.is_none());
+    }
+
+    #[test]
+    fn test_adapt_sampling_deepseek_doubles_tokens() {
+        let mut params = make_sampling_params();
+        params.max_new_tokens = 4096;
+        params.temperature = None;
+        let model = make_model_record(Some("deepseek"));
+        adapt_sampling_for_reasoning_models(&mut params, &model);
+        // DeepSeek doubles tokens like OpenAI
+        assert_eq!(params.max_new_tokens, 8192);
+        // All reasoning fields should be cleared - DeepSeek handles automatically
+        assert!(params.reasoning_effort.is_none());
+        assert!(params.thinking.is_none());
+        assert!(params.enable_thinking.is_none());
+        // Temperature should be set from model default
+        assert_eq!(params.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn test_adapt_sampling_deepseek_no_double_above_8192() {
+        let mut params = make_sampling_params();
+        params.max_new_tokens = 16384;
+        let model = make_model_record(Some("deepseek"));
+        adapt_sampling_for_reasoning_models(&mut params, &model);
+        // Should not double if already above 8192
+        assert_eq!(params.max_new_tokens, 16384);
+    }
+
+    #[test]
+    fn test_deepseek_reasoning_intent_always_off() {
+        // DeepSeek handles reasoning automatically - never send reasoning_effort to API
+        let model = make_model_record(Some("deepseek"));
+
+        // Even with boost_reasoning enabled, should return Off
+        let mut params = make_sampling_params();
+        params.boost_reasoning = true;
+        let intent = sampling_params_to_reasoning_intent(&params, &model);
+        assert_eq!(intent, ReasoningIntent::Off);
+
+        // Even with reasoning_effort set (shouldn't happen but defensive)
+        params.reasoning_effort = Some(ReasoningEffort::High);
+        let intent = sampling_params_to_reasoning_intent(&params, &model);
+        assert_eq!(intent, ReasoningIntent::Off);
     }
 
     #[test]

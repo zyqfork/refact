@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{
-    ChatContent, ChatMessage, ChatMeta, ChatMode, ChatUsage, SamplingParameters,
+    ChatContent, ChatMessage, ChatMeta, ChatUsage, SamplingParameters, is_agentic_mode_id,
 };
 use crate::global_context::GlobalContext;
 use crate::llm::LlmRequest;
@@ -23,18 +23,7 @@ use super::stream_core::{run_llm_stream, StreamRunParams, StreamCollector, norma
 use super::queue::inject_priority_messages_if_any;
 use super::config::tokens;
 
-pub fn parse_chat_mode(mode: &str) -> ChatMode {
-    match mode.to_uppercase().as_str() {
-        "AGENT" => ChatMode::AGENT,
-        "NO_TOOLS" => ChatMode::NO_TOOLS,
-        "EXPLORE" => ChatMode::EXPLORE,
-        "CONFIGURE" | "CONFIGURATOR" => ChatMode::CONFIGURE,
-        "PROJECT_SUMMARY" => ChatMode::PROJECT_SUMMARY,
-        "TASK_PLANNER" => ChatMode::TASK_PLANNER,
-        "TASK_AGENT" => ChatMode::TASK_AGENT,
-        _ => ChatMode::AGENT,
-    }
-}
+
 
 fn tail_needs_assistant(messages: &[ChatMessage]) -> bool {
     let mut saw_toolish = false;
@@ -178,7 +167,7 @@ pub async fn run_llm_generation(
     chat_id: String,
     abort_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let chat_mode = parse_chat_mode(&thread.mode);
+
 
     let tools: Vec<crate::tools::tools_description::ToolDesc> =
         crate::tools::tools_list::get_tools_for_mode(gcx.clone(), &thread.mode, Some(&thread.model))
@@ -208,7 +197,7 @@ pub async fn run_llm_generation(
 
     let meta = ChatMeta {
         chat_id: chat_id.clone(),
-        chat_mode,
+        chat_mode: thread.mode.clone(),
         chat_remote: false,
         current_config_file: String::new(),
         context_tokens_cap: thread.context_tokens_cap,
@@ -259,11 +248,14 @@ pub async fn run_llm_generation(
 
         if first_conv_idx_in_new > 0 {
             let mut session = session_arc.lock().await;
-            let first_conv_idx_in_session = session
+
+            let mut system_insert_idx = 0;
+            let mut context_insert_idx = session
                 .messages
                 .iter()
-                .position(|m| m.role == "user" || m.role == "assistant")
-                .unwrap_or(session.messages.len());
+                .position(|m| m.role == "system")
+                .map(|i| i + 1)
+                .unwrap_or(0);
 
             let mut inserted = 0;
             for msg in messages_with_preamble.iter().take(first_conv_idx_in_new) {
@@ -296,7 +288,16 @@ pub async fn run_llm_generation(
                 if msg_with_id.message_id.is_empty() {
                     msg_with_id.message_id = Uuid::new_v4().to_string();
                 }
-                let insert_idx = first_conv_idx_in_session + inserted;
+                let insert_idx = if msg.role == "system" {
+                    let idx = system_insert_idx;
+                    system_insert_idx += 1;
+                    context_insert_idx += 1;
+                    idx
+                } else {
+                    let idx = context_insert_idx;
+                    context_insert_idx += 1;
+                    idx
+                };
                 session.messages.insert(insert_idx, msg_with_id.clone());
                 session.emit(ChatEvent::MessageAdded {
                     message: msg_with_id,
@@ -313,7 +314,7 @@ pub async fn run_llm_generation(
     }
 
     let last_is_user = messages.last().map(|m| m.role == "user").unwrap_or(false);
-    if chat_mode == ChatMode::AGENT && last_is_user {
+    if is_agentic_mode_id(&thread.mode) && last_is_user {
         let msg_count_before = messages.len();
         enrich_messages_with_knowledge(gcx.clone(), &mut messages, Some(&chat_id)).await;
         if messages.len() > msg_count_before {
@@ -349,9 +350,18 @@ pub async fn run_llm_generation(
     }
 
     let mut parameters = SamplingParameters {
-        temperature: Some(0.0),
-        max_new_tokens: 4096.min(effective_n_ctx / 4),
+        temperature: thread.temperature,
+        frequency_penalty: thread.frequency_penalty,
+        max_new_tokens: thread.max_tokens.unwrap_or_else(|| 4096.min(effective_n_ctx / 4)),
         boost_reasoning: thread.boost_reasoning,
+        reasoning_effort: thread.reasoning_effort.as_ref().and_then(|s| {
+            match s.as_str() {
+                "low" => Some(crate::call_validation::ReasoningEffort::Low),
+                "medium" => Some(crate::call_validation::ReasoningEffort::Medium),
+                "high" => Some(crate::call_validation::ReasoningEffort::High),
+                _ => None,
+            }
+        }),
         ..Default::default()
     };
 
@@ -374,6 +384,7 @@ pub async fn run_llm_generation(
         allow_at_commands: true,
         allow_tool_prerun: true,
         supports_tools: model_rec.supports_tools,
+        parallel_tool_calls: thread.parallel_tool_calls,
         ..Default::default()
     };
 
@@ -428,15 +439,22 @@ async fn run_streaming_generation(
     info!("session generation: model={}, messages={}", llm_request.model_id, llm_request.messages.len());
 
     const TEMPERATURE_BUMP: f32 = 0.1;
-    const MAX_TEMPERATURE: f32 = 0.5;
-    let base_temp = llm_request.params.temperature.unwrap_or(0.0).min(MAX_TEMPERATURE);
-    let max_attempts = ((MAX_TEMPERATURE - base_temp) / TEMPERATURE_BUMP).floor() as usize + 1;
+    const MAX_RETRY_TEMPERATURE: f32 = 0.5;
+    let user_specified_temp = llm_request.params.temperature;
+    let can_retry_with_temp_bump = user_specified_temp.is_none();
+    let max_attempts = if can_retry_with_temp_bump {
+        (MAX_RETRY_TEMPERATURE / TEMPERATURE_BUMP).floor() as usize + 2
+    } else {
+        1
+    };
     let mut attempt = 0;
 
     let result = loop {
         attempt += 1;
-        let current_temp = base_temp + TEMPERATURE_BUMP * (attempt - 1) as f32;
-        llm_request.params.temperature = Some(current_temp);
+        if can_retry_with_temp_bump && attempt > 1 {
+            let retry_temp = TEMPERATURE_BUMP * (attempt - 2) as f32;
+            llm_request.params.temperature = Some(retry_temp.min(MAX_RETRY_TEMPERATURE));
+        }
 
         let params = StreamRunParams {
             llm_request: llm_request.clone(),
@@ -494,11 +512,16 @@ async fn run_streaming_generation(
         let result = results.into_iter().next().unwrap_or_default();
 
         if is_result_empty(&result) {
-            if attempt < max_attempts {
-                let next_temp = (base_temp + TEMPERATURE_BUMP * attempt as f32).min(MAX_TEMPERATURE);
+            if attempt < max_attempts && can_retry_with_temp_bump {
+                let current_temp_display = if attempt == 1 {
+                    "default".to_string()
+                } else {
+                    format!("{:.1}", TEMPERATURE_BUMP * (attempt - 2) as f32)
+                };
+                let next_temp = (TEMPERATURE_BUMP * (attempt - 1) as f32).min(MAX_RETRY_TEMPERATURE);
                 warn!(
-                    "Empty assistant response at T={:.1}, retrying with T={:.1} (attempt {}/{})",
-                    current_temp, next_temp, attempt, max_attempts
+                    "Empty assistant response at T={}, retrying with T={:.1} (attempt {}/{})",
+                    current_temp_display, next_temp, attempt, max_attempts
                 );
                 {
                     let mut session = session_arc.lock().await;
@@ -514,9 +537,10 @@ async fn run_streaming_generation(
                 }
                 continue;
             } else {
+                let effective_temp = llm_request.params.temperature.unwrap_or(0.0);
                 return Err(format!(
                     "Empty assistant response after {} attempts (T={:.1})",
-                    max_attempts, current_temp
+                    max_attempts, effective_temp
                 ));
             }
         }

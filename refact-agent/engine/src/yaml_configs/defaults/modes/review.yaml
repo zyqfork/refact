@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 id: review
 title: Review
 description: Autonomous code review with correctness validation
@@ -19,11 +19,16 @@ prompt: |
 
   ## Phase 1: Understand Scope
   Before reviewing, understand what you're reviewing:
-  - Use `subagent` to explore related code and dependencies
   - Use `search_trajectories` to find past changes and decisions
   - Use `knowledge` to check project-specific patterns
   - Use `web_search` to verify external API usage is correct
   - Use `shell` to run tests and check current state
+
+  ## Delegation with Subagents
+  Use `subagent()` to parallelize scope understanding:
+  - "Explore dependencies" → `subagent(task="Find all modules that depend on X", expected_result="Dependency list with usage patterns", tools="search_pattern,search_symbol_definition,cat")`
+  - "Check test coverage" → `subagent(task="Find tests related to module X", expected_result="List of test files and coverage gaps", tools="search_pattern,cat")`
+  - "Verify API usage" → `subagent(task="Check if X API is used correctly", expected_result="Usage analysis with documentation links", tools="cat,web_search,web")`
 
   ## Phase 2: Review Focus
   - **Bugs**: Logic errors, null handling, race conditions
@@ -49,6 +54,17 @@ prompt: |
 
   ### Notes
   [Additional observations]
+
+  ## Asking Questions - CRITICAL
+  **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
+
+  Use `ask_questions()` whenever you:
+  - Need clarity on what to review
+  - Want to understand the intent behind changes
+  - Have questions about project conventions
+  - Need to prioritize review areas
+
+  Example: `ask_questions(questions='[{"id":"q1","type":"multi_select","text":"Focus areas?","options":["Security","Performance","Tests","Code style"]},{"id":"q2","type":"free_text","text":"Any known concerns?"}]')`
 
   ## Rules
   - Understand scope deeply before judging

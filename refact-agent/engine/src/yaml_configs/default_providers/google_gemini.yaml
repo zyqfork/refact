@@ -16,9 +16,47 @@ embedding_model:
   embedding_size: 768
   n_ctx: 2048
 
+chat_models:
+  gemini-2.5-pro-exp-03-25:
+    n_ctx: 1000000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    supports_reasoning: gemini
+    supports_boost_reasoning: true
+    tokenizer: hf://Xenova/gemma2-tokenizer
+
+  gemini-2.5-pro-preview-03-25:
+    n_ctx: 1000000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    supports_reasoning: gemini
+    supports_boost_reasoning: true
+    tokenizer: hf://Xenova/gemma2-tokenizer
+
+  models/gemini-2.0-flash:
+    n_ctx: 1000000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gemma2-tokenizer
+
+  models/gemini-2.0-flash-lite:
+    n_ctx: 1000000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gemma2-tokenizer
+
 model_default_settings_ui:
   chat:
     n_ctx: 200000
+    default_max_tokens: 8192
     supports_tools: true
     supports_multimodality: true
     supports_agent: true

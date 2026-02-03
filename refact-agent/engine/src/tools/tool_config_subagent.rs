@@ -154,6 +154,7 @@ impl Tool for ToolConfigSubagent {
             max_steps,
             false,
             None,
+            "agent".to_string(),
             Some(tool_call_id.clone()),
             Some(parent_subchat_tx),
             Some(parent_abort_flag),

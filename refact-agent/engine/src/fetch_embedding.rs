@@ -4,7 +4,7 @@ use tokio::sync::Mutex as AMutex;
 use tracing::error;
 
 use crate::caps::EmbeddingModelRecord;
-use crate::forward_to_openai_endpoint::get_embedding_openai_style;
+use crate::llm::get_embedding_openai_style;
 
 pub async fn get_embedding(
     client: Arc<AMutex<reqwest::Client>>,

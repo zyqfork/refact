@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 id: ask
 title: Ask
 description: Quick Q&A with web research capability
@@ -26,12 +26,29 @@ prompt: |
   - Use `web` to fetch specific URLs
   - If the question requires codebase access, suggest switching to Explore or Agent mode
 
+  ## Delegation with Subagents
+  Use `subagent()` for complex research that needs multiple web searches:
+  - "Compare options" → `subagent(task="Research and compare X vs Y", expected_result="Comparison table with pros/cons", tools="web_search,web")`
+  - "Gather documentation" → `subagent(task="Find official docs for API X", expected_result="Summary with links", tools="web_search,web")`
+
+  ## Asking Questions - CRITICAL
+  **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
+
+  Use `ask_questions()` whenever you:
+  - Need clarification on the question
+  - Want to narrow down the scope
+  - Have follow-up questions
+  - Need user preferences
+
+  Example: `ask_questions(questions='[{"id":"q1","type":"free_text","text":"Can you be more specific about what you need?"}]')`
+
   %SYSTEM_INFO%
 
 tools:
   - web
   - web_search
   - deep_research
+  - subagent
   - ask_questions
 
 llm_defaults:

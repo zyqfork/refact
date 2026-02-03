@@ -251,6 +251,8 @@ impl SelfHostedCapsModelRecord {
             supports_reasoning: self.supports_reasoning.clone(),
             supports_boost_reasoning: self.supports_boost_reasoning,
             default_temperature: self.default_temperature,
+            default_frequency_penalty: None,
+            default_max_tokens: None,
         })
     }
 }

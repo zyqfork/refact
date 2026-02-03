@@ -91,7 +91,9 @@ export const SearchTool: React.FC<SearchToolProps> = ({
       ? maybeResult.content
       : null;
 
-  const matchCount = content ? countMatches(content) : null;
+  // Don't show match count on error - error messages also have content
+  const matchCount =
+    content && status !== "error" ? countMatches(content) : null;
 
   const summary = useMemo(() => {
     switch (toolType) {

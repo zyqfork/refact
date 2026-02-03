@@ -63,6 +63,7 @@ export type TabDisplayData = {
   id: string;
   title: string;
   session_state?: string;
+  mode?: string;
 };
 
 export const selectTabsDisplayData = createSelector(
@@ -82,6 +83,7 @@ export const selectTabsDisplayData = createSelector(
         id,
         title: runtime?.thread.title ?? historyItem?.title ?? "New Chat",
         session_state: liveSessionState ?? historyItem?.session_state,
+        mode: runtime?.thread.mode ?? historyItem?.mode,
       };
     }),
 );
@@ -143,6 +145,21 @@ export const selectIncludeProjectInfo = (state: RootState) =>
 
 export const selectContextTokensCap = (state: RootState) =>
   state.chat.threads[state.chat.current_thread_id]?.thread.context_tokens_cap;
+
+export const selectReasoningEffort = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread.reasoning_effort;
+
+export const selectTemperature = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread.temperature;
+
+export const selectFrequencyPenalty = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread.frequency_penalty;
+
+export const selectMaxTokens = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread.max_tokens;
+
+export const selectParallelToolCalls = (state: RootState) =>
+  state.chat.threads[state.chat.current_thread_id]?.thread.parallel_tool_calls;
 
 export const selectThreadNewChatSuggested = (state: RootState) =>
   state.chat.threads[state.chat.current_thread_id]?.thread.new_chat_suggested ??

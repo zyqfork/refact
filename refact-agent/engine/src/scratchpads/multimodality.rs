@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokenizers::Tokenizer;
 use crate::call_validation::{ChatContent, ChatMessage, ChatToolCall};
 use crate::scratchpads::scratchpad_utils::{
@@ -49,40 +49,6 @@ impl MultimodalElement {
 
     pub fn from_openai_text(openai_text: MultimodalElementTextOpenAI) -> Result<Self, String> {
         MultimodalElement::new("text".to_string(), openai_text.text)
-    }
-
-    pub fn to_orig(&self, style: &Option<String>) -> ChatMultimodalElement {
-        let style = style.clone().unwrap_or("openai".to_string());
-        match style.as_str() {
-            "openai" => {
-                if self.is_text() {
-                    self.to_openai_text()
-                } else if self.is_image() {
-                    self.to_openai_image()
-                } else {
-                    unreachable!()
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn to_openai_image(&self) -> ChatMultimodalElement {
-        let image_url = format!("data:{};base64,{}", self.m_type, self.m_content);
-        ChatMultimodalElement::MultimodalElementImageOpenAI(MultimodalElementImageOpenAI {
-            content_type: "image_url".to_string(),
-            image_url: MultimodalElementImageOpenAIImageURL {
-                url: image_url.clone(),
-                detail: "high".to_string(),
-            },
-        })
-    }
-
-    fn to_openai_text(&self) -> ChatMultimodalElement {
-        ChatMultimodalElement::MultimodalElementTextOpenAI(MultimodalElementTextOpenAI {
-            content_type: "text".to_string(),
-            text: self.m_content.clone(),
-        })
     }
 
     pub fn count_tokens(
@@ -165,14 +131,6 @@ impl ChatContentRaw {
                 internal_elements.map(ChatContent::Multimodal)
             }
             ChatContentRaw::ContextFiles(files) => Ok(ChatContent::ContextFiles(files.clone())),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        match self {
-            ChatContentRaw::SimpleText(text) => text.is_empty(),
-            ChatContentRaw::Multimodal(elements) => elements.is_empty(),
-            ChatContentRaw::ContextFiles(files) => files.is_empty(),
         }
     }
 }
@@ -260,23 +218,6 @@ impl ChatContent {
                     })
                     .sum();
                 Ok(total)
-            }
-        }
-    }
-
-    pub fn into_raw(&self, style: &Option<String>) -> ChatContentRaw {
-        match self {
-            ChatContent::SimpleText(text) => ChatContentRaw::SimpleText(text.clone()),
-            ChatContent::Multimodal(elements) => {
-                let orig_elements = elements
-                    .iter()
-                    .map(|el| el.to_orig(style))
-                    .collect::<Vec<_>>();
-                ChatContentRaw::Multimodal(orig_elements)
-            }
-            ChatContent::ContextFiles(files) => {
-                // Serialize context files as JSON array
-                ChatContentRaw::ContextFiles(files.clone())
             }
         }
     }
@@ -378,45 +319,6 @@ impl ChatMessage {
             content: ChatContent::SimpleText(content),
             ..Default::default()
         }
-    }
-
-    pub fn into_value(&self, style: &Option<String>, model_id: &str) -> Value {
-        let mut dict = serde_json::Map::new();
-        let chat_content_raw = self.content.into_raw(style);
-        dict.insert("role".to_string(), Value::String(self.role.clone()));
-        if model_supports_empty_strings(model_id) || !chat_content_raw.is_empty() {
-            dict.insert("content".to_string(), json!(chat_content_raw));
-        }
-        if !model_supports_empty_strings(model_id)
-            && chat_content_raw.is_empty()
-            && self.tool_calls.is_none()
-            && self.thinking_blocks.is_none()
-        {
-            dict.insert("content".to_string(), "_".into());
-        }
-        if let Some(tool_calls) = self.tool_calls.clone() {
-            dict.insert("tool_calls".to_string(), json!(tool_calls));
-        }
-        if !self.tool_call_id.is_empty() {
-            dict.insert(
-                "tool_call_id".to_string(),
-                Value::String(self.tool_call_id.clone()),
-            );
-        }
-        if let Some(thinking_blocks) = self.thinking_blocks.clone() {
-            dict.insert("thinking_blocks".to_string(), json!(thinking_blocks));
-        }
-        if let Some(reasoning_content) = self.reasoning_content.clone() {
-            dict.insert("reasoning_content".to_string(), json!(reasoning_content));
-        }
-        if !self.citations.is_empty() {
-            dict.insert("citations".to_string(), json!(self.citations));
-        }
-        for (key, val) in &self.extra {
-            dict.insert(key.clone(), val.clone());
-        }
-
-        Value::Object(dict)
     }
 }
 
@@ -535,7 +437,4 @@ impl<'de> Deserialize<'de> for ChatMessage {
     }
 }
 
-/// If API supports sending fields with empty strings
-fn model_supports_empty_strings(model_id: &str) -> bool {
-    !model_id.starts_with("google_gemini/")
-}
+

@@ -29,6 +29,11 @@ import {
   setIncreaseMaxTokens,
   setAreFollowUpsEnabled,
   setSystemPrompt,
+  setReasoningEffort,
+  setTemperature,
+  setFrequencyPenalty,
+  setMaxTokens,
+  setParallelToolCalls,
 } from "../features/Chat/Thread";
 import { saveLastThreadParams } from "../utils/threadStorage";
 import { statisticsApi } from "../services/refact/statistics";
@@ -701,6 +706,126 @@ startListening({
       });
     } catch {
       // Silently ignore - backend may not support this command
+    }
+  },
+});
+
+startListening({
+  actionCreator: setReasoningEffort,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+
+    if (!port || !chatId) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { reasoning_effort: action.payload.value },
+      });
+    } catch {
+      // Silently ignore
+    }
+  },
+});
+
+startListening({
+  actionCreator: setTemperature,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+
+    if (!port || !chatId) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { temperature: action.payload.value },
+      });
+    } catch {
+      // Silently ignore
+    }
+  },
+});
+
+startListening({
+  actionCreator: setFrequencyPenalty,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+
+    if (!port || !chatId) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { frequency_penalty: action.payload.value },
+      });
+    } catch {
+      // Silently ignore
+    }
+  },
+});
+
+startListening({
+  actionCreator: setMaxTokens,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+
+    if (!port || !chatId) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { max_tokens: action.payload.value },
+      });
+    } catch {
+      // Silently ignore
+    }
+  },
+});
+
+startListening({
+  actionCreator: setParallelToolCalls,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+
+    if (!port || !chatId) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { parallel_tool_calls: action.payload.value },
+      });
+    } catch {
+      // Silently ignore
     }
   },
 });

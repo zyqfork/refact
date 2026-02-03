@@ -10,7 +10,7 @@ use crate::tools::tools_description::ToolDesc;
 use crate::tools::tools_list::get_available_tools;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{
-    ChatContent, ChatMeta, ChatMode, ChatToolCall, SamplingParameters, ChatMessage, ChatUsage,
+    ChatContent, ChatMeta, ChatToolCall, SamplingParameters, ChatMessage, ChatUsage,
     ReasoningEffort, ChatModelType, SubchatParameters, ContextFile,
 };
 use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
@@ -109,6 +109,7 @@ pub struct SubchatConfig {
     pub prepend_system_prompt: bool,
     pub wrap_up: Option<WrapUpConfig>,
     pub model: String,
+    pub mode: String,
     pub n_ctx: usize,
     pub max_new_tokens: usize,
     pub temperature: Option<f32>,
@@ -116,7 +117,6 @@ pub struct SubchatConfig {
     pub parent_tool_call_id: Option<String>,
     pub parent_subchat_tx: Option<Arc<AMutex<mpsc::UnboundedSender<Value>>>>,
     pub abort_flag: Option<Arc<AtomicBool>>,
-    pub subchat_depth: usize,
 }
 
 pub struct SubchatResult {
@@ -236,6 +236,7 @@ pub async fn resolve_subchat_config(
     max_steps: usize,
     prepend_system_prompt: bool,
     wrap_up: Option<WrapUpConfig>,
+    mode: String,
 ) -> Result<SubchatConfig, String> {
     resolve_subchat_config_with_parent(
         gcx,
@@ -250,6 +251,7 @@ pub async fn resolve_subchat_config(
         max_steps,
         prepend_system_prompt,
         wrap_up,
+        mode,
         None,
         None,
         None,
@@ -271,6 +273,7 @@ pub async fn resolve_subchat_config_with_parent(
     max_steps: usize,
     prepend_system_prompt: bool,
     wrap_up: Option<WrapUpConfig>,
+    mode: String,
     parent_tool_call_id: Option<String>,
     parent_subchat_tx: Option<Arc<AMutex<mpsc::UnboundedSender<Value>>>>,
     abort_flag: Option<Arc<AtomicBool>>,
@@ -312,6 +315,7 @@ pub async fn resolve_subchat_config_with_parent(
         prepend_system_prompt,
         wrap_up,
         model,
+        mode,
         n_ctx: params.subchat_n_ctx,
         max_new_tokens: params.subchat_max_new_tokens,
         temperature: params.subchat_temperature,
@@ -319,7 +323,6 @@ pub async fn resolve_subchat_config_with_parent(
         parent_tool_call_id,
         parent_subchat_tx,
         abort_flag,
-        subchat_depth,
     })
 }
 
@@ -406,7 +409,7 @@ pub async fn run_subchat(
                 .clone()
                 .unwrap_or_else(|| "Subchat".to_string()),
             model: config.model.clone(),
-            mode: "AGENT".to_string(),
+            mode: config.mode.clone(),
             tool_use: tool_use_str,
             parent_id: config.parent_id.clone(),
             link_type: config.link_type.clone(),
@@ -444,6 +447,7 @@ pub async fn run_subchat_once(
         1,
         false,
         None,
+        "agent".to_string(),
     )
     .await?;
 
@@ -468,6 +472,7 @@ pub async fn run_subchat_once(
     let results = subchat_single_internal(
         ccx,
         &config.model,
+        &config.mode,
         messages,
         Some(vec![]),
         false,
@@ -514,6 +519,7 @@ async fn run_subchat_loop(
         let results = subchat_single_internal(
             ccx.clone(),
             &config.model,
+            &config.mode,
             messages.clone(),
             tools_policy.to_subset_for_llm(),
             false,
@@ -534,6 +540,7 @@ async fn run_subchat_loop(
         messages = execute_pending_tool_calls(
             ccx.clone(),
             &config.model,
+            &config.mode,
             messages,
             tools_policy,
             step,
@@ -593,6 +600,7 @@ async fn run_subchat_with_wrap_up(
         let results = subchat_single_internal(
             ccx.clone(),
             &config.model,
+            &config.mode,
             messages.clone(),
             tools_policy.to_subset_for_llm(),
             false,
@@ -609,6 +617,7 @@ async fn run_subchat_with_wrap_up(
         messages = execute_pending_tool_calls(
             ccx.clone(),
             &config.model,
+            &config.mode,
             messages,
             tools_policy,
             step_n,
@@ -631,6 +640,7 @@ async fn run_subchat_with_wrap_up(
     messages = execute_pending_tool_calls(
         ccx.clone(),
         &config.model,
+        &config.mode,
         messages,
         tools_policy,
         step_n,
@@ -644,6 +654,7 @@ async fn run_subchat_with_wrap_up(
     let final_results = subchat_single_internal(
         ccx.clone(),
         &config.model,
+        &config.mode,
         messages,
         Some(vec![]),
         false,
@@ -674,6 +685,7 @@ fn truncate_args(s: &str, max: usize) -> String {
 async fn execute_pending_tool_calls(
     ccx: Arc<AMutex<AtCommandsContext>>,
     model_id: &str,
+    mode_id: &str,
     mut messages: Vec<ChatMessage>,
     tools_policy: &ToolsPolicy,
     step_idx: usize,
@@ -717,6 +729,7 @@ async fn execute_pending_tool_calls(
     let thread = ThreadParams {
         id: format!("subchat-{}", Uuid::new_v4()),
         model: model_id.to_string(),
+        mode: mode_id.to_string(),
         context_tokens_cap: Some(n_ctx),
         ..Default::default()
     };
@@ -747,7 +760,7 @@ async fn execute_pending_tool_calls(
         &allowed,
         &messages,
         &thread,
-        "agent",
+        &thread.mode,
         Some(&thread.model),
         ExecuteToolsOptions::default(),
     )
@@ -792,6 +805,7 @@ async fn execute_pending_tool_calls(
 async fn subchat_stream(
     ccx: Arc<AMutex<AtCommandsContext>>,
     model_id: &str,
+    mode_id: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<ToolDesc>,
     prepend_system_prompt: bool,
@@ -825,7 +839,7 @@ async fn subchat_stream(
 
     let meta = ChatMeta {
         chat_id: Uuid::new_v4().to_string(),
-        chat_mode: ChatMode::AGENT,
+        chat_mode: mode_id.to_string(),
         chat_remote: false,
         current_config_file: String::new(),
         context_tokens_cap: Some(capped_n_ctx),
@@ -859,7 +873,7 @@ async fn subchat_stream(
         &t,
         messages.clone(),
         model_id,
-        "agent",
+        mode_id,
         tools,
         &meta,
         &mut parameters,
@@ -977,6 +991,7 @@ fn aggregate_metering_from_messages(
 async fn subchat_single_internal(
     ccx: Arc<AMutex<AtCommandsContext>>,
     model_id: &str,
+    mode_id: &str,
     messages: Vec<ChatMessage>,
     tools_subset: Option<Vec<String>>,
     only_deterministic_messages: bool,
@@ -1015,6 +1030,7 @@ async fn subchat_single_internal(
     subchat_stream(
         ccx.clone(),
         model_id,
+        mode_id,
         messages,
         tools,
         prepend_system_prompt,

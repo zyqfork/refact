@@ -5,7 +5,7 @@ use hyper::Body;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock as ARwLock;
 
-use crate::call_validation::{ChatMessage, ChatMeta, ChatMode};
+use crate::call_validation::{ChatMessage, ChatMeta, validate_mode_for_request};
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 use crate::indexing_utils::wait_for_indexing_if_needed;
@@ -13,17 +13,7 @@ use crate::scratchpads::chat_utils_prompts::prepend_the_right_system_prompt_and_
 use crate::scratchpads::scratchpad_utils::HasRagResults;
 use crate::tools::tools_list::get_tools_for_mode;
 
-fn chat_mode_to_mode_id(mode: &ChatMode) -> &'static str {
-    match mode {
-        ChatMode::NO_TOOLS => "explore",
-        ChatMode::EXPLORE => "explore",
-        ChatMode::AGENT => "agent",
-        ChatMode::CONFIGURE => "configurator",
-        ChatMode::PROJECT_SUMMARY => "project_summary",
-        ChatMode::TASK_PLANNER => "task_planner",
-        ChatMode::TASK_AGENT => "task_agent",
-    }
-}
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PrependSystemPromptPost {
@@ -51,19 +41,25 @@ pub async fn handle_v1_prepend_system_prompt_and_maybe_more_initial_messages(
     })?;
     let mut has_rag_results = HasRagResults::new();
 
-    let mode_id = chat_mode_to_mode_id(&post.chat_meta.chat_mode);
+    let mode_id = validate_mode_for_request(gcx.clone(), &post.chat_meta.chat_mode).await.map_err(|e| {
+        ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("Invalid chat mode: {}", e),
+        )
+    })?;
+    
     let messages = prepend_the_right_system_prompt_and_maybe_more_initial_messages(
         gcx.clone(),
         post.messages,
         &post.chat_meta,
         &None,
         &mut has_rag_results,
-        get_tools_for_mode(gcx.clone(), mode_id, None)
+        get_tools_for_mode(gcx.clone(), &mode_id, None)
             .await
             .into_iter()
             .map(|t| t.tool_description().name)
             .collect(),
-        mode_id,
+        &mode_id,
         "",
     )
     .await;

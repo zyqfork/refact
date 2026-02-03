@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::call_validation::{ChatMessage, ChatToolCall, ChatUsage};
+use crate::call_validation::{ChatMessage, ChatMeta, ChatUsage};
 use crate::llm::params::{CacheControl, CommonParams, ReasoningIntent};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub struct LlmRequest {
     pub cache_control: CacheControl,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<serde_json::Map<String, Value>>,
+    /// Metadata for Refact cloud (chat_id, mode, etc.) - sent when support_metadata is true
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ChatMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +59,7 @@ impl LlmRequest {
             response_format: None,
             cache_control: CacheControl::Off,
             extra_body: None,
+            meta: None,
         }
     }
 
@@ -76,6 +80,21 @@ impl LlmRequest {
         self.reasoning = reasoning;
         self
     }
+
+    pub fn with_parallel_tool_calls(mut self, parallel: bool) -> Self {
+        self.parallel_tool_calls = parallel;
+        self
+    }
+
+    pub fn with_meta(mut self, meta: ChatMeta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+
+    pub fn with_cache_control(mut self, cache_control: CacheControl) -> Self {
+        self.cache_control = cache_control;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,36 +109,6 @@ pub enum CanonicalToolChoice {
 impl Default for CanonicalToolChoice {
     fn default() -> Self {
         Self::Auto
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct LlmResponse {
-    pub content: String,
-    pub reasoning_content: Option<String>,
-    pub tool_calls: Vec<ChatToolCall>,
-    pub thinking_blocks: Vec<Value>,
-    pub citations: Vec<Value>,
-    pub finish_reason: Option<String>,
-    pub usage: Option<ChatUsage>,
-    pub extra: serde_json::Map<String, Value>,
-}
-
-impl LlmResponse {
-    pub fn into_message(self, role: &str) -> ChatMessage {
-        let mut msg = ChatMessage::new(role.to_string(), self.content);
-        msg.reasoning_content = self.reasoning_content;
-        if !self.tool_calls.is_empty() {
-            msg.tool_calls = Some(self.tool_calls);
-        }
-        if !self.thinking_blocks.is_empty() {
-            msg.thinking_blocks = Some(self.thinking_blocks);
-        }
-        msg.citations = self.citations;
-        msg.finish_reason = self.finish_reason;
-        msg.usage = self.usage;
-        msg.extra = self.extra;
-        msg
     }
 }
 
@@ -171,15 +160,23 @@ mod tests {
     }
 
     #[test]
-    fn test_llm_response_into_message() {
-        let resp = LlmResponse {
-            content: "Hello".to_string(),
-            finish_reason: Some("stop".to_string()),
-            ..Default::default()
-        };
-        let msg = resp.into_message("assistant");
-        assert_eq!(msg.role, "assistant");
-        assert_eq!(msg.content.content_text_only(), "Hello");
-        assert_eq!(msg.finish_reason, Some("stop".to_string()));
+    fn test_stream_delta_variants() {
+        use serde_json::json;
+
+        let deltas = vec![
+            LlmStreamDelta::AppendContent { text: "hello".to_string() },
+            LlmStreamDelta::AppendReasoning { text: "thinking".to_string() },
+            LlmStreamDelta::SetToolCalls { tool_calls: vec![json!({"id": "1"})] },
+            LlmStreamDelta::SetThinkingBlocks { blocks: vec![json!({"type": "thinking", "text": "..."})] },
+            LlmStreamDelta::AddCitation { citation: json!({"url": "https://example.com", "title": "Example"}) },
+            LlmStreamDelta::SetUsage { usage: ChatUsage::default() },
+            LlmStreamDelta::SetFinishReason { reason: "stop".to_string() },
+            LlmStreamDelta::MergeExtra { extra: serde_json::Map::new() },
+            LlmStreamDelta::Done,
+        ];
+
+        assert_eq!(deltas.len(), 9);
+        assert!(matches!(&deltas[3], LlmStreamDelta::SetThinkingBlocks { blocks } if blocks.len() == 1));
+        assert!(matches!(&deltas[4], LlmStreamDelta::AddCitation { citation } if citation.get("url").is_some()));
     }
 }

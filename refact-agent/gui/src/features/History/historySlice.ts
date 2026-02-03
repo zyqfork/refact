@@ -126,7 +126,7 @@ export function buildHistoryTree(
   for (const node of ordered) {
     const pid = node.parent_id;
     if (!pid || !byId.has(pid)) continue;
-    if (node.link_type === "handoff") {
+    if (node.link_type === "handoff" || node.link_type === "mode_transition") {
       attach(node.id, pid);
     } else {
       attach(pid, node.id);
@@ -368,13 +368,18 @@ export const historySlice = createSlice({
         title?: string;
         model?: string;
         session_state?: ChatHistoryItem["session_state"];
+        parent_id?: string;
+        link_type?: string;
       }>,
     ) => {
-      const { id, title, model, session_state } = action.payload;
+      const { id, title, model, session_state, parent_id, link_type } =
+        action.payload;
       if (id in state.chats) {
         if (title) state.chats[id].title = title;
         if (model) state.chats[id].model = model;
         if (session_state) state.chats[id].session_state = session_state;
+        if (parent_id) state.chats[id].parent_id = parent_id;
+        if (link_type) state.chats[id].link_type = link_type;
         return;
       }
       const now = new Date().toISOString();
@@ -396,6 +401,8 @@ export const historySlice = createSlice({
         updatedAt: now,
         session_state: session_state ?? "idle",
         message_count: 0,
+        parent_id,
+        link_type,
       };
     },
 
@@ -630,12 +637,15 @@ startHistoryListening({
 startHistoryListening({
   actionCreator: createChatWithId,
   effect: (action, listenerApi) => {
-    if (action.payload.isTaskChat ?? action.payload.taskMeta?.task_id) return;
+    if (action.payload.isTaskChat === true || action.payload.taskMeta?.task_id)
+      return;
     listenerApi.dispatch(
       upsertChatStub({
         id: action.payload.id,
         title: action.payload.title,
         model: action.payload.model,
+        parent_id: action.payload.parentId,
+        link_type: action.payload.linkType,
       }),
     );
   },

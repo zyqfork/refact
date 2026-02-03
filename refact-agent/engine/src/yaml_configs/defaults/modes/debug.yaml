@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 id: debug
 title: Debug
 description: Systematic bug diagnosis and root cause analysis
@@ -50,10 +50,26 @@ prompt: |
   **Evidence**: [what confirms this]
   **Fix Approach**: [how to resolve]
 
+  ## Delegation with Subagents
+  Use `subagent()` to parallelize investigation:
+  - "Trace call path" → `subagent(task="Trace the call path from A to B", expected_result="Call chain with file:line locations", tools="search_symbol_definition,cat")`
+  - "Find similar bugs" → `subagent(task="Search for similar error handling patterns", expected_result="List of related code patterns", tools="search_pattern,cat,search_trajectories")`
+  - "Check dependencies" → `subagent(task="Analyze dependencies of module X", expected_result="Dependency graph and potential issues", tools="tree,cat,search_pattern")`
+
+  ## Asking Questions - CRITICAL
+  **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
+
+  Use `ask_questions()` whenever you:
+  - Need more details about the symptoms
+  - Want to confirm reproduction steps
+  - Have multiple hypotheses to prioritize
+  - Need environment/configuration details
+
+  Example: `ask_questions(questions='[{"id":"q1","type":"free_text","text":"What error message do you see?"},{"id":"q2","type":"single_select","text":"When does this happen?","options":["Always","Sometimes","Only in specific conditions"]}]')`
+
   ## Rules
   - Do NOT modify files (diagnosis only)
   - Use `shell` to run tests, check logs, reproduce issues
-  - Use `ask_questions` if symptoms are unclear
   - To apply fixes, suggest switching to Agent mode
 
   %SYSTEM_INFO%

@@ -8,9 +8,27 @@ running_models:
   - deepseek-chat
   - deepseek-reasoner
 
+chat_models:
+  deepseek-chat:
+    n_ctx: 64000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_agent: true
+    tokenizer: hf://deepseek-ai/DeepSeek-V3
+
+  deepseek-reasoner:
+    n_ctx: 64000
+    default_max_tokens: 16384
+    supports_tools: true
+    supports_agent: true
+    supports_reasoning: deepseek
+    default_temperature: 0.6
+    tokenizer: hf://deepseek-ai/DeepSeek-V3
+
 model_default_settings_ui:
   chat:
     n_ctx: 64000
+    default_max_tokens: 8192
     supports_tools: true
     supports_agent: true
-    tokenizer: hf://deepseek-ai/DeepSeek-...
+    tokenizer: hf://deepseek-ai/DeepSeek-V3

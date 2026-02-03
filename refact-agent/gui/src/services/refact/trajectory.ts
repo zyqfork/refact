@@ -5,6 +5,7 @@ import {
   TRAJECTORY_TRANSFORM_APPLY_URL,
   TRAJECTORY_HANDOFF_PREVIEW_URL,
   TRAJECTORY_HANDOFF_APPLY_URL,
+  TRAJECTORY_MODE_TRANSITION_APPLY_URL,
 } from "./consts";
 
 export type TransformOptions = {
@@ -51,6 +52,11 @@ export type HandoffPreviewResponse = {
 export type HandoffApplyResponse = {
   new_chat_id: string;
   stats: TransformStats;
+};
+
+export type ModeTransitionApplyResponse = {
+  new_chat_id: string;
+  messages_count: number;
 };
 
 function buildUrl(template: string, chatId: string, port: number): string {
@@ -143,6 +149,40 @@ export const trajectoryApi = createApi({
         return { data: result.data as HandoffApplyResponse };
       },
     }),
+
+    applyModeTransition: builder.mutation<
+      ModeTransitionApplyResponse,
+      {
+        chatId: string;
+        targetMode: string;
+        targetModeDescription?: string;
+      }
+    >({
+      async queryFn(
+        { chatId, targetMode, targetModeDescription },
+        api,
+        _opts,
+        baseQuery,
+      ) {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort;
+        const url = buildUrl(
+          TRAJECTORY_MODE_TRANSITION_APPLY_URL,
+          chatId,
+          port,
+        );
+        const result = await baseQuery({
+          url,
+          method: "POST",
+          body: {
+            target_mode: targetMode,
+            target_mode_description: targetModeDescription ?? "",
+          },
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as ModeTransitionApplyResponse };
+      },
+    }),
   }),
 });
 
@@ -151,4 +191,5 @@ export const {
   useApplyTransformMutation,
   usePreviewHandoffMutation,
   useApplyHandoffMutation,
+  useApplyModeTransitionMutation,
 } = trajectoryApi;

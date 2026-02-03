@@ -1,9 +1,12 @@
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde_json::{json, Value};
 
-use crate::call_validation::{ChatToolCall, ChatToolFunction, ChatUsage};
-use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError};
-use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmResponse, LlmStreamDelta};
+use crate::call_validation::ChatUsage;
+use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError, extract_extra_fields, insert_extra_headers};
+use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmStreamDelta, ResponseFormat};
+
+/// Fields that cannot be overridden via extra_body for security
+const PROTECTED_FIELDS: &[&str] = &["model", "input", "stream", "tools", "tool_choice", "instructions"];
 
 pub struct OpenAiResponsesAdapter;
 
@@ -24,18 +27,11 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
         }
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(&format!("refact-lsp/{}", env!("CARGO_PKG_VERSION")))
+            HeaderValue::from_str(&format!("refact-lsp {}", env!("CARGO_PKG_VERSION")))
                 .unwrap_or_else(|_| HeaderValue::from_static("refact-lsp")),
         );
 
-        for (key, value) in &settings.extra_headers {
-            if let (Ok(name), Ok(val)) = (
-                reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                HeaderValue::from_str(value),
-            ) {
-                headers.insert(name, val);
-            }
-        }
+        insert_extra_headers(&mut headers, &settings.extra_headers);
 
         let (input, instructions) = convert_to_responses_format(&req.messages);
 
@@ -56,6 +52,10 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             body["temperature"] = json!(temp);
         }
 
+        if let Some(freq_penalty) = req.params.frequency_penalty {
+            body["frequency_penalty"] = json!(freq_penalty);
+        }
+
         if settings.supports_tools {
             if let Some(tools) = &req.tools {
                 if !tools.is_empty() {
@@ -63,6 +63,7 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
                     if let Some(choice) = &req.tool_choice {
                         body["tool_choice"] = tool_choice_to_responses(choice);
                     }
+                    body["parallel_tool_calls"] = json!(req.parallel_tool_calls);
                 }
             }
         } else if req.tools.is_some() {
@@ -78,11 +79,30 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             }
         }
 
+        if !req.params.stop.is_empty() {
+            body["stop"] = json!(req.params.stop);
+        }
+
+        if let Some(ref response_format) = req.response_format {
+            body["text"] = response_format_to_responses(response_format);
+        }
+
         if let Some(extra) = &req.extra_body {
             if let Some(obj) = body.as_object_mut() {
                 for (k, v) in extra {
+                    if PROTECTED_FIELDS.contains(&k.as_str()) {
+                        tracing::warn!("extra_body attempted to override protected field '{}', ignoring", k);
+                        continue;
+                    }
                     obj.insert(k.clone(), v.clone());
                 }
+            }
+        }
+
+        // Add meta field for Refact cloud (when support_metadata is enabled)
+        if let Some(meta) = &req.meta {
+            if let Ok(meta_value) = serde_json::to_value(meta) {
+                body["meta"] = meta_value;
             }
         }
 
@@ -158,19 +178,63 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             }
             "response.output_item.done" => {
                 if let Some(item) = json.get("item") {
-                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-                        if let Some(tc) = extract_tool_call_from_item(item, &json) {
-                            deltas.push(LlmStreamDelta::SetToolCalls {
-                                tool_calls: vec![tc],
-                            });
+                    let item_type = item.get("type").and_then(|t| t.as_str());
+                    match item_type {
+                        Some("function_call") => {
+                            if let Some(tc) = extract_tool_call_from_item(item, &json) {
+                                deltas.push(LlmStreamDelta::SetToolCalls {
+                                    tool_calls: vec![tc],
+                                });
+                            }
                         }
+                        Some("web_search_call") => {
+                            // Extract citations from web search results
+                            if let Some(results) = item.get("results").and_then(|r| r.as_array()) {
+                                for result in results {
+                                    deltas.push(LlmStreamDelta::AddCitation {
+                                        citation: result.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
             "response.output_text.done" | "response.reasoning.done" => {}
+            "response.web_search_call.searching" | "response.web_search_call.completed" => {
+                // Web search tool events - citations may be in results
+            }
             "response.completed" => {
+                // Also check for citations in completed response
+                if let Some(output) = json.get("response").and_then(|r| r.get("output")).and_then(|o| o.as_array()) {
+                    for item in output {
+                        if item.get("type").and_then(|t| t.as_str()) == Some("web_search_call") {
+                            if let Some(results) = item.get("results").and_then(|r| r.as_array()) {
+                                for result in results {
+                                    deltas.push(LlmStreamDelta::AddCitation {
+                                        citation: result.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                let finish_reason = json
+                    .get("response")
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str())
+                    .or_else(|| json.get("status").and_then(|s| s.as_str()))
+                    .map(|s| match s {
+                        "completed" => "stop",
+                        "cancelled" => "stop",
+                        "failed" => "error",
+                        "incomplete" => "length",
+                        other => other,
+                    })
+                    .unwrap_or("stop");
                 deltas.push(LlmStreamDelta::SetFinishReason {
-                    reason: "stop".to_string(),
+                    reason: finish_reason.to_string(),
                 });
                 if let Some(usage) = extract_usage(&json) {
                     deltas.push(LlmStreamDelta::SetUsage { usage });
@@ -189,80 +253,14 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             _ => {}
         }
 
+        // Extract Refact-specific extra fields on ALL events consistently
+        // This handles both top-level and nested "response" wrapper fields
+        let extra = extract_extra_fields(&json);
+        if !extra.is_empty() {
+            deltas.push(LlmStreamDelta::MergeExtra { extra });
+        }
+
         Ok(deltas)
-    }
-
-    fn parse_response(&self, json: Value) -> Result<LlmResponse, String> {
-        if let Some(error) = json.get("error") {
-            return Err(error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown error")
-                .to_string());
-        }
-
-        let output = json.get("output").and_then(|o| o.as_array());
-
-        let mut content = String::new();
-        let mut reasoning_content = None;
-        let mut tool_calls = Vec::new();
-
-        if let Some(items) = output {
-            for item in items {
-                let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                match item_type {
-                    "message" => {
-                        if let Some(msg_content) = item.get("content").and_then(|c| c.as_array()) {
-                            for part in msg_content {
-                                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                    content.push_str(text);
-                                }
-                            }
-                        }
-                    }
-                    "reasoning" => {
-                        if let Some(summary) = item.get("summary").and_then(|s| s.as_array()) {
-                            let reasoning: String = summary
-                                .iter()
-                                .filter_map(|s| s.get("text").and_then(|t| t.as_str()))
-                                .collect::<Vec<_>>()
-                                .join("");
-                            if !reasoning.is_empty() {
-                                reasoning_content = Some(reasoning);
-                            }
-                        }
-                    }
-                    "function_call" => {
-                        if let Some(tc) = parse_responses_tool_call(item) {
-                            tool_calls.push(tc);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let status = json
-            .get("status")
-            .and_then(|s| s.as_str())
-            .unwrap_or("unknown");
-        let finish_reason = match status {
-            "completed" => Some("stop".to_string()),
-            "failed" => Some("error".to_string()),
-            "incomplete" => Some("length".to_string()),
-            _ => None,
-        };
-
-        let usage = extract_usage(&json);
-
-        Ok(LlmResponse {
-            content,
-            reasoning_content,
-            tool_calls,
-            finish_reason,
-            usage,
-            ..Default::default()
-        })
     }
 }
 
@@ -271,15 +269,24 @@ fn convert_to_responses_format(
 ) -> (Value, Option<String>) {
     let mut instructions = None;
     let mut input_messages = Vec::new();
+    let mut system_count = 0;
 
     for msg in messages {
         match msg.role.as_str() {
             "system" => {
+                system_count += 1;
+                if system_count > 1 {
+                    tracing::warn!(
+                        "Multiple system messages detected ({}), only the last one will be used",
+                        system_count
+                    );
+                }
                 instructions = Some(msg.content.content_text_only());
             }
-            "user" => {
+            "user" | "plain_text" | "cd_instruction" | "context_file" => {
                 let content = msg_content_to_responses(&msg.content);
                 input_messages.push(json!({
+                    "type": "message",
                     "role": "user",
                     "content": content
                 }));
@@ -290,32 +297,31 @@ fn convert_to_responses_format(
                     input_messages.push(json!({
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": text_content}]
+                        "content": text_content
                     }));
                 }
                 if let Some(tool_calls) = &msg.tool_calls {
                     for tc in tool_calls {
-                        input_messages.push(json!({
-                            "type": "function_call",
-                            "call_id": tc.id,
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }));
+                        if !tc.id.starts_with("srvtoolu_") {  // Filter server-executed tools
+                            input_messages.push(json!({
+                                "type": "function_call",
+                                "call_id": tc.id,
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }));
+                        }
                     }
                 }
             }
-            "tool" => {
-                input_messages.push(json!({
-                    "type": "function_call_output",
-                    "call_id": msg.tool_call_id,
-                    "output": msg.content.content_text_only()
-                }));
-            }
-            "plain_text" | "cd_instruction" => {
-                input_messages.push(json!({
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": msg.content.content_text_only()}]
-                }));
+            "tool" | "diff" => {
+                // Both "tool" and "diff" are tool results - filter server-executed
+                if !msg.tool_call_id.starts_with("srvtoolu_") {
+                    input_messages.push(json!({
+                        "type": "function_call_output",
+                        "call_id": msg.tool_call_id,
+                        "output": msg.content.content_text_only()
+                    }));
+                }
             }
             _ => {}
         }
@@ -389,19 +395,50 @@ fn tool_choice_to_responses(choice: &CanonicalToolChoice) -> Value {
     }
 }
 
+fn response_format_to_responses(format: &ResponseFormat) -> Value {
+    match format {
+        ResponseFormat::Text => json!({"format": {"type": "text"}}),
+        ResponseFormat::JsonObject => json!({"format": {"type": "json_object"}}),
+        ResponseFormat::JsonSchema { name, description, schema, strict } => {
+            let mut json_schema = json!({
+                "type": "json_schema",
+                "name": name,
+                "schema": schema,
+                "strict": strict,
+            });
+            if let Some(desc) = description {
+                json_schema["description"] = json!(desc);
+            }
+            json!({"format": json_schema})
+        }
+    }
+}
+
+fn value_to_arguments_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
 fn extract_tool_call_from_item(item: &Value, event: &Value) -> Option<Value> {
     let call_id = item.get("call_id")?;
     let output_index = event
         .get("output_index")
         .and_then(|i| i.as_u64())
         .unwrap_or(0);
+    let arguments = item
+        .get("arguments")
+        .map(value_to_arguments_string)
+        .unwrap_or_default();
     Some(json!({
         "index": output_index,
         "id": call_id,
         "type": "function",
         "function": {
             "name": item.get("name"),
-            "arguments": item.get("arguments").and_then(|a| a.as_str()).unwrap_or("")
+            "arguments": arguments
         }
     }))
 }
@@ -411,11 +448,14 @@ fn extract_tool_call_delta(json: &Value) -> Option<Value> {
         .get("output_index")
         .and_then(|i| i.as_u64())
         .unwrap_or(0);
+    let arguments = json
+        .get("delta")
+        .map(value_to_arguments_string)?;
     Some(json!({
         "index": output_index,
         "type": "function",
         "function": {
-            "arguments": json.get("delta")?
+            "arguments": arguments
         }
     }))
 }
@@ -425,12 +465,16 @@ fn extract_tool_call_done(json: &Value) -> Option<Value> {
         .get("output_index")
         .and_then(|i| i.as_u64())
         .unwrap_or(0);
+    let arguments = json
+        .get("arguments")
+        .map(value_to_arguments_string)
+        .unwrap_or_default();
     Some(json!({
         "index": output_index,
         "type": "function",
         "function": {
             "name": json.get("name")?,
-            "arguments": json.get("arguments")?
+            "arguments": arguments
         }
     }))
 }
@@ -466,18 +510,6 @@ fn extract_usage(json: &Value) -> Option<ChatUsage> {
     })
 }
 
-fn parse_responses_tool_call(item: &Value) -> Option<ChatToolCall> {
-    Some(ChatToolCall {
-        id: item.get("call_id")?.as_str()?.to_string(),
-        tool_type: "function".to_string(),
-        function: ChatToolFunction {
-            name: item.get("name")?.as_str()?.to_string(),
-            arguments: item.get("arguments")?.as_str()?.to_string(),
-        },
-        index: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +524,7 @@ mod tests {
             supports_tools: true,
             supports_reasoning: true,
             supports_max_completion_tokens: false,
+            eof_is_done: false,
         }
     }
 
@@ -575,43 +608,6 @@ mod tests {
         let result = adapter.parse_stream_chunk(chunk);
 
         assert!(matches!(result, Err(StreamParseError::FatalError(_))));
-    }
-
-    #[test]
-    fn test_parse_response_basic() {
-        let adapter = OpenAiResponsesAdapter;
-        let json = json!({
-            "status": "completed",
-            "output": [{
-                "type": "message",
-                "content": [{"type": "text", "text": "Hello!"}]
-            }],
-            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
-        });
-
-        let resp = adapter.parse_response(json).unwrap();
-
-        assert_eq!(resp.content, "Hello!");
-        assert_eq!(resp.finish_reason, Some("stop".to_string()));
-    }
-
-    #[test]
-    fn test_parse_response_with_function_call() {
-        let adapter = OpenAiResponsesAdapter;
-        let json = json!({
-            "status": "completed",
-            "output": [{
-                "type": "function_call",
-                "call_id": "call_123",
-                "name": "get_weather",
-                "arguments": "{\"location\":\"NYC\"}"
-            }]
-        });
-
-        let resp = adapter.parse_response(json).unwrap();
-
-        assert_eq!(resp.tool_calls.len(), 1);
-        assert_eq!(resp.tool_calls[0].function.name, "get_weather");
     }
 
     #[test]
@@ -765,6 +761,114 @@ mod tests {
                 assert_eq!(usage.total_tokens, 150);
             }
             _ => panic!("expected SetUsage"),
+        }
+    }
+
+    #[test]
+    fn test_convert_context_file_to_user() {
+        let messages = vec![
+            ChatMessage::new("system".to_string(), "Be helpful".to_string()),
+            ChatMessage::new("context_file".to_string(), "file content here".to_string()),
+            ChatMessage::new("user".to_string(), "What is this?".to_string()),
+        ];
+
+        let (input, instructions) = convert_to_responses_format(&messages);
+
+        assert_eq!(instructions, Some("Be helpful".to_string()));
+        let input_arr = input.as_array().unwrap();
+        assert_eq!(input_arr.len(), 2);
+        // Verify uniform type: "message" format
+        assert_eq!(input_arr[0]["type"], "message");
+        assert_eq!(input_arr[0]["role"], "user");
+        assert_eq!(input_arr[0]["content"][0]["type"], "input_text");
+        assert_eq!(input_arr[0]["content"][0]["text"], "file content here");
+        assert_eq!(input_arr[1]["type"], "message");
+        assert_eq!(input_arr[1]["role"], "user");
+    }
+
+    #[test]
+    fn test_convert_messages_uniform_type() {
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "Hello".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("Hi there".to_string()),
+                tool_calls: None,
+                ..Default::default()
+            },
+            ChatMessage::new("plain_text".to_string(), "Some plain text".to_string()),
+            ChatMessage::new("cd_instruction".to_string(), "An instruction".to_string()),
+        ];
+
+        let (input, _) = convert_to_responses_format(&messages);
+        let input_arr = input.as_array().unwrap();
+
+        // All message-type items should have type: "message"
+        assert_eq!(input_arr[0]["type"], "message");
+        assert_eq!(input_arr[0]["role"], "user");
+        assert_eq!(input_arr[1]["type"], "message");
+        assert_eq!(input_arr[1]["role"], "assistant");
+        // Assistant history should use simple string content, not output_text array
+        assert!(input_arr[1]["content"].is_string(), "assistant content should be a string, not an array");
+        assert_eq!(input_arr[1]["content"], "Hi there");
+        assert_eq!(input_arr[2]["type"], "message");
+        assert_eq!(input_arr[2]["role"], "user");
+        assert_eq!(input_arr[3]["type"], "message");
+        assert_eq!(input_arr[3]["role"], "user");
+    }
+
+    #[test]
+    fn test_tool_arguments_object_stringified() {
+        let json = json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "call_id": "call_123",
+                "name": "test_func",
+                "arguments": {"key": "value", "num": 42}
+            }
+        });
+
+        let tc = extract_tool_call_from_item(&json["item"], &json).unwrap();
+        // Arguments should be stringified JSON
+        assert_eq!(tc["function"]["arguments"], r#"{"key":"value","num":42}"#);
+    }
+
+    #[test]
+    fn test_stream_web_search_citations() {
+        let adapter = OpenAiResponsesAdapter;
+        // Web search results in output_item.done event
+        let chunk = r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"ws_123","results":[{"url":"https://example.com","title":"Example","snippet":"Some content"},{"url":"https://other.com","title":"Other","snippet":"Other content"}]}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+        let citation_count = deltas.iter().filter(|d| matches!(d, LlmStreamDelta::AddCitation { .. })).count();
+        assert_eq!(citation_count, 2);
+
+        // Verify first citation
+        let citations: Vec<_> = deltas.iter().filter_map(|d| {
+            if let LlmStreamDelta::AddCitation { citation } = d {
+                Some(citation)
+            } else {
+                None
+            }
+        }).collect();
+        assert_eq!(citations[0].get("url").and_then(|v| v.as_str()), Some("https://example.com"));
+        assert_eq!(citations[1].get("url").and_then(|v| v.as_str()), Some("https://other.com"));
+    }
+
+    #[test]
+    fn test_stream_completed_with_web_search_citations() {
+        let adapter = OpenAiResponsesAdapter;
+        // Citations in response.completed event
+        let chunk = r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"web_search_call","results":[{"url":"https://search.com","title":"Search Result"}]}]}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+        let citation_count = deltas.iter().filter(|d| matches!(d, LlmStreamDelta::AddCitation { .. })).count();
+        assert_eq!(citation_count, 1);
+
+        if let Some(LlmStreamDelta::AddCitation { citation }) = deltas.iter().find(|d| matches!(d, LlmStreamDelta::AddCitation { .. })) {
+            assert_eq!(citation.get("url").and_then(|v| v.as_str()), Some("https://search.com"));
         }
     }
 }

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hash;
 use axum::http::StatusCode;
-use indexmap::IndexMap;
 use ropey::Rope;
 
 use crate::custom_error::ScratchError;
@@ -44,6 +43,7 @@ pub struct SamplingParameters {
     #[serde(default)]
     pub max_new_tokens: usize, // TODO: rename it to `max_completion_tokens` everywhere, including chat-js
     pub temperature: Option<f32>,
+    pub frequency_penalty: Option<f32>,
     pub top_p: Option<f32>, // NOTE: deprecated
     #[serde(default)]
     pub stop: Vec<String>,
@@ -128,6 +128,22 @@ pub struct ContextFile {
     pub usefulness: f32, // higher is better
     #[serde(default, skip_serializing)]
     pub skip_pp: bool, // if true, skip postprocessing compression for this file
+}
+
+impl Default for ContextFile {
+    fn default() -> Self {
+        Self {
+            file_name: String::new(),
+            file_content: String::new(),
+            line1: 0,
+            line2: 0,
+            file_rev: None,
+            symbols: Vec::new(),
+            gradient_type: -1,
+            usefulness: 0.0,
+            skip_pp: false,
+        }
+    }
 }
 
 fn default_gradient_type_value() -> i32 {
@@ -248,36 +264,6 @@ pub struct SubchatParameters {
     pub subchat_reasoning_effort: Option<ReasoningEffort>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
-#[allow(dead_code)]
-pub struct ChatPost {
-    pub messages: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub parameters: SamplingParameters,
-    #[serde(default)]
-    pub model: String,
-    pub stream: Option<bool>,
-    pub temperature: Option<f32>,
-    #[serde(default)]
-    pub max_tokens: Option<usize>,
-    #[serde(default)]
-    pub increase_max_tokens: bool,
-    #[serde(default)]
-    pub tool_choice: Option<String>,
-    #[serde(default)]
-    pub checkpoints_enabled: bool,
-    #[serde(default)]
-    pub only_deterministic_messages: bool, // means don't sample from the model
-    #[serde(default)]
-    pub subchat_tool_parameters: IndexMap<String, SubchatParameters>, // tool_name: {model, allowed_context, temperature}
-    #[serde(default = "PostprocessSettings::new")]
-    pub postprocess_parameters: PostprocessSettings,
-    #[serde(default)]
-    pub meta: ChatMeta,
-    #[serde(default)]
-    pub style: Option<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMeta {
     #[serde(default)]
@@ -286,8 +272,8 @@ pub struct ChatMeta {
     pub request_attempt_id: String,
     #[serde(default)]
     pub chat_remote: bool,
-    #[serde(default)]
-    pub chat_mode: ChatMode,
+    #[serde(default = "default_mode_id")]
+    pub chat_mode: String,
     #[serde(default)]
     pub current_config_file: String,
     #[serde(default = "default_true")]
@@ -296,13 +282,17 @@ pub struct ChatMeta {
     pub context_tokens_cap: Option<usize>,
 }
 
+fn default_mode_id() -> String {
+    "agent".to_string()
+}
+
 impl Default for ChatMeta {
     fn default() -> Self {
         ChatMeta {
             chat_id: String::new(),
             request_attempt_id: String::new(),
             chat_remote: false,
-            chat_mode: ChatMode::default(),
+            chat_mode: default_mode_id(),
             current_config_file: String::new(),
             include_project_info: true,
             context_tokens_cap: None,
@@ -310,41 +300,97 @@ impl Default for ChatMeta {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy)]
-#[allow(non_camel_case_types)]
-pub enum ChatMode {
-    #[serde(alias = "no_tools")]
-    NO_TOOLS,
-    #[serde(alias = "explore")]
-    EXPLORE,
-    #[serde(alias = "agent")]
-    AGENT,
-    #[serde(alias = "configure", alias = "configurator")]
-    CONFIGURE,
-    #[serde(alias = "project_summary")]
-    PROJECT_SUMMARY,
-    #[serde(alias = "task_planner")]
-    TASK_PLANNER,
-    #[serde(alias = "task_agent")]
-    TASK_AGENT,
-}
-
-impl ChatMode {
-    pub fn is_agentic(self) -> bool {
-        match self {
-            ChatMode::AGENT | ChatMode::TASK_PLANNER | ChatMode::TASK_AGENT => true,
-            ChatMode::NO_TOOLS
-            | ChatMode::EXPLORE
-            | ChatMode::CONFIGURE
-            | ChatMode::PROJECT_SUMMARY => false,
+/// Normalize a mode ID string (legacy enum values or dynamic mode IDs).
+/// Handles uppercase legacy values and returns lowercase mode IDs.
+/// Returns error if mode is empty or contains invalid characters.
+pub fn normalize_mode_id(mode: &str) -> Result<String, String> {
+    let trimmed = mode.trim();
+    
+    if trimmed.is_empty() {
+        return Ok("agent".to_string());
+    }
+    
+    // Validate characters: lowercase, digits, underscore, hyphen
+    if !trimmed.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
+        // Try to normalize uppercase legacy values
+        let normalized = trimmed.to_lowercase();
+        if !normalized.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
+            return Err(format!("Invalid mode ID: '{}' contains invalid characters", trimmed));
         }
+        return Ok(normalized);
     }
+    
+    Ok(trimmed.to_string())
 }
 
-impl Default for ChatMode {
-    fn default() -> Self {
-        ChatMode::NO_TOOLS
+/// Check if a mode ID is agentic (supports tool execution and knowledge enrichment).
+pub fn is_agentic_mode_id(mode_id: &str) -> bool {
+    matches!(mode_id, "agent" | "task_planner" | "task_agent")
+}
+
+/// Validate and canonicalize a mode ID with strict registry existence check.
+/// Returns 422-compatible error if mode is invalid or doesn't exist in registry.
+pub async fn validate_mode_for_request(
+    gcx: std::sync::Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>,
+    mode: &str,
+) -> Result<String, String> {
+    let canonical = canonical_mode_id(mode)?;
+    
+    let mode_config = crate::yaml_configs::customization_registry::get_mode_config(
+        gcx,
+        &canonical,
+        None,
+    ).await;
+    
+    if mode_config.is_none() {
+        return Err(format!("Mode '{}' does not exist in registry", canonical));
     }
+    
+    Ok(canonical)
+}
+
+/// Canonicalize a mode ID string with full validation and legacy mapping.
+/// 
+/// This function:
+/// 1. Normalizes format (lowercases, validates characters)
+/// 2. Maps legacy enum values to canonical mode IDs
+/// 3. Validates length (max 128 chars)
+/// 4. Returns error for invalid input
+///
+/// Examples:
+/// - "AGENT" → "agent"
+/// - "agent" → "agent"
+/// - "CONFIGURE" → "configurator"
+/// - "NO_TOOLS" → "explore"
+/// - "my_custom_mode" → "my_custom_mode"
+/// - "" → "agent" (default)
+/// - "invalid!mode" → Err
+pub fn canonical_mode_id(mode: &str) -> Result<String, String> {
+    let trimmed = mode.trim();
+    
+    if trimmed.is_empty() {
+        return Ok("agent".to_string());
+    }
+    
+    if trimmed.len() > 128 {
+        return Err(format!("Mode ID too long: {} chars (max 128)", trimmed.len()));
+    }
+    
+    let normalized = normalize_mode_id(trimmed)?;
+    
+    let canonical = match normalized.to_uppercase().as_str() {
+        "NO_TOOLS" => "explore".to_string(),
+        "EXPLORE" => "explore".to_string(),
+        "AGENT" => "agent".to_string(),
+        "CONFIGURE" | "CONFIGURATOR" => "configurator".to_string(),
+        "PROJECT_SUMMARY" => "project_summary".to_string(),
+        "PLAN" => "plan".to_string(),
+        "TASK_PLANNER" => "task_planner".to_string(),
+        "TASK_AGENT" => "task_agent".to_string(),
+        _ => normalized,
+    };
+    
+    Ok(canonical)
 }
 
 fn default_true() -> bool {

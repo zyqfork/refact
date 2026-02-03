@@ -82,6 +82,7 @@ use crate::http::routers::v1::tasks::{
 };
 use crate::http::routers::v1::trajectory_ops::{
     handle_transform_preview, handle_transform_apply, handle_handoff_preview, handle_handoff_apply,
+    handle_mode_transition_apply,
 };
 use crate::http::routers::v1::project_configs::{
     handle_v1_project_configs_get, handle_v1_project_configs_rescan, handle_v1_project_configs_bootstrap,
@@ -333,6 +334,10 @@ pub fn make_v1_router() -> Router {
         .route(
             "/chats/:chat_id/trajectory/handoff/apply",
             post(handle_handoff_apply),
+        )
+        .route(
+            "/chats/:chat_id/trajectory/mode-transition/apply",
+            post(handle_mode_transition_apply),
         )
         .route("/project-information", get(handle_v1_project_information_get))
         .route("/project-information", post(handle_v1_project_information_save))

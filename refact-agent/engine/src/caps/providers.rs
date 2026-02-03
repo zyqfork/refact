@@ -95,6 +95,7 @@ impl CapsProvider {
             self.embedding_model.base.user_configured = true;
         }
 
+        extend_collection::<Vec<String>>(&mut self.running_models, "running_models", &value)?;
         extend_model_collection::<ChatModelRecord>(
             &mut self.chat_models,
             "chat_models",
@@ -107,7 +108,6 @@ impl CapsProvider {
             &value,
             &self.running_models,
         )?;
-        extend_collection::<Vec<String>>(&mut self.running_models, "running_models", &value)?;
 
         match serde_yaml::from_value::<DefaultModels>(value) {
             Ok(default_models) => {
@@ -273,6 +273,10 @@ const PROVIDER_TEMPLATES: &[(&str, &str)] = &[
     (
         "openrouter",
         include_str!("../yaml_configs/default_providers/openrouter.yaml"),
+    ),
+    (
+        "refact",
+        include_str!("../yaml_configs/default_providers/refact.yaml"),
     ),
     (
         "xai",

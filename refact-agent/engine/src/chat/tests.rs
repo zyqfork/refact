@@ -53,6 +53,8 @@ mod tests {
                 prompt_tokens: 100,
                 completion_tokens: 50,
                 total_tokens: 150,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
             }),
             finish_reason: Some("stop".to_string()),
             reasoning_content: Some("I think therefore I am".to_string()),
@@ -175,6 +177,8 @@ mod tests {
             prompt_tokens: 100,
             completion_tokens: 50,
             total_tokens: 150,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
         };
 
         let serialized = serde_json::to_value(&usage).expect("serialize");
@@ -938,6 +942,7 @@ mod tests {
             supports_tools: true,
             tool_choice: None,
             parallel_tool_calls: None,
+            ..Default::default()
         };
 
         assert!(!opts.prepend_system_prompt);
@@ -1390,22 +1395,41 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_chat_mode() {
-        use crate::chat::generation::parse_chat_mode;
-        use crate::call_validation::ChatMode;
+    fn test_normalize_mode_id() {
+        use crate::call_validation::normalize_mode_id;
 
-        assert!(matches!(parse_chat_mode("AGENT"), ChatMode::AGENT));
-        assert!(matches!(parse_chat_mode("agent"), ChatMode::AGENT));
-        assert!(matches!(parse_chat_mode("Agent"), ChatMode::AGENT));
-        assert!(matches!(parse_chat_mode("NO_TOOLS"), ChatMode::NO_TOOLS));
-        assert!(matches!(parse_chat_mode("no_tools"), ChatMode::NO_TOOLS));
-        assert!(matches!(parse_chat_mode("EXPLORE"), ChatMode::EXPLORE));
-        assert!(matches!(parse_chat_mode("CONFIGURE"), ChatMode::CONFIGURE));
-        assert!(matches!(
-            parse_chat_mode("PROJECT_SUMMARY"),
-            ChatMode::PROJECT_SUMMARY
-        ));
-        assert!(matches!(parse_chat_mode("unknown"), ChatMode::AGENT));
-        assert!(matches!(parse_chat_mode(""), ChatMode::AGENT));
+        assert_eq!(normalize_mode_id("agent").unwrap(), "agent");
+        assert_eq!(normalize_mode_id("AGENT").unwrap(), "agent");
+        assert_eq!(normalize_mode_id("Agent").unwrap(), "agent");
+        assert_eq!(normalize_mode_id("explore").unwrap(), "explore");
+        assert_eq!(normalize_mode_id("task_planner").unwrap(), "task_planner");
+        assert_eq!(normalize_mode_id("").unwrap(), "agent");
+        assert!(normalize_mode_id("invalid!mode").is_err());
+    }
+
+    #[test]
+    fn test_canonical_mode_id() {
+        use crate::call_validation::canonical_mode_id;
+
+        assert_eq!(canonical_mode_id("agent").unwrap(), "agent");
+        assert_eq!(canonical_mode_id("AGENT").unwrap(), "agent");
+        assert_eq!(canonical_mode_id("Agent").unwrap(), "agent");
+        assert_eq!(canonical_mode_id("CONFIGURE").unwrap(), "configurator");
+        assert_eq!(canonical_mode_id("configure").unwrap(), "configurator");
+        assert_eq!(canonical_mode_id("CONFIGURATOR").unwrap(), "configurator");
+        assert_eq!(canonical_mode_id("NO_TOOLS").unwrap(), "explore");
+        assert_eq!(canonical_mode_id("no_tools").unwrap(), "explore");
+        assert_eq!(canonical_mode_id("EXPLORE").unwrap(), "explore");
+        assert_eq!(canonical_mode_id("TASK_PLANNER").unwrap(), "task_planner");
+        assert_eq!(canonical_mode_id("task_planner").unwrap(), "task_planner");
+        assert_eq!(canonical_mode_id("TASK_AGENT").unwrap(), "task_agent");
+        assert_eq!(canonical_mode_id("task_agent").unwrap(), "task_agent");
+        assert_eq!(canonical_mode_id("PROJECT_SUMMARY").unwrap(), "project_summary");
+        assert_eq!(canonical_mode_id("PLAN").unwrap(), "plan");
+        assert_eq!(canonical_mode_id("my_custom_mode").unwrap(), "my_custom_mode");
+        assert_eq!(canonical_mode_id("").unwrap(), "agent");
+        assert_eq!(canonical_mode_id("  ").unwrap(), "agent");
+        assert!(canonical_mode_id("invalid!mode").is_err());
+        assert!(canonical_mode_id(&"x".repeat(200)).is_err());
     }
 }

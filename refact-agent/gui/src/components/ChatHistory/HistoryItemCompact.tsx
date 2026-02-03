@@ -22,6 +22,8 @@ import {
   getStatusTooltip,
 } from "../../utils/sessionStatus";
 import { CircularProgress } from "./CircularProgress";
+import { useGetChatModesQuery } from "../../services/refact/chatModes";
+import { getModeColor } from "../../utils/modeColors";
 import styles from "./HistoryItemCompact.module.css";
 
 export interface HistoryItemCompactProps {
@@ -115,8 +117,13 @@ export const HistoryItemCompact: React.FC<HistoryItemCompactProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(historyItem.title);
+  const { data: modesData } = useGetChatModesQuery(undefined);
   const statusState = getStatusFromSessionState(historyItem.session_state);
   const statusTooltip = getStatusTooltip(historyItem.session_state);
+
+  const modeId = historyItem.mode;
+  const modeInfo = modesData?.modes.find((m) => m.id === modeId);
+  const modeTitle = modeInfo?.title ?? modeId;
   const dateTimeString = formatDateTime(historyItem.updatedAt);
   const messageCount = historyItem.message_count ?? historyItem.messages.length;
   const totalCoins = historyItem.total_coins;
@@ -284,6 +291,16 @@ export const HistoryItemCompact: React.FC<HistoryItemCompactProps> = ({
             size="small"
             tooltipText={statusTooltip}
           />
+          {modeTitle && modeTitle.toLowerCase() !== badge?.toLowerCase() && (
+            <Badge
+              size="1"
+              color={getModeColor(modeId)}
+              variant="soft"
+              className={styles.modeBadge}
+            >
+              {modeTitle}
+            </Badge>
+          )}
           {badge && (
             <Badge
               size="1"

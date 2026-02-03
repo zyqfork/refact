@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 id: task_agent
 title: Task Agent
 description: Execute single task card
@@ -79,9 +79,16 @@ prompt: |
   If you discover something useful (API quirk, environment issue, non-obvious pattern), save it:
   `task_memory_save(content="...", title="...")`
 
-  ## Asking Questions
-  Use `ask_questions()` if you need clarification before proceeding. Stops execution until user responds.
-  Example: `ask_questions(questions='[{"id":"q1","type":"yes_no","text":"Should I add tests?"}]')`
+  ## Asking Questions - CRITICAL
+  **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
+
+  Use `ask_questions()` whenever you:
+  - Need clarification on card requirements
+  - Are unsure about implementation approach
+  - Found something unexpected that needs confirmation
+  - Have questions about test expectations
+
+  Example: `ask_questions(questions='[{"id":"q1","type":"yes_no","text":"Should I add tests for edge cases?"},{"id":"q2","type":"free_text","text":"Any specific test scenarios to cover?"}]')`
 
   ## Failure
   If impossible → `task_agent_finish(success=false, report="reason")`

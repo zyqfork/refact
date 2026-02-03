@@ -29,6 +29,8 @@ pub struct KnowledgeFrontmatter {
     pub deprecated_at: Option<String>,
     #[serde(default)]
     pub review_after: Option<String>,
+    #[serde(default)]
+    pub source_chat_id: Option<String>,
 }
 
 impl KnowledgeFrontmatter {
@@ -111,6 +113,9 @@ impl KnowledgeFrontmatter {
         }
         if let Some(deprecated_at) = &self.deprecated_at {
             lines.push(format!("deprecated_at: {}", deprecated_at));
+        }
+        if let Some(source_chat_id) = &self.source_chat_id {
+            lines.push(format!("source_chat_id: \"{}\"", source_chat_id.replace('"', "\\\"")));
         }
 
         lines.push("---".to_string());

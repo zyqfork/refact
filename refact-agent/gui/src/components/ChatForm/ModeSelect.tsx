@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
 import {
   Flex,
   Text,
@@ -14,8 +14,12 @@ import {
 } from "../../services/refact/chatModes";
 import { DEFAULT_MODE } from "../../features/Chat/Thread/types";
 import { useAppSelector, useAppDispatch } from "../../hooks";
-import { selectMessages } from "../../features/Chat/Thread";
+import {
+  selectMessages,
+  selectCurrentThreadId,
+} from "../../features/Chat/Thread";
 import { push } from "../../features/Pages/pagesSlice";
+import { ModeTransitionDialog } from "./ModeTransitionDialog";
 import styles from "./ModeSelect.module.css";
 
 type ModeSelectProps = {
@@ -35,6 +39,7 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
   const dispatch = useAppDispatch();
   const { data, isLoading, isError } = useGetChatModesQuery(undefined);
   const messages = useAppSelector(selectMessages);
+  const currentChatId = useAppSelector(selectCurrentThreadId);
 
   const modes = data?.modes ?? [];
   const effectiveMode = selectedMode || DEFAULT_MODE;
@@ -42,13 +47,39 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
   const currentTitle = currentMode?.title ?? effectiveMode;
   const toolsCount = currentMode?.tools_count ?? 0;
 
-  // Mode is locked after first message
-  const isModeLocked = messages.length > 0;
-  const isModeDisabled = disabled ?? isModeLocked;
+  // Mode transition is needed when there are messages
+  const hasMessages = messages.length > 0;
+  const isModeDisabled = disabled ?? false;
 
   const [isOpen, setIsOpen] = useState(false);
+  const [transitionDialogOpen, setTransitionDialogOpen] = useState(false);
+  const [targetModeForTransition, setTargetModeForTransition] =
+    useState<ChatModeInfo | null>(null);
   const selectedModeRef = useRef<HTMLButtonElement>(null);
   const modeListRef = useRef<HTMLDivElement>(null);
+
+  const handleModeSelect = useCallback(
+    (mode: ChatModeInfo) => {
+      if (hasMessages) {
+        // Open transition dialog for mode switch with context (including self-switch)
+        setTargetModeForTransition(mode);
+        setTransitionDialogOpen(true);
+        setIsOpen(false);
+      } else {
+        // Direct mode change (no messages)
+        onModeChange(mode.id, mode.thread_defaults);
+        setIsOpen(false);
+      }
+    },
+    [hasMessages, onModeChange],
+  );
+
+  const handleTransitionDialogClose = useCallback((open: boolean) => {
+    setTransitionDialogOpen(open);
+    if (!open) {
+      setTargetModeForTransition(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -120,60 +151,75 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
   );
 
   return (
-    <Popover.Root open={isOpen} onOpenChange={setIsOpen}>
-      <Popover.Trigger>
-        <button
-          className={`${styles.trigger} ${
-            isModeDisabled ? styles.disabled : ""
-          }`}
-          disabled={isModeDisabled}
-          type="button"
-          title={
-            isModeLocked ? "Mode is locked after first message" : undefined
-          }
-        >
-          {triggerContent}
-        </button>
-      </Popover.Trigger>
-
-      <Popover.Content
-        className={styles.content}
-        side="top"
-        align="start"
-        sideOffset={8}
-      >
-        <div className={styles.modeList} ref={modeListRef}>
-          {modes.map((mode, index) => {
-            const isSelected = effectiveMode === mode.id;
-            return (
-              <React.Fragment key={mode.id}>
-                {index > 0 && (
-                  <Separator size="4" className={styles.separator} />
-                )}
-                <ModeMenuItem
-                  ref={isSelected ? selectedModeRef : undefined}
-                  mode={mode}
-                  isSelected={isSelected}
-                  onSelect={() => {
-                    onModeChange(mode.id, mode.thread_defaults);
-                    setIsOpen(false);
-                  }}
-                  disabled={isModeLocked}
-                />
-              </React.Fragment>
-            );
-          })}
-          <Separator size="4" className={styles.separator} />
+    <>
+      <Popover.Root open={isOpen} onOpenChange={setIsOpen}>
+        <Popover.Trigger>
           <button
-            className={styles.addModeItem}
-            onClick={handleCreateNewMode}
+            className={`${styles.trigger} ${
+              isModeDisabled ? styles.disabled : ""
+            }`}
+            disabled={isModeDisabled}
             type="button"
+            title={
+              hasMessages
+                ? "Click to switch mode (context will be preserved)"
+                : undefined
+            }
           >
-            <Text size="1">Create new mode...</Text>
+            {triggerContent}
           </button>
-        </div>
-      </Popover.Content>
-    </Popover.Root>
+        </Popover.Trigger>
+
+        <Popover.Content
+          className={styles.content}
+          side="top"
+          align="start"
+          sideOffset={8}
+        >
+          <div className={styles.modeList} ref={modeListRef}>
+            {modes.map((mode, index) => {
+              const isSelected = effectiveMode === mode.id;
+              return (
+                <React.Fragment key={mode.id}>
+                  {index > 0 && (
+                    <Separator size="4" className={styles.separator} />
+                  )}
+                  <ModeMenuItem
+                    ref={isSelected ? selectedModeRef : undefined}
+                    mode={mode}
+                    isSelected={isSelected}
+                    onSelect={() => handleModeSelect(mode)}
+                    disabled={false}
+                    showTransitionHint={hasMessages}
+                    isSelfSwitch={hasMessages && isSelected}
+                  />
+                </React.Fragment>
+              );
+            })}
+            <Separator size="4" className={styles.separator} />
+            <button
+              className={styles.addModeItem}
+              onClick={handleCreateNewMode}
+              type="button"
+            >
+              <Text size="1">Create new mode...</Text>
+            </button>
+          </div>
+        </Popover.Content>
+      </Popover.Root>
+
+      {targetModeForTransition && currentChatId && (
+        <ModeTransitionDialog
+          open={transitionDialogOpen}
+          onOpenChange={handleTransitionDialogClose}
+          chatId={currentChatId}
+          currentMode={effectiveMode}
+          targetMode={targetModeForTransition.id}
+          targetModeTitle={targetModeForTransition.title}
+          targetModeDescription={targetModeForTransition.description}
+        />
+      )}
+    </>
   );
 };
 
@@ -182,10 +228,15 @@ type ModeMenuItemProps = {
   isSelected: boolean;
   onSelect: () => void;
   disabled?: boolean;
+  showTransitionHint?: boolean;
+  isSelfSwitch?: boolean;
 };
 
 const ModeMenuItem = React.forwardRef<HTMLButtonElement, ModeMenuItemProps>(
-  ({ mode, isSelected, onSelect, disabled }, ref) => {
+  (
+    { mode, isSelected, onSelect, disabled, showTransitionHint, isSelfSwitch },
+    ref,
+  ) => {
     return (
       <button
         ref={ref}
@@ -197,9 +248,20 @@ const ModeMenuItem = React.forwardRef<HTMLButtonElement, ModeMenuItemProps>(
         disabled={disabled}
       >
         <Flex direction="column" gap="1" style={{ width: "100%" }}>
-          <Text size="1" weight="medium">
-            {mode.title}
-          </Text>
+          <Flex align="center" gap="2">
+            <Text size="1" weight="medium">
+              {mode.title}
+            </Text>
+            {showTransitionHint && (
+              <Badge
+                size="1"
+                color={isSelfSwitch ? "green" : "amber"}
+                variant="soft"
+              >
+                {isSelfSwitch ? "restart" : "switch"}
+              </Badge>
+            )}
+          </Flex>
 
           {mode.description && (
             <Text size="1" color="gray" className={styles.description}>

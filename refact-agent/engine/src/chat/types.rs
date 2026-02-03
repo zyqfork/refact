@@ -79,7 +79,18 @@ pub struct ThreadParams {
     pub model: String,
     pub mode: String,
     pub tool_use: String,
+    #[serde(default)]
     pub boost_reasoning: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     pub context_tokens_cap: Option<usize>,
     pub include_project_info: bool,
     pub checkpoints_enabled: bool,
@@ -108,6 +119,11 @@ impl Default for ThreadParams {
             mode: "agent".to_string(),
             tool_use: "agent".to_string(),
             boost_reasoning: false,
+            reasoning_effort: None,
+            temperature: None,
+            frequency_penalty: None,
+            max_tokens: None,
+            parallel_tool_calls: None,
             context_tokens_cap: None,
             include_project_info: true,
             checkpoints_enabled: true,
@@ -230,6 +246,11 @@ pub enum ChatEvent {
         subchat_id: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attached_files: Vec<String>,
+    },
+    RuntimeUpdated {
+        state: SessionState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     Ack {
         client_request_id: String,
@@ -489,6 +510,11 @@ mod tests {
         assert_eq!(params.mode, "agent");
         assert_eq!(params.tool_use, "agent");
         assert!(!params.boost_reasoning);
+        assert!(params.reasoning_effort.is_none());
+        assert!(params.temperature.is_none());
+        assert!(params.frequency_penalty.is_none());
+        assert!(params.max_tokens.is_none());
+        assert!(params.parallel_tool_calls.is_none());
         assert!(params.include_project_info);
         assert!(params.checkpoints_enabled);
         assert!(!params.is_title_generated);
@@ -708,5 +734,26 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["client_request_id"], "req-1");
         assert_eq!(json["type"], "abort");
+    }
+
+    #[test]
+    fn test_runtime_updated_serde() {
+        let event = ChatEvent::RuntimeUpdated {
+            state: SessionState::Completed,
+            error: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "runtime_updated");
+        assert_eq!(json["state"], "completed");
+        assert!(json.get("error").is_none());
+
+        let event_with_error = ChatEvent::RuntimeUpdated {
+            state: SessionState::Error,
+            error: Some("test error".into()),
+        };
+        let json2 = serde_json::to_value(&event_with_error).unwrap();
+        assert_eq!(json2["type"], "runtime_updated");
+        assert_eq!(json2["state"], "error");
+        assert_eq!(json2["error"], "test error");
     }
 }

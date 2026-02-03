@@ -163,6 +163,79 @@ pub fn apply_setparams_patch(
             changed = true;
         }
     }
+    if let Some(effort_val) = patch.get("reasoning_effort") {
+        let new_val = if effort_val.is_null() {
+            None
+        } else if let Some(effort) = effort_val.as_str() {
+            if effort.is_empty() { None } else { Some(effort.to_string()) }
+        } else {
+            thread.reasoning_effort.clone()
+        };
+        if thread.reasoning_effort != new_val {
+            thread.reasoning_effort = new_val;
+            changed = true;
+        }
+    }
+    if let Some(temp_val) = patch.get("temperature") {
+        if temp_val.is_null() {
+            if thread.temperature.is_some() {
+                thread.temperature = None;
+                changed = true;
+            }
+        } else if let Some(t) = temp_val.as_f64() {
+            let new_val = Some((t as f32).clamp(0.0, 2.0));
+            if thread.temperature != new_val {
+                thread.temperature = new_val;
+                changed = true;
+            }
+        }
+        // Invalid type (not null, not number) - ignore, keep current value
+    }
+    if let Some(freq_val) = patch.get("frequency_penalty") {
+        if freq_val.is_null() {
+            if thread.frequency_penalty.is_some() {
+                thread.frequency_penalty = None;
+                changed = true;
+            }
+        } else if let Some(f) = freq_val.as_f64() {
+            let new_val = Some((f as f32).clamp(-2.0, 2.0));
+            if thread.frequency_penalty != new_val {
+                thread.frequency_penalty = new_val;
+                changed = true;
+            }
+        }
+        // Invalid type - ignore
+    }
+    if let Some(max_val) = patch.get("max_tokens") {
+        if max_val.is_null() {
+            if thread.max_tokens.is_some() {
+                thread.max_tokens = None;
+                changed = true;
+            }
+        } else if let Some(m) = max_val.as_u64() {
+            let new_val = Some((m as usize).min(1_000_000));
+            if thread.max_tokens != new_val {
+                thread.max_tokens = new_val;
+                changed = true;
+            }
+        }
+        // Invalid type - ignore
+    }
+    if let Some(parallel_val) = patch.get("parallel_tool_calls") {
+        if parallel_val.is_null() {
+            if thread.parallel_tool_calls.is_some() {
+                thread.parallel_tool_calls = None;
+                changed = true;
+            }
+        } else if let Some(p) = parallel_val.as_bool() {
+            let new_val = Some(p);
+            if thread.parallel_tool_calls != new_val {
+                thread.parallel_tool_calls = new_val;
+                changed = true;
+            }
+        }
+        // Invalid type - ignore
+    }
     if let Some(tool_use) = patch.get("tool_use").and_then(|v| v.as_str()) {
         if thread.tool_use != tool_use {
             thread.tool_use = tool_use.to_string();
@@ -170,11 +243,19 @@ pub fn apply_setparams_patch(
         }
     }
     if let Some(cap) = patch.get("context_tokens_cap") {
-        let new_cap = cap.as_u64().map(|n| n as usize);
-        if thread.context_tokens_cap != new_cap {
-            thread.context_tokens_cap = new_cap;
-            changed = true;
+        if cap.is_null() {
+            if thread.context_tokens_cap.is_some() {
+                thread.context_tokens_cap = None;
+                changed = true;
+            }
+        } else if let Some(n) = cap.as_u64() {
+            let new_cap = Some(n as usize);
+            if thread.context_tokens_cap != new_cap {
+                thread.context_tokens_cap = new_cap;
+                changed = true;
+            }
         }
+        // Invalid type (not null, not number) - ignore, keep current value
     }
     if let Some(include) = patch.get("include_project_info").and_then(|v| v.as_bool()) {
         if thread.include_project_info != include {
@@ -613,7 +694,7 @@ fn is_allowed_role_for_restore(role: &str) -> bool {
 
 /// Sanitize message for branching - preserves conversation structure but strips:
 /// - tool_calls from assistant messages (security: prevents prerun of injected tool calls)
-/// - transient metadata (usage, checkpoints, citations, etc.)
+/// - transient metadata (usage, checkpoints, etc.)
 fn sanitize_message_for_restore(msg: &ChatMessage) -> ChatMessage {
     ChatMessage {
         message_id: Uuid::new_v4().to_string(),
@@ -626,7 +707,7 @@ fn sanitize_message_for_restore(msg: &ChatMessage) -> ChatMessage {
         checkpoints: vec![],  // Strip checkpoint data
         reasoning_content: msg.reasoning_content.clone(),
         thinking_blocks: msg.thinking_blocks.clone(),
-        citations: vec![],  // Strip citations
+        citations: msg.citations.clone(),  // Preserve citations (e.g., from web_search)
         finish_reason: None,  // Strip finish reason
         extra: serde_json::Map::new(),  // Strip extra provider-specific data
         output_filter: None,
@@ -959,6 +1040,16 @@ mod tests {
         let (changed, _) = apply_setparams_patch(&mut thread, &patch);
         assert!(changed);
         assert!(thread.context_tokens_cap.is_none());
+    }
+
+    #[test]
+    fn test_apply_setparams_context_tokens_cap_invalid_type_ignored() {
+        let mut thread = ThreadParams::default();
+        thread.context_tokens_cap = Some(4096);
+        let patch = json!({"context_tokens_cap": "invalid"});
+        let (changed, _) = apply_setparams_patch(&mut thread, &patch);
+        assert!(!changed);
+        assert_eq!(thread.context_tokens_cap, Some(4096)); // Value preserved
     }
 
     #[test]

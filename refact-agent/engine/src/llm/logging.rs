@@ -3,7 +3,7 @@ use serde_json::Value;
 const REDACTED: &str = "[REDACTED]";
 const MAX_CONTENT_LOG_LENGTH: usize = 500;
 
-fn safe_truncate(s: &str, max_len: usize) -> &str {
+pub fn safe_truncate(s: &str, max_len: usize) -> &str {
     if s.len() <= max_len {
         return s;
     }
@@ -40,6 +40,26 @@ fn sanitize_messages(messages: &mut Value) {
                 if let Some(content) = obj.get_mut("content") {
                     truncate_content(content);
                 }
+                // Sanitize tool_calls[].function.arguments (OpenAI Chat format)
+                if let Some(tool_calls) = obj.get_mut("tool_calls") {
+                    sanitize_tool_calls(tool_calls);
+                }
+            }
+        }
+    }
+}
+
+fn sanitize_tool_calls(tool_calls: &mut Value) {
+    if let Some(arr) = tool_calls.as_array_mut() {
+        for tc in arr {
+            if let Some(obj) = tc.as_object_mut() {
+                if let Some(function) = obj.get_mut("function") {
+                    if let Some(func_obj) = function.as_object_mut() {
+                        if let Some(arguments) = func_obj.get_mut("arguments") {
+                            truncate_string(arguments);
+                        }
+                    }
+                }
             }
         }
     }
@@ -57,8 +77,21 @@ fn sanitize_input(input: &mut Value) {
         Value::Array(arr) => {
             for item in arr {
                 if let Some(obj) = item.as_object_mut() {
+                    // Sanitize message content
                     if let Some(content) = obj.get_mut("content") {
                         truncate_content(content);
+                    }
+                    // Sanitize function_call arguments (OpenAI Responses format)
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                        if let Some(arguments) = obj.get_mut("arguments") {
+                            truncate_string(arguments);
+                        }
+                    }
+                    // Sanitize function_call_output (OpenAI Responses format)
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("function_call_output") {
+                        if let Some(output) = obj.get_mut("output") {
+                            truncate_string(output);
+                        }
                     }
                 }
             }
@@ -242,5 +275,65 @@ mod tests {
         let sanitized = sanitize_request_for_logging(&body);
         let data = &sanitized["messages"][0]["content"][0]["source"]["data"];
         assert_eq!(data, "[REDACTED]");
+    }
+
+    #[test]
+    fn test_sanitize_request_truncates_tool_call_arguments() {
+        let long_args = format!(r#"{{"file_path": "/secret/path/to/file.txt", "content": "{}"}}"#, "x".repeat(1000));
+        let body = json!({
+            "messages": [{
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "file_write",
+                        "arguments": long_args
+                    }
+                }]
+            }]
+        });
+        let sanitized = sanitize_request_for_logging(&body);
+        let args = sanitized["messages"][0]["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
+        assert!(args.len() < 600);
+        assert!(args.contains("[truncated"));
+    }
+
+    #[test]
+    fn test_sanitize_request_truncates_responses_function_call() {
+        let long_args = "x".repeat(1000);
+        let body = json!({
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_abc",
+                    "name": "read_file",
+                    "arguments": long_args
+                }
+            ]
+        });
+        let sanitized = sanitize_request_for_logging(&body);
+        let args = sanitized["input"][0]["arguments"].as_str().unwrap();
+        assert!(args.len() < 600);
+        assert!(args.contains("[truncated"));
+    }
+
+    #[test]
+    fn test_sanitize_request_truncates_responses_function_call_output() {
+        let long_output = "SECRET_FILE_CONTENT_".repeat(100);
+        let body = json!({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_abc",
+                    "output": long_output
+                }
+            ]
+        });
+        let sanitized = sanitize_request_for_logging(&body);
+        let output = sanitized["input"][0]["output"].as_str().unwrap();
+        assert!(output.len() < 600);
+        assert!(output.contains("[truncated"));
     }
 }

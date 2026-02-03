@@ -14,8 +14,10 @@ import {
   Skeleton,
   Slider,
   Badge,
+  TextField,
 } from "@radix-ui/themes";
-import { ChevronDownIcon } from "@radix-ui/react-icons";
+import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
+import * as Collapsible from "@radix-ui/react-collapsible";
 import { useAppSelector, useAppDispatch, useCapsForToolUse } from "../../hooks";
 import { useGetCapsQuery, CapCost } from "../../services/refact/caps";
 import {
@@ -25,7 +27,15 @@ import {
   selectIsStreaming,
   selectIsWaiting,
   selectThreadBoostReasoning,
+  selectTemperature,
+  selectFrequencyPenalty,
+  selectMaxTokens,
+  selectParallelToolCalls,
   setContextTokensCap,
+  setTemperature,
+  setFrequencyPenalty,
+  setMaxTokens,
+  setParallelToolCalls,
 } from "../../features/Chat/Thread";
 import { push } from "../../features/Pages/pagesSlice";
 import { enrichAndGroupModels } from "../../utils/enrichModels";
@@ -99,6 +109,10 @@ export const ChatSettingsDropdown: React.FC = () => {
   const contextCap = useAppSelector(selectContextTokensCap);
   const threadModel = useAppSelector(selectModel);
   const isBoostReasoningEnabled = useAppSelector(selectThreadBoostReasoning);
+  const threadTemperature = useAppSelector(selectTemperature);
+  const threadFrequencyPenalty = useAppSelector(selectFrequencyPenalty);
+  const threadMaxTokens = useAppSelector(selectMaxTokens);
+  const threadParallelToolCalls = useAppSelector(selectParallelToolCalls);
 
   const caps = useCapsForToolUse();
   const capsQuery = useGetCapsQuery(undefined);
@@ -115,6 +129,7 @@ export const ChatSettingsDropdown: React.FC = () => {
   // Model data
   const currentModelName = caps.currentModel || "Select model";
   const [isOpen, setIsOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const selectedModelRef = useRef<HTMLButtonElement>(null);
   const modelListRef = useRef<HTMLDivElement>(null);
 
@@ -185,6 +200,33 @@ export const ChatSettingsDropdown: React.FC = () => {
   const [localSliderValue, setLocalSliderValue] = useState<number | null>(null);
   const displayCap = localSliderValue ?? effectiveCap;
 
+  const [localTemperature, setLocalTemperature] = useState<number | null>(null);
+  const [localFrequencyPenalty, setLocalFrequencyPenalty] = useState<
+    number | null
+  >(null);
+  const [localMaxTokens, setLocalMaxTokens] = useState<string | null>(null);
+  const displayTemperature = localTemperature ?? threadTemperature;
+  const displayFrequencyPenalty =
+    localFrequencyPenalty ?? threadFrequencyPenalty;
+  const displayMaxTokens = localMaxTokens ?? threadMaxTokens?.toString() ?? "";
+
+  // Reset local state when chatId changes or popover closes
+  useEffect(() => {
+    setLocalSliderValue(null);
+    setLocalTemperature(null);
+    setLocalFrequencyPenalty(null);
+    setLocalMaxTokens(null);
+  }, [chatId]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setLocalSliderValue(null);
+      setLocalTemperature(null);
+      setLocalFrequencyPenalty(null);
+      setLocalMaxTokens(null);
+    }
+  }, [isOpen]);
+
   // Handlers
   const handleModelSelect = useCallback(
     (modelValue: string) => {
@@ -229,6 +271,81 @@ export const ChatSettingsDropdown: React.FC = () => {
     },
     [handleReasoningChange, noop],
   );
+
+  const handleTemperatureChange = useCallback((values: number[]) => {
+    setLocalTemperature(values[0]);
+  }, []);
+
+  const handleTemperatureCommit = useCallback(
+    (values: number[]) => {
+      dispatch(setTemperature({ chatId, value: values[0] }));
+      setLocalTemperature(null);
+    },
+    [dispatch, chatId],
+  );
+
+  const handleTemperatureReset = useCallback(() => {
+    dispatch(setTemperature({ chatId, value: null }));
+    setLocalTemperature(null);
+  }, [dispatch, chatId]);
+
+  const handleFrequencyPenaltyChange = useCallback((values: number[]) => {
+    setLocalFrequencyPenalty(values[0]);
+  }, []);
+
+  const handleFrequencyPenaltyCommit = useCallback(
+    (values: number[]) => {
+      dispatch(setFrequencyPenalty({ chatId, value: values[0] }));
+      setLocalFrequencyPenalty(null);
+    },
+    [dispatch, chatId],
+  );
+
+  const handleFrequencyPenaltyReset = useCallback(() => {
+    dispatch(setFrequencyPenalty({ chatId, value: null }));
+    setLocalFrequencyPenalty(null);
+  }, [dispatch, chatId]);
+
+  const handleMaxTokensChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setLocalMaxTokens(e.target.value);
+    },
+    [],
+  );
+
+  const handleMaxTokensBlur = useCallback(() => {
+    if (localMaxTokens === null) return;
+    const value = localMaxTokens ? parseInt(localMaxTokens, 10) : null;
+    if (value === null || (!isNaN(value) && value >= 0)) {
+      dispatch(setMaxTokens({ chatId, value }));
+    }
+    setLocalMaxTokens(null);
+  }, [dispatch, chatId, localMaxTokens]);
+
+  const handleMaxTokensKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        handleMaxTokensBlur();
+      }
+    },
+    [handleMaxTokensBlur],
+  );
+
+  const handleMaxTokensReset = useCallback(() => {
+    dispatch(setMaxTokens({ chatId, value: null }));
+    setLocalMaxTokens(null);
+  }, [dispatch, chatId]);
+
+  const handleParallelToolCallsChange = useCallback(
+    (checked: boolean) => {
+      dispatch(setParallelToolCalls({ chatId, value: checked }));
+    },
+    [dispatch, chatId],
+  );
+
+  const handleParallelToolCallsReset = useCallback(() => {
+    dispatch(setParallelToolCalls({ chatId, value: null }));
+  }, [dispatch, chatId]);
 
   // Loading state
   if (caps.loading || !areCapsInitialized) {
@@ -448,6 +565,157 @@ export const ChatSettingsDropdown: React.FC = () => {
             </Flex>
           </div>
         )}
+
+        <Separator size="4" />
+
+        {/* Advanced Settings Section */}
+        <Collapsible.Root open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <Collapsible.Trigger asChild>
+            <button
+              className={styles.advancedTrigger}
+              type="button"
+              disabled={isInteractionDisabled}
+            >
+              <Flex align="center" gap="1">
+                <ChevronRightIcon
+                  className={`${styles.advancedChevron} ${
+                    advancedOpen ? styles.advancedChevronOpen : ""
+                  }`}
+                />
+                <Text size="1" weight="medium">
+                  Advanced settings
+                </Text>
+              </Flex>
+            </button>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            <div className={styles.advancedContent}>
+              {/* Temperature */}
+              <div className={styles.advancedRow}>
+                <Flex justify="between" align="center" mb="1">
+                  <Text size="1" color="gray">
+                    Temperature
+                  </Text>
+                  <Flex align="center" gap="2">
+                    <Text size="1" weight="medium">
+                      {displayTemperature?.toFixed(1) ?? "default"}
+                    </Text>
+                    {threadTemperature !== undefined && (
+                      <button
+                        type="button"
+                        className={styles.resetButton}
+                        onClick={handleTemperatureReset}
+                        disabled={isInteractionDisabled}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </Flex>
+                </Flex>
+                <Slider
+                  size="1"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={[displayTemperature ?? 0.7]}
+                  onValueChange={handleTemperatureChange}
+                  onValueCommit={handleTemperatureCommit}
+                  disabled={isInteractionDisabled}
+                />
+              </div>
+
+              {/* Frequency Penalty */}
+              <div className={styles.advancedRow}>
+                <Flex justify="between" align="center" mb="1">
+                  <Text size="1" color="gray">
+                    Frequency penalty
+                  </Text>
+                  <Flex align="center" gap="2">
+                    <Text size="1" weight="medium">
+                      {displayFrequencyPenalty?.toFixed(1) ?? "default"}
+                    </Text>
+                    {threadFrequencyPenalty !== undefined && (
+                      <button
+                        type="button"
+                        className={styles.resetButton}
+                        onClick={handleFrequencyPenaltyReset}
+                        disabled={isInteractionDisabled}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </Flex>
+                </Flex>
+                <Slider
+                  size="1"
+                  min={-2}
+                  max={2}
+                  step={0.1}
+                  value={[displayFrequencyPenalty ?? 0]}
+                  onValueChange={handleFrequencyPenaltyChange}
+                  onValueCommit={handleFrequencyPenaltyCommit}
+                  disabled={isInteractionDisabled}
+                />
+              </div>
+
+              {/* Max Tokens */}
+              <div className={styles.advancedRow}>
+                <Flex justify="between" align="center" mb="1">
+                  <Text size="1" color="gray">
+                    Max tokens
+                  </Text>
+                  {threadMaxTokens !== undefined && (
+                    <button
+                      type="button"
+                      className={styles.resetButton}
+                      onClick={handleMaxTokensReset}
+                      disabled={isInteractionDisabled}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </Flex>
+                <TextField.Root
+                  size="1"
+                  type="number"
+                  placeholder="default"
+                  value={displayMaxTokens}
+                  onChange={handleMaxTokensChange}
+                  onBlur={handleMaxTokensBlur}
+                  onKeyDown={handleMaxTokensKeyDown}
+                  disabled={isInteractionDisabled}
+                />
+              </div>
+
+              {/* Parallel Tool Calls */}
+              <div className={styles.advancedRow}>
+                <Flex align="center" justify="between">
+                  <Text size="1" color="gray">
+                    Parallel tool calls
+                  </Text>
+                  <Flex align="center" gap="2">
+                    <Switch
+                      size="1"
+                      checked={threadParallelToolCalls ?? false}
+                      onCheckedChange={handleParallelToolCallsChange}
+                      disabled={isInteractionDisabled}
+                    />
+                    {threadParallelToolCalls !== undefined && (
+                      <button
+                        type="button"
+                        className={styles.resetButton}
+                        onClick={handleParallelToolCallsReset}
+                        disabled={isInteractionDisabled}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </Flex>
+                </Flex>
+              </div>
+            </div>
+          </Collapsible.Content>
+        </Collapsible.Root>
       </Popover.Content>
     </Popover.Root>
   );

@@ -372,6 +372,11 @@ impl Tool for ToolTaskSpawnAgent {
                 parent_id: None,
                 link_type: None,
                 root_chat_id: None,
+                reasoning_effort: None,
+                temperature: None,
+                frequency_penalty: None,
+                max_tokens: None,
+                parallel_tool_calls: None,
             };
 
             let user_prompt = build_agent_prompt(

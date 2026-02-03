@@ -260,6 +260,10 @@ impl ChatSession {
         let state_changed = old_state != state;
         let error_changed = old_error != error;
         if state_changed || error_changed {
+            self.emit(ChatEvent::RuntimeUpdated {
+                state,
+                error: error.clone(),
+            });
             self.emit_trajectory_state_change();
         }
     }

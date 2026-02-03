@@ -410,6 +410,25 @@ pub async fn load_trajectory_for_chat(
             .get("root_chat_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        reasoning_effort: t
+            .get("reasoning_effort")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        temperature: t
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .map(|n| n as f32),
+        frequency_penalty: t
+            .get("frequency_penalty")
+            .and_then(|v| v.as_f64())
+            .map(|n| n as f32),
+        max_tokens: t
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
+        parallel_tool_calls: t
+            .get("parallel_tool_calls")
+            .and_then(|v| v.as_bool()),
     };
 
     let auto_approve_editing_tools_present = t.get("auto_approve_editing_tools").and_then(|v| v.as_bool()).is_some();
@@ -2533,6 +2552,11 @@ mod tests {
                 mode: "AGENT".to_string(),
                 tool_use: "agent".to_string(),
                 boost_reasoning: true,
+                reasoning_effort: None,
+                temperature: None,
+                frequency_penalty: None,
+                max_tokens: None,
+                parallel_tool_calls: None,
                 context_tokens_cap: Some(8000),
                 include_project_info: false,
                 checkpoints_enabled: true,

@@ -1,11 +1,14 @@
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde_json::{json, Value};
 
-use crate::call_validation::{ChatToolCall, ChatToolFunction, ChatUsage};
-use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError};
+use crate::call_validation::ChatUsage;
+use crate::llm::adapter::{AdapterSettings, HttpParts, LlmWireAdapter, StreamParseError, extract_extra_fields, insert_extra_headers};
 use crate::llm::canonical::{
-    CanonicalToolChoice, LlmRequest, LlmResponse, LlmStreamDelta, ResponseFormat,
+    CanonicalToolChoice, LlmRequest, LlmStreamDelta, ResponseFormat,
 };
+
+/// Fields that cannot be overridden via extra_body for security
+const PROTECTED_FIELDS: &[&str] = &["model", "messages", "stream", "tools", "tool_choice", "stream_options"];
 
 pub struct OpenAiChatAdapter;
 
@@ -26,18 +29,11 @@ impl LlmWireAdapter for OpenAiChatAdapter {
         }
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(&format!("refact-lsp/{}", env!("CARGO_PKG_VERSION")))
+            HeaderValue::from_str(&format!("refact-lsp {}", env!("CARGO_PKG_VERSION")))
                 .unwrap_or_else(|_| HeaderValue::from_static("refact-lsp")),
         );
 
-        for (key, value) in &settings.extra_headers {
-            if let (Ok(name), Ok(val)) = (
-                reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                HeaderValue::from_str(value),
-            ) {
-                headers.insert(name, val);
-            }
-        }
+        insert_extra_headers(&mut headers, &settings.extra_headers);
 
         let messages = convert_messages_to_openai(&req.messages);
 
@@ -59,6 +55,10 @@ impl LlmWireAdapter for OpenAiChatAdapter {
 
         if let Some(temp) = req.params.temperature {
             body["temperature"] = json!(temp);
+        }
+
+        if let Some(freq_penalty) = req.params.frequency_penalty {
+            body["frequency_penalty"] = json!(freq_penalty);
         }
 
         if !req.params.stop.is_empty() {
@@ -99,8 +99,19 @@ impl LlmWireAdapter for OpenAiChatAdapter {
         if let Some(extra) = &req.extra_body {
             if let Some(obj) = body.as_object_mut() {
                 for (k, v) in extra {
+                    if PROTECTED_FIELDS.contains(&k.as_str()) {
+                        tracing::warn!("extra_body attempted to override protected field '{}', ignoring", k);
+                        continue;
+                    }
                     obj.insert(k.clone(), v.clone());
                 }
+            }
+        }
+
+        // Add meta field for Refact cloud (when support_metadata is enabled)
+        if let Some(meta) = &req.meta {
+            if let Ok(meta_value) = serde_json::to_value(meta) {
+                body["meta"] = meta_value;
             }
         }
 
@@ -166,6 +177,17 @@ impl LlmWireAdapter for OpenAiChatAdapter {
                             }
                         }
                     }
+
+                    // Citations support (OpenAI-compatible, e.g., Perplexity, litellm)
+                    if let Some(citations) = delta.get("citations") {
+                        if let Some(arr) = citations.as_array() {
+                            for citation in arr {
+                                deltas.push(LlmStreamDelta::AddCitation {
+                                    citation: citation.clone(),
+                                });
+                            }
+                        }
+                    }
                 }
 
                 if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
@@ -182,58 +204,13 @@ impl LlmWireAdapter for OpenAiChatAdapter {
             }
         }
 
-        Ok(deltas)
-    }
-
-    fn parse_response(&self, json: Value) -> Result<LlmResponse, String> {
-        if let Some(error) = json.get("error") {
-            return Err(error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown error")
-                .to_string());
+        // Extract Refact-specific extra fields (metering, billing, etc.)
+        let extra = extract_extra_fields(&json);
+        if !extra.is_empty() {
+            deltas.push(LlmStreamDelta::MergeExtra { extra });
         }
 
-        let choices = json
-            .get("choices")
-            .and_then(|c| c.as_array())
-            .ok_or("missing choices in response")?;
-
-        let choice = choices.first().ok_or("empty choices array")?;
-        let message = choice.get("message").ok_or("missing message in choice")?;
-
-        let content = message
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let reasoning_content = message
-            .get("reasoning_content")
-            .and_then(|r| r.as_str())
-            .map(|s| s.to_string());
-
-        let tool_calls = message
-            .get("tool_calls")
-            .and_then(|tc| tc.as_array())
-            .map(|arr| arr.iter().filter_map(|tc| parse_tool_call(tc)).collect())
-            .unwrap_or_default();
-
-        let finish_reason = choice
-            .get("finish_reason")
-            .and_then(|r| r.as_str())
-            .map(|s| s.to_string());
-
-        let usage = json.get("usage").and_then(parse_openai_usage);
-
-        Ok(LlmResponse {
-            content,
-            reasoning_content,
-            tool_calls,
-            finish_reason,
-            usage,
-            ..Default::default()
-        })
+        Ok(deltas)
     }
 }
 
@@ -243,9 +220,15 @@ fn convert_messages_to_openai(messages: &[crate::call_validation::ChatMessage]) 
         .filter_map(|msg| {
             let role = match msg.role.as_str() {
                 "user" | "assistant" | "system" | "tool" => msg.role.clone(),
-                "plain_text" | "cd_instruction" => "user".to_string(),
+                "diff" => "tool".to_string(),  // diff messages are tool results
+                "plain_text" | "cd_instruction" | "context_file" => "user".to_string(),
                 _ => return None,
             };
+
+            // Filter out tool results for server-executed tools
+            if (role == "tool" || msg.role == "diff") && msg.tool_call_id.starts_with("srvtoolu_") {
+                return None;
+            }
 
             let mut obj = json!({
                 "role": role,
@@ -294,6 +277,7 @@ fn convert_messages_to_openai(messages: &[crate::call_validation::ChatMessage]) 
             if let Some(tool_calls) = &msg.tool_calls {
                 let tc: Vec<Value> = tool_calls
                     .iter()
+                    .filter(|tc| !tc.id.starts_with("srvtoolu_"))  // Filter server-executed tools
                     .map(|tc| {
                         json!({
                             "id": tc.id,
@@ -305,7 +289,9 @@ fn convert_messages_to_openai(messages: &[crate::call_validation::ChatMessage]) 
                         })
                     })
                     .collect();
-                obj["tool_calls"] = json!(tc);
+                if !tc.is_empty() {
+                    obj["tool_calls"] = json!(tc);
+                }
             }
 
             if !msg.tool_call_id.is_empty() {
@@ -352,22 +338,6 @@ fn response_format_to_openai(format: &ResponseFormat) -> Value {
     }
 }
 
-fn parse_tool_call(tc: &Value) -> Option<ChatToolCall> {
-    Some(ChatToolCall {
-        id: tc.get("id")?.as_str()?.to_string(),
-        tool_type: tc
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("function")
-            .to_string(),
-        function: ChatToolFunction {
-            name: tc.get("function")?.get("name")?.as_str()?.to_string(),
-            arguments: tc.get("function")?.get("arguments")?.as_str()?.to_string(),
-        },
-        index: tc.get("index").and_then(|i| i.as_u64()).map(|i| i as usize),
-    })
-}
-
 fn parse_openai_usage(usage: &Value) -> Option<ChatUsage> {
     let prompt_tokens = usage
         .get("prompt_tokens")
@@ -380,7 +350,8 @@ fn parse_openai_usage(usage: &Value) -> Option<ChatUsage> {
     let total_tokens = usage
         .get("total_tokens")
         .and_then(|t| t.as_u64())
-        .unwrap_or(0) as usize;
+        .map(|v| v as usize)
+        .unwrap_or_else(|| prompt_tokens + completion_tokens);
     let cache_read = usage
         .get("prompt_tokens_details")
         .and_then(|d| d.get("cached_tokens"))
@@ -398,7 +369,7 @@ fn parse_openai_usage(usage: &Value) -> Option<ChatUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::call_validation::{ChatContent, ChatMessage};
+    use crate::call_validation::ChatMessage;
 
     fn default_settings() -> AdapterSettings {
         AdapterSettings {
@@ -409,6 +380,7 @@ mod tests {
             supports_tools: true,
             supports_reasoning: false,
             supports_max_completion_tokens: false,
+            eof_is_done: false,
         }
     }
 
@@ -495,51 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_response_basic() {
-        let adapter = OpenAiChatAdapter;
-        let json = json!({
-            "choices": [{
-                "message": {"content": "Hi there!"},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        });
-
-        let resp = adapter.parse_response(json).unwrap();
-
-        assert_eq!(resp.content, "Hi there!");
-        assert_eq!(resp.finish_reason, Some("stop".to_string()));
-        assert!(resp.usage.is_some());
-    }
-
-    #[test]
-    fn test_parse_response_with_tool_calls() {
-        let adapter = OpenAiChatAdapter;
-        let json = json!({
-            "choices": [{
-                "message": {
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": "{\"location\":\"NYC\"}"
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        });
-
-        let resp = adapter.parse_response(json).unwrap();
-
-        assert_eq!(resp.tool_calls.len(), 1);
-        assert_eq!(resp.tool_calls[0].id, "call_123");
-        assert_eq!(resp.tool_calls[0].function.name, "get_weather");
-    }
-
-    #[test]
     fn test_convert_messages_filters_unknown_roles() {
         let messages = vec![
             ChatMessage::new("user".to_string(), "hi".to_string()),
@@ -611,5 +538,163 @@ mod tests {
 
         assert_eq!(http.body["max_completion_tokens"], 500);
         assert!(http.body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn test_convert_messages_context_file_becomes_user() {
+        let messages = vec![
+            ChatMessage::new("system".to_string(), "You are helpful".to_string()),
+            ChatMessage::new("context_file".to_string(), "file content here".to_string()),
+            ChatMessage::new("user".to_string(), "What is this?".to_string()),
+        ];
+
+        let converted = convert_messages_to_openai(&messages);
+
+        assert_eq!(converted.len(), 3);
+        assert_eq!(converted[0]["role"], "system");
+        assert_eq!(converted[1]["role"], "user");
+        assert_eq!(converted[1]["content"], "file content here");
+        assert_eq!(converted[2]["role"], "user");
+    }
+
+    #[test]
+    fn test_extra_body_protected_fields_ignored() {
+        let adapter = OpenAiChatAdapter;
+        let mut req = LlmRequest::new("gpt-4".to_string(), vec![
+            ChatMessage::new("user".to_string(), "Hi".to_string()),
+        ]);
+        req.extra_body = Some(serde_json::Map::from_iter([
+            ("model".to_string(), json!("hacked-model")),
+            ("messages".to_string(), json!([{"role": "user", "content": "hacked"}])),
+            ("stream".to_string(), json!(false)),
+            ("custom_field".to_string(), json!("allowed")),
+        ]));
+
+        let http = adapter.build_http(&req, &default_settings()).unwrap();
+
+        // Protected fields should NOT be overridden
+        assert_eq!(http.body["model"], "gpt-4");
+        assert_ne!(http.body["messages"], json!([{"role": "user", "content": "hacked"}]));
+        assert_eq!(http.body["stream"], true); // Default is true
+        // Custom fields should be allowed
+        assert_eq!(http.body["custom_field"], "allowed");
+    }
+
+    #[test]
+    fn test_meta_field_included_for_refact_cloud() {
+        use crate::call_validation::ChatMeta;
+
+        let adapter = OpenAiChatAdapter;
+        let meta = ChatMeta {
+            chat_id: "test-chat-123".to_string(),
+            chat_mode: "agent".to_string(),
+            ..Default::default()
+        };
+        let req = LlmRequest::new("gpt-4".to_string(), vec![
+            ChatMessage::new("user".to_string(), "Hi".to_string()),
+        ]).with_meta(meta);
+
+        let http = adapter.build_http(&req, &default_settings()).unwrap();
+
+        // Meta field should be included
+        assert!(http.body.get("meta").is_some());
+        assert_eq!(http.body["meta"]["chat_id"], "test-chat-123");
+    }
+
+    #[test]
+    fn test_user_agent_format() {
+        let adapter = OpenAiChatAdapter;
+        let req = LlmRequest::new("gpt-4".to_string(), vec![
+            ChatMessage::new("user".to_string(), "Hi".to_string()),
+        ]);
+
+        let http = adapter.build_http(&req, &default_settings()).unwrap();
+
+        // User-Agent should use space separator (not slash) for Refact cloud compatibility
+        let ua = http.headers.get(USER_AGENT).unwrap().to_str().unwrap();
+        assert!(ua.starts_with("refact-lsp "), "User-Agent should start with 'refact-lsp ' (space, not slash)");
+        // Should match format: "refact-lsp X.Y.Z"
+        let parts: Vec<&str> = ua.split(' ').collect();
+        assert_eq!(parts.len(), 2, "User-Agent should have exactly 2 parts");
+        assert_eq!(parts[0], "refact-lsp");
+        // Version should be semver-like
+        assert!(parts[1].contains('.'), "Version should contain dots");
+    }
+
+    #[test]
+    fn test_server_executed_tools_filtered() {
+        use crate::call_validation::{ChatToolCall, ChatToolFunction};
+
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "Search for something".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("".to_string()),
+                tool_calls: Some(vec![
+                    ChatToolCall {
+                        id: "srvtoolu_123".to_string(),  // Server-executed
+                        index: Some(0),
+                        tool_type: "function".to_string(),
+                        function: ChatToolFunction {
+                            name: "web_search".to_string(),
+                            arguments: r#"{"query":"test"}"#.to_string(),
+                        },
+                    },
+                    ChatToolCall {
+                        id: "call_456".to_string(),  // Regular tool call
+                        index: Some(1),
+                        tool_type: "function".to_string(),
+                        function: ChatToolFunction {
+                            name: "cat".to_string(),
+                            arguments: r#"{"path":"file.txt"}"#.to_string(),
+                        },
+                    },
+                ]),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("search results".to_string()),
+                tool_call_id: "srvtoolu_123".to_string(),  // Server-executed result
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: crate::call_validation::ChatContent::SimpleText("file content".to_string()),
+                tool_call_id: "call_456".to_string(),  // Regular tool result
+                ..Default::default()
+            },
+        ];
+
+        let converted = convert_messages_to_openai(&messages);
+
+        // Should have 3 messages: user, assistant (with only regular tool call), tool result (only regular)
+        assert_eq!(converted.len(), 3);
+
+        // Assistant message should only have the regular tool call
+        let assistant = &converted[1];
+        let tool_calls = assistant["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], "call_456");
+
+        // Only regular tool result should be present
+        let tool_result = &converted[2];
+        assert_eq!(tool_result["tool_call_id"], "call_456");
+    }
+
+    #[test]
+    fn test_stream_citations_in_delta() {
+        let adapter = OpenAiChatAdapter;
+        let chunk = r#"{"id":"123","choices":[{"index":0,"delta":{"citations":[{"url":"https://example.com","title":"Example","snippet":"Some text"}]}}]}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+        let citation_count = deltas.iter().filter(|d| matches!(d, LlmStreamDelta::AddCitation { .. })).count();
+        assert_eq!(citation_count, 1);
+
+        // Verify citation content
+        if let Some(LlmStreamDelta::AddCitation { citation }) = deltas.iter().find(|d| matches!(d, LlmStreamDelta::AddCitation { .. })) {
+            assert_eq!(citation.get("url").and_then(|v| v.as_str()), Some("https://example.com"));
+            assert_eq!(citation.get("title").and_then(|v| v.as_str()), Some("Example"));
+        }
     }
 }

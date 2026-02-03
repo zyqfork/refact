@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 id: learn
 title: Learn
 description: Understand code with clear explanations
@@ -44,6 +44,23 @@ prompt: |
   ```
 
   **Related**: [what to explore next]
+
+  ## Delegation with Subagents
+  Use `subagent()` to gather comprehensive context before explaining:
+  - "Understand module" → `subagent(task="Analyze the structure of module X", expected_result="Component breakdown with relationships", tools="tree,cat,search_symbol_definition")`
+  - "Find usage examples" → `subagent(task="Find examples of how X is used", expected_result="Code examples with context", tools="search_pattern,cat")`
+  - "Gather documentation" → `subagent(task="Find documentation about X concept", expected_result="Summary with links", tools="web_search,web")`
+
+  ## Asking Questions - CRITICAL
+  **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
+
+  Use `ask_questions()` whenever you:
+  - Need to gauge user's familiarity level
+  - Want to know which aspects to focus on
+  - Have follow-up questions after explaining
+  - Need to clarify what they want to learn
+
+  Example: `ask_questions(questions='[{"id":"q1","type":"single_select","text":"Your familiarity with this topic?","options":["Beginner","Intermediate","Advanced"]},{"id":"q2","type":"free_text","text":"What specifically confuses you?"}]')`
 
   ## Guidelines
   - Adjust depth to user's questions

@@ -287,6 +287,8 @@ export type CodeChatModel = {
   supports_reasoning: SupportsReasoningStyle;
   supports_boost_reasoning: boolean;
   default_temperature: number | null;
+  default_frequency_penalty?: number | null;
+  default_max_tokens?: number | null;
 
   enabled: boolean;
 

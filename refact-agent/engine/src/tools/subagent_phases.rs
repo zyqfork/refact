@@ -194,6 +194,7 @@ pub async fn gather_files_phase(
         max_steps,
         false,
         None,
+        "agent".to_string(),
         Some(tool_call_id.clone()),
         Some(parent_subchat_tx.clone()),
         Some(parent_abort_flag),

@@ -46,6 +46,8 @@ export const TRAJECTORY_HANDOFF_PREVIEW_URL =
   "/v1/chats/{chat_id}/trajectory/handoff/preview";
 export const TRAJECTORY_HANDOFF_APPLY_URL =
   "/v1/chats/{chat_id}/trajectory/handoff/apply";
+export const TRAJECTORY_MODE_TRANSITION_APPLY_URL =
+  "/v1/chats/{chat_id}/trajectory/mode-transition/apply";
 
 // Providers & Models
 export const CONFIGURED_PROVIDERS_URL = "/v1/providers";

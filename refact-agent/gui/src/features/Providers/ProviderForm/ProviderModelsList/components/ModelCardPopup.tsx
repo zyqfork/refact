@@ -374,15 +374,47 @@ const ChatModelFields: FC<ChatModelFieldsProps> = ({
       .split("")
       .map((s) => (s === "." ? undefined : s));
 
-    if (value > 1 || digits.length > 8) {
-      e.target.value = "1";
+    if (value > 2 || digits.length > 8) {
+      e.target.value = "2";
     }
 
     setEditedModelData({
       ...editedModelData,
       type: "chat",
       default_temperature:
-        e.target.value === "" ? null : Math.min(parseFloat(e.target.value), 1),
+        e.target.value === "" ? null : Math.min(parseFloat(e.target.value), 2),
+    });
+  };
+
+  const handleFrequencyPenaltyChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    if (!editedModelData) return;
+    const value = parseFloat(e.target.value);
+
+    if (value < -2 || value > 2) {
+      e.target.value = Math.max(-2, Math.min(2, value)).toString();
+    }
+
+    setEditedModelData({
+      ...editedModelData,
+      type: "chat",
+      default_frequency_penalty:
+        e.target.value === ""
+          ? null
+          : Math.max(-2, Math.min(2, parseFloat(e.target.value))),
+    });
+  };
+
+  const handleMaxTokensChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!editedModelData) return;
+    const value = parseInt(e.target.value, 10);
+
+    setEditedModelData({
+      ...editedModelData,
+      type: "chat",
+      default_max_tokens:
+        e.target.value === "" || isNaN(value) ? null : Math.max(0, value),
     });
   };
 
@@ -420,10 +452,24 @@ const ChatModelFields: FC<ChatModelFieldsProps> = ({
       <FormField
         label="Default Temperature"
         value={editedModelData.default_temperature?.toString() ?? ""}
-        placeholder="Default temperature"
+        placeholder="Default temperature (0-2)"
         type="number"
-        max="1"
+        max="2"
         onChange={handleTemperatureChange}
+      />
+      <FormField
+        label="Default Frequency Penalty"
+        value={editedModelData.default_frequency_penalty?.toString() ?? ""}
+        placeholder="Default frequency penalty (-2 to 2)"
+        type="number"
+        onChange={handleFrequencyPenaltyChange}
+      />
+      <FormField
+        label="Default Max Tokens"
+        value={editedModelData.default_max_tokens?.toString() ?? ""}
+        placeholder="Default max tokens"
+        type="number"
+        onChange={handleMaxTokensChange}
       />
 
       <Flex direction="column" gap="2">

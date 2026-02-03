@@ -1486,6 +1486,8 @@ mod tests {
                 prompt_tokens: 100,
                 completion_tokens: 50,
                 total_tokens: 150,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
             }),
             finish_reason: Some("stop".to_string()),
             reasoning_content: Some("thinking...".to_string()),

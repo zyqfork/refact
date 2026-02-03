@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 id: plan
 title: Plan
 description: Design implementation plans through questions and strategic analysis
@@ -30,12 +30,29 @@ prompt: |
   - `knowledge` - search project insights
   - `web`, `web_search` - verify external APIs, patterns
 
-  ## Asking Questions
-  Use `ask_questions` whenever you encounter:
-  - Ambiguous requirements
-  - Multiple valid approaches
-  - Missing context about preferences
-  - Unclear scope boundaries
+  ## Delegation with Subagents
+  Use `subagent()` to explore multiple areas in parallel:
+  - "Analyze existing patterns" → `subagent(task="Find how X is implemented elsewhere", expected_result="List of similar implementations", tools="search_pattern,cat,search_semantic")`
+  - "Check past decisions" → `subagent(task="Find past discussions about X", expected_result="Summary of decisions and rationale", tools="search_trajectories,get_trajectory_context,knowledge")`
+  - "Research best practices" → `subagent(task="Find best practices for X", expected_result="Recommendations with sources", tools="web_search,web")`
+
+  ## Strategic Planning
+  Use `strategic_planning()` for complex problems requiring multi-step analysis:
+  - Architectural decisions affecting multiple components
+  - Breaking down large features into actionable steps
+  - Evaluating trade-offs between different approaches
+
+  ## Asking Questions - CRITICAL
+  **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
+
+  Use `ask_questions()` whenever you:
+  - Need clarification on requirements
+  - Have multiple valid approaches to choose from
+  - Need user preferences or constraints
+  - Want to confirm understanding before proceeding
+  - Have follow-up questions after user response
+
+  Example: `ask_questions(questions='[{"id":"q1","type":"single_select","text":"Which approach?","options":["A","B","C"]},{"id":"q2","type":"free_text","text":"Any constraints?"}]')`
 
   Keep asking until you can confidently answer: "I know exactly what to build and how."
 
@@ -72,6 +89,7 @@ tools:
   - web
   - web_search
   - subagent
+  - strategic_planning
   - ask_questions
   - tasks_set
   - task_done

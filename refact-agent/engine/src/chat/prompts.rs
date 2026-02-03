@@ -16,7 +16,7 @@ use super::system_context::{
     generate_git_info_prompt, gather_git_info, PROJECT_CONTEXT_MARKER,
 };
 use crate::yaml_configs::project_information::load_project_information_config;
-use crate::call_validation::{ChatMessage, ChatContent, ChatMode, ContextFile};
+use crate::call_validation::{ChatMessage, ChatContent, ContextFile, canonical_mode_id};
 use crate::tasks::storage::infer_task_id_from_chat_id;
 use crate::tools::tool_task_memory::load_task_memories;
 use crate::yaml_configs::customization_registry::{get_mode_config, map_legacy_mode_to_id};
@@ -411,12 +411,27 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
     }
 
     if !have_system {
-        match chat_meta.chat_mode {
-            ChatMode::EXPLORE
-            | ChatMode::AGENT
-            | ChatMode::NO_TOOLS
-            | ChatMode::TASK_PLANNER
-            | ChatMode::TASK_AGENT => {
+        let canonical_mode = canonical_mode_id(&chat_meta.chat_mode).unwrap_or_else(|_| "agent".to_string());
+        match canonical_mode.as_str() {
+            "configurator" => {
+                crate::integrations::config_chat::mix_config_messages(
+                    gcx.clone(),
+                    &chat_meta,
+                    &mut messages,
+                    stream_back_to_user,
+                )
+                .await;
+            }
+            "project_summary" => {
+                crate::integrations::project_summary_chat::mix_project_summary_messages(
+                    gcx.clone(),
+                    &chat_meta,
+                    &mut messages,
+                    stream_back_to_user,
+                )
+                .await;
+            }
+            _ => {
                 let base_prompt = get_mode_system_prompt(gcx.clone(), mode_id, Some(model_id)).await;
                 let system_message_content = system_prompt_add_extra_instructions(
                     gcx.clone(),
@@ -434,24 +449,6 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
                 stream_back_to_user.push_in_json(serde_json::json!(msg));
                 messages.insert(0, msg);
             }
-            ChatMode::CONFIGURE => {
-                crate::integrations::config_chat::mix_config_messages(
-                    gcx.clone(),
-                    &chat_meta,
-                    &mut messages,
-                    stream_back_to_user,
-                )
-                .await;
-            }
-            ChatMode::PROJECT_SUMMARY => {
-                crate::integrations::project_summary_chat::mix_project_summary_messages(
-                    gcx.clone(),
-                    &chat_meta,
-                    &mut messages,
-                    stream_back_to_user,
-                )
-                .await;
-            }
         }
     }
 
@@ -466,10 +463,8 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
         tracing::info!("Skipping project/system context injection (include_project_info=false)");
     }
 
-    if matches!(
-        chat_meta.chat_mode,
-        ChatMode::TASK_PLANNER | ChatMode::TASK_AGENT
-    ) {
+    let canonical_chat_mode = canonical_mode_id(&chat_meta.chat_mode).unwrap_or_else(|_| "agent".to_string());
+    if matches!(canonical_chat_mode.as_str(), "task_planner" | "task_agent") {
         match inject_task_memories(&gcx, &mut messages, stream_back_to_user, &chat_meta.chat_id)
             .await
         {

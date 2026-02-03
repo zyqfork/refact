@@ -9,11 +9,11 @@ use tokio::sync::RwLock as ARwLock;
 use crate::call_validation::ChatUsage;
 use crate::caps::BaseModelRecord;
 use crate::global_context::GlobalContext;
-use crate::llm::{LlmRequest, LlmStreamDelta, get_adapter};
+use crate::llm::{LlmRequest, LlmStreamDelta, get_adapter, safe_truncate, sanitize_request_for_logging, sanitize_headers_for_logging};
 use crate::llm::adapter::{AdapterSettings, StreamParseError};
 
 use super::types::{DeltaOp, stream_heartbeat, stream_idle_timeout, stream_total_timeout};
-use super::openai_merge::merge_tool_call;
+use super::openai_merge::ToolCallAccumulator;
 
 pub struct StreamRunParams {
     pub llm_request: LlmRequest,
@@ -80,6 +80,7 @@ pub async fn run_llm_stream<C: StreamCollector>(
         supports_tools: params.supports_tools,
         supports_reasoning: params.supports_reasoning,
         supports_max_completion_tokens: params.model_rec.supports_max_completion_tokens,
+        eof_is_done: params.model_rec.eof_is_done,
     };
 
     // Build HTTP request using adapter
@@ -90,10 +91,18 @@ pub async fn run_llm_stream<C: StreamCollector>(
         return Err("LLM endpoint URL is empty".to_string());
     }
 
+    // Log sanitized request for debugging (redacts secrets and truncates content)
+    tracing::debug!(
+        url = %http_parts.url,
+        headers = ?sanitize_headers_for_logging(&http_parts.headers),
+        body = %sanitize_request_for_logging(&http_parts.body),
+        "LLM streaming request"
+    );
+
     // Create event source for streaming
     let request = client
         .post(&http_parts.url)
-        .headers(http_parts.headers)
+        .headers(http_parts.headers.clone())
         .json(&http_parts.body);
 
     let mut event_source = EventSource::new(request)
@@ -129,7 +138,12 @@ pub async fn run_llm_stream<C: StreamCollector>(
             maybe_event = event_source.next() => {
                 match maybe_event {
                     Some(e) => e,
-                    None => break,
+                    None => {
+                        if !stream_done && !adapter_settings.eof_is_done {
+                            return Err("LLM stream ended unexpectedly without completion signal".to_string());
+                        }
+                        break;
+                    }
                 }
             }
         };
@@ -167,9 +181,9 @@ pub async fn run_llm_stream<C: StreamCollector>(
                         }
                         LlmStreamDelta::SetToolCalls { tool_calls } => {
                             for tc in &tool_calls {
-                                merge_tool_call(&mut acc.tool_calls, tc.clone());
+                                acc.tool_calls.merge(tc);
                             }
-                            ops.push(DeltaOp::SetToolCalls { tool_calls: acc.tool_calls.clone() });
+                            ops.push(DeltaOp::SetToolCalls { tool_calls: acc.tool_calls.finalize() });
                         }
                         LlmStreamDelta::SetThinkingBlocks { blocks } => {
                             acc.thinking_blocks = blocks.clone();
@@ -215,11 +229,29 @@ pub async fn run_llm_stream<C: StreamCollector>(
         .enumerate()
         .map(|(idx, acc)| {
             collector.on_finish(idx, acc.finish_reason.clone());
+
+            // Merge accumulated reasoning text into thinking_blocks if present.
+            // This is required for Anthropic tool calling - the thinking_blocks must contain
+            // both the thinking text AND the signature for multi-turn conversations.
+            let thinking_blocks = if !acc.thinking_blocks.is_empty() && !acc.reasoning.is_empty() {
+                acc.thinking_blocks.into_iter().map(|mut block| {
+                    if let Some(obj) = block.as_object_mut() {
+                        // Only add thinking text if block doesn't already have it
+                        if !obj.contains_key("thinking") {
+                            obj.insert("thinking".to_string(), json!(acc.reasoning.clone()));
+                        }
+                    }
+                    block
+                }).collect()
+            } else {
+                acc.thinking_blocks
+            };
+
             ChoiceFinal {
                 content: acc.content,
                 reasoning: acc.reasoning,
-                thinking_blocks: acc.thinking_blocks,
-                tool_calls_raw: acc.tool_calls,
+                thinking_blocks,
+                tool_calls_raw: acc.tool_calls.finalize(),
                 citations: acc.citations,
                 extra: acc.extra,
                 finish_reason: acc.finish_reason,
@@ -236,7 +268,7 @@ struct ChoiceAccumulator {
     content: String,
     reasoning: String,
     thinking_blocks: Vec<serde_json::Value>,
-    tool_calls: Vec<serde_json::Value>,
+    tool_calls: ToolCallAccumulator,  // Use efficient accumulator instead of Vec
     citations: Vec<serde_json::Value>,
     extra: serde_json::Map<String, serde_json::Value>,
     finish_reason: Option<String>,
@@ -284,18 +316,6 @@ pub fn normalize_tool_call(tc: &serde_json::Value) -> Option<crate::call_validat
         },
         tool_type,
     })
-}
-
-fn safe_truncate(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        return s;
-    }
-    // Find the last char boundary at or before max_len
-    let mut end = max_len;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }
 
 async fn format_stream_error(err: EventSourceError) -> String {

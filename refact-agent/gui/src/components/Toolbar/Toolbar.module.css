@@ -162,6 +162,13 @@
   white-space: nowrap;
 }
 
+.tabModeBadge {
+  flex-shrink: 0;
+  font-size: 9px;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
 .tabClose {
   position: absolute;
   right: 8px;

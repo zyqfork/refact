@@ -1,4 +1,4 @@
-import { TextField, HoverCard, Text } from "@radix-ui/themes";
+import { TextField, HoverCard, Text, Badge } from "@radix-ui/themes";
 import { Dropdown, DropdownNavigationOptions } from "./Dropdown";
 import { Cross1Icon, PlusIcon, CheckboxIcon } from "@radix-ui/react-icons";
 import classNames from "classnames";
@@ -43,10 +43,12 @@ import {
   useEventsBusForIDE,
 } from "../../hooks";
 import { telemetryApi } from "../../services/refact/telemetry";
+import { useGetChatModesQuery } from "../../services/refact/chatModes";
 
 import styles from "./Toolbar.module.css";
 import { useActiveTeamsGroup } from "../../hooks/useActiveTeamsGroup";
 import { ConnectionStatusIndicator } from "../ConnectionStatus";
+import { getModeColor } from "../../utils/modeColors";
 
 export type DashboardTab = {
   type: "dashboard";
@@ -91,6 +93,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const currentChatId = useAppSelector(selectChatId);
   const openTasks = useAppSelector(selectOpenTasksFromRoot);
   const { newChatEnabled } = useActiveTeamsGroup();
+  const { data: modesData } = useGetChatModesQuery(undefined);
 
   const { openSettings, openHotKeys } = useEventsBusForIDE();
   const [createTask] = useCreateTaskMutation();
@@ -489,6 +492,9 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
 
             const statusState = getStatusFromSessionState(tab.session_state);
 
+            const modeInfo = modesData?.modes.find((m) => m.id === tab.mode);
+            const modeLabel = modeInfo?.title ?? tab.mode;
+
             return (
               <div
                 key={tab.id}
@@ -512,6 +518,16 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                     <StatusDot state={statusState} size="small" />
                   </span>
                   <span className={styles.tabTitle}>{tab.title}</span>
+                  {modeLabel && (
+                    <Badge
+                      size="1"
+                      color={getModeColor(tab.mode)}
+                      variant="soft"
+                      className={styles.tabModeBadge}
+                    >
+                      {modeLabel}
+                    </Badge>
+                  )}
                 </button>
                 <button
                   type="button"

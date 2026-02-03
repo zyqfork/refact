@@ -24,6 +24,11 @@ export type ThreadParams = {
   use_compression?: boolean;
   auto_approve_editing_tools?: boolean;
   auto_approve_dangerous_commands?: boolean;
+  reasoning_effort?: string | null;
+  temperature?: number | null;
+  frequency_penalty?: number | null;
+  max_tokens?: number | null;
+  parallel_tool_calls?: boolean | null;
   task_meta?: {
     task_id: string;
     role: string;
@@ -168,6 +173,13 @@ export type EventEnvelope =
       type: "queue_updated";
       queue_size: number;
       queued_items: QueuedItem[];
+    }
+  | {
+      chat_id: string;
+      seq: string;
+      type: "runtime_updated";
+      state: string;
+      error?: string;
     };
 
 export type ChatEventEnvelope = EventEnvelope;

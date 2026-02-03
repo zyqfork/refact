@@ -44,6 +44,11 @@ import {
   setAreFollowUpsEnabled,
   setIncludeProjectInfo,
   setContextTokensCap,
+  setReasoningEffort,
+  setTemperature,
+  setFrequencyPenalty,
+  setMaxTokens,
+  setParallelToolCalls,
   closeThread,
   switchToThread,
   updateOpenThread,
@@ -380,6 +385,31 @@ export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(setBoostReasoning, (state, action) => {
     const rt = getRuntime(state, action.payload.chatId);
     if (rt) rt.thread.boost_reasoning = action.payload.value;
+  });
+
+  builder.addCase(setReasoningEffort, (state, action) => {
+    const rt = getRuntime(state, action.payload.chatId);
+    if (rt) rt.thread.reasoning_effort = action.payload.value ?? undefined;
+  });
+
+  builder.addCase(setTemperature, (state, action) => {
+    const rt = getRuntime(state, action.payload.chatId);
+    if (rt) rt.thread.temperature = action.payload.value ?? undefined;
+  });
+
+  builder.addCase(setFrequencyPenalty, (state, action) => {
+    const rt = getRuntime(state, action.payload.chatId);
+    if (rt) rt.thread.frequency_penalty = action.payload.value ?? undefined;
+  });
+
+  builder.addCase(setMaxTokens, (state, action) => {
+    const rt = getRuntime(state, action.payload.chatId);
+    if (rt) rt.thread.max_tokens = action.payload.value ?? undefined;
+  });
+
+  builder.addCase(setParallelToolCalls, (state, action) => {
+    const rt = getRuntime(state, action.payload.chatId);
+    if (rt) rt.thread.parallel_tool_calls = action.payload.value ?? undefined;
   });
 
   builder.addCase(setTaskWidgetExpanded, (state, action) => {
@@ -802,6 +832,15 @@ export const chatReducer = createReducer(initialState, (builder) => {
           new_chat_suggested: { wasSuggested: false },
           is_task_chat: isTaskChat,
           task_meta: snapshotTaskMeta,
+          reasoning_effort:
+            (event.thread.reasoning_effort as ChatThread["reasoning_effort"]) ??
+            existing?.reasoning_effort,
+          temperature: event.thread.temperature ?? existing?.temperature,
+          frequency_penalty:
+            event.thread.frequency_penalty ?? existing?.frequency_penalty,
+          max_tokens: event.thread.max_tokens ?? existing?.max_tokens,
+          parallel_tool_calls:
+            event.thread.parallel_tool_calls ?? existing?.parallel_tool_calls,
         };
 
         const snapshotState = event.runtime.state as string;
@@ -893,6 +932,36 @@ export const chatReducer = createReducer(initialState, (builder) => {
         )
           rt.thread.auto_approve_dangerous_commands =
             params.auto_approve_dangerous_commands;
+        if ("reasoning_effort" in params) {
+          rt.thread.reasoning_effort =
+            params.reasoning_effort == null
+              ? undefined
+              : (params.reasoning_effort as ChatThread["reasoning_effort"]);
+        }
+        if ("temperature" in params) {
+          rt.thread.temperature =
+            params.temperature == null
+              ? undefined
+              : (params.temperature as number);
+        }
+        if ("frequency_penalty" in params) {
+          rt.thread.frequency_penalty =
+            params.frequency_penalty == null
+              ? undefined
+              : (params.frequency_penalty as number);
+        }
+        if ("max_tokens" in params) {
+          rt.thread.max_tokens =
+            params.max_tokens == null
+              ? undefined
+              : (params.max_tokens as number);
+        }
+        if ("parallel_tool_calls" in params) {
+          rt.thread.parallel_tool_calls =
+            params.parallel_tool_calls == null
+              ? undefined
+              : (params.parallel_tool_calls as boolean);
+        }
         if ("task_meta" in params && params.task_meta != null) {
           rt.thread.task_meta = params.task_meta as ChatThread["task_meta"];
           rt.thread.is_task_chat = true;
@@ -1084,6 +1153,45 @@ export const chatReducer = createReducer(initialState, (builder) => {
         if (!rt) break;
         rt.queued_items =
           event.queued_items as ChatThreadRuntime["queued_items"];
+        break;
+      }
+
+      case "runtime_updated": {
+        if (!rt) break;
+        const newState = event.state;
+        rt.session_state = newState;
+
+        // Update streaming/waiting flags based on state
+        switch (newState) {
+          case "idle":
+          case "completed":
+          case "waiting_user_input":
+          case "error":
+            rt.streaming = false;
+            rt.waiting_for_response = false;
+            break;
+          case "generating":
+            rt.streaming = true;
+            rt.waiting_for_response = true;
+            break;
+          case "executing_tools":
+          case "waiting_ide":
+            rt.streaming = false;
+            rt.waiting_for_response = true;
+            break;
+          case "paused":
+            rt.streaming = false;
+            rt.waiting_for_response = false;
+            // Note: pause_reasons are set via pause_required event
+            break;
+        }
+
+        // Update error state
+        if (newState === "error" && event.error) {
+          rt.error = event.error;
+        } else if (newState !== "error") {
+          rt.error = null;
+        }
         break;
       }
     }

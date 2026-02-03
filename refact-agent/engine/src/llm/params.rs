@@ -16,6 +16,8 @@ pub struct CommonParams {
     pub max_tokens: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub stop: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,6 +33,7 @@ impl Default for CommonParams {
         Self {
             max_tokens: DEFAULT_MAX_TOKENS,
             temperature: None,
+            frequency_penalty: None,
             stop: Vec::new(),
             n: None,
         }
@@ -54,10 +57,6 @@ impl Default for ReasoningIntent {
 }
 
 impl ReasoningIntent {
-    pub fn is_off(&self) -> bool {
-        matches!(self, Self::Off)
-    }
-
     pub fn to_openai_effort(&self) -> Option<&'static str> {
         match self {
             Self::Off => None,

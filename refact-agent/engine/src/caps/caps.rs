@@ -61,6 +61,10 @@ pub struct BaseModelRecord {
     #[serde(default)]
     pub supports_max_completion_tokens: bool,
 
+    /// Treat stream EOF as completion (for endpoints that don't send explicit Done signal)
+    #[serde(default)]
+    pub eof_is_done: bool,
+
     // Fields used for Config/UI management
     #[serde(skip_deserializing)]
     pub removable: bool,
@@ -104,11 +108,15 @@ pub struct ChatModelRecord {
     #[serde(default)]
     pub default_temperature: Option<f32>,
     #[serde(default)]
+    pub default_frequency_penalty: Option<f32>,
+    #[serde(default)]
+    pub default_max_tokens: Option<usize>,
+    #[serde(default)]
     pub supports_strict_tools: bool,
 }
 
 pub fn default_chat_scratchpad() -> String {
-    "PASSTHROUGH".to_string()
+    String::new()
 }
 
 impl HasBaseModelRecord for ChatModelRecord {
@@ -161,7 +169,7 @@ impl CompletionModelFamily {
 }
 
 pub fn default_completion_scratchpad() -> String {
-    "REPLACE_PASSTHROUGH".to_string()
+    "FIM-PSM".to_string()
 }
 
 pub fn default_completion_scratchpad_patch() -> serde_json::Value {

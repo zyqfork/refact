@@ -1,0 +1,169 @@
+# Refact Cloud provider - sampling defaults for cloud-fetched models
+# This config is merged with caps fetched from https://app.refact.ai/coding_assistant_caps.json
+# Local overrides in ~/.config/refact/providers.d/refact.yaml take precedence
+
+wire_format: refact
+chat_endpoint: "https://app.refact.ai/v1/chat"
+embedding_endpoint: "https://app.refact.ai/v1/embeddings"
+supports_completion: false
+support_metadata: true
+
+api_key: ""
+
+# Model-specific sampling defaults
+# These override cloud caps when models don't specify these values
+chat_models:
+  # GPT-4.1 family (standard chat models)
+  gpt-4.1:
+    n_ctx: 1047576
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  gpt-4.1-mini:
+    n_ctx: 1047576
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  gpt-4.1-nano:
+    n_ctx: 1047576
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  # GPT-4o family
+  gpt-4o:
+    n_ctx: 128000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  gpt-4o-mini:
+    n_ctx: 128000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  # OpenAI Reasoning models (o-series)
+  o3-mini:
+    n_ctx: 200000
+    default_max_tokens: 100000
+    supports_tools: true
+    supports_agent: true
+    supports_reasoning: openai
+    supports_boost_reasoning: true
+    supports_max_completion_tokens: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  o1:
+    n_ctx: 200000
+    default_max_tokens: 100000
+    supports_tools: true
+    supports_multimodality: true
+    supports_reasoning: openai
+    supports_boost_reasoning: true
+    supports_max_completion_tokens: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  o1-mini:
+    n_ctx: 128000
+    default_max_tokens: 65536
+    supports_tools: true
+    supports_reasoning: openai
+    supports_max_completion_tokens: true
+    tokenizer: hf://Xenova/gpt-4o
+
+  # Claude family
+  claude-3-7-sonnet-latest:
+    n_ctx: 200000
+    default_max_tokens: 16384
+    default_temperature: 1.0
+    supports_tools: true
+    supports_strict_tools: true
+    supports_multimodality: true
+    supports_clicks: true
+    supports_agent: true
+    supports_reasoning: anthropic
+    supports_boost_reasoning: true
+    tokenizer: hf://Xenova/claude-tokenizer
+
+  claude-3.7-sonnet:
+    n_ctx: 200000
+    default_max_tokens: 16384
+    default_temperature: 1.0
+    supports_tools: true
+    supports_strict_tools: true
+    supports_multimodality: true
+    supports_clicks: true
+    supports_agent: true
+    supports_reasoning: anthropic
+    supports_boost_reasoning: true
+    tokenizer: hf://Xenova/claude-tokenizer
+
+  claude-3-5-sonnet-latest:
+    n_ctx: 200000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_strict_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    supports_reasoning: anthropic
+    tokenizer: hf://Xenova/claude-tokenizer
+
+  claude-3.5-sonnet:
+    n_ctx: 200000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_strict_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    supports_reasoning: anthropic
+    tokenizer: hf://Xenova/claude-tokenizer
+
+  claude-3-5-haiku-latest:
+    n_ctx: 200000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_strict_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/claude-tokenizer
+
+  claude-haiku-4-5:
+    n_ctx: 200000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_strict_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    tokenizer: hf://Xenova/claude-tokenizer
+
+running_models:
+  - gpt-4.1
+  - gpt-4o
+  - gpt-4.1-mini
+  - gpt-4o-mini
+  - o3-mini
+  - claude-3.7-sonnet
+  - claude-3.5-sonnet
+
+model_default_settings_ui:
+  chat:
+    n_ctx: 200000
+    default_max_tokens: 8192
+    supports_tools: true
+    supports_multimodality: true
+    supports_agent: true
+    supports_reasoning: openai
+    tokenizer: hf://Xenova/gpt-4o
