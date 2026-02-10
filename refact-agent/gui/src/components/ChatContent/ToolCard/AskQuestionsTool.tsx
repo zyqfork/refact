@@ -135,7 +135,9 @@ const QuestionWidget: React.FC<{
     case "yes_no":
       return (
         <Box className={styles.questionItem}>
-          <Box mb="2"><Markdown>{question.text}</Markdown></Box>
+          <Box mb="2">
+            <Markdown>{question.text}</Markdown>
+          </Box>
           <RadioGroup.Root
             value={typeof value === "string" ? value : ""}
             onValueChange={onChange}
@@ -151,7 +153,9 @@ const QuestionWidget: React.FC<{
     case "single_select":
       return (
         <Box className={styles.questionItem}>
-          <Box mb="2"><Markdown>{question.text}</Markdown></Box>
+          <Box mb="2">
+            <Markdown>{question.text}</Markdown>
+          </Box>
           <RadioGroup.Root
             value={typeof value === "string" ? value : ""}
             onValueChange={onChange}
@@ -170,7 +174,9 @@ const QuestionWidget: React.FC<{
     case "multi_select":
       return (
         <Box className={styles.questionItem}>
-          <Box mb="2"><Markdown>{question.text}</Markdown></Box>
+          <Box mb="2">
+            <Markdown>{question.text}</Markdown>
+          </Box>
           <Flex direction="column" gap="2">
             {question.options?.map((opt) => (
               <Flex key={opt} align="center" gap="2">
@@ -195,7 +201,9 @@ const QuestionWidget: React.FC<{
     case "free_text":
       return (
         <Box className={styles.questionItem}>
-          <Box mb="2"><Markdown>{question.text}</Markdown></Box>
+          <Box mb="2">
+            <Markdown>{question.text}</Markdown>
+          </Box>
           <TextArea
             value={typeof value === "string" ? value : ""}
             onChange={(e) => onChange(e.target.value)}

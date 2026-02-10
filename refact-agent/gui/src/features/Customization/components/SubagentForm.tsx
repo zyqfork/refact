@@ -442,7 +442,7 @@ const SubchatTab: React.FC<{
                 e.target.value || undefined,
               )
             }
-            placeholder="low / medium / high"
+            placeholder="low / medium / high / xhigh / max"
           />
         </Flex>
         <Flex direction="column" gap="2" style={{ flex: 1 }}>

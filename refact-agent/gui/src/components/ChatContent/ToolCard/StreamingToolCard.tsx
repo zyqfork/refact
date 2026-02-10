@@ -67,10 +67,7 @@ export const StreamingToolCard: React.FC<StreamingToolCardProps> = ({
 
   const header = (
     <Flex
-      className={classNames(
-        styles.header,
-        status === "error" && styles.error,
-      )}
+      className={classNames(styles.header, status === "error" && styles.error)}
       align="center"
       gap="2"
       onClick={onToggle}

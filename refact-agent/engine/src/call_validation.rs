@@ -30,6 +30,8 @@ pub enum ReasoningEffort {
     #[default]
     Medium,
     High,
+    XHigh,
+    Max,
 }
 
 impl ReasoningEffort {

@@ -14,6 +14,7 @@ import {
   Slider,
   Badge,
   Switch,
+  Callout,
 } from "@radix-ui/themes";
 import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
 import * as Collapsible from "@radix-ui/react-collapsible";
@@ -23,6 +24,7 @@ import {
   selectChatId,
   selectContextTokensCap,
   selectModel,
+  selectMessages,
   selectIsStreaming,
   selectIsWaiting,
   selectThreadBoostReasoning,
@@ -107,11 +109,16 @@ export const ChatSettingsDropdown: React.FC = () => {
   const isWaiting = useAppSelector(selectIsWaiting);
   const contextCap = useAppSelector(selectContextTokensCap);
   const threadModel = useAppSelector(selectModel);
+  const messages = useAppSelector(selectMessages);
   const isBoostReasoningEnabled = useAppSelector(selectThreadBoostReasoning);
   const threadTemperature = useAppSelector(selectTemperature);
   const threadMaxTokens = useAppSelector(selectMaxTokens);
   const threadReasoningEffort = useAppSelector(selectReasoningEffort);
   const threadThinkingBudget = useAppSelector(selectThinkingBudget);
+  const hasAnyReasoningConfigured =
+    (isBoostReasoningEnabled ?? false) ||
+    threadReasoningEffort != null ||
+    threadThinkingBudget != null;
 
   const caps = useCapsForToolUse();
   const capsQuery = useGetCapsQuery(undefined);
@@ -193,9 +200,9 @@ export const ChatSettingsDropdown: React.FC = () => {
   const maxTokens = useMemo(() => {
     const chatModels = capsQuery.data?.chat_models;
     if (!chatModels || !threadModel) return 0;
-    const modelData = chatModels[threadModel];
-    if (!modelData) return 0;
-    return modelData.n_ctx;
+    if (!Object.prototype.hasOwnProperty.call(chatModels, threadModel))
+      return 0;
+    return chatModels[threadModel].n_ctx;
   }, [capsQuery.data, threadModel]);
 
   const sliderSteps = useMemo(() => getSliderSteps(maxTokens), [maxTokens]);
@@ -217,6 +224,8 @@ export const ChatSettingsDropdown: React.FC = () => {
   const displayTemperature = localTemperature ?? threadTemperature;
   const displayThinkingBudget = localThinkingBudget ?? threadThinkingBudget;
   const displayMaxTokens = localMaxTokens ?? threadMaxTokens;
+
+  const isStartedChat = messages.length > 0;
 
   useEffect(() => {
     setLocalSliderValue(null);
@@ -275,8 +284,16 @@ export const ChatSettingsDropdown: React.FC = () => {
         } as unknown as React.MouseEvent<HTMLButtonElement>,
         checked,
       );
+
+      // Ensure “Reasoning” toggle truly controls reasoning.
+      // Backend treats `reasoning_effort` / `thinking_budget` as enabling reasoning
+      // even if `boost_reasoning` is turned off.
+      if (!checked) {
+        dispatch(setReasoningEffort({ chatId, value: null }));
+        dispatch(setThinkingBudget({ chatId, value: null }));
+      }
     },
-    [handleReasoningChange, noop],
+    [handleReasoningChange, noop, dispatch, chatId],
   );
 
   const handleTemperatureChange = useCallback((values: number[]) => {
@@ -285,16 +302,22 @@ export const ChatSettingsDropdown: React.FC = () => {
 
   const handleTemperatureCommit = useCallback(
     (values: number[]) => {
+      if (hasAnyReasoningConfigured) {
+        // UI should be disabled already, but keep commit a no-op defensively.
+        setLocalTemperature(null);
+        return;
+      }
       dispatch(setTemperature({ chatId, value: values[0] }));
       setLocalTemperature(null);
     },
-    [dispatch, chatId],
+    [dispatch, chatId, hasAnyReasoningConfigured],
   );
 
   const handleTemperatureReset = useCallback(() => {
+    if (hasAnyReasoningConfigured) return;
     dispatch(setTemperature({ chatId, value: null }));
     setLocalTemperature(null);
-  }, [dispatch, chatId]);
+  }, [dispatch, chatId, hasAnyReasoningConfigured]);
 
   const handleMaxTokensReset = useCallback(() => {
     dispatch(setMaxTokens({ chatId, value: null }));
@@ -507,7 +530,7 @@ export const ChatSettingsDropdown: React.FC = () => {
               <Flex align="center" gap="1">
                 <Text size="1">🧠</Text>
                 <Text size="1" weight="medium">
-                  Extended reasoning
+                  Reasoning
                 </Text>
               </Flex>
               <Switch
@@ -517,10 +540,20 @@ export const ChatSettingsDropdown: React.FC = () => {
                 disabled={thinkingDisabled}
               />
             </Flex>
+
+            {isStartedChat && (
+              <Callout.Root color="amber" size="1" mt="2">
+                <Callout.Text>
+                  Changing reasoning mid-chat may break prompt caching (if
+                  enabled) and make the next turn much more expensive.
+                </Callout.Text>
+              </Callout.Root>
+            )}
+
             {isBoostReasoningEnabled &&
               selectedModelDetail?.supportsReasoning && (
                 <>
-                  {/* OpenAI/Mistral: low/medium/high */}
+                  {/* OpenAI/Mistral: low/medium/high/xhigh */}
                   {(selectedModelDetail.supportsReasoning === "openai" ||
                     selectedModelDetail.supportsReasoning === "mistral") && (
                     <Flex align="center" justify="between" gap="2" mt="2">
@@ -528,25 +561,27 @@ export const ChatSettingsDropdown: React.FC = () => {
                         Effort
                       </Text>
                       <Flex gap="1">
-                        {(["low", "medium", "high"] as const).map((level) => (
-                          <button
-                            key={level}
-                            type="button"
-                            className={`${styles.effortButton} ${
-                              (threadReasoningEffort ?? "medium") === level
-                                ? styles.effortButtonActive
-                                : ""
-                            }`}
-                            onClick={() =>
-                              dispatch(
-                                setReasoningEffort({ chatId, value: level }),
-                              )
-                            }
-                            disabled={isInteractionDisabled}
-                          >
-                            <Text size="1">{level}</Text>
-                          </button>
-                        ))}
+                        {(["low", "medium", "high", "xhigh"] as const).map(
+                          (level) => (
+                            <button
+                              key={level}
+                              type="button"
+                              className={`${styles.effortButton} ${
+                                (threadReasoningEffort ?? "medium") === level
+                                  ? styles.effortButtonActive
+                                  : ""
+                              }`}
+                              onClick={() =>
+                                dispatch(
+                                  setReasoningEffort({ chatId, value: level }),
+                                )
+                              }
+                              disabled={isInteractionDisabled}
+                            >
+                              <Text size="1">{level}</Text>
+                            </button>
+                          ),
+                        )}
                       </Flex>
                     </Flex>
                   )}
@@ -580,8 +615,9 @@ export const ChatSettingsDropdown: React.FC = () => {
                       </Flex>
                     </Flex>
                   )}
-                  {/* Anthropic/Qwen/Zhipu: thinking budget slider */}
-                  {(selectedModelDetail.supportsReasoning === "anthropic" ||
+                  {/* Anthropic budget/Qwen/Zhipu: thinking budget slider */}
+                  {(selectedModelDetail.supportsReasoning ===
+                    "anthropic_budget" ||
                     selectedModelDetail.supportsReasoning === "qwen" ||
                     selectedModelDetail.supportsReasoning === "zhipu") && (
                     <Flex direction="column" gap="1" mt="2">
@@ -617,6 +653,39 @@ export const ChatSettingsDropdown: React.FC = () => {
                         <Text size="1" color="gray">
                           32K
                         </Text>
+                      </Flex>
+                    </Flex>
+                  )}
+
+                  {/* Anthropic effort: low/medium/high/max */}
+                  {selectedModelDetail.supportsReasoning ===
+                    "anthropic_effort" && (
+                    <Flex align="center" justify="between" gap="2" mt="2">
+                      <Text size="1" color="gray">
+                        Effort
+                      </Text>
+                      <Flex gap="1">
+                        {(["low", "medium", "high", "max"] as const).map(
+                          (level) => (
+                            <button
+                              key={level}
+                              type="button"
+                              className={`${styles.effortButton} ${
+                                (threadReasoningEffort ?? "medium") === level
+                                  ? styles.effortButtonActive
+                                  : ""
+                              }`}
+                              onClick={() =>
+                                dispatch(
+                                  setReasoningEffort({ chatId, value: level }),
+                                )
+                              }
+                              disabled={isInteractionDisabled}
+                            >
+                              <Text size="1">{level}</Text>
+                            </button>
+                          ),
+                        )}
                       </Flex>
                     </Flex>
                   )}
@@ -658,16 +727,21 @@ export const ChatSettingsDropdown: React.FC = () => {
                   </Text>
                   <Flex align="center" gap="2">
                     <Text size="1" weight="medium">
-                      {displayTemperature?.toFixed(1) ??
-                        (selectedModelDetail?.defaultTemperature?.toFixed(1) ??
-                          "0.7") + " (default)"}
+                      {hasAnyReasoningConfigured
+                        ? "None"
+                        : displayTemperature?.toFixed(1) ??
+                          (selectedModelDetail?.defaultTemperature?.toFixed(
+                            1,
+                          ) ?? "0.7") + " (default)"}
                     </Text>
                     {threadTemperature != null && (
                       <button
                         type="button"
                         className={styles.resetButton}
                         onClick={handleTemperatureReset}
-                        disabled={isInteractionDisabled}
+                        disabled={
+                          isInteractionDisabled || hasAnyReasoningConfigured
+                        }
                       >
                         ✕
                       </button>
@@ -686,7 +760,7 @@ export const ChatSettingsDropdown: React.FC = () => {
                   ]}
                   onValueChange={handleTemperatureChange}
                   onValueCommit={handleTemperatureCommit}
-                  disabled={isInteractionDisabled}
+                  disabled={isInteractionDisabled || hasAnyReasoningConfigured}
                 />
               </div>
 

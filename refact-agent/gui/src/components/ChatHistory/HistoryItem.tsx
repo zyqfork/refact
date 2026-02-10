@@ -12,7 +12,11 @@ import { CloseButton } from "../Buttons/Buttons";
 import { IconButton } from "@radix-ui/themes";
 import { OpenInNewWindowIcon } from "@radix-ui/react-icons";
 import type { ChatHistoryItem } from "../../features/History/historySlice";
-import { getTotalCostMeteringForMessages, getTotalUsdMeteringForMessages, formatUsd } from "../../utils/getMetering";
+import {
+  getTotalCostMeteringForMessages,
+  getTotalUsdMeteringForMessages,
+  formatUsd,
+} from "../../utils/getMetering";
 import { Coin } from "../../images";
 import { getStatusFromSessionState } from "../../utils/sessionStatus";
 

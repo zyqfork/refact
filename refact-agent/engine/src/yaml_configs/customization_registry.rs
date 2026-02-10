@@ -702,7 +702,9 @@ mod tests {
                 if let Some(ref reasoning_effort) = config.subchat.reasoning_effort {
                     let valid = reasoning_effort.eq_ignore_ascii_case("low")
                         || reasoning_effort.eq_ignore_ascii_case("medium")
-                        || reasoning_effort.eq_ignore_ascii_case("high");
+                        || reasoning_effort.eq_ignore_ascii_case("high")
+                        || reasoning_effort.eq_ignore_ascii_case("xhigh")
+                        || reasoning_effort.eq_ignore_ascii_case("max");
                     assert!(
                         valid,
                         "Subagent '{}' has invalid reasoning_effort: {}",

@@ -214,7 +214,13 @@ const UsdHoverContent: React.FC<{
   generatedUsd?: number;
   cacheReadUsd?: number;
   cacheCreationUsd?: number;
-}> = ({ totalUsd, promptUsd, generatedUsd, cacheReadUsd, cacheCreationUsd }) => {
+}> = ({
+  totalUsd,
+  promptUsd,
+  generatedUsd,
+  cacheReadUsd,
+  cacheCreationUsd,
+}) => {
   return (
     <Flex direction="column" gap="2" p="1">
       <Flex align="center" justify="between" width="100%" gap="4">
@@ -502,8 +508,7 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
     return currentThreadUsage?.cache_creation_input_tokens ?? 0;
   }, [meteringTokens, currentThreadUsage]);
 
-  const maxContextTokens =
-    useAppSelector(selectEffectiveMaxContextTokens) ?? 0;
+  const maxContextTokens = useAppSelector(selectEffectiveMaxContextTokens) ?? 0;
 
   const shouldUsageBeHidden = useMemo(() => {
     if (isInline) return false;

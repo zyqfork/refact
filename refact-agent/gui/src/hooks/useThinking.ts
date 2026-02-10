@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useCapsForToolUse } from "./useCapsForToolUse";
 import { useAppSelector } from "./useAppSelector";
 import {
@@ -67,12 +67,6 @@ export function useThinking() {
     },
     [dispatch, chatId],
   );
-
-  useEffect(() => {
-    if (!supportsBoostReasoning) {
-      dispatch(setBoostReasoning({ chatId, value: supportsBoostReasoning }));
-    }
-  }, [dispatch, chatId, supportsBoostReasoning, shouldBeDisabled]);
 
   return {
     handleReasoningChange,

@@ -42,7 +42,7 @@ export type IntegrationMeta = {
   shouldIntermediatePageShowUp?: boolean;
 };
 
-export type ReasoningEffort = "low" | "medium" | "high";
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type ChatThread = {
   id: string;
@@ -54,7 +54,7 @@ export type ChatThread = {
   tool_use?: ToolUse;
   isTitleGenerated?: boolean;
   boost_reasoning?: boolean;
-  /** Reasoning effort level: "low", "medium", or "high" */
+  /** Reasoning effort level: "low", "medium", "high", "xhigh", or "max" */
   reasoning_effort?: ReasoningEffort;
   /** Thinking budget in tokens (for Anthropic, Qwen, Gemini 2.5) */
   thinking_budget?: number;

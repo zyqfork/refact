@@ -272,7 +272,20 @@ export type DeleteModelRequestBody = Omit<UpdateModelRequestBody, "model"> & {
   model: string;
 };
 
-export type SupportsReasoningStyle = "openai" | "anthropic" | "deepseek" | null;
+// NOTE: This string is produced by backend caps (`ChatModelRecord.supports_reasoning`).
+// Keep in sync with `engine/src/caps/caps.rs` mapping.
+export type SupportsReasoningStyle =
+  | "openai"
+  | "anthropic_budget"
+  | "anthropic_effort"
+  | "deepseek"
+  | "xai"
+  | "qwen"
+  | "gemini"
+  | "kimi"
+  | "zhipu"
+  | "mistral"
+  | null;
 
 export type CodeChatModel = {
   n_ctx: number;

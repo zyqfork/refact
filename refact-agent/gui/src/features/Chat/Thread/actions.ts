@@ -47,12 +47,10 @@ function buildThreadParamsPatch(
     patch.include_project_info = thread.include_project_info;
   if (thread.context_tokens_cap !== undefined)
     patch.context_tokens_cap = thread.context_tokens_cap;
-  if (thread.temperature != null)
-    patch.temperature = thread.temperature;
+  if (thread.temperature != null) patch.temperature = thread.temperature;
   if (thread.frequency_penalty != null)
     patch.frequency_penalty = thread.frequency_penalty;
-  if (thread.max_tokens != null)
-    patch.max_tokens = thread.max_tokens;
+  if (thread.max_tokens != null) patch.max_tokens = thread.max_tokens;
   if (thread.reasoning_effort != null)
     patch.reasoning_effort = thread.reasoning_effort;
   if (thread.thinking_budget != null)
@@ -388,7 +386,7 @@ export const setContextTokensCap = createAction<PayloadWithChatAndNumber>(
 
 export const setReasoningEffort = createAction<{
   chatId: string;
-  value: "low" | "medium" | "high" | null;
+  value: "low" | "medium" | "high" | "xhigh" | "max" | null;
 }>("chatThread/setReasoningEffort");
 
 export const setThinkingBudget = createAction<{

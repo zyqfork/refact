@@ -105,6 +105,7 @@ impl LlmWireAdapter for AnthropicAdapter {
                     }
                 }
             }
+            body.as_object_mut().map(|obj| obj.remove("temperature"));
         }
 
         if body.get("thinking").and_then(|t| t.get("type")).and_then(|t| t.as_str()) == Some("enabled") {

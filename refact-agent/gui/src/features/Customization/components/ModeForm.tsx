@@ -218,7 +218,7 @@ const ModelTypeSection: React.FC<ModelTypeSectionProps> = ({
           <TextField.Root
             size="1"
             value={reasoningEffort}
-            placeholder="low/med/high"
+            placeholder="low/medium/high/xhigh/max"
             onChange={(e) =>
               onPatch(
                 [...basePath, "reasoning_effort"],

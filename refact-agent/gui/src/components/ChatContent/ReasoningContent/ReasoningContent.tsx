@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import { Flex, Text, Spinner } from "@radix-ui/themes";
 import classNames from "classnames";
 import { LightningBoltIcon } from "@radix-ui/react-icons";
@@ -7,6 +13,16 @@ import { Markdown } from "../../Markdown";
 import { useDelayedUnmount } from "../../shared/useDelayedUnmount";
 
 import styles from "./ReasoningContent.module.css";
+
+// Bold titles like "**Some Title**" often appear glued to the end of the
+// previous sentence in reasoning summaries.  Insert a paragraph break before
+// them so Markdown renders each title as a separate block.
+// The regex matches "**" preceded by a non-whitespace char where the first
+// letter after "**" is uppercase — so inline bold like "**sorted**" is left
+// alone.
+function fixReasoningParagraphs(text: string): string {
+  return text.replace(/(\S)(\*\*[A-Z])/g, "$1\n\n$2");
+}
 
 type ReasoningContentProps = {
   reasoningContent: string;
@@ -133,6 +149,11 @@ export const ReasoningContent: React.FC<ReasoningContentProps> = ({
       ? `Thought for ${formatDuration(thinkingDuration)}`
       : "Thought";
 
+  const formattedContent = useMemo(
+    () => fixReasoningParagraphs(reasoningContent),
+    [reasoningContent],
+  );
+
   const { shouldRender, isAnimatingOpen } = useDelayedUnmount(isOpen, 200);
 
   return (
@@ -167,12 +188,12 @@ export const ReasoningContent: React.FC<ReasoningContentProps> = ({
               className={styles.content}
               onScroll={handleScroll}
             >
-              <Text size="2" color="gray">
+              <Text size="2" color="gray" as="div">
                 <Markdown
                   canHaveInteractiveElements={true}
                   onCopyClick={onCopyClick}
                 >
-                  {reasoningContent}
+                  {formattedContent}
                 </Markdown>
               </Text>
             </div>

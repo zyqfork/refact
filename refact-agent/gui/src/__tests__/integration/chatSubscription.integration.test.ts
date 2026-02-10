@@ -265,7 +265,8 @@ describe.skipIf(!(await isServerAvailable()))(
         const chatId = generateChatId("test-abort-stream");
 
         // Start collecting events
-        const eventsPromise = collectEvents(chatId, 15, 10000);
+        // Use a higher cap here: streaming can emit many deltas before abort lands.
+        const eventsPromise = collectEvents(chatId, 200, 15000);
 
         await new Promise((r) => setTimeout(r, 300));
 
@@ -282,8 +283,8 @@ describe.skipIf(!(await isServerAvailable()))(
           LSP_PORT,
         );
 
-        // Wait for generation to start
-        await new Promise((r) => setTimeout(r, 1000));
+        // Wait briefly for generation to start, then abort.
+        await new Promise((r) => setTimeout(r, 200));
 
         // Send abort
         await abortGeneration(chatId, LSP_PORT);

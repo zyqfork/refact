@@ -33,6 +33,7 @@ import {
   setThinkingBudget,
   setTemperature,
   setMaxTokens,
+  buildThreadParamsPatch,
 } from "../features/Chat/Thread";
 import { saveLastThreadParams } from "../utils/threadStorage";
 import { statisticsApi } from "../services/refact/statistics";
@@ -82,7 +83,7 @@ const startListening = listenerMiddleware.startListening.withTypes<
 
 startListening({
   actionCreator: newChatAction,
-  effect: (_action, listenerApi) => {
+  effect: async (_action, listenerApi) => {
     const state = listenerApi.getState();
     const chatId = state.chat.current_thread_id;
 
@@ -102,6 +103,36 @@ startListening({
       }),
     );
     listenerApi.dispatch(clearError());
+
+    // New chats are created client-side first; sync the initial params to backend
+    // immediately so the first snapshot doesn't overwrite local defaults.
+    const runtime = state.chat.threads[chatId];
+    const port = state.config.lspPort;
+    if (!runtime || !port || !chatId) return;
+
+    try {
+      const patch = buildThreadParamsPatch(runtime.thread, true);
+
+      // If reasoning is enabled by defaults (new chat), ensure temperature is sent as null.
+      // Otherwise backend may fall back to a numeric default (often 0), which is invalid
+      // for reasoning-enabled providers.
+      const isReasoningEnabled =
+        Boolean(runtime.thread.boost_reasoning) ||
+        runtime.thread.reasoning_effort != null ||
+        runtime.thread.thinking_budget != null;
+      if (isReasoningEnabled) {
+        patch.temperature = null;
+      }
+
+      if (Object.keys(patch).length > 0) {
+        await sendChatCommand(chatId, port, state.config.apiKey ?? undefined, {
+          type: "set_params",
+          patch,
+        });
+      }
+    } catch {
+      // Silently ignore - backend may not support this command
+    }
   },
 });
 
@@ -707,6 +738,15 @@ startListening({
         type: "set_params",
         patch: { boost_reasoning: action.payload.value },
       });
+
+      // When reasoning is enabled, temperature must be unset.
+      // This avoids provider-side validation errors.
+      if (action.payload.value) {
+        await sendChatCommand(chatId, port, apiKey ?? undefined, {
+          type: "set_params",
+          patch: { temperature: null },
+        });
+      }
     } catch {
       // Silently ignore - backend may not support this command
     }
@@ -731,6 +771,14 @@ startListening({
         type: "set_params",
         patch: { reasoning_effort: action.payload.value },
       });
+
+      // Any explicit reasoning effort implies reasoning mode: unset temperature.
+      if (action.payload.value != null) {
+        await sendChatCommand(chatId, port, apiKey ?? undefined, {
+          type: "set_params",
+          patch: { temperature: null },
+        });
+      }
     } catch {
       // Silently ignore
     }
@@ -755,6 +803,14 @@ startListening({
         type: "set_params",
         patch: { thinking_budget: action.payload.value },
       });
+
+      // Any explicit thinking budget implies reasoning mode: unset temperature.
+      if (action.payload.value != null) {
+        await sendChatCommand(chatId, port, apiKey ?? undefined, {
+          type: "set_params",
+          patch: { temperature: null },
+        });
+      }
     } catch {
       // Silently ignore errors - user will see them via SSE events
     }
@@ -1028,23 +1084,52 @@ startListening({
     if (!runtime) return;
 
     const isUnstartedChat = runtime.thread.messages.length === 0;
-    if (!isUnstartedChat) return;
+    const shouldPersistForNewChats =
+      isUnstartedChat ||
+      setBoostReasoning.match(_action) ||
+      setReasoningEffort.match(_action) ||
+      setThinkingBudget.match(_action);
+    if (!shouldPersistForNewChats) return;
 
-    saveLastThreadParams({
-      model: runtime.thread.model,
-      mode: runtime.thread.mode,
-      boost_reasoning: runtime.thread.boost_reasoning,
-      reasoning_effort: runtime.thread.reasoning_effort,
-      thinking_budget: runtime.thread.thinking_budget,
-      temperature: runtime.thread.temperature,
-      max_tokens: runtime.thread.max_tokens,
-      increase_max_tokens: runtime.thread.increase_max_tokens,
-      include_project_info: runtime.thread.include_project_info,
-      context_tokens_cap: runtime.thread.context_tokens_cap,
-      system_prompt: state.chat.system_prompt,
-      checkpoints_enabled: state.chat.checkpoints_enabled,
-      follow_ups_enabled: state.chat.follow_ups_enabled,
-    });
+    // Persist the updated param(s) as defaults for *new* chats.
+    // IMPORTANT: For started chats, we only persist reasoning-related toggles
+    // (boost_reasoning / reasoning_effort / thinking_budget), keeping other
+    // sampling params “sticky” only before the first message.
+    const mode = runtime.thread.mode;
+    const patch: Parameters<typeof saveLastThreadParams>[0] = { mode };
+
+    if (isUnstartedChat) {
+      patch.model = runtime.thread.model;
+      patch.temperature = runtime.thread.temperature;
+      patch.max_tokens = runtime.thread.max_tokens;
+      patch.increase_max_tokens = runtime.thread.increase_max_tokens;
+      patch.include_project_info = runtime.thread.include_project_info;
+      patch.context_tokens_cap = runtime.thread.context_tokens_cap;
+      patch.system_prompt = state.chat.system_prompt;
+      patch.checkpoints_enabled = state.chat.checkpoints_enabled;
+      patch.follow_ups_enabled = state.chat.follow_ups_enabled;
+    }
+
+    if (setBoostReasoning.match(_action)) {
+      patch.boost_reasoning = runtime.thread.boost_reasoning;
+      // preserve temperature reset as part of “reasoning defaults”
+      patch.temperature = runtime.thread.temperature;
+    }
+    if (setReasoningEffort.match(_action)) {
+      patch.reasoning_effort = runtime.thread.reasoning_effort;
+      patch.temperature = runtime.thread.temperature;
+    }
+    if (setThinkingBudget.match(_action)) {
+      patch.thinking_budget = runtime.thread.thinking_budget;
+      patch.temperature = runtime.thread.temperature;
+    }
+
+    // Still persist model changes after start (matches current UX).
+    if (setChatModel.match(_action)) {
+      patch.model = runtime.thread.model;
+    }
+
+    saveLastThreadParams(patch);
   },
 });
 

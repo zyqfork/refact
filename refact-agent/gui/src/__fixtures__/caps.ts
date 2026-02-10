@@ -285,7 +285,7 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_multimodality: true,
       supports_clicks: true,
       supports_agent: true,
-      supports_reasoning: "anthropic",
+      supports_reasoning: "anthropic_budget",
       supports_boost_reasoning: true,
       default_temperature: null,
     },

@@ -50,6 +50,8 @@ pub enum ReasoningIntent {
     Low,
     Medium,
     High,
+    XHigh,
+    Max,
     BudgetTokens(usize),
 }
 
@@ -66,6 +68,9 @@ impl ReasoningIntent {
             Self::Low => Some("low"),
             Self::Medium => Some("medium"),
             Self::High => Some("high"),
+            Self::XHigh => Some("xhigh"),
+            // OpenAI doesn't currently expose "max" effort; treat as highest.
+            Self::Max => Some("xhigh"),
             Self::BudgetTokens(_) => Some("high"),
         }
     }
@@ -76,6 +81,8 @@ impl ReasoningIntent {
             Self::Low => Some(default_budget / 4),
             Self::Medium => Some(default_budget / 2),
             Self::High => Some(default_budget),
+            Self::XHigh => Some(default_budget),
+            Self::Max => Some(default_budget),
             Self::BudgetTokens(n) => Some(*n),
         }
     }
@@ -86,6 +93,9 @@ impl ReasoningIntent {
             Self::Low => Some("low"),
             Self::Medium => Some("medium"),
             Self::High => Some("high"),
+            // Anthropic doesn't have a separate "xhigh" level; closest is "high".
+            Self::XHigh => Some("max"),
+            Self::Max => Some("max"),
             Self::BudgetTokens(_) => Some("high"),
         }
     }

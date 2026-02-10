@@ -33,7 +33,11 @@ export const ToolCard: React.FC<ToolCardProps> = ({
   animate = true,
   toolCall,
 }) => {
-  const { shouldRender, isAnimatingOpen } = useDelayedUnmount(isOpen, 200, animate);
+  const { shouldRender, isAnimatingOpen } = useDelayedUnmount(
+    isOpen,
+    200,
+    animate,
+  );
 
   const header = (
     <Flex className={styles.header} align="center" gap="2" onClick={onToggle}>

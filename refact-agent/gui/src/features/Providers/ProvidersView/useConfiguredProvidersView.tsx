@@ -8,25 +8,25 @@ export function useGetConfiguredProvidersView({
 }) {
   const sortedConfiguredProviders = useMemo(() => {
     return [...configuredProviders].sort((a, b) => {
-        const getPriority = (provider: { name: string }) => {
-          if (
-            provider.name === "refact" ||
-            provider.name === "refact_self_hosted"
-          )
-            return 0;
-          if (provider.name === "custom") return 2;
-          return 1;
-        };
+      const getPriority = (provider: { name: string }) => {
+        if (
+          provider.name === "refact" ||
+          provider.name === "refact_self_hosted"
+        )
+          return 0;
+        if (provider.name === "custom") return 2;
+        return 1;
+      };
 
-        const priorityA = getPriority(a);
-        const priorityB = getPriority(b);
+      const priorityA = getPriority(a);
+      const priorityB = getPriority(b);
 
-        if (priorityA !== priorityB) {
-          return priorityA - priorityB;
-        }
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
 
-        return a.name.localeCompare(b.name);
-      });
+      return a.name.localeCompare(b.name);
+    });
   }, [configuredProviders]);
 
   return {

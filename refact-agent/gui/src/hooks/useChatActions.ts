@@ -72,7 +72,6 @@ export function useChatActions() {
   const sendImmediately = useAppSelector(selectSendImmediately);
   const messages = useAppSelector(selectMessages);
 
-
   /**
    * Build message content with attached images if any.
    */

@@ -118,7 +118,8 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       "cache_read_input_tokens",
     ],
   });
-  const hasUsageInfo = Boolean(usage && contextTokens > 0) || showCoins || hasUsd;
+  const hasUsageInfo =
+    Boolean(usage && contextTokens > 0) || showCoins || hasUsd;
 
   return (
     <div className={styles.footerLane}>
@@ -259,18 +260,27 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
                       <Text size="2" weight="bold">
                         Cost
                       </Text>
-                      <Text size="2">
-                        {formatUsd(meteringUsd.total_usd)}
-                      </Text>
+                      <Text size="2">{formatUsd(meteringUsd.total_usd)}</Text>
                     </Flex>
                     <UsdDisplay label="Prompt" value={meteringUsd.prompt_usd} />
-                    <UsdDisplay label="Completion" value={meteringUsd.generated_usd} />
-                    {meteringUsd.cache_read_usd !== undefined && meteringUsd.cache_read_usd > 0 && (
-                      <UsdDisplay label="Cache read" value={meteringUsd.cache_read_usd} />
-                    )}
-                    {meteringUsd.cache_creation_usd !== undefined && meteringUsd.cache_creation_usd > 0 && (
-                      <UsdDisplay label="Cache creation" value={meteringUsd.cache_creation_usd} />
-                    )}
+                    <UsdDisplay
+                      label="Completion"
+                      value={meteringUsd.generated_usd}
+                    />
+                    {meteringUsd.cache_read_usd !== undefined &&
+                      meteringUsd.cache_read_usd > 0 && (
+                        <UsdDisplay
+                          label="Cache read"
+                          value={meteringUsd.cache_read_usd}
+                        />
+                      )}
+                    {meteringUsd.cache_creation_usd !== undefined &&
+                      meteringUsd.cache_creation_usd > 0 && (
+                        <UsdDisplay
+                          label="Cache creation"
+                          value={meteringUsd.cache_creation_usd}
+                        />
+                      )}
                   </>
                 )}
               </Flex>

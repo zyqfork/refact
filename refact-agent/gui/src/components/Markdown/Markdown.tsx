@@ -67,7 +67,7 @@ const MaybeInteractiveElement: React.FC<{
   });
 
   return (
-    <Text className={styles.maybe_pin} my="2">
+    <Text as="p" className={styles.maybe_pin} my="2">
       {processed}
     </Text>
   );

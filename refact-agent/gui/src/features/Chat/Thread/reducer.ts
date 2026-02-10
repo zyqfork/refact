@@ -391,17 +391,35 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
   builder.addCase(setBoostReasoning, (state, action) => {
     const rt = getRuntime(state, action.payload.chatId);
-    if (rt) rt.thread.boost_reasoning = action.payload.value;
+    if (rt) {
+      rt.thread.boost_reasoning = action.payload.value;
+      // Reasoning implies temperature must be unset (treated as "None").
+      if (action.payload.value) {
+        rt.thread.temperature = undefined;
+      }
+    }
   });
 
   builder.addCase(setReasoningEffort, (state, action) => {
     const rt = getRuntime(state, action.payload.chatId);
-    if (rt) rt.thread.reasoning_effort = action.payload.value ?? undefined;
+    if (rt) {
+      rt.thread.reasoning_effort = action.payload.value ?? undefined;
+      // Any explicit reasoning effort implies reasoning mode: unset temperature.
+      if (action.payload.value != null) {
+        rt.thread.temperature = undefined;
+      }
+    }
   });
 
   builder.addCase(setThinkingBudget, (state, action) => {
     const rt = getRuntime(state, action.payload.chatId);
-    if (rt) rt.thread.thinking_budget = action.payload.value ?? undefined;
+    if (rt) {
+      rt.thread.thinking_budget = action.payload.value ?? undefined;
+      // Any explicit thinking budget implies reasoning mode: unset temperature.
+      if (action.payload.value != null) {
+        rt.thread.temperature = undefined;
+      }
+    }
   });
 
   builder.addCase(setTemperature, (state, action) => {

@@ -159,8 +159,10 @@ pub async fn resolve_subchat_params(
         Some(re) if re.eq_ignore_ascii_case("low") => Some(ReasoningEffort::Low),
         Some(re) if re.eq_ignore_ascii_case("medium") => Some(ReasoningEffort::Medium),
         Some(re) if re.eq_ignore_ascii_case("high") => Some(ReasoningEffort::High),
+        Some(re) if re.eq_ignore_ascii_case("xhigh") => Some(ReasoningEffort::XHigh),
+        Some(re) if re.eq_ignore_ascii_case("max") => Some(ReasoningEffort::Max),
         Some(re) => return Err(format!(
-            "invalid reasoning_effort '{}' for '{}', expected: low, medium, high",
+            "invalid reasoning_effort '{}' for '{}', expected: low, medium, high, xhigh, max",
             re, tool_name
         )),
         None => None,

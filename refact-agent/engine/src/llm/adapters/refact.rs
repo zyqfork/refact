@@ -97,11 +97,27 @@ impl LlmWireAdapter for RefactAdapter {
         if settings.supports_reasoning {
             let rtype = settings.reasoning_type.as_deref().unwrap_or("");
             match rtype {
-                "anthropic_budget" | "anthropic_effort" => {
+                "anthropic_budget" => {
                     if let Some(budget) = req.reasoning.to_anthropic_budget(DEFAULT_THINKING_BUDGET) {
                         body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
                     }
                 }
+                "anthropic_effort" => {
+                    match &req.reasoning {
+                        crate::llm::params::ReasoningIntent::BudgetTokens(n) => {
+                            body["thinking"] = json!({"type": "enabled", "budget_tokens": *n});
+                        }
+                        _ => {
+                            if let Some(effort) = req.reasoning.to_anthropic_effort() {
+                                body["thinking"] = json!({"type": "adaptive"});
+                                body["output_config"] = json!({"effort": effort});
+                            }
+                        }
+                    }
+                }
+                "xai" => {
+                    // do nothing since the reasoning supported only implicitly
+                },
                 _ => {
                     // openai, deepseek, xai, qwen, gemini, kimi, zhipu, mistral, etc.
                     if let Some(effort) = req.reasoning.to_openai_effort() {

@@ -1,4 +1,10 @@
-import React, { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import React, {
+  useMemo,
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+} from "react";
 import { ToolCall } from "../../../services/refact/types";
 import { Portal } from "../../Portal";
 import styles from "./ToolCallTooltip.module.css";
@@ -39,7 +45,7 @@ export const ToolCallTooltip: React.FC<ToolCallTooltipProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const toolName = toolCall.function.name ?? "unknown";
-  const entries = useMemo(() => parseArgs(toolCall), [toolCall.function.arguments]);
+  const entries = useMemo(() => parseArgs(toolCall), [toolCall]);
 
   const clearOpenTimer = useCallback(() => {
     if (openTimerRef.current) {

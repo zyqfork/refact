@@ -36,7 +36,14 @@ import { Spinner } from "../../../../../components/Spinner";
 const SUPPORTED_REASONING_STYLES: SupportsReasoningStyle[] = [
   "openai",
   "deepseek",
-  "anthropic",
+  "anthropic_budget",
+  "anthropic_effort",
+  "xai",
+  "qwen",
+  "gemini",
+  "kimi",
+  "zhipu",
+  "mistral",
   null,
 ];
 
