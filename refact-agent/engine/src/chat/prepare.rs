@@ -377,6 +377,8 @@ fn sampling_params_to_reasoning_intent(
             ReasoningEffort::Low => ReasoningIntent::Low,
             ReasoningEffort::Medium => ReasoningIntent::Medium,
             ReasoningEffort::High => ReasoningIntent::High,
+            ReasoningEffort::XHigh => ReasoningIntent::XHigh,
+            ReasoningEffort::Max => ReasoningIntent::Max,
         };
     }
 

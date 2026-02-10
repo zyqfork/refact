@@ -395,6 +395,8 @@ pub async fn run_llm_generation(
                 "low" => Some(crate::call_validation::ReasoningEffort::Low),
                 "medium" => Some(crate::call_validation::ReasoningEffort::Medium),
                 "high" => Some(crate::call_validation::ReasoningEffort::High),
+                "xhigh" => Some(crate::call_validation::ReasoningEffort::XHigh),
+                "max" => Some(crate::call_validation::ReasoningEffort::Max),
                 _ => None,
             }
         }).or_else(|| {
@@ -403,6 +405,8 @@ pub async fn run_llm_generation(
                     "low" => Some(crate::call_validation::ReasoningEffort::Low),
                     "medium" => Some(crate::call_validation::ReasoningEffort::Medium),
                     "high" => Some(crate::call_validation::ReasoningEffort::High),
+                    "xhigh" => Some(crate::call_validation::ReasoningEffort::XHigh),
+                    "max" => Some(crate::call_validation::ReasoningEffort::Max),
                     _ => None,
                 }
             })
