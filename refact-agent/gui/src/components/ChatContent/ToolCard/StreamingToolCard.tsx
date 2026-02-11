@@ -65,6 +65,18 @@ export const StreamingToolCard: React.FC<StreamingToolCardProps> = ({
     animate,
   );
 
+  const entertainmentMessage = useMemo(() => {
+    if (status !== "running") return null;
+    const log = toolCall.subchat_log;
+    if (!log || log.length === 0) return null;
+    const last = log[log.length - 1];
+    const stepMatch = last.match(/^(\d+\/\d+):\s*([\s\S]+)$/);
+    if (stepMatch) {
+      return { step: stepMatch[1], text: stepMatch[2].trim() };
+    }
+    return { step: null, text: last };
+  }, [status, toolCall.subchat_log]);
+
   const header = (
     <Flex
       className={classNames(styles.header, status === "error" && styles.error)}
@@ -100,6 +112,17 @@ export const StreamingToolCard: React.FC<StreamingToolCardProps> = ({
   return (
     <div className={styles.card}>
       <ToolCallTooltip toolCall={toolCall}>{header}</ToolCallTooltip>
+
+      {entertainmentMessage && (
+        <div className={styles.entertainmentRow}>
+          <Text size="1" className={styles.entertainmentText}>
+            {entertainmentMessage.step && (
+              <span style={{ marginRight: 6 }}>{entertainmentMessage.step}</span>
+            )}
+            {entertainmentMessage.text}
+          </Text>
+        </div>
+      )}
 
       {shouldRender && content && (
         <div

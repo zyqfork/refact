@@ -2,7 +2,6 @@ import React, { useMemo } from "react";
 import { PersonIcon } from "@radix-ui/react-icons";
 import { ToolCall } from "../../../services/refact/types";
 import { StreamingToolCard } from "./StreamingToolCard";
-import { truncateMiddle } from "./utils";
 
 interface SubagentArgs {
   task?: string;
@@ -24,11 +23,11 @@ export const SubagentTool: React.FC<SubagentToolProps> = ({ toolCall }) => {
     }
   }, [toolCall.function.arguments]);
 
-  const summary = `Analyze "${truncateMiddle(args.task ?? "task", 45)}"`;
+  const summary = `Analyze "${args.task ?? "task"}"`;
 
   const meta =
     [
-      args.tools && `tools: ${truncateMiddle(args.tools, 30)}`,
+      args.tools && `tools: ${args.tools}`,
       args.max_steps && `max: ${args.max_steps}`,
     ]
       .filter(Boolean)

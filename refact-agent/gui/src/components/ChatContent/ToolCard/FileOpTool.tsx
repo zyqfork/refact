@@ -9,7 +9,7 @@ import {
 } from "../../../features/Chat/Thread/selectors";
 import { ToolCall, DiffChunk } from "../../../services/refact/types";
 import { ShikiCodeBlock } from "../../Markdown";
-import { truncateMiddle, basename } from "./utils";
+import { basename } from "./utils";
 import styles from "./FileOpTool.module.css";
 
 type FileOpType = "mv" | "rm" | "add_workspace_folder";
@@ -116,14 +116,14 @@ export const FileOpTool: React.FC<FileOpToolProps> = ({
               className={styles.filename}
               onClick={(e) => handleFileClick(e, src)}
             >
-              {truncateMiddle(basename(src), 20)}
+              {basename(src)}
             </span>
             {" → "}
             <span
               className={styles.filename}
               onClick={(e) => handleFileClick(e, dest)}
             >
-              {truncateMiddle(basename(dest), 20)}
+              {basename(dest)}
             </span>
           </>
         ),
@@ -139,7 +139,7 @@ export const FileOpTool: React.FC<FileOpToolProps> = ({
           <>
             Add workspace{" "}
             <span className={styles.filename}>
-              {truncateMiddle(basename(path), 30)}
+              {basename(path)}
             </span>
           </>
         ),
@@ -161,7 +161,7 @@ export const FileOpTool: React.FC<FileOpToolProps> = ({
         <>
           Delete{" "}
           <span className={styles.filename}>
-            {truncateMiddle(basename(path), 30)}
+            {basename(path)}
           </span>
           {isDir && <span className={styles.meta}> (recursive)</span>}
           {linesRemoved > 0 && (

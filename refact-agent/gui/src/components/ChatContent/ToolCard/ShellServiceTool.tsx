@@ -8,7 +8,7 @@ import {
 } from "@radix-ui/react-icons";
 import { ToolCall } from "../../../services/refact/types";
 import { StreamingToolCard } from "./StreamingToolCard";
-import { truncateMiddle } from "./utils";
+
 
 interface ShellServiceArgs {
   service_name?: string;
@@ -45,12 +45,12 @@ export const ShellServiceTool: React.FC<ShellServiceToolProps> = ({
   const icon = ACTION_ICONS[action] ?? <PlayIcon />;
 
   const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-  const summary = `${actionLabel} ${truncateMiddle(serviceName, 40)}`;
+  const summary = `${actionLabel} ${serviceName}`;
 
   const meta = args.command
-    ? truncateMiddle(args.command, 50)
+    ? args.command
     : args.workdir
-      ? `in ${truncateMiddle(args.workdir, 40)}`
+      ? `in ${args.workdir}`
       : null;
 
   return (

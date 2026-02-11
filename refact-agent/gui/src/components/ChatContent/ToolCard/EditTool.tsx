@@ -19,7 +19,7 @@ import {
   isUpdateTextDocToolCall,
   isUpdateTextDocByLinesToolCall,
 } from "../../Tools/types";
-import { truncateMiddle, basename } from "./utils";
+import { basename } from "./utils";
 import styles from "./EditTool.module.css";
 
 interface EditToolProps {
@@ -219,7 +219,12 @@ export const EditTool: React.FC<EditToolProps> = ({ toolCall, diffs = [] }) => {
     }
   }, [chatId, diffPasteBack, replaceContent, toolCall.id]);
 
-  const filePath = useMemo(() => getFilePath(toolCall), [toolCall]);
+  const filePath = useMemo(() => {
+    const fromArgs = getFilePath(toolCall);
+    if (fromArgs) return fromArgs;
+    if (allDiffs.length > 0) return allDiffs[0].file_name;
+    return null;
+  }, [toolCall, allDiffs]);
   const isCreate = isCreateTool(toolCall.function.name);
   const stats = useMemo(() => getDiffStats(allDiffs), [allDiffs]);
 
@@ -288,7 +293,7 @@ export const EditTool: React.FC<EditToolProps> = ({ toolCall, diffs = [] }) => {
             className={styles.filename}
             onClick={(e) => handleFileClick(e, filePath)}
           >
-            {truncateMiddle(basename(filePath), 40)}
+            {basename(filePath)}
           </span>
           {statsEl && <> {statsEl}</>}
         </>

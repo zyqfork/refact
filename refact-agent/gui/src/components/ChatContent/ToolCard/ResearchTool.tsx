@@ -2,8 +2,6 @@ import React, { useMemo } from "react";
 import { ReaderIcon } from "@radix-ui/react-icons";
 import { ToolCall } from "../../../services/refact/types";
 import { StreamingToolCard } from "./StreamingToolCard";
-import { truncateMiddle } from "./utils";
-
 interface ResearchArgs {
   research_query?: string;
 }
@@ -23,7 +21,7 @@ export const ResearchTool: React.FC<ResearchToolProps> = ({ toolCall }) => {
 
   const query = args.research_query ?? "";
   const summary = query
-    ? `Research "${truncateMiddle(query, 45)}"`
+    ? `Research "${query}"`
     : "Research";
 
   return (

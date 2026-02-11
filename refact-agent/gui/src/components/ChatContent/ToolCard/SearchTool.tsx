@@ -34,11 +34,6 @@ interface SearchToolProps {
   contextFiles?: ChatContextFile[];
 }
 
-function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 1) + "…";
-}
-
 function countMatches(content: string): number | null {
   const lines = content.split("\n").filter((l) => l.trim());
   if (lines.length === 0) return null;
@@ -102,7 +97,7 @@ export const SearchTool: React.FC<SearchToolProps> = ({
         const pattern = patternArgs.pattern ?? "pattern";
         return (
           <>
-            Search <span className={styles.query}>{truncate(pattern, 30)}</span>
+            Search <span className={styles.query}>{pattern}</span>
             {matchCount !== null && (
               <span className={styles.count}> → {matchCount} matches</span>
             )}
@@ -116,7 +111,7 @@ export const SearchTool: React.FC<SearchToolProps> = ({
           <>
             Search{" "}
             <span className={styles.query}>
-              &quot;{truncate(query, 25)}&quot;
+              &quot;{query}&quot;
             </span>
             {matchCount !== null && (
               <span className={styles.count}> → {matchCount} results</span>
@@ -129,7 +124,7 @@ export const SearchTool: React.FC<SearchToolProps> = ({
         const symbols = symbolArgs.symbols ?? "symbol";
         return (
           <>
-            Find <span className={styles.query}>{truncate(symbols, 30)}</span>
+            Find <span className={styles.query}>{symbols}</span>
             {matchCount !== null && (
               <span className={styles.count}> → {matchCount} found</span>
             )}

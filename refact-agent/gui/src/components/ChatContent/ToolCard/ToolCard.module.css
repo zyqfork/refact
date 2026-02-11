@@ -34,11 +34,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .meta {
-  flex: 1;
+  flex: 0 10 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

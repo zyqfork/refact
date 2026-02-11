@@ -3,6 +3,7 @@
   font-size: inherit;
   color: var(--accent-11);
   cursor: pointer;
+  vertical-align: baseline;
 }
 
 .filename:hover {
@@ -12,6 +13,7 @@
 .statsInline {
   font-family: var(--code-font-family);
   font-size: 12px;
+  vertical-align: baseline;
 }
 
 .statsInline .added {

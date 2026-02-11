@@ -21,33 +21,19 @@ function formatToolName(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function truncateArgs(args: string, maxLen: number): string {
-  if (args.length <= maxLen) return args;
-  return args.slice(0, maxLen - 1) + "…";
-}
-
 function formatArgs(argsStr: string): string {
   try {
     const args = JSON.parse(argsStr) as Record<string, unknown>;
     const entries = Object.entries(args);
     if (entries.length === 0) return "";
-    if (entries.length === 1) {
-      const [key, value] = entries[0];
-      const valueStr =
-        typeof value === "string" ? value : JSON.stringify(value);
-      return `${key}=${truncateArgs(valueStr, 30)}`;
-    }
-    return (
-      entries
-        .slice(0, 2)
-        .map(([k, v]) => {
-          const valueStr = typeof v === "string" ? v : JSON.stringify(v);
-          return `${k}=${truncateArgs(valueStr, 15)}`;
-        })
-        .join(", ") + (entries.length > 2 ? ", …" : "")
-    );
+    return entries
+      .map(([k, v]) => {
+        const valueStr = typeof v === "string" ? v : JSON.stringify(v);
+        return `${k}=${valueStr}`;
+      })
+      .join(", ");
   } catch {
-    return truncateArgs(argsStr, 40);
+    return argsStr;
   }
 }
 

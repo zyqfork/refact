@@ -25,11 +25,6 @@ interface WebToolProps {
   contextFiles?: ChatContextFile[];
 }
 
-function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 1) + "…";
-}
-
 function extractDomain(url: string): string {
   try {
     const parsed = new URL(url);
@@ -96,7 +91,7 @@ export const WebTool: React.FC<WebToolProps> = ({
     return (
       <>
         Search web{" "}
-        <span className={styles.query}>&quot;{truncate(query, 25)}&quot;</span>
+        <span className={styles.query}>&quot;{query}&quot;</span>
       </>
     );
   }, [toolType, args]);

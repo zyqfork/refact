@@ -2,7 +2,6 @@ import React, { useMemo } from "react";
 import { CodeIcon } from "@radix-ui/react-icons";
 import { ToolCall } from "../../../services/refact/types";
 import { StreamingToolCard } from "./StreamingToolCard";
-import { truncateMiddle } from "./utils";
 
 interface ShellArgs {
   command?: string;
@@ -23,8 +22,8 @@ export const ShellTool: React.FC<ShellToolProps> = ({ toolCall }) => {
   }, [toolCall.function.arguments]);
 
   const command = args.command ?? toolCall.function.arguments;
-  const summary = `Run ${truncateMiddle(command, 50)}`;
-  const meta = args.workdir ? `in ${truncateMiddle(args.workdir, 40)}` : null;
+  const summary = `Run ${command}`;
+  const meta = args.workdir ? `in ${args.workdir}` : null;
 
   return (
     <StreamingToolCard

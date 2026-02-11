@@ -2,10 +2,13 @@
   font-family: var(--code-font-family);
   font-size: 0.95em;
   color: var(--accent-11);
+  vertical-align: baseline;
 }
 
 .count {
   color: var(--gray-10);
+  vertical-align: baseline;
+  white-space: nowrap;
 }
 
 .resultContent {

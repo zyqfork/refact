@@ -95,15 +95,20 @@ export const ReadTool: React.FC<ReadToolProps> = ({
         </>
       );
     }
-    const fileList =
-      paths
-        .slice(0, 2)
-        .map((p) => basename(p))
-        .join(", ") + (paths.length > 2 ? `, +${paths.length - 2}` : "");
     return (
       <>
-        Read {paths.length} files{" "}
-        <span className={styles.args}>{fileList}</span>
+        Read{" "}
+        {paths.map((p, i) => (
+          <React.Fragment key={p}>
+            {i > 0 && ", "}
+            <span
+              className={styles.filename}
+              onClick={(e) => handleFileClick(e, p)}
+            >
+              {basename(p)}
+            </span>
+          </React.Fragment>
+        ))}
       </>
     );
   }, [paths, handleFileClick]);

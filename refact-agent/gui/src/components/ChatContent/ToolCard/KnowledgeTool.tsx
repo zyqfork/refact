@@ -33,11 +33,6 @@ interface KnowledgeToolProps {
   contextFiles?: ChatContextFile[];
 }
 
-function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 1) + "…";
-}
-
 export const KnowledgeTool: React.FC<KnowledgeToolProps> = ({
   toolCall,
   toolType,
@@ -92,7 +87,7 @@ export const KnowledgeTool: React.FC<KnowledgeToolProps> = ({
         <>
           Recall{" "}
           <span className={styles.query}>
-            &quot;{truncate(query, 25)}&quot;
+            &quot;{query}&quot;
           </span>
         </>
       );
@@ -105,7 +100,7 @@ export const KnowledgeTool: React.FC<KnowledgeToolProps> = ({
         <>
           Remember{" "}
           <span className={styles.query}>
-            &quot;{truncate(preview, 25)}&quot;
+            &quot;{preview}&quot;
           </span>
         </>
       );
@@ -117,7 +112,7 @@ export const KnowledgeTool: React.FC<KnowledgeToolProps> = ({
     return (
       <>
         Recall{" "}
-        <span className={styles.query}>&quot;{truncate(query, 25)}&quot;</span>
+        <span className={styles.query}>&quot;{query}&quot;</span>
       </>
     );
   }, [toolType, args]);
