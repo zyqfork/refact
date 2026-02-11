@@ -394,9 +394,7 @@ fn validate_chat_history(messages: &Vec<ChatMessage>) -> Result<Vec<ChatMessage>
     for (msg_idx, msg) in messages.iter().enumerate() {
         if let Some(tool_calls) = &msg.tool_calls {
             for tc in tool_calls {
-                if let Err(e) =
-                    serde_json::from_str::<HashMap<String, Value>>(&tc.function.arguments)
-                {
+                if let Err(e) = tc.function.parse_args() {
                     return Err(format!(
                         "Message at index {} has an unparseable tool call arguments for tool '{}': {} (arguments: {})",
                         msg_idx, tc.function.name, e, tc.function.arguments));

@@ -675,7 +675,7 @@ pub async fn check_tools_confirmation(
         };
 
         let args: std::collections::HashMap<String, serde_json::Value> =
-            match serde_json::from_str(&tool_call.function.arguments) {
+            match tool_call.function.parse_args() {
                 Ok(a) => a,
                 Err(e) => {
                     denials.push(PauseReason {
@@ -891,7 +891,7 @@ async fn execute_single_tool(
     model_id: Option<&str>,
 ) -> (usize, bool, Vec<ChatMessage>, Vec<ContextFile>) {
     let args: std::collections::HashMap<String, serde_json::Value> =
-        match serde_json::from_str(&tool_call.function.arguments) {
+        match tool_call.function.parse_args() {
             Ok(a) => a,
             Err(e) => {
                 return (

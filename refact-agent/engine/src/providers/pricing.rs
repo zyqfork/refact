@@ -36,7 +36,14 @@ pub fn compute_cost(usage: &ChatUsage, pricing: &ModelPricing) -> Option<Meterin
 pub fn openai_pricing(model_id: &str) -> Option<ModelPricing> {
     let id = model_id.to_lowercase();
     match id.as_str() {
-        // GPT-5 family
+        // Codex-mini (standalone model, not gpt-5 family)
+        s if s.contains("codex-mini") => Some(ModelPricing {
+            prompt: 1.50,
+            generated: 6.00,
+            cache_read: Some(0.375),
+            cache_creation: None,
+        }),
+        // GPT-5 family (also covers gpt-5-codex, gpt-5.1-codex, gpt-5.2-codex)
         s if s.contains("gpt-5") && s.contains("nano") => Some(ModelPricing {
             prompt: 0.05,
             generated: 0.40,

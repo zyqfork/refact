@@ -381,9 +381,9 @@ pub fn normalize_tool_call(tc: &serde_json::Value) -> Option<crate::call_validat
         });
 
     let arguments = match function.get("arguments") {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(v) if !v.is_null() => serde_json::to_string(v).unwrap_or_default(),
-        _ => String::new(),
+        Some(serde_json::Value::String(s)) if s.trim().starts_with('{') => s.clone(),
+        Some(serde_json::Value::Object(_)) => serde_json::to_string(&function["arguments"]).unwrap_or_else(|_| "{}".to_string()),
+        _ => "{}".to_string(),
     };
 
     let tool_type = tc

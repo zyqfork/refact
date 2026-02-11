@@ -8,6 +8,7 @@ mod refact;
 mod anthropic;
 mod openai;
 mod openai_responses;
+mod openai_codex;
 mod openrouter;
 mod ollama;
 mod lmstudio;

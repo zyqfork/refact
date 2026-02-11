@@ -755,7 +755,6 @@ mod tests {
             supports_max_completion_tokens: false,
             support_metadata: false,
             eof_is_done: false,
-            is_claude_code_oauth: false,
             supports_web_search: false,
         }
     }

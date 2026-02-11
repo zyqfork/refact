@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use axum::{Extension, Json};
 use axum::http::{Response, StatusCode};
 use hyper::Body;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
 
 use crate::at_commands::at_commands::AtCommandsContext;
@@ -245,7 +243,7 @@ pub async fn handle_v1_tools_check_if_confirmation_needed(
         };
 
         let args =
-            match serde_json::from_str::<HashMap<String, Value>>(&tool_call.function.arguments) {
+            match tool_call.function.parse_args() {
                 Ok(args) => args,
                 Err(e) => {
                     return Ok(reply(
