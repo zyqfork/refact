@@ -3,6 +3,7 @@ import classNames from "classnames";
 import { Button, Flex, Separator, Switch } from "@radix-ui/themes";
 
 import { FormFields } from "./FormFields";
+import { ProviderOAuth } from "./ProviderOAuth";
 import { Spinner } from "../../../components/Spinner";
 
 import { useProviderForm, ProviderFormValues } from "./useProviderForm";
@@ -77,6 +78,27 @@ export const ProviderForm: React.FC<ProviderFormProps> = ({
               />
             </Flex>
             <Separator size="4" mb="2" />
+            {currentProvider.name === "claude_code" && (
+              <Flex direction="column" gap="2" mb="3">
+                <ProviderOAuth
+                  providerName={currentProvider.name}
+                  oauthConnected={Boolean(
+                    formValues &&
+                    typeof formValues === "object" &&
+                    "oauth_connected" in formValues &&
+                    formValues.oauth_connected
+                  )}
+                  authStatus={
+                    formValues &&
+                    typeof formValues === "object" &&
+                    "auth_status" in formValues
+                      ? String(formValues.auth_status)
+                      : ""
+                  }
+                />
+                <Separator size="4" />
+              </Flex>
+            )}
             <Flex direction="column" gap="2">
               <FormFields
                 providerData={formValues}

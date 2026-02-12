@@ -19,5 +19,6 @@ mod xai_responses;
 mod google_gemini;
 mod custom;
 pub mod claude_code;
+pub mod claude_code_oauth;
 
 pub use registry::*;

@@ -211,7 +211,7 @@ pub async fn handle_v1_provider_update(
         ));
     }
 
-    // Merge with existing config to preserve secrets
+    let settings = strip_derived_fields(settings);
     let merged_settings = merge_provider_settings_preserving_secrets(&config_dir, &params.name, settings).await?;
 
     save_provider_config(&config_dir, &params.name, merged_settings)
@@ -752,6 +752,21 @@ async fn handle_v1_provider_remove_custom_model_impl(
 }
 
 /// Merge new settings with existing config, preserving secret fields when value is "***"
+const DERIVED_SETTINGS_KEYS: &[&str] = &[
+    "auth_status", "oauth_connected", "claude_cli_path", "readonly",
+];
+
+fn strip_derived_fields(value: serde_yaml::Value) -> serde_yaml::Value {
+    if let serde_yaml::Value::Mapping(mut map) = value {
+        for key in DERIVED_SETTINGS_KEYS {
+            map.remove(serde_yaml::Value::String(key.to_string()));
+        }
+        serde_yaml::Value::Mapping(map)
+    } else {
+        value
+    }
+}
+
 async fn merge_provider_settings_preserving_secrets(
     config_dir: &std::path::Path,
     provider_name: &str,
@@ -908,3 +923,158 @@ async fn patch_provider_model_config(
 
     Ok(())
 }
+
+pub async fn handle_v1_provider_oauth_start(
+    Extension(_gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(params): Path<ProviderPathParams>,
+    _body_bytes: hyper::body::Bytes,
+) -> Result<Response<Body>, ScratchError> {
+    if params.name != "claude_code" {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("OAuth not supported for provider '{}'", params.name),
+        ));
+    }
+
+    let mode = crate::providers::claude_code_oauth::OAuthMode::Max;
+
+    let (session_id, authorize_url) = crate::providers::claude_code_oauth::start_oauth_session(mode).await;
+
+    json_response(StatusCode::OK, &json!({
+        "session_id": session_id,
+        "authorize_url": authorize_url,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct OAuthExchangeRequest {
+    pub session_id: String,
+    pub code: String,
+}
+
+pub async fn handle_v1_provider_oauth_exchange(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(params): Path<ProviderPathParams>,
+    body_bytes: hyper::body::Bytes,
+) -> Result<Response<Body>, ScratchError> {
+    if params.name != "claude_code" {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("OAuth not supported for provider '{}'", params.name),
+        ));
+    }
+
+    let request: OAuthExchangeRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
+        ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("Invalid JSON: {}", e))
+    })?;
+
+    let http_client = gcx.read().await.http_client.clone();
+
+    let tokens = crate::providers::claude_code_oauth::exchange_code(
+        &http_client,
+        &request.session_id,
+        &request.code,
+    )
+    .await
+    .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+
+    let config_dir = gcx.read().await.config_dir.clone();
+    save_oauth_tokens_to_provider(&gcx, &config_dir, &tokens).await?;
+
+    json_response(StatusCode::OK, &json!({
+        "success": true,
+        "auth_status": "OK (OAuth login)",
+    }))
+}
+
+pub async fn handle_v1_provider_oauth_logout(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(params): Path<ProviderPathParams>,
+) -> Result<Response<Body>, ScratchError> {
+    if params.name != "claude_code" {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("OAuth not supported for provider '{}'", params.name),
+        ));
+    }
+
+    let config_dir = gcx.read().await.config_dir.clone();
+    let empty_tokens = crate::providers::claude_code_oauth::OAuthTokens::default();
+    save_oauth_tokens_to_provider(&gcx, &config_dir, &empty_tokens).await?;
+
+    json_response(StatusCode::OK, &json!({
+        "success": true,
+        "auth_status": "No credentials found",
+    }))
+}
+
+async fn save_oauth_tokens_to_provider(
+    gcx: &Arc<ARwLock<GlobalContext>>,
+    config_dir: &std::path::Path,
+    tokens: &crate::providers::claude_code_oauth::OAuthTokens,
+) -> Result<(), ScratchError> {
+    let providers_dir = config_dir.join("providers.d");
+    let config_path = providers_dir.join("claude_code.yaml");
+
+    tokio::fs::create_dir_all(&providers_dir).await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create providers.d: {}", e)))?;
+
+    let mut yaml_map: serde_yaml::Mapping = if config_path.exists() {
+        let content = tokio::fs::read_to_string(&config_path).await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read config: {}", e)))?;
+        let value: serde_yaml::Value = serde_yaml::from_str(&content)
+            .map_err(|e| ScratchError::new(
+                StatusCode::CONFLICT,
+                format!("Config file is invalid YAML and cannot be safely patched: {}. Please fix the file manually.", e),
+            ))?;
+        value.as_mapping().cloned().ok_or_else(|| ScratchError::new(
+            StatusCode::CONFLICT,
+            "Config file root is not a YAML mapping. Cannot safely patch.".to_string(),
+        ))?
+    } else {
+        serde_yaml::Mapping::new()
+    };
+
+    yaml_map.insert(
+        serde_yaml::Value::String("enabled".to_string()),
+        serde_yaml::Value::Bool(true),
+    );
+    yaml_map.insert(
+        serde_yaml::Value::String("oauth_tokens".to_string()),
+        serde_yaml::to_value(tokens)
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize tokens: {}", e)))?,
+    );
+
+    let content = serde_yaml::to_string(&yaml_map)
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize config: {}", e)))?;
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static OAUTH_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique_id = OAUTH_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = config_path.with_extension(format!("yaml.tmp.{}.{}", std::process::id(), unique_id));
+
+    tokio::fs::write(&temp_path, &content).await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write temp config: {}", e)))?;
+    tokio::fs::rename(&temp_path, &config_path).await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to rename config: {}", e)))?;
+
+    {
+        let gcx_locked = gcx.read().await;
+        let mut registry = gcx_locked.providers.write().await;
+
+        let full_content = tokio::fs::read_to_string(&config_path).await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to reload config: {}", e)))?;
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&full_content)
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid YAML after save: {}", e)))?;
+
+        let mut provider = create_provider("claude_code")
+            .ok_or_else(|| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create provider".to_string()))?;
+        provider.provider_settings_apply(yaml)
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to apply settings: {}", e)))?;
+        registry.add(provider);
+    }
+
+    invalidate_caps(gcx.clone()).await;
+    Ok(())
+}
+

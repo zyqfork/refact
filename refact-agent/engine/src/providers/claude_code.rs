@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::caps::model_caps::ModelCapabilities;
 use crate::llm::adapter::WireFormat;
+use crate::providers::claude_code_oauth::OAuthTokens;
 use crate::providers::traits::{
     AvailableModel, CustomModelConfig, ModelSource, ProviderRuntime, ProviderTrait,
     parse_enabled_models, parse_custom_models, set_model_enabled_impl,
@@ -18,7 +19,6 @@ pub enum ClaudeCodeAuthMethod {
     Auto,
     CliSession,
     OauthToken,
-    ApiKey,
 }
 
 impl Default for ClaudeCodeAuthMethod {
@@ -33,8 +33,6 @@ pub struct ClaudeCodeProvider {
     #[serde(default)]
     pub auth_method: ClaudeCodeAuthMethod,
     #[serde(default)]
-    pub api_key: String,
-    #[serde(default)]
     pub oauth_token: String,
     #[serde(default)]
     pub cli_path: Option<String>,
@@ -42,6 +40,8 @@ pub struct ClaudeCodeProvider {
     pub enabled_models: Vec<String>,
     #[serde(default)]
     pub custom_models: HashMap<String, CustomModelConfig>,
+    #[serde(default)]
+    pub oauth_tokens: OAuthTokens,
 }
 
 impl ClaudeCodeProvider {
@@ -105,11 +105,17 @@ impl ClaudeCodeProvider {
 
     fn diagnose_auth_status(&self) -> String {
         match self.resolve_auth() {
-            Ok((api_key, auth_token)) => {
+            Ok(auth_token) => {
                 if !auth_token.is_empty() {
-                    "OK (OAuth token from CLI session)".to_string()
-                } else if !api_key.is_empty() {
-                    "OK (API key)".to_string()
+                    if !self.oauth_tokens.is_empty() {
+                        if self.oauth_tokens.is_expired() {
+                            "OK (OAuth - token needs refresh)".to_string()
+                        } else {
+                            "OK (OAuth login)".to_string()
+                        }
+                    } else {
+                        "OK (OAuth token from CLI session)".to_string()
+                    }
                 } else {
                     "No credentials found".to_string()
                 }
@@ -121,77 +127,54 @@ impl ClaudeCodeProvider {
         }
     }
 
-    /// Resolved auth credentials. Returns (api_key, auth_token) where:
-    /// - api_key is set for standard Anthropic API keys (uses x-api-key header)
-    /// - auth_token is set for OAuth tokens from Claude CLI (uses Authorization: Bearer header)
-    /// This mirrors the official Anthropic SDK's dual auth support.
-    fn resolve_auth(&self) -> Result<(String, String), String> {
+    fn resolve_auth(&self) -> Result<String, String> {
         match self.auth_method {
             ClaudeCodeAuthMethod::Auto => {
-                // OAuth sources first (use Authorization: Bearer)
+                if !self.oauth_tokens.is_empty()
+                    && !self.oauth_tokens.access_token.is_empty()
+                    && !self.oauth_tokens.is_expired()
+                {
+                    tracing::debug!("Claude Code: using in-app OAuth token");
+                    return Ok(self.oauth_tokens.access_token.clone());
+                }
+
                 if let Ok(token) = self.get_cli_oauth_token() {
-                    tracing::info!("Claude Code: using CLI session OAuth token from credentials file");
-                    return Ok((String::new(), token));
+                    tracing::debug!("Claude Code: using CLI session OAuth token from credentials file");
+                    return Ok(token);
                 }
 
                 if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
                     if !token.is_empty() && token != "***" {
-                        tracing::info!("Claude Code: using CLAUDE_CODE_OAUTH_TOKEN env var");
-                        return Ok((String::new(), token));
+                        tracing::debug!("Claude Code: using CLAUDE_CODE_OAUTH_TOKEN env var");
+                        return Ok(token);
                     }
                 }
 
                 if !self.oauth_token.is_empty() && self.oauth_token != "***" {
-                    tracing::info!("Claude Code: using configured OAuth token");
-                    return Ok((String::new(), self.oauth_token.clone()));
-                }
-
-                // API key sources (use x-api-key)
-                if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-                    if !key.is_empty() && key != "***" {
-                        tracing::info!("Claude Code: using ANTHROPIC_API_KEY env var");
-                        return Ok((key, String::new()));
-                    }
-                }
-
-                if !self.api_key.is_empty() && self.api_key != "***" {
-                    tracing::info!("Claude Code: using configured API key");
-                    return Ok((self.api_key.clone(), String::new()));
+                    tracing::debug!("Claude Code: using configured OAuth token");
+                    return Ok(self.oauth_token.clone());
                 }
 
                 Err(concat!(
                     "No authentication method available. Options:\n",
-                    "  1. Install Claude CLI and run 'claude auth login'\n",
-                    "  2. Set CLAUDE_CODE_OAUTH_TOKEN environment variable\n",
-                    "  3. Set ANTHROPIC_API_KEY environment variable\n",
-                    "  4. Provide api_key or oauth_token in provider config"
+                    "  1. Click 'Login with Anthropic' in provider settings\n",
+                    "  2. Install Claude CLI and run 'claude auth login'\n",
+                    "  3. Provide oauth_token in provider config"
                 ).to_string())
             }
             ClaudeCodeAuthMethod::CliSession => {
-                let token = self.get_cli_oauth_token()?;
-                Ok((String::new(), token))
+                self.get_cli_oauth_token()
             }
             ClaudeCodeAuthMethod::OauthToken => {
                 if !self.oauth_token.is_empty() && self.oauth_token != "***" {
-                    return Ok((String::new(), self.oauth_token.clone()));
+                    return Ok(self.oauth_token.clone());
                 }
                 if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
                     if !token.is_empty() && token != "***" {
-                        return Ok((String::new(), token));
+                        return Ok(token);
                     }
                 }
                 Err("OAuth token not provided. Set oauth_token or CLAUDE_CODE_OAUTH_TOKEN env var.".to_string())
-            }
-            ClaudeCodeAuthMethod::ApiKey => {
-                if !self.api_key.is_empty() && self.api_key != "***" {
-                    return Ok((self.api_key.clone(), String::new()));
-                }
-                if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-                    if !key.is_empty() && key != "***" {
-                        return Ok((key, String::new()));
-                    }
-                }
-                Err("API key not provided. Set api_key or ANTHROPIC_API_KEY env var.".to_string())
             }
         }
     }
@@ -230,22 +213,22 @@ impl ProviderTrait for ClaudeCodeProvider {
     fn provider_schema(&self) -> &'static str {
         r#"
 fields:
-  api_key:
-    f_type: string_long
-    f_desc: "Anthropic API key (only if not using Claude CLI)"
-    f_placeholder: "sk-ant-..."
-    f_label: "API Key (optional)"
-    f_extra: true
   oauth_token:
     f_type: string_long
-    f_desc: "OAuth token (only if not using Claude CLI)"
+    f_desc: "OAuth token (only if not using OAuth login)"
     f_placeholder: "sk-ant-oat01-..."
     f_label: "OAuth Token (optional)"
     f_extra: true
+oauth:
+  supported: true
+  methods:
+    - id: max
+      label: "Claude Pro/Max"
+      description: "Login with your Claude Pro or Max subscription"
 description: |
   Use your Claude Code subscription to access Claude models.
 
-  **Setup:** Install Claude CLI and run `claude auth login` — credentials are detected automatically.
+  **Setup:** Click **Login with Anthropic** below, or install Claude CLI and run `claude auth login`.
 available:
   on_your_laptop_possible: true
   when_isolated_possible: true
@@ -255,11 +238,6 @@ available:
     fn provider_settings_apply(&mut self, yaml: serde_yaml::Value) -> Result<(), String> {
         if let Some(enabled) = yaml.get("enabled").and_then(|v| v.as_bool()) {
             self.enabled = enabled;
-        }
-        if let Some(api_key) = yaml.get("api_key").and_then(|v| v.as_str()) {
-            if api_key != "***" {
-                self.api_key = api_key.to_string();
-            }
         }
         if let Some(oauth_token) = yaml.get("oauth_token").and_then(|v| v.as_str()) {
             if oauth_token != "***" {
@@ -275,6 +253,10 @@ available:
             self.auth_method = serde_yaml::from_value(auth_method.clone())
                 .map_err(|e| format!("invalid auth_method: {}", e))?;
         }
+        if let Some(oauth_tokens) = yaml.get("oauth_tokens") {
+            self.oauth_tokens = serde_yaml::from_value(oauth_tokens.clone())
+                .unwrap_or_default();
+        }
         parse_enabled_models(&yaml, &mut self.enabled_models);
         parse_custom_models(&yaml, &mut self.custom_models);
         Ok(())
@@ -284,29 +266,31 @@ available:
         let cli_detected = self.detect_cli_path().unwrap_or_default();
         let auth_status = self.diagnose_auth_status();
 
+        let oauth_connected = !self.oauth_tokens.is_empty() && !self.oauth_tokens.access_token.is_empty();
+
         json!({
             "enabled": self.enabled,
             "auth_status": auth_status,
             "claude_cli_path": if cli_detected.is_empty() { "not found".to_string() } else { cli_detected },
-            "api_key": if self.api_key.is_empty() { "" } else { "***" },
             "oauth_token": if self.oauth_token.is_empty() { "" } else { "***" },
+            "oauth_connected": oauth_connected,
             "enabled_models": self.enabled_models,
             "custom_models": self.custom_models
         })
     }
 
     fn build_runtime(&self) -> Result<ProviderRuntime, String> {
-        let (api_key, auth_token) = match self.resolve_auth() {
-            Ok(creds) => creds,
+        let auth_token = match self.resolve_auth() {
+            Ok(token) => token,
             Err(e) => {
                 if self.enabled {
                     tracing::warn!("Claude Code auth failed: {}", e);
                 }
-                (String::new(), String::new())
+                String::new()
             }
         };
 
-        let has_auth = !api_key.is_empty() || !auth_token.is_empty();
+        let has_auth = !auth_token.is_empty();
 
         Ok(ProviderRuntime {
             name: self.name().to_string(),
@@ -317,7 +301,7 @@ available:
             chat_endpoint: "https://api.anthropic.com/v1/messages".to_string(),
             completion_endpoint: String::new(),
             embedding_endpoint: String::new(),
-            api_key,
+            api_key: String::new(),
             auth_token,
             tokenizer_api_key: String::new(),
             extra_headers: HashMap::new(),
@@ -345,15 +329,15 @@ available:
         http_client: &reqwest::Client,
         model_caps: &HashMap<String, ModelCapabilities>,
     ) -> Vec<AvailableModel> {
-        let (api_key, auth_token) = match self.resolve_auth() {
-            Ok(creds) => creds,
+        let auth_token = match self.resolve_auth() {
+            Ok(token) => token,
             Err(e) => {
                 tracing::warn!("Claude Code: cannot fetch models, auth failed: {}", e);
                 return self.get_custom_models_only();
             }
         };
 
-        let api_model_ids = fetch_claude_code_model_ids(http_client, &api_key, &auth_token).await;
+        let api_model_ids = fetch_claude_code_model_ids(http_client, &auth_token).await;
         if api_model_ids.is_empty() {
             tracing::warn!("Claude Code: API returned no models, falling back to custom models only");
             return self.get_custom_models_only();
@@ -366,10 +350,10 @@ available:
         let regex_opt = self.model_filter_regex()
             .and_then(|p| regex::Regex::new(p).ok());
 
+        let date_regex = regex::Regex::new(r"^(.+?)-\d{8}$").expect("valid static regex");
         let mut models: Vec<AvailableModel> = Vec::new();
 
         for api_id in &api_model_ids {
-            // Match against model_caps using the same regex filter
             let matches_filter = match &regex_opt {
                 Some(regex) => regex.is_match(api_id),
                 None => true,
@@ -377,8 +361,6 @@ available:
             if !matches_filter {
                 continue;
             }
-            
-            let date_regex = regex::Regex::new(r"^(.+?)-\d{8}$").unwrap();
             let api_id_without_date = date_regex
                 .captures(api_id)
                 .and_then(|caps| caps.get(1))
@@ -422,29 +404,23 @@ available:
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Fetch available model IDs from the Anthropic API using the provider's credentials.
+/// Fetch available model IDs from the Anthropic API using OAuth credentials.
 /// Returns model IDs (e.g., "claude-sonnet-4-20250514") that can be matched against model_caps.
-/// Uses OAuth Bearer auth when available, falls back to API key auth.
 pub async fn fetch_claude_code_model_ids(
     http_client: &reqwest::Client,
-    api_key: &str,
     auth_token: &str,
 ) -> Vec<String> {
-    let mut request = http_client
-        .get(ANTHROPIC_MODELS_URL)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("content-type", "application/json");
-
-    if !auth_token.is_empty() {
-        request = request
-            .header("Authorization", format!("Bearer {}", auth_token))
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .header("user-agent", "claude-cli/2.1.2 (external, cli)");
-    } else if !api_key.is_empty() {
-        request = request.header("x-api-key", api_key);
-    } else {
+    if auth_token.is_empty() {
         return vec![];
     }
+
+    let request = http_client
+        .get(ANTHROPIC_MODELS_URL)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .header("content-type", "application/json")
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("user-agent", "claude-cli/2.1.2 (external, cli)");
 
     match request.send().await {
         Ok(response) => {

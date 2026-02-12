@@ -109,7 +109,7 @@ impl LlmWireAdapter for RefactAdapter {
                         }
                         _ => {
                             if let Some(effort) = req.reasoning.to_anthropic_effort() {
-                                body["thinking"] = json!({"type": "adaptive"});
+                                body["reasoning_effort"] = json!(effort);
                                 body["output_config"] = json!({"effort": effort});
                             }
                         }

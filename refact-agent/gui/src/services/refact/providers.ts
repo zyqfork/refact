@@ -528,6 +528,95 @@ export const providersApi = createApi({
       },
     }),
 
+    oauthStart: builder.mutation<
+      { session_id: string; authorize_url: string },
+      { providerName: string; mode?: string }
+    >({
+      queryFn: async (args, api, extraOptions, baseQuery) => {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort as unknown as number;
+        const url = `http://127.0.0.1:${port}${PROVIDERS_URL}/${args.providerName}/oauth/start`;
+
+        const result = await baseQuery({
+          ...extraOptions,
+          method: "POST",
+          url,
+          body: { mode: args.mode ?? "max" },
+          credentials: "same-origin",
+          redirect: "follow",
+        });
+        if (result.error) {
+          return { error: result.error };
+        }
+        const data = result.data as {
+          session_id: string;
+          authorize_url: string;
+        };
+        return { data };
+      },
+    }),
+
+    oauthExchange: builder.mutation<
+      { success: boolean; auth_status: string },
+      { providerName: string; session_id: string; code: string }
+    >({
+      invalidatesTags: (_result, _error, { providerName }) => [
+        { type: "PROVIDER", id: providerName },
+        { type: "PROVIDERS", id: "LIST" },
+        { type: "AVAILABLE_MODELS", id: providerName },
+      ],
+      queryFn: async (args, api, extraOptions, baseQuery) => {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort as unknown as number;
+        const url = `http://127.0.0.1:${port}${PROVIDERS_URL}/${args.providerName}/oauth/exchange`;
+
+        const result = await baseQuery({
+          ...extraOptions,
+          method: "POST",
+          url,
+          body: { session_id: args.session_id, code: args.code },
+          credentials: "same-origin",
+          redirect: "follow",
+        });
+        if (result.error) {
+          return { error: result.error };
+        }
+        const data = result.data as {
+          success: boolean;
+          auth_status: string;
+        };
+        return { data };
+      },
+    }),
+
+    oauthLogout: builder.mutation<
+      { success: boolean },
+      { providerName: string }
+    >({
+      invalidatesTags: (_result, _error, { providerName }) => [
+        { type: "PROVIDER", id: providerName },
+        { type: "PROVIDERS", id: "LIST" },
+        { type: "AVAILABLE_MODELS", id: providerName },
+      ],
+      queryFn: async (args, api, extraOptions, baseQuery) => {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort as unknown as number;
+        const url = `http://127.0.0.1:${port}${PROVIDERS_URL}/${args.providerName}/oauth/logout`;
+
+        const result = await baseQuery({
+          ...extraOptions,
+          method: "POST",
+          url,
+          credentials: "same-origin",
+          redirect: "follow",
+        });
+        if (result.error) {
+          return { error: result.error };
+        }
+        return { data: { success: true } };
+      },
+    }),
+
     deleteProvider: builder.mutation<{ success: boolean }, string>({
       invalidatesTags: (_result, _error, providerName) => [
         { type: "PROVIDER", id: providerName },
@@ -737,4 +826,7 @@ export const {
   useDeleteProviderMutation,
   useGetDefaultsQuery,
   useUpdateDefaultsMutation,
+  useOauthStartMutation,
+  useOauthExchangeMutation,
+  useOauthLogoutMutation,
 } = providersApi;
