@@ -12,6 +12,7 @@ use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::global_context::GlobalContext;
 use crate::yaml_configs::customization_registry::get_subagent_config;
+use crate::knowledge_index::format_related_memories_section;
 use tokio::sync::RwLock as ARwLock;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::memories::{memories_add_enriched, EnrichmentParams};
@@ -209,7 +210,8 @@ impl Tool for ToolDeepResearch {
                 Ok(path) => {
                     tracing::info!("Created enriched memory from deep research: {:?}", path);
                     format!(
-                        "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`",
+                        "\n\n---\n📝 **This report has been saved to the knowledge base:** `{}`\n\nRelated memories may be shown elsewhere in short form. To load full content of a memory, call `cat(paths=\"{}\")`.",
+                        path.display(),
                         path.display()
                     )
                 }
@@ -218,7 +220,18 @@ impl Tool for ToolDeepResearch {
                     String::new()
                 }
             };
-        let final_message = format!("{}{}", research_content, memory_note);
+        let related_memories_note = {
+            let gcx = ccx.lock().await.global_context.clone();
+            let gcx_read = gcx.read().await;
+            let idx_guard = gcx_read.knowledge_index.lock().await;
+            let cards = idx_guard.related_for_tags(
+                &vec!["deep-research".to_string(), "research".to_string()],
+                5,
+            );
+            format_related_memories_section(&cards, None)
+        };
+
+        let final_message = format!("{}{}{}", research_content, memory_note, related_memories_note);
 
         Ok((
             false,

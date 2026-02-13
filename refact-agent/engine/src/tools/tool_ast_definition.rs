@@ -11,6 +11,7 @@ use crate::custom_error::trace_and_default;
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
 use crate::postprocessing::pp_command_output::OutputFilter;
+use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolAstDefinition {
     pub config_path: String,
@@ -116,9 +117,29 @@ impl Tool for ToolAstDefinition {
             }
 
             let combined_message = all_messages.join("\n");
+
+            // Append related memories based on involved file paths.
+            let related_section = {
+                let gcx_read = gcx.read().await;
+                let idx_guard = gcx_read.knowledge_index.lock().await;
+                let mut files: Vec<String> = all_context_files
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContextEnum::ContextFile(cf) => Some(cf.file_name.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                files.sort();
+                files.dedup();
+                let mut cards = idx_guard.related_for_files(&files, 8);
+                if cards.is_empty() {
+                    cards = idx_guard.related_for_related_files(&files, 8);
+                }
+                format_related_memories_section(&cards, None)
+            };
             all_context_files.push(ContextEnum::ChatMessage(ChatMessage {
                 role: "tool".to_string(),
-                content: ChatContent::SimpleText(combined_message),
+                content: ChatContent::SimpleText(format!("{}{}", combined_message, related_section)),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
                 output_filter: Some(OutputFilter::no_limits()), // Already compressed internally

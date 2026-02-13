@@ -7,6 +7,7 @@ use tokio::fs;
 use tokio_rusqlite::Connection;
 use tracing::info;
 use zerocopy::IntoBytes;
+use regex::Regex;
 
 use crate::vecdb::vdb_structs::{SimpleTextHashVector, SplitResult, VecdbRecord};
 
@@ -396,10 +397,49 @@ impl VecDBSqlite {
         use crate::vecdb::vdb_error::with_retry;
         use tokio::time::Duration;
 
-        let scope_condition = vecdb_scope_filter_mb
-            .clone()
-            .map(|_| format!("AND scope = ?"))
-            .unwrap_or_else(String::new);
+        // NOTE: historically `create_scope_filter()` produced SQL-ish fragments:
+        //   (scope LIKE '/abs/dir/%')
+        //   (scope = "/abs/file")
+        // but `vecdb_search()` treated its argument as a plain exact scope value.
+        //
+        // To keep existing callers working AND remain safe, we only accept
+        // these two patterns and translate them into parameterized SQL.
+        fn parse_scope_filter(filter: &str) -> Option<(String, String)> {
+            // Accept: (scope LIKE '...%')  or  scope LIKE "...%"
+            let like_re = Regex::new(
+                r#"(?i)\bscope\s+like\s+['\"]([^'\"]+)['\"]\s*\)?\s*$"#,
+            )
+            .ok()?;
+            if let Some(caps) = like_re.captures(filter.trim()) {
+                let pattern = caps.get(1)?.as_str().to_string();
+                return Some(("AND scope LIKE ?".to_string(), pattern));
+            }
+
+            // Accept: (scope = '...')  or  scope = "..."
+            let eq_re = Regex::new(
+                r#"(?i)\bscope\s*=\s*['\"]([^'\"]+)['\"]\s*\)?\s*$"#,
+            )
+            .ok()?;
+            if let Some(caps) = eq_re.captures(filter.trim()) {
+                let value = caps.get(1)?.as_str().to_string();
+                return Some(("AND scope = ?".to_string(), value));
+            }
+            None
+        }
+
+        let (scope_condition, scope_param) = match vecdb_scope_filter_mb.as_deref() {
+            Some(filter_str) => match parse_scope_filter(filter_str) {
+                Some((cond, param)) => (cond, Some(param)),
+                None => {
+                    tracing::warn!(
+                        "vecdb_search: unsupported scope filter format, ignoring: {}",
+                        filter_str
+                    );
+                    (String::new(), None)
+                }
+            },
+            None => (String::new(), None),
+        };
         let embedding_owned = embedding.clone();
         let emb_table_name = self.emb_table_name.clone();
 
@@ -409,7 +449,7 @@ impl VecDBSqlite {
                 let embedding_owned = embedding_owned.clone();
                 let emb_table_name = emb_table_name.clone();
                 let scope_condition = scope_condition.clone();
-                let vecdb_scope_filter_mb = vecdb_scope_filter_mb.clone();
+                let scope_param = scope_param.clone();
 
                 self.conn.call(move |connection| {
                     let mut stmt = connection.prepare(&format!(
@@ -430,7 +470,7 @@ impl VecDBSqlite {
                     ))?;
 
                     let embedding_bytes = embedding_owned.as_bytes();
-                    let params = match &vecdb_scope_filter_mb {
+                    let params = match &scope_param {
                         Some(scope) => rusqlite::params![&embedding_bytes, top_n, scope.clone()],
                         None => rusqlite::params![&embedding_bytes, top_n],
                     };

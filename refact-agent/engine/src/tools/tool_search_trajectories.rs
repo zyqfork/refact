@@ -93,7 +93,8 @@ impl Tool for ToolSearchTrajectories {
                 result.push_str("\n\n");
             }
             result.push_str("───────────────────────────────────────\n");
-            result.push_str("💡 Use get_trajectory_context(trajectory_id, message_start, message_end) to expand.");
+            result.push_str("💡 Use get_trajectory_context(trajectory_id, message_start, message_end) to expand.\n");
+            result.push_str("\nNote: these are heuristic matches and may be unrelated.");
             result
         };
 

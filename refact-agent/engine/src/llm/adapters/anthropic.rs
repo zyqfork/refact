@@ -811,7 +811,10 @@ mod tests {
 
         let http = adapter.build_http(&req_with_reasoning, &settings()).unwrap();
         let beta = http.headers.get("anthropic-beta").map(|v| v.to_str().unwrap().to_string());
-        assert_eq!(beta, Some(INTERLEAVED_THINKING_BETA.to_string()));
+        // When thinking is enabled, the adapter may include multiple beta flags.
+        assert!(beta.is_some());
+        let beta = beta.unwrap();
+        assert!(beta.contains(INTERLEAVED_THINKING_BETA));
     }
 
     #[test]

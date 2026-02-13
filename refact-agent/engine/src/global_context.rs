@@ -28,6 +28,7 @@ use crate::telemetry::telemetry_structs;
 use crate::background_tasks::BackgroundTasksHolder;
 use crate::voice::SharedVoiceService;
 use crate::yaml_configs::customization_registry::RegistryCacheManager;
+use crate::knowledge_index::KnowledgeIndex;
 
 #[derive(Debug, StructOpt, Clone)]
 pub struct CommandLine {
@@ -300,6 +301,9 @@ pub struct GlobalContext {
     pub voice_service: SharedVoiceService,
     pub project_registry_cache: Arc<StdRwLock<RegistryCacheManager>>,
     pub providers: Arc<ARwLock<ProviderRegistry>>,
+
+    // Fast in-memory index for knowledge cards. Built asynchronously.
+    pub knowledge_index: Arc<AMutex<KnowledgeIndex>>,
 }
 
 pub type SharedGlobalContext = Arc<ARwLock<GlobalContext>>; // TODO: remove this type alias, confusing
@@ -596,6 +600,7 @@ pub async fn create_global_context(
                 .await
                 .unwrap_or_default()
         )),
+        knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
     };
     let gcx = Arc::new(ARwLock::new(cx));
     crate::files_in_workspace::watcher_init(gcx.clone()).await;
@@ -697,6 +702,7 @@ pub mod tests {
             voice_service: crate::voice::VoiceService::new(),
             project_registry_cache: Arc::new(StdRwLock::new(RegistryCacheManager::new())),
             providers: Arc::new(ARwLock::new(ProviderRegistry::default())),
+            knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
         };
 
         Arc::new(ARwLock::new(cx))

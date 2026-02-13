@@ -10,6 +10,8 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::subchat::run_subchat;
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::yaml_configs::customization_registry::get_subagent_config;
+use crate::knowledge_index::format_related_memories_section;
+use regex::Regex;
 
 const FILE_EDITING_TOOLS: &[&str] = &[
     "create_textdoc",
@@ -283,6 +285,40 @@ impl Tool for ToolSubagent {
 
 {}"#,
             task, expected_result, result_content
+        );
+
+        // Append related memories in short form (heuristic):
+        // - detect file paths in task/expected_result
+        // - retrieve related cards by filenames from in-memory index
+        let related_section = {
+            let combined = format!("{}\n{}", task, expected_result);
+            let path_re = Regex::new(r"(?:^|[\s`])((?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)")
+                .unwrap();
+            let mut files: Vec<String> = path_re
+                .captures_iter(&combined)
+                .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+                .collect();
+            files.sort();
+            files.dedup();
+
+            let gcx = ccx.lock().await.global_context.clone();
+            let gcx_read = gcx.read().await;
+            let idx_guard = gcx_read.knowledge_index.lock().await;
+            let mut cards = idx_guard.related_for_files(&files, 5);
+            if cards.is_empty() {
+                // Fall back to tag-based lookup if we have no file signals.
+                cards = idx_guard.related_for_tags(
+                    &vec!["subagent".to_string(), "report".to_string(), "task-report".to_string()],
+                    5,
+                );
+            }
+            format_related_memories_section(&cards, None)
+        };
+
+        let result_message = format!(
+            "{}{}\n\nNote: related memories are heuristic and may be unrelated. If any look relevant, load full content with `cat(paths=\"<path>\")` using the memory file path shown above.",
+            result_message,
+            related_section
         );
 
         Ok((

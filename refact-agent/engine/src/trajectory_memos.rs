@@ -11,6 +11,7 @@ use crate::chat::trajectories::extract_text_with_image_placeholders_from_json;
 use crate::files_correction::get_project_dirs;
 use crate::global_context::GlobalContext;
 use crate::memories::{memories_add, create_frontmatter};
+use crate::memories::extract_file_paths;
 use crate::subchat::run_subchat_once;
 use crate::yaml_configs::customization_registry::get_subagent_config;
 
@@ -114,6 +115,12 @@ async fn process_single_trajectory(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
+
+    let root_chat_id = trajectory
+        .get("root_chat_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| trajectory_id.clone());
     let current_title = trajectory
         .get("title")
         .and_then(|v| v.as_str())
@@ -162,8 +169,21 @@ async fn process_single_trajectory(
             &[memo.memo_type.clone(), "trajectory".to_string()],
             &[],
             &[],
-            "trajectory",
+            "memory",
         );
+
+        let mut frontmatter = frontmatter;
+        frontmatter.source_chat_id = Some(root_chat_id.clone());
+        frontmatter.source_tool = Some("memo_extraction".to_string());
+        frontmatter.source_trajectory_id = Some(trajectory_id.clone());
+        frontmatter.summary = Some(memo.content.lines().take(3).collect::<Vec<_>>().join(" "));
+        frontmatter.description = memo
+            .content
+            .lines()
+            .skip(1)
+            .find(|l| !l.trim().is_empty())
+            .map(|l| l.trim().to_string());
+        frontmatter.related_files = extract_file_paths(&memo.content);
 
         let content_with_source = format!(
             "{}\n\n---\nSource: trajectory `{}`",

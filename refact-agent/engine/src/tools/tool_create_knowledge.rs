@@ -9,6 +9,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::memories::{memories_add_enriched, EnrichmentParams};
+use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolCreateKnowledge {
     pub config_path: String,
@@ -86,7 +87,7 @@ impl Tool for ToolCreateKnowledge {
 
         let root_chat_id = ccx.lock().await.root_chat_id.clone();
         let enrichment_params = EnrichmentParams {
-            base_tags: user_tags,
+            base_tags: user_tags.clone(),
             base_filenames: user_filenames,
             base_kind: "knowledge".to_string(),
             base_title: None,
@@ -95,7 +96,25 @@ impl Tool for ToolCreateKnowledge {
 
         let file_path = memories_add_enriched(ccx.clone(), &content, enrichment_params).await?;
 
-        let result_msg = format!("Knowledge entry created: {}", file_path.display());
+        // Surface related memories right away (short form), and tell how to fetch full content.
+        let related_section = {
+            let gcx = ccx.lock().await.global_context.clone();
+            let gcx_read = gcx.read().await;
+            let idx_guard = gcx_read.knowledge_index.lock().await;
+            let mut tags = user_tags.clone();
+            tags.push("knowledge".to_string());
+            tags.sort();
+            tags.dedup();
+            let cards = idx_guard.related_for_tags(&tags, 5);
+            format_related_memories_section(&cards, Some(&file_path))
+        };
+
+        let result_msg = format!(
+            "Knowledge entry created: {}\n\nTo load full content later, call `cat(paths=\"{}\")`.{}",
+            file_path.display(),
+            file_path.display(),
+            related_section
+        );
 
         Ok((
             false,

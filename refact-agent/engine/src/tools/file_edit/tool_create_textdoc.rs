@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex as AMutex;
 use tokio::sync::RwLock as ARwLock;
+use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolCreateTextDoc {
     pub config_path: String,
@@ -90,12 +91,35 @@ impl Tool for ToolCreateTextDoc {
             ccx_locked.global_context.clone()
         };
         let (_, _, chunks, _summary) =
-            tool_create_text_doc_exec(gcx, args, false, &None).await?;
+            tool_create_text_doc_exec(gcx.clone(), args, false, &None).await?;
+
+        let related_section = {
+            let idx_arc = { gcx.read().await.knowledge_index.clone() };
+            let idx_guard = idx_arc.lock().await;
+            let mut paths: Vec<String> = Vec::new();
+            for c in chunks.iter() {
+                if !c.file_name.is_empty() {
+                    paths.push(c.file_name.clone());
+                }
+                if let Some(rename) = &c.file_name_rename {
+                    if !rename.is_empty() {
+                        paths.push(rename.clone());
+                    }
+                }
+            }
+            paths.sort();
+            paths.dedup();
+            let mut cards = idx_guard.related_for_files(&paths, 8);
+            if cards.is_empty() {
+                cards = idx_guard.related_for_related_files(&paths, 8);
+            }
+            format_related_memories_section(&cards, None)
+        };
         Ok((
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
                 role: "diff".to_string(),
-                content: ChatContent::SimpleText(json!(chunks).to_string()),
+                content: ChatContent::SimpleText(format!("{}{}", json!(chunks).to_string(), related_section)),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
                 ..Default::default()

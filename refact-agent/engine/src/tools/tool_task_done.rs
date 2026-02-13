@@ -34,6 +34,10 @@ fn spawn_memory_enrichment_task(
                     "task_done: knowledge saved to {}",
                     knowledge_path.display()
                 );
+                tracing::info!(
+                    "task_done: to load full content later, use cat(paths=\"{}\")",
+                    knowledge_path.display()
+                );
             }
             Err(e) => {
                 error!("task_done: failed to save knowledge: {}", e);

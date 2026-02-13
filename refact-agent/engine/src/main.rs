@@ -67,6 +67,7 @@ mod files_correction_cache;
 mod git;
 mod integrations;
 mod knowledge_graph;
+mod knowledge_index;
 mod memories;
 mod privacy;
 mod tasks;

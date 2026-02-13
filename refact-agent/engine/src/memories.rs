@@ -1,6 +1,6 @@
 use std::path::{PathBuf, Path};
 use std::sync::Arc;
-use chrono::{Local, Duration};
+use chrono::{Local, Duration, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock as ARwLock;
@@ -11,6 +11,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use std::collections::HashMap;
+use sha2::{Digest, Sha256};
 
 fn path_contains_component(path: &Path, component: &str) -> bool {
     path.components().any(|c| c.as_os_str() == component)
@@ -25,7 +26,6 @@ use crate::global_context::GlobalContext;
 use crate::knowledge_graph::kg_structs::KnowledgeFrontmatter;
 use crate::knowledge_graph::kg_subchat::{enrich_knowledge_metadata, check_deprecation};
 use crate::knowledge_graph::build_knowledge_graph;
-use crate::vecdb::vdb_structs::VecdbSearch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -160,7 +160,35 @@ pub fn create_frontmatter(
         deprecated_at: None,
         review_after: Some(review_after),
         source_chat_id: None,
+
+        created_at: Some(Utc::now().to_rfc3339()),
+        summary: None,
+        description: None,
+        entities: Vec::new(),
+        related_files: Vec::new(),
+        related_entities: Vec::new(),
+        content_hash: None,
+        source_tool: None,
+        source_trajectory_id: None,
+        source_message_range: None,
     }
+}
+
+fn first_nonempty_line(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        return Some(trimmed.trim_start_matches('#').trim().to_string());
+    }
+    None
+}
+
+fn compute_content_hash_hex(content: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(content.as_bytes());
+    hex::encode(h.finalize())
 }
 
 pub async fn get_global_knowledge_dir(gcx: Arc<ARwLock<GlobalContext>>) -> PathBuf {
@@ -224,6 +252,13 @@ pub async fn memories_add(
         .map_err(|e| format!("Failed to write knowledge file: {}", e))?;
 
     info!("Created knowledge entry: {}", file_path.display());
+
+    // Update fast in-memory knowledge index (best-effort, new docs going forward).
+    {
+        let gcx_read = gcx.read().await;
+        let mut idx = gcx_read.knowledge_index.lock().await;
+        idx.add_from_frontmatter(file_path.clone(), frontmatter, Some(content));
+    }
 
     if let Some(vecdb) = gcx.read().await.vec_db.lock().await.as_ref() {
         vecdb
@@ -361,14 +396,67 @@ pub async fn memories_search(
     }
 
     let vecdb = vecdb_guard.as_ref().unwrap();
-    let search_result = vecdb
-        .vecdb_search(
-            query.to_string(),
-            (top_n_memories + top_n_trajectories) * 5,
-            None,
-        )
-        .await
-        .map_err(|e| format!("VecDB search failed: {}", e))?;
+
+    // Improve recall by doing two scoped searches:
+    // - knowledge roots
+    // - trajectory roots
+    // This avoids code chunks dominating a global top-K.
+    let embedding = vecdb.embed_query(query).await?;
+
+    let k_knowledge = ((top_n_memories.max(1) + top_n_trajectories.max(1)) * 50).min(400);
+    let k_trajectories = ((top_n_memories.max(1) + top_n_trajectories.max(1)) * 50).min(400);
+
+    let mut combined_results: Vec<crate::vecdb::vdb_structs::VecdbRecord> = Vec::new();
+
+    for kd in &knowledge_dirs {
+        let prefix = if kd.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR) {
+            kd.to_string_lossy().to_string()
+        } else {
+            format!("{}{}", kd.to_string_lossy(), std::path::MAIN_SEPARATOR)
+        };
+        let filter = format!("(scope LIKE '{}%')", prefix.replace('"', "\\\""));
+        if let Ok(res) = vecdb
+            .vecdb_search_with_embedding(&embedding, k_knowledge, Some(filter))
+            .await
+        {
+            combined_results.extend(res);
+        }
+    }
+
+    let trajectory_dirs = crate::chat::trajectories::get_all_trajectories_dirs(gcx.clone()).await;
+    for td in &trajectory_dirs {
+        let prefix = if td.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR) {
+            td.to_string_lossy().to_string()
+        } else {
+            format!("{}{}", td.to_string_lossy(), std::path::MAIN_SEPARATOR)
+        };
+        let filter = format!("(scope LIKE '{}%')", prefix.replace('"', "\\\""));
+        if let Ok(res) = vecdb
+            .vecdb_search_with_embedding(&embedding, k_trajectories, Some(filter))
+            .await
+        {
+            combined_results.extend(res);
+        }
+    }
+
+    // De-dup identical segments; keep best usefulness.
+    combined_results.sort_by(|a, b| b.usefulness.total_cmp(&a.usefulness));
+    let mut deduped = Vec::new();
+    let mut seen = std::collections::HashSet::<(PathBuf, u64, u64)>::new();
+    for r in combined_results {
+        let key = (r.file_path.clone(), r.start_line, r.end_line);
+        if seen.insert(key) {
+            deduped.push(r);
+        }
+        if deduped.len() >= (k_knowledge + k_trajectories) {
+            break;
+        }
+    }
+
+    let search_result = crate::vecdb::vdb_structs::SearchResult {
+        query_text: query.to_string(),
+        results: deduped,
+    };
     drop(vecdb_guard);
 
     struct KnowledgeMatch {
@@ -382,10 +470,9 @@ pub async fn memories_search(
     let mut knowledge_matches: HashMap<PathBuf, KnowledgeMatch> = HashMap::new();
     let mut trajectory_matches: HashMap<PathBuf, TrajectoryMatch> = HashMap::new();
 
-    let trajectory_dirs = crate::chat::trajectories::get_all_trajectories_dirs(gcx.clone()).await;
-
     for rec in search_result.results.iter() {
-        let score = 1.0 - (rec.distance / 2.0).min(1.0);
+        // Prefer VecDB usefulness normalization over raw distance.
+        let score = (rec.usefulness / 100.0).clamp(0.0, 1.0);
         let is_knowledge = knowledge_dirs.iter().any(|d| rec.file_path.starts_with(d))
             && !path_contains_component(&rec.file_path, "archive");
         let is_trajectory = trajectory_dirs.iter().any(|d| rec.file_path.starts_with(d))
@@ -735,8 +822,12 @@ pub async fn archive_document(
     gcx: Arc<ARwLock<GlobalContext>>,
     doc_path: &PathBuf,
 ) -> Result<PathBuf, String> {
-    let knowledge_dir = get_first_knowledge_dir(gcx.clone()).await?;
-    let archive_dir = knowledge_dir.join("archive");
+    // Archive under the document's own knowledge root to support both local and global
+    // knowledge directories, and multi-root workspaces.
+    let archive_dir = doc_path
+        .parent()
+        .map(|p| p.join("archive"))
+        .ok_or("Invalid document path: no parent")?;
     fs::create_dir_all(&archive_dir)
         .await
         .map_err(|e| format!("Failed to create archive dir: {}", e))?;
@@ -744,6 +835,7 @@ pub async fn archive_document(
     let filename = doc_path.file_name().ok_or("Invalid filename")?;
     let archive_path = archive_dir.join(filename);
 
+    let old_path_str = doc_path.to_string_lossy().to_string();
     fs::rename(doc_path, &archive_path)
         .await
         .map_err(|e| format!("Failed to move to archive: {}", e))?;
@@ -754,10 +846,18 @@ pub async fn archive_document(
         archive_path.display()
     );
 
+    // Keep VecDB consistent with the rename (remove old path, enqueue new path).
+    if let Some(vecdb) = gcx.read().await.vec_db.lock().await.as_ref() {
+        let _ = vecdb.remove_file(&PathBuf::from(old_path_str)).await;
+        vecdb
+            .vectorizer_enqueue_files(&vec![archive_path.to_string_lossy().to_string()], true)
+            .await;
+    }
+
     Ok(archive_path)
 }
 
-fn extract_entities(content: &str) -> Vec<String> {
+pub fn extract_entities(content: &str) -> Vec<String> {
     let backtick_re =
         Regex::new(r"`([a-zA-Z_][a-zA-Z0-9_:]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*)`").unwrap();
     backtick_re
@@ -767,7 +867,7 @@ fn extract_entities(content: &str) -> Vec<String> {
         .collect()
 }
 
-fn extract_file_paths(content: &str) -> Vec<String> {
+pub fn extract_file_paths(content: &str) -> Vec<String> {
     let path_re =
         Regex::new(r"(?:^|[\s`])((?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)").unwrap();
     path_re
@@ -798,7 +898,7 @@ pub async fn memories_add_enriched(
 
     let candidate_files: Vec<String> = {
         let mut files = params.base_filenames.clone();
-        files.extend(detected_paths);
+        files.extend(detected_paths.clone());
         files.into_iter().take(30).collect()
     };
 
@@ -886,6 +986,38 @@ pub async fn memories_add_enriched(
         };
 
     let now = Local::now();
+    let content_hash = compute_content_hash_hex(content);
+    let summary = first_nonempty_line(content);
+
+    // Optional “short description”: prefer second non-empty line if present,
+    // otherwise fall back to summary.
+    let description = {
+        let nonempty: Vec<&str> = content
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if nonempty.len() >= 2 {
+            Some(nonempty[1].trim_start_matches('#').trim().to_string())
+        } else {
+            summary.clone()
+        }
+    };
+
+    // “Related” fields are intended for fast, cheap retrieval.
+    // For now we populate them from detected paths/entities as best-effort.
+    let related_files: Vec<String> = {
+        let mut files = detected_paths.clone();
+        files.sort();
+        files.dedup();
+        files.into_iter().take(50).collect()
+    };
+    let related_entities: Vec<String> = {
+        let mut ents = entities.clone();
+        ents.sort();
+        ents.dedup();
+        ents.into_iter().take(50).collect()
+    };
     let frontmatter = KnowledgeFrontmatter {
         id: Some(Uuid::new_v4().to_string()),
         title: final_title.clone(),
@@ -904,6 +1036,17 @@ pub async fn memories_add_enriched(
                 .to_string(),
         ),
         source_chat_id: params.source_chat_id.clone(),
+
+        created_at: Some(Utc::now().to_rfc3339()),
+        summary,
+        description,
+        entities: entities.clone(),
+        related_files,
+        related_entities,
+        content_hash: Some(content_hash),
+        source_tool: Some("memories_add_enriched".to_string()),
+        source_trajectory_id: None,
+        source_message_range: None,
     };
 
     let file_path = memories_add(gcx.clone(), &frontmatter, content).await?;

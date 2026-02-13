@@ -6,6 +6,7 @@ use tokio::sync::RwLock as ARwLock;
 use tokio::task::JoinHandle;
 
 use crate::global_context::GlobalContext;
+use crate::knowledge_index::build_knowledge_index;
 
 pub struct BackgroundTasksHolder {
     tasks: Vec<JoinHandle<()>>,
@@ -40,6 +41,7 @@ pub async fn start_background_tasks(
     gcx: Arc<ARwLock<GlobalContext>>,
     _config_dir: &PathBuf,
 ) -> BackgroundTasksHolder {
+    let gcx_for_knowledge_index = gcx.clone();
     let mut bg = BackgroundTasksHolder::new(vec![
         tokio::spawn(crate::files_in_workspace::files_in_workspace_init_task(
             gcx.clone(),
@@ -66,6 +68,17 @@ pub async fn start_background_tasks(
             gcx.clone(),
         )),
         tokio::spawn(crate::chat::start_agent_monitor(gcx.clone())),
+        tokio::spawn(async move {
+            // Build in-memory knowledge index in background (best-effort).
+            let index = build_knowledge_index(gcx_for_knowledge_index.clone()).await;
+            *gcx_for_knowledge_index
+                .read()
+                .await
+                .knowledge_index
+                .lock()
+                .await = index;
+            tracing::info!("knowledge_index: built");
+        }),
     ]);
     let ast = gcx.clone().read().await.ast_service.clone();
     if let Some(ast_service) = ast {

@@ -221,7 +221,11 @@ async fn execute_strategic_planning(
 
     let memory_note = match memories_add_enriched(ccx.clone(), &solution_content, enrichment_params).await {
         Ok(path) => {
-            format!("\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`", path.display())
+            format!(
+                "\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`\n\nRelated memories may be shown elsewhere in short form. To load full content of a memory, call `cat(paths=\"{}\")`.",
+                path.display(),
+                path.display()
+            )
         }
         Err(e) => {
             tracing::warn!("strategic_planning: failed to save memory: {}", e);

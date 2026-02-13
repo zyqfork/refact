@@ -74,6 +74,7 @@ serde_yaml = "0.9.31"
 # all features = ["compression", "docs", "event_log", "failpoints", "io_uring", "lock_free_delays", "measure_allocs", "miri_optimizations", "mutex", "no_inline", "no_logs", "pretty_backtrace", "testing"]
 shadow-rs = { version = "1.1.0", features = [], default-features = false }
 sha2 = "0.10.8"
+hex = "0.4.3"
 shell-words = "1.1.0"
 shell-escape = "0.1.5"
 select = "0.6.0"

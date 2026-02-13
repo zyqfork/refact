@@ -7,6 +7,35 @@ use crate::call_validation::{ChatContent, ChatMessage, ContextFile};
 use crate::global_context::GlobalContext;
 use crate::memories::memories_search;
 
+fn format_enrichment_card(m: &crate::memories::MemoRecord) -> String {
+    let mut out = String::new();
+    out.push_str("# Related memory (short form)\n");
+    out.push_str("Note: this is a heuristic match and may be unrelated to the actual problem.\n\n");
+    if let Some(title) = &m.title {
+        out.push_str(&format!("Title: {}\n", title));
+    }
+    if let Some(kind) = &m.kind {
+        out.push_str(&format!("Kind: {}\n", kind));
+    }
+    if let Some(score) = m.score {
+        out.push_str(&format!("Relevance: {:.0}%\n", score * 100.0));
+    }
+    if !m.tags.is_empty() {
+        out.push_str(&format!("Tags: {}\n", m.tags.join(", ")));
+    }
+    if let Some(path) = &m.file_path {
+        out.push_str(&format!("Memory file: {}\n", path.display()));
+        out.push_str(&format!("To load full content: call `cat(paths=\"{}\")`\n\n", path.display()));
+    }
+    // Keep the card small to preserve user intent.
+    let snippet: String = m.content.chars().take(900).collect();
+    out.push_str(&snippet);
+    if m.content.chars().count() > 900 {
+        out.push_str("\n\n[TRUNCATED]\n");
+    }
+    out
+}
+
 const KNOWLEDGE_TOP_N: usize = 3;
 const TRAJECTORY_TOP_N: usize = 2;
 const KNOWLEDGE_SCORE_THRESHOLD: f32 = 0.75;
@@ -217,10 +246,11 @@ async fn create_knowledge_context(
         .iter()
         .filter_map(|memo| {
             let file_path = memo.file_path.as_ref()?;
-            let line_count = memo.content.lines().count().max(1);
+            let card = format_enrichment_card(memo);
+            let line_count = card.lines().count().max(1);
             Some(ContextFile {
                 file_name: file_path.to_string_lossy().to_string(),
-                file_content: memo.content.clone(),
+                file_content: card,
                 line1: 1,
                 line2: line_count,
                 file_rev: None,

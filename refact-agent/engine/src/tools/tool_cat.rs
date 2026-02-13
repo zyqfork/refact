@@ -17,6 +17,7 @@ use crate::files_correction::{
 };
 use crate::files_in_workspace::{get_file_text_from_memory_or_disk, ls_files};
 use crate::scratchpads::multimodality::MultimodalElement;
+use crate::knowledge_index::format_related_memories_section;
 
 use std::io::Cursor;
 use image::imageops::FilterType;
@@ -201,6 +202,19 @@ impl Tool for ToolCat {
             })
             .collect();
 
+        // Append related memories (short form) based on involved file paths.
+        // This is fast: uses in-memory KnowledgeIndex only.
+        let related_section = {
+            let gcx = ccx.lock().await.global_context.clone();
+            let gcx_read = gcx.read().await;
+            let idx_guard = gcx_read.knowledge_index.lock().await;
+            let mut cards = idx_guard.related_for_files(&filenames_present, 8);
+            if cards.is_empty() {
+                cards = idx_guard.related_for_related_files(&filenames_present, 8);
+            }
+            format_related_memories_section(&cards, None)
+        };
+
         let chat_content = if multimodal.is_empty() {
             ChatContent::SimpleText(content)
         } else {
@@ -216,9 +230,22 @@ impl Tool for ToolCat {
             )
         };
 
+        // Keep multimodal shape intact: we append a new text block.
         results.push(ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
-            content: chat_content,
+            content: match chat_content {
+                ChatContent::SimpleText(t) => ChatContent::SimpleText(format!("{}{}", t, related_section)),
+                ChatContent::Multimodal(mut mm) => {
+                    if !related_section.is_empty() {
+                        mm.push(MultimodalElement {
+                            m_type: "text".to_string(),
+                            m_content: related_section,
+                        });
+                    }
+                    ChatContent::Multimodal(mm)
+                }
+                other => other,
+            },
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             ..Default::default()

@@ -16,6 +16,7 @@ use crate::files_correction::{
     paths_from_anywhere,
 };
 use crate::files_in_workspace::ls_files;
+use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolTree {
     pub config_path: String,
@@ -80,6 +81,7 @@ impl Tool for ToolTree {
             Some(v) => return Err(format!("argument `path` is not a string: {:?}", v)),
             None => None,
         };
+        let path_mb_for_related = path_mb.clone();
         let use_ast = match args.get("use_ast") {
             Some(Value::Bool(b)) => *b,
             Some(v) => return Err(format!("argument `use_ast` is not a boolean: {:?}", v)),
@@ -91,7 +93,7 @@ impl Tool for ToolTree {
             None => 10,
         };
 
-        let (tree, is_root_query) = match path_mb {
+        let (tree, is_root_query) = match path_mb.clone() {
             Some(path) => {
                 let file_candidates =
                     correct_to_nearest_filename(gcx.clone(), &path, false, 10).await;
@@ -142,11 +144,28 @@ impl Tool for ToolTree {
             content
         };
 
+        // Append related memories (short form). Since tree() is directory-oriented,
+        // we try to surface memories that reference the directory itself via related_files.
+        // This keeps the lookup fast (in-memory index) and doesn't require VecDB.
+        let related_section = {
+            let idx_arc = { gcx.read().await.knowledge_index.clone() };
+            let idx_guard = idx_arc.lock().await;
+            let path_key = path_mb_for_related.clone();
+            let mut keys: Vec<String> = Vec::new();
+            if let Some(path) = path_key {
+                keys.push(path);
+            }
+            keys.sort();
+            keys.dedup();
+            let cards = idx_guard.related_for_related_files(&keys, 8);
+            format_related_memories_section(&cards, None)
+        };
+
         Ok((
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
                 role: "tool".to_string(),
-                content: ChatContent::SimpleText(content),
+                content: ChatContent::SimpleText(format!("{}{}", content, related_section)),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
                 output_filter: Some(OutputFilter::no_limits()),

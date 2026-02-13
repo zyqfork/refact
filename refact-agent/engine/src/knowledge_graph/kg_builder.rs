@@ -10,8 +10,13 @@ use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
 use crate::files_correction::get_project_dirs;
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::GlobalContext;
+use crate::memories::get_global_knowledge_dir;
 
 use super::kg_structs::{KnowledgeDoc, KnowledgeFrontmatter, KnowledgeGraph};
+
+fn path_has_component(path: &std::path::Path, component: &str) -> bool {
+    path.components().any(|c| c.as_os_str() == component)
+}
 
 fn extract_entities(content: &str) -> Vec<String> {
     let backtick_re =
@@ -32,11 +37,17 @@ pub async fn build_knowledge_graph(gcx: Arc<ARwLock<GlobalContext>>) -> Knowledg
     let mut graph = KnowledgeGraph::new();
 
     let project_dirs = get_project_dirs(gcx.clone()).await;
-    let knowledge_dirs: Vec<PathBuf> = project_dirs
+    let mut knowledge_dirs: Vec<PathBuf> = project_dirs
         .iter()
         .map(|d| d.join(KNOWLEDGE_FOLDER_NAME))
         .filter(|d| d.exists())
         .collect();
+
+    // Include global knowledge dir as well (align KG with retrieval paths).
+    let global_dir = get_global_knowledge_dir(gcx.clone()).await;
+    if global_dir.exists() {
+        knowledge_dirs.push(global_dir);
+    }
 
     if knowledge_dirs.is_empty() {
         info!("knowledge_graph: no .refact/knowledge directories found");
@@ -61,7 +72,7 @@ pub async fn build_knowledge_graph(gcx: Arc<ARwLock<GlobalContext>>) -> Knowledg
                 continue;
             }
 
-            if path.to_string_lossy().contains("/archive/") {
+            if path_has_component(path, "archive") {
                 continue;
             }
 

@@ -9,7 +9,7 @@ use crate::background_tasks::BackgroundTasksHolder;
 use crate::fetch_embedding;
 use crate::global_context::{CommandLine, GlobalContext};
 use crate::vecdb::vdb_sqlite::VecDBSqlite;
-use crate::vecdb::vdb_structs::{SearchResult, VecDbStatus, VecdbConstants, VecdbSearch};
+use crate::vecdb::vdb_structs::{SearchResult, VecDbStatus, VecdbConstants, VecdbRecord, VecdbSearch};
 use crate::vecdb::vdb_thread::{
     vecdb_start_background_tasks, vectorizer_enqueue_files, FileVectorizerService,
 };
@@ -20,6 +20,58 @@ pub struct VecDb {
     pub vectorizer_service: Arc<AMutex<FileVectorizerService>>,
     // cmdline: CommandLine,  // TODO: take from command line what's needed, don't store a copy
     constants: VecdbConstants,
+}
+
+impl VecDb {
+    pub async fn embed_query(&self, query: &str) -> Result<Vec<f32>, String> {
+        let embedding_mb = fetch_embedding::get_embedding_with_retries(
+            self.vecdb_emb_client.clone(),
+            &self.constants.embedding_model,
+            vec![query.to_string()],
+            5,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        embedding_mb
+            .into_iter()
+            .next()
+            .ok_or_else(|| "VecDB: empty embedding result".to_string())
+    }
+
+    fn compute_usefulness_and_filter(&self, mut results: Vec<VecdbRecord>) -> Vec<VecdbRecord> {
+        let mut dist0 = 0.0;
+        let mut filtered_results = Vec::new();
+        let rejection_threshold = self.constants.embedding_model.rejection_threshold;
+        for rec in results.iter_mut() {
+            if dist0 == 0.0 {
+                dist0 = rec.distance.abs();
+            }
+            rec.usefulness = 100.0
+                - 75.0
+                    * ((rec.distance.abs() - dist0) / (dist0 + 0.01))
+                        .max(0.0)
+                        .min(1.0);
+            if rec.distance.abs() < rejection_threshold {
+                filtered_results.push(rec.clone());
+            }
+        }
+        filtered_results
+    }
+
+    pub async fn vecdb_search_with_embedding(
+        &self,
+        embedding: &Vec<f32>,
+        top_n: usize,
+        vecdb_scope_filter_mb: Option<String>,
+    ) -> Result<Vec<VecdbRecord>, String> {
+        let mut handler_locked = self.vecdb_handler.lock().await;
+        let raw = handler_locked
+            .vecdb_search(embedding, top_n, vecdb_scope_filter_mb)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(self.compute_usefulness_and_filter(raw))
+    }
 }
 
 async fn do_i_need_to_reload_vecdb(
@@ -236,61 +288,18 @@ impl VecdbSearch for VecDb {
     ) -> Result<SearchResult, String> {
         // TODO: move out of struct, replace self with Arc
         let t0 = std::time::Instant::now();
-        let embedding_mb = fetch_embedding::get_embedding_with_retries(
-            self.vecdb_emb_client.clone(),
-            &self.constants.embedding_model,
-            vec![query.clone()],
-            5,
-        )
-        .await;
-        if embedding_mb.is_err() {
-            return Err(embedding_mb.unwrap_err().to_string());
-        }
+        let embedding = self.embed_query(&query).await?;
         info!(
             "search query {:?}, it took {:.3}s to vectorize the query",
             query,
             t0.elapsed().as_secs_f64()
         );
 
-        let mut handler_locked = self.vecdb_handler.lock().await;
         let t1 = std::time::Instant::now();
-        let mut results = match handler_locked
-            .vecdb_search(&embedding_mb.unwrap()[0], top_n, vecdb_scope_filter_mb)
-            .await
-        {
-            Ok(res) => res,
-            Err(err) => return Err(err.to_string()),
-        };
+        let results = self
+            .vecdb_search_with_embedding(&embedding, top_n, vecdb_scope_filter_mb)
+            .await?;
         info!("search itself {:.3}s", t1.elapsed().as_secs_f64());
-        let mut dist0 = 0.0;
-        let mut filtered_results = Vec::new();
-        let rejection_threshold = self.constants.embedding_model.rejection_threshold;
-        info!("rejection_threshold {:.3}", rejection_threshold);
-        for rec in results.iter_mut() {
-            if dist0 == 0.0 {
-                dist0 = rec.distance.abs();
-            }
-            let last_35_chars =
-                crate::nicer_logs::last_n_chars(&rec.file_path.display().to_string(), 35);
-            rec.usefulness = 100.0
-                - 75.0
-                    * ((rec.distance.abs() - dist0) / (dist0 + 0.01))
-                        .max(0.0)
-                        .min(1.0);
-            if rec.distance.abs() >= rejection_threshold {
-                info!(
-                    "distance {:.3} -> dropped {}:{}-{}",
-                    rec.distance, last_35_chars, rec.start_line, rec.end_line
-                );
-            } else {
-                info!(
-                    "distance {:.3} -> useful {:.1}, found {}:{}-{}",
-                    rec.distance, rec.usefulness, last_35_chars, rec.start_line, rec.end_line
-                );
-                filtered_results.push(rec.clone());
-            }
-        }
-        results = filtered_results;
         Ok(SearchResult {
             query_text: query,
             results,

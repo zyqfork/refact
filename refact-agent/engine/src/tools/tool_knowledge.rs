@@ -11,6 +11,7 @@ use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, Too
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::memories::memories_search;
 use crate::knowledge_graph::build_knowledge_graph;
+use crate::knowledge_index::format_related_memories_section;
 use crate::postprocessing::pp_command_output::OutputFilter;
 
 pub struct ToolGetKnowledge {
@@ -111,7 +112,7 @@ impl Tool for ToolGetKnowledge {
         let memories_str = if unique_memories.is_empty() {
             "No relevant knowledge found.".to_string()
         } else {
-            unique_memories
+            let mut body: String = unique_memories
                 .iter()
                 .take(8)
                 .map(|m| {
@@ -136,7 +137,25 @@ impl Tool for ToolGetKnowledge {
                     result.push_str("\n\n---\n");
                     result
                 })
-                .collect()
+                .collect();
+
+            // Add a short-form related memories section (fast, in-memory).
+            let related = {
+                let gcx_read = gcx.read().await;
+                let idx_guard = gcx_read.knowledge_index.lock().await;
+                let mut tags: Vec<String> = unique_memories
+                    .iter()
+                    .flat_map(|m| m.tags.iter().cloned())
+                    .collect();
+                tags.sort();
+                tags.dedup();
+                let cards = idx_guard.related_for_tags(&tags, 8);
+                format_related_memories_section(&cards, None)
+            };
+
+            body.push_str(&related);
+            body.push_str("\n\nNote: the related memories section is heuristic; fetch full content if needed.");
+            body
         };
 
         Ok((

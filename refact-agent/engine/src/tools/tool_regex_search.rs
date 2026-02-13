@@ -19,6 +19,7 @@ use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::GlobalContext;
 use crate::tools::scope_utils::{resolve_scope, validate_scope_files};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolRegexSearch {
     pub config_path: String,
@@ -315,10 +316,26 @@ impl Tool for ToolRegexSearch {
             return Err("⚠️ No matches found for pattern or path. 💡 Try broader scope ('workspace'), simpler pattern, or use (?i) for case-insensitive".to_string());
         }
 
+        // Append related memories (short form) based on the matched file paths.
+        let related_section = {
+            let gcx_read = gcx.read().await;
+            let idx_guard = gcx_read.knowledge_index.lock().await;
+            let matched_files: Vec<String> = all_search_results
+                .iter()
+                .map(|cf| cf.file_name.clone())
+                .unique()
+                .collect();
+            let mut cards = idx_guard.related_for_files(&matched_files, 8);
+            if cards.is_empty() {
+                cards = idx_guard.related_for_related_files(&matched_files, 8);
+            }
+            format_related_memories_section(&cards, None)
+        };
+
         let mut results = vec_context_file_to_context_tools(all_search_results);
         results.push(ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
-            content: ChatContent::SimpleText(all_content),
+            content: ChatContent::SimpleText(format!("{}{}", all_content, related_section)),
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             output_filter: Some(OutputFilter::no_limits()), // Already compressed internally

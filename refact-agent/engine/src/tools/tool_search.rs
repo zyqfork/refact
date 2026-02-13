@@ -12,6 +12,7 @@ use crate::at_commands::at_search::execute_at_search;
 use crate::tools::scope_utils::create_scope_filter;
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
+use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolSearch {
     pub config_path: String,
@@ -152,10 +153,29 @@ impl Tool for ToolSearch {
             return Err("⚠️ All searches produced no results. 💡 Try different keywords, broaden scope to 'workspace', or use search_pattern() for regex search".to_string());
         }
 
+        // Append related memories (short form) based on involved file paths.
+        // This does not require VecDB and is <50ms (in-memory index).
+        let related_section = {
+            let gcx = ccx.lock().await.global_context.clone();
+            let gcx_read = gcx.read().await;
+            let idx_guard = gcx_read.knowledge_index.lock().await;
+            let mut files: Vec<String> = all_context_files
+                .iter()
+                .map(|cf| cf.file_name.clone())
+                .unique()
+                .collect();
+            files.sort();
+            let mut cards = idx_guard.related_for_files(&files, 8);
+            if cards.is_empty() {
+                cards = idx_guard.related_for_related_files(&files, 8);
+            }
+            format_related_memories_section(&cards, None)
+        };
+
         let mut results = vec_context_file_to_context_tools(all_context_files);
         results.push(ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
-            content: ChatContent::SimpleText(all_content),
+            content: ChatContent::SimpleText(format!("{}{}", all_content, related_section)),
             tool_calls: None,
             tool_call_id: tool_call_id.clone(),
             ..Default::default()

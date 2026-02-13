@@ -31,6 +31,29 @@ pub struct KnowledgeFrontmatter {
     pub review_after: Option<String>,
     #[serde(default)]
     pub source_chat_id: Option<String>,
+
+    // Optional richer metadata for effective retrieval (new docs going forward).
+    // Old docs will simply have these unset.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub entities: Vec<String>,
+    #[serde(default)]
+    pub related_files: Vec<String>,
+    #[serde(default)]
+    pub related_entities: Vec<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    #[serde(default)]
+    pub source_tool: Option<String>,
+    #[serde(default)]
+    pub source_trajectory_id: Option<String>,
+    #[serde(default)]
+    pub source_message_range: Option<String>,
 }
 
 impl KnowledgeFrontmatter {
@@ -116,6 +139,64 @@ impl KnowledgeFrontmatter {
         }
         if let Some(source_chat_id) = &self.source_chat_id {
             lines.push(format!("source_chat_id: \"{}\"", source_chat_id.replace('"', "\\\"")));
+        }
+
+        if let Some(created_at) = &self.created_at {
+            lines.push(format!("created_at: \"{}\"", created_at.replace('"', "\\\"")));
+        }
+        if let Some(summary) = &self.summary {
+            lines.push(format!("summary: \"{}\"", summary.replace('"', "\\\"")));
+        }
+        if let Some(description) = &self.description {
+            lines.push(format!(
+                "description: \"{}\"",
+                description.replace('"', "\\\"")
+            ));
+        }
+        if !self.entities.is_empty() {
+            let entities_str = self
+                .entities
+                .iter()
+                .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("entities: [{}]", entities_str));
+        }
+        if !self.related_files.is_empty() {
+            let files_str = self
+                .related_files
+                .iter()
+                .map(|f| format!("\"{}\"", f.replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("related_files: [{}]", files_str));
+        }
+        if !self.related_entities.is_empty() {
+            let entities_str = self
+                .related_entities
+                .iter()
+                .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("related_entities: [{}]", entities_str));
+        }
+        if let Some(content_hash) = &self.content_hash {
+            lines.push(format!("content_hash: \"{}\"", content_hash.replace('"', "\\\"")));
+        }
+        if let Some(source_tool) = &self.source_tool {
+            lines.push(format!("source_tool: \"{}\"", source_tool.replace('"', "\\\"")));
+        }
+        if let Some(source_trajectory_id) = &self.source_trajectory_id {
+            lines.push(format!(
+                "source_trajectory_id: \"{}\"",
+                source_trajectory_id.replace('"', "\\\"")
+            ));
+        }
+        if let Some(source_message_range) = &self.source_message_range {
+            lines.push(format!(
+                "source_message_range: \"{}\"",
+                source_message_range.replace('"', "\\\"")
+            ));
         }
 
         lines.push("---".to_string());
@@ -211,6 +292,15 @@ impl KnowledgeGraph {
 
     pub fn get_or_create_file(&mut self, path: &str, exists: bool) -> NodeIndex {
         if let Some(&idx) = self.file_index.get(path) {
+            // If we already created the node as `exists=false`, and later discover
+            // the file exists, upgrade it to keep KG consistent.
+            if exists {
+                if let Some(KgNode::FileRef { exists: ref mut ex }) =
+                    self.graph.node_weight_mut(idx)
+                {
+                    *ex = true;
+                }
+            }
             return idx;
         }
         let idx = self.graph.add_node(KgNode::FileRef { exists });
