@@ -14,6 +14,7 @@ const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const SCOPE: &str = "openid profile email offline_access";
 
 const CODEX_HOME_DIR: &str = ".codex";
+const CODEX_CALLBACK_PORT: u16 = 1455;
 const SESSION_TTL_SECS: i64 = 600;
 
 #[derive(Debug, Clone)]
@@ -143,22 +144,41 @@ pub fn codex_cli_credentials_exist() -> bool {
         .unwrap_or(false)
 }
 
+/// RFC 3986 percent-encoding: encodes spaces as `%20` (not `+` like form-urlencoded).
+/// Matches the encoding used by the real Codex CLI (`urlencoding::encode`).
+fn percent_encode_param(input: &str) -> String {
+    let mut result = String::with_capacity(input.len() * 3);
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(byte as char);
+            }
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
+}
+
 fn build_authorize_url(code_challenge: &str, state: &str, redirect_uri: &str) -> String {
-    let mut url = url::Url::parse(AUTHORIZE_URL).expect("valid base URL");
-
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", CLIENT_ID)
-        .append_pair("redirect_uri", redirect_uri)
-        .append_pair("scope", SCOPE)
-        .append_pair("code_challenge", code_challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("id_token_add_organizations", "true")
-        .append_pair("codex_cli_simplified_flow", "true")
-        .append_pair("state", state)
-        .append_pair("originator", "codex_cli_rs");
-
-    url.to_string()
+    let params = [
+        ("response_type", "code"),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", redirect_uri),
+        ("scope", SCOPE),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("state", state),
+        ("originator", "codex_cli_rs"),
+    ];
+    let qs = params.iter()
+        .map(|(k, v)| format!("{}={}", k, percent_encode_param(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{}?{}", AUTHORIZE_URL, qs)
 }
 
 async fn prune_expired_sessions(sessions: &mut HashMap<String, PkceSession>) {
@@ -166,10 +186,21 @@ async fn prune_expired_sessions(sessions: &mut HashMap<String, PkceSession>) {
     sessions.retain(|_, s| now - s.created_at < SESSION_TTL_SECS);
 }
 
-pub async fn start_oauth_session(callback_port: u16) -> (String, String) {
+/// Returns (session_id, authorize_url, callback_port).
+/// The callback_port is the port used in the redirect_uri (1455 if available, fallback otherwise).
+pub async fn start_oauth_session(fallback_port: u16) -> (String, String, u16) {
     let verifier = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
     let session_id = uuid::Uuid::new_v4().to_string();
+
+    // Use port 1455 (Codex CLI default) as primary; fall back to app port
+    let callback_port = if port_available(CODEX_CALLBACK_PORT) {
+        CODEX_CALLBACK_PORT
+    } else {
+        tracing::warn!("OpenAI Codex OAuth: port {} unavailable, falling back to {}", CODEX_CALLBACK_PORT, fallback_port);
+        fallback_port
+    };
+
     let redirect_uri = format!("http://localhost:{}/auth/callback", callback_port);
     let authorize_url = build_authorize_url(&challenge, &session_id, &redirect_uri);
 
@@ -183,7 +214,11 @@ pub async fn start_oauth_session(callback_port: u16) -> (String, String) {
     prune_expired_sessions(&mut sessions).await;
     sessions.insert(session_id.clone(), session);
 
-    (session_id, authorize_url)
+    (session_id, authorize_url, callback_port)
+}
+
+fn port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok()
 }
 
 pub async fn exchange_code(
@@ -280,4 +315,137 @@ pub async fn refresh_access_token(
         },
         expires_at,
     })
+}
+
+/// Starts a temporary HTTP listener on the given port to handle the OAuth callback.
+/// Returns a JoinHandle that resolves when the callback is received or timeout expires.
+/// The callback exchanges the authorization code for tokens and returns them.
+pub async fn start_callback_listener(
+    port: u16,
+    http_client: reqwest::Client,
+) -> Result<tokio::task::JoinHandle<Option<OAuthTokens>>, String> {
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .map_err(|e| format!("Cannot bind callback listener on port {}: {}", port, e))?;
+
+    tracing::info!("OpenAI Codex OAuth: callback listener started on port {}", port);
+
+    let handle = tokio::spawn(async move {
+        let timeout = tokio::time::Duration::from_secs(SESSION_TTL_SECS as u64);
+        let accept_result = tokio::time::timeout(timeout, listener.accept()).await;
+
+        let (mut stream, _addr) = match accept_result {
+            Ok(Ok((s, a))) => (s, a),
+            Ok(Err(e)) => {
+                tracing::warn!("OpenAI Codex OAuth: callback accept error: {}", e);
+                return None;
+            }
+            Err(_) => {
+                tracing::info!("OpenAI Codex OAuth: callback listener timed out");
+                return None;
+            }
+        };
+
+        use tokio::io::AsyncReadExt;
+
+        let mut buf = vec![0u8; 8192];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("OpenAI Codex OAuth: failed to read callback request: {}", e);
+                return None;
+            }
+        };
+        let request_str = String::from_utf8_lossy(&buf[..n]);
+
+        // Parse the GET request line to extract path + query
+        let first_line = request_str.lines().next().unwrap_or("");
+        let path_and_query = first_line.split_whitespace().nth(1).unwrap_or("");
+
+        let parsed = match url::Url::parse(&format!("http://localhost{}", path_and_query)) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!("OpenAI Codex OAuth: failed to parse callback URL: {}", e);
+                send_http_response(&mut stream, 400, "Bad Request").await;
+                return None;
+            }
+        };
+
+        let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+
+        if let Some(err) = params.get("error") {
+            let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("Unknown error");
+            tracing::warn!("OpenAI Codex OAuth error: {} — {}", err, desc);
+            send_http_response(&mut stream, 200, &callback_html(false, &format!("{}: {}", err, desc))).await;
+            return None;
+        }
+
+        let code = match params.get("code") {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => {
+                send_http_response(&mut stream, 200, &callback_html(false, "No authorization code received")).await;
+                return None;
+            }
+        };
+
+        let session_id = match params.get("state") {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => {
+                send_http_response(&mut stream, 200, &callback_html(false, "Missing state parameter")).await;
+                return None;
+            }
+        };
+
+        match exchange_code(&http_client, &session_id, &code).await {
+            Ok(tokens) => {
+                send_http_response(&mut stream, 200, &callback_html(true, "Authentication successful. You can close this window.")).await;
+                Some(tokens)
+            }
+            Err(e) => {
+                tracing::warn!("OpenAI Codex OAuth: token exchange failed: {}", e);
+                send_http_response(&mut stream, 200, &callback_html(false, &format!("Token exchange failed: {}", e))).await;
+                None
+            }
+        }
+    });
+
+    Ok(handle)
+}
+
+async fn send_http_response(stream: &mut tokio::net::TcpStream, status: u16, body: &str) {
+    use tokio::io::AsyncWriteExt;
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        _ => "Error",
+    };
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status, reason, body.len(), body
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+}
+
+fn callback_html(success: bool, message: &str) -> String {
+    let (title, heading, color) = if success {
+        ("Authentication Successful", "&#x2713; Authentication Successful", "#4ade80")
+    } else {
+        ("Authentication Failed", "&#x2717; Authentication Failed", "#ef4444")
+    };
+    // HTML-escape the message to prevent XSS
+    let escaped_message = message
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><title>{title}</title></head>
+<body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1a1a2e; color: #e0e0e0;">
+<div style="text-align: center;">
+<h1 style="color: {color};">{heading}</h1>
+<p>{escaped_message}</p>
+</div>
+</body></html>"#
+    )
 }

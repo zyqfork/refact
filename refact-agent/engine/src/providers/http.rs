@@ -970,8 +970,36 @@ pub async fn handle_v1_provider_oauth_start(
             }))
         }
         "openai_codex" => {
-            let callback_port = gcx.read().await.cmdline.http_port;
-            let (session_id, authorize_url) = crate::providers::openai_codex_oauth::start_oauth_session(callback_port).await;
+            let fallback_port = gcx.read().await.cmdline.http_port;
+            let (session_id, authorize_url, callback_port) = crate::providers::openai_codex_oauth::start_oauth_session(fallback_port).await;
+
+            // If callback port differs from our main HTTP port, start a dedicated listener
+            if callback_port != fallback_port {
+                let http_client = gcx.read().await.http_client.clone();
+                match crate::providers::openai_codex_oauth::start_callback_listener(callback_port, http_client).await {
+                    Ok(listener_handle) => {
+                        let gcx_clone = gcx.clone();
+                        tokio::spawn(async move {
+                            if let Some(tokens) = listener_handle.await.ok().flatten() {
+                                let config_dir = gcx_clone.read().await.config_dir.clone();
+                                if let Ok(tokens_value) = serde_yaml::to_value(&tokens) {
+                                    if let Err(e) = save_provider_oauth_tokens(
+                                        &gcx_clone, &config_dir, "openai_codex", &tokens_value,
+                                    ).await {
+                                        tracing::warn!("OpenAI Codex: failed to save OAuth tokens from callback listener: {:?}", e);
+                                    } else {
+                                        tracing::info!("OpenAI Codex: OAuth tokens saved successfully from callback listener");
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("OpenAI Codex: failed to start callback listener: {}", e);
+                    }
+                }
+            }
+
             json_response(StatusCode::OK, &json!({
                 "session_id": session_id,
                 "authorize_url": authorize_url,

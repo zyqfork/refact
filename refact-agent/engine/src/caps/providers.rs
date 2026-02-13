@@ -28,7 +28,7 @@ pub struct CapsProvider {
     #[serde(default = "default_endpoint_style")]
     pub endpoint_style: String,
 
-    // This aliases are for backward compatibility with cloud and self-hosted caps
+    // These aliases are for backward compatibility with cloud and self-hosted caps
     #[serde(default, alias = "endpoint_template")]
     pub completion_endpoint: String,
     #[serde(default, alias = "endpoint_chat_passthrough")]
@@ -327,6 +327,8 @@ pub async fn get_provider_yaml_paths(config_dir: &Path) -> (Vec<PathBuf>, Vec<St
         }
     }
 
+    yaml_paths.sort();
+
     (yaml_paths, errors)
 }
 
@@ -366,12 +368,25 @@ pub async fn read_providers_d(
     }
 
     let provider_templates = get_provider_templates();
+    let mut seen_provider_names = std::collections::HashSet::new();
 
     for yaml_path in yaml_paths {
         let provider_name = match yaml_path.file_stem() {
             Some(name) => name.to_string_lossy().to_string(),
             None => continue,
         };
+
+        if !seen_provider_names.insert(provider_name.clone()) {
+            error_log.push(YamlError {
+                path: yaml_path.to_string_lossy().to_string(),
+                error_line: 0,
+                error_msg: format!(
+                    "Duplicate provider name '{}' (another file with the same stem was already processed)",
+                    provider_name
+                ),
+            });
+            continue;
+        }
 
         if provider_templates.contains_key(&provider_name) {
             match get_provider_from_template_and_config_file(
@@ -595,39 +610,59 @@ fn apply_models_dict_patch(provider: &mut CapsProvider) {
 }
 
 #[derive(Deserialize)]
-pub struct KnownModels {
+pub struct CompletionPresets {
     pub completion_models: IndexMap<String, CompletionModelRecord>,
-    #[allow(dead_code)]
-    pub chat_models: IndexMap<String, ChatModelRecord>,
+}
+
+#[derive(Deserialize)]
+pub struct EmbeddingPresets {
     pub embedding_models: IndexMap<String, EmbeddingModelRecord>,
 }
-const UNPARSED_KNOWN_MODELS: &'static str = include_str!("../known_models.json");
-static KNOWN_MODELS: OnceLock<KnownModels> = OnceLock::new();
 
-pub fn get_known_models() -> &'static KnownModels {
-    KNOWN_MODELS.get_or_init(|| {
-        serde_json::from_str::<KnownModels>(UNPARSED_KNOWN_MODELS)
-            .map_err(|e| {
-                let up_to_line = UNPARSED_KNOWN_MODELS
+const UNPARSED_COMPLETION_PRESETS: &str = include_str!("../completion_presets.json");
+const UNPARSED_EMBEDDING_PRESETS: &str = include_str!("../embedding_presets.json");
+
+static COMPLETION_PRESETS: OnceLock<CompletionPresets> = OnceLock::new();
+static EMBEDDING_PRESETS: OnceLock<EmbeddingPresets> = OnceLock::new();
+
+pub fn get_completion_presets() -> &'static CompletionPresets {
+    COMPLETION_PRESETS.get_or_init(|| {
+        serde_json::from_str::<CompletionPresets>(UNPARSED_COMPLETION_PRESETS)
+            .unwrap_or_else(|e| {
+                let up_to_line = UNPARSED_COMPLETION_PRESETS
                     .lines()
                     .take(e.line())
                     .collect::<Vec<&str>>()
                     .join("\n");
-                panic!("{}\nfailed to parse KNOWN_MODELS: {}", up_to_line, e);
+                panic!("{}\nfailed to parse COMPLETION_PRESETS: {}", up_to_line, e);
             })
-            .unwrap()
+    })
+}
+
+pub fn get_embedding_presets() -> &'static EmbeddingPresets {
+    EMBEDDING_PRESETS.get_or_init(|| {
+        serde_json::from_str::<EmbeddingPresets>(UNPARSED_EMBEDDING_PRESETS)
+            .unwrap_or_else(|e| {
+                let up_to_line = UNPARSED_EMBEDDING_PRESETS
+                    .lines()
+                    .take(e.line())
+                    .collect::<Vec<&str>>()
+                    .join("\n");
+                panic!("{}\nfailed to parse EMBEDDING_PRESETS: {}", up_to_line, e);
+            })
     })
 }
 
 fn populate_model_records(provider: &mut CapsProvider, experimental: bool) {
-    let known_models = get_known_models();
+    let completion_presets = get_completion_presets();
+    let embedding_presets = get_embedding_presets();
 
     for model_name in &provider.running_models {
         if !provider.completion_models.contains_key(model_name) {
             if let Some(model_rec) = find_model_match(
                 model_name,
                 &provider.completion_models,
-                &known_models.completion_models,
+                &completion_presets.completion_models,
                 experimental,
             ) {
                 provider
@@ -653,7 +688,7 @@ fn populate_model_records(provider: &mut CapsProvider, experimental: bool) {
         if let Some(model_rec) = find_model_match(
             &model_name,
             &IndexMap::new(),
-            &known_models.embedding_models,
+            &embedding_presets.embedding_models,
             experimental,
         ) {
             provider.embedding_model = model_rec;
@@ -662,6 +697,40 @@ fn populate_model_records(provider: &mut CapsProvider, experimental: bool) {
             tracing::warn!(
                 "Unknown embedding model '{}', maybe configure it or update this binary",
                 model_name
+            );
+        }
+    }
+
+    if provider.embedding_model.is_configured() {
+        let model_name = provider.embedding_model.base.name.clone();
+        if let Some(preset) = find_model_match(
+            &model_name,
+            &IndexMap::new(),
+            &embedding_presets.embedding_models,
+            experimental,
+        ) {
+            if provider.embedding_model.base.tokenizer.is_empty() {
+                provider.embedding_model.base.tokenizer = preset.base.tokenizer.clone();
+            }
+            if !provider.embedding_model.base.user_configured {
+                if provider.embedding_model.base.n_ctx == 0 {
+                    provider.embedding_model.base.n_ctx = preset.base.n_ctx;
+                }
+                if provider.embedding_model.embedding_size == 0 {
+                    provider.embedding_model.embedding_size = preset.embedding_size;
+                }
+                if provider.embedding_model.rejection_threshold == 0.0 {
+                    provider.embedding_model.rejection_threshold = preset.rejection_threshold;
+                }
+                if provider.embedding_model.embedding_batch == 0 {
+                    provider.embedding_model.embedding_batch = preset.embedding_batch;
+                }
+            }
+        }
+        if provider.embedding_model.base.tokenizer.is_empty() {
+            tracing::warn!(
+                "Embedding model '{}' has no tokenizer configured and no preset match; VecDB may fail to start",
+                provider.embedding_model.base.name
             );
         }
     }
@@ -795,7 +864,79 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_known_models() {
-        let _ = get_known_models(); // This will panic if any model fails to parse
+    fn test_parse_completion_presets() {
+        let _ = get_completion_presets(); // This will panic if any preset fails to parse
+    }
+
+    #[test]
+    fn test_parse_embedding_presets() {
+        let _ = get_embedding_presets(); // This will panic if any preset fails to parse
+    }
+
+    #[test]
+    fn test_embedding_tokenizer_prefill_from_preset() {
+        let mut provider = CapsProvider {
+            name: "test".to_string(),
+            embedding_model: EmbeddingModelRecord {
+                base: BaseModelRecord {
+                    name: "text-embedding-3-small".to_string(),
+                    n_ctx: 8191,
+                    tokenizer: String::new(),
+                    enabled: true,
+                    ..Default::default()
+                },
+                embedding_size: 1536,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        populate_model_records(&mut provider, false);
+        assert!(
+            !provider.embedding_model.base.tokenizer.is_empty(),
+            "tokenizer should have been filled from embedding presets"
+        );
+        assert_eq!(
+            provider.embedding_model.base.tokenizer,
+            "hf://Xenova/text-embedding-ada-002"
+        );
+    }
+
+    #[test]
+    fn test_embedding_prefill_respects_user_configured() {
+        let mut provider = CapsProvider {
+            name: "test".to_string(),
+            embedding_model: EmbeddingModelRecord {
+                base: BaseModelRecord {
+                    name: "text-embedding-3-small".to_string(),
+                    n_ctx: 4096,
+                    tokenizer: String::new(),
+                    enabled: true,
+                    user_configured: true,
+                    ..Default::default()
+                },
+                embedding_size: 0,
+                rejection_threshold: 0.0,
+                embedding_batch: 0,
+            },
+            ..Default::default()
+        };
+        populate_model_records(&mut provider, false);
+        assert_eq!(
+            provider.embedding_model.base.tokenizer,
+            "hf://Xenova/text-embedding-ada-002",
+            "tokenizer should always be filled even for user-configured models"
+        );
+        assert_eq!(
+            provider.embedding_model.base.n_ctx, 4096,
+            "user-configured n_ctx should NOT be overwritten"
+        );
+        assert_eq!(
+            provider.embedding_model.embedding_size, 0,
+            "user-configured zero embedding_size should NOT be overwritten"
+        );
+        assert_eq!(
+            provider.embedding_model.rejection_threshold, 0.0,
+            "user-configured zero rejection_threshold should NOT be overwritten"
+        );
     }
 }
