@@ -21,6 +21,17 @@ enum AuthSource {
     None,
 }
 
+#[derive(Debug, Clone)]
+enum CodexAuth {
+    PlatformApiKey { api_key: String },
+    ChatGptBackendOAuth {
+        access_token: String,
+        chatgpt_account_id: String,
+        api_key_exchange_error: String,
+    },
+    None,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OpenAICodexProvider {
     #[serde(default)]
@@ -37,35 +48,73 @@ impl OpenAICodexProvider {
     /// IMPORTANT: Codex/ChatGPT OAuth produces an OAuth access token, but the OpenAI Platform
     /// API requires an API key with `api.responses.write` scope. Codex CLI obtains that API key
     /// via OAuth token-exchange and stores it as OPENAI_API_KEY.
-    fn resolve_auth(&self) -> (AuthSource, String) {
+    fn resolve_auth(&self) -> (AuthSource, CodexAuth) {
         // Prefer API key obtained via token-exchange in our OAuth flow.
         if !self.oauth_tokens.openai_api_key.is_empty() {
-            return (AuthSource::InAppOAuth, self.oauth_tokens.openai_api_key.clone());
+            return (
+                AuthSource::InAppOAuth,
+                CodexAuth::PlatformApiKey {
+                    api_key: self.oauth_tokens.openai_api_key.clone(),
+                },
+            );
+        }
+
+        // If we have a ChatGPT OAuth access token + chatgpt_account_id, we can use
+        // ChatGPT backend endpoint (Codex-style) without an OpenAI Platform org.
+        if self.oauth_tokens.has_valid_access_token() && !self.oauth_tokens.chatgpt_account_id.is_empty() {
+            return (
+                AuthSource::InAppOAuth,
+                CodexAuth::ChatGptBackendOAuth {
+                    access_token: self.oauth_tokens.access_token.clone(),
+                    chatgpt_account_id: self.oauth_tokens.chatgpt_account_id.clone(),
+                    api_key_exchange_error: self.oauth_tokens.api_key_exchange_error.clone(),
+                },
+            );
         }
 
         // Fall back to Codex CLI credentials: prefer OPENAI_API_KEY if present.
         if let Ok(cli_tokens) = crate::providers::openai_codex_oauth::read_codex_cli_credentials() {
             if !cli_tokens.openai_api_key.is_empty() {
-                return (AuthSource::CodexCli, cli_tokens.openai_api_key);
-            }
-            // Last resort: OAuth access token (usually NOT sufficient for platform endpoints).
-            if !cli_tokens.access_token.is_empty() {
-                return (AuthSource::CodexCli, cli_tokens.access_token);
+                return (
+                    AuthSource::CodexCli,
+                    CodexAuth::PlatformApiKey {
+                        api_key: cli_tokens.openai_api_key,
+                    },
+                );
             }
         }
 
-        // Last resort: in-app OAuth access token (usually NOT sufficient for platform endpoints).
+        // Last resort: OAuth access token only (usually not enough).
         if self.oauth_tokens.has_valid_access_token() {
-            return (AuthSource::InAppOAuth, self.oauth_tokens.access_token.clone());
+            return (
+                AuthSource::InAppOAuth,
+                CodexAuth::ChatGptBackendOAuth {
+                    access_token: self.oauth_tokens.access_token.clone(),
+                    chatgpt_account_id: String::new(),
+                    api_key_exchange_error: self.oauth_tokens.api_key_exchange_error.clone(),
+                },
+            );
         }
 
-        (AuthSource::None, String::new())
+        (AuthSource::None, CodexAuth::None)
     }
 
     fn diagnose_auth_status(&self) -> String {
         if !self.oauth_tokens.openai_api_key.is_empty() {
-            return "OK (OAuth login)".to_string();
+            return "OK (OAuth login — Platform API key)".to_string();
         }
+
+        if self.oauth_tokens.has_valid_access_token() {
+            if !self.oauth_tokens.chatgpt_account_id.is_empty() {
+                if self.oauth_tokens.api_key_exchange_error.is_empty() {
+                    return "Connected (ChatGPT backend)".to_string();
+                }
+                // Keep details in `api_key_exchange_error`; show a short user-friendly status.
+                return "Connected (ChatGPT backend). Platform API key not available for this account.".to_string();
+            }
+            return "OAuth login incomplete: missing chatgpt_account_id".to_string();
+        }
+
         if !self.oauth_tokens.is_empty() && self.oauth_tokens.has_refresh_token() {
             return "OAuth token expired — needs refresh".to_string();
         }
@@ -137,19 +186,43 @@ available:
 
     fn provider_settings_as_json(&self) -> serde_json::Value {
         let auth_status = self.diagnose_auth_status();
-        let oauth_connected = !self.oauth_tokens.openai_api_key.is_empty();
+        let oauth_connected = self.oauth_tokens.has_valid_access_token() || self.oauth_tokens.has_refresh_token();
+        let api_key_ready = !self.oauth_tokens.openai_api_key.is_empty();
 
         json!({
             "auth_status": auth_status,
             "oauth_connected": oauth_connected,
+            "api_key_ready": api_key_ready,
+            "api_key_exchange_error": self.oauth_tokens.api_key_exchange_error,
             "enabled_models": self.enabled_models,
             "custom_models": self.custom_models
         })
     }
 
     fn build_runtime(&self) -> Result<ProviderRuntime, String> {
-        let (_, auth_token) = self.resolve_auth();
-        let has_auth = !auth_token.is_empty();
+        let (_, auth) = self.resolve_auth();
+        let mut extra_headers = HashMap::new();
+
+        let (chat_endpoint, api_key) = match auth {
+            CodexAuth::PlatformApiKey { api_key } => ("https://api.openai.com/v1/responses".to_string(), api_key),
+            CodexAuth::ChatGptBackendOAuth { access_token, chatgpt_account_id, .. } => {
+                // OpenCode/Codex-style endpoint: ChatGPT backend
+                // Requires store:false (set in adapter by endpoint), and special headers.
+                if !chatgpt_account_id.is_empty() {
+                    extra_headers.insert("chatgpt-account-id".to_string(), chatgpt_account_id);
+                }
+                extra_headers.insert("OpenAI-Beta".to_string(), "responses=experimental".to_string());
+                extra_headers.insert("originator".to_string(), "codex_cli_rs".to_string());
+                extra_headers.insert("accept".to_string(), "text/event-stream".to_string());
+                (
+                    "https://chatgpt.com/backend-api/codex/responses".to_string(),
+                    access_token,
+                )
+            }
+            CodexAuth::None => (String::new(), String::new()),
+        };
+
+        let has_auth = !api_key.is_empty() && !chat_endpoint.is_empty();
 
         Ok(ProviderRuntime {
             name: self.name().to_string(),
@@ -157,13 +230,13 @@ available:
             enabled: has_auth && !self.enabled_models.is_empty(),
             readonly: false,
             wire_format: self.default_wire_format(),
-            chat_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            chat_endpoint,
             completion_endpoint: String::new(),
             embedding_endpoint: String::new(),
-            api_key: auth_token,
+            api_key,
             auth_token: String::new(),
             tokenizer_api_key: String::new(),
-            extra_headers: HashMap::new(),
+            extra_headers,
             support_metadata: false,
             chat_models: Vec::new(),
             completion_models: Vec::new(),
@@ -172,6 +245,9 @@ available:
     }
 
     fn has_credentials(&self) -> bool {
+        if !self.oauth_tokens.openai_api_key.is_empty() {
+            return true;
+        }
         if self.oauth_tokens.has_valid_access_token() {
             return true;
         }
@@ -198,8 +274,13 @@ available:
         _http_client: &reqwest::Client,
         model_caps: &HashMap<String, ModelCapabilities>,
     ) -> Vec<AvailableModel> {
-        let (_, auth_token) = self.resolve_auth();
-        if auth_token.is_empty() {
+        let (_, auth) = self.resolve_auth();
+        let has_auth = match auth {
+            CodexAuth::PlatformApiKey { ref api_key } => !api_key.is_empty(),
+            CodexAuth::ChatGptBackendOAuth { ref access_token, .. } => !access_token.is_empty(),
+            CodexAuth::None => false,
+        };
+        if !has_auth {
             tracing::warn!("OpenAI Codex: no auth");
             return self.get_custom_models_only();
         }

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
-use crate::subchat::run_subchat_once;
+use crate::subchat::run_subchat_once_with_parent;
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
 };
@@ -24,69 +24,13 @@ pub struct ToolDeepResearch {
     pub config_path: String,
 }
 
-static ENTERTAINMENT_MESSAGES: &[&str] = &[
-    "1/9: 🔬 Deep research in progress... This may take up to 30 minutes, please be patient!",
-    "2/9: 🌐 Browsing the web and gathering relevant sources...",
-    "3/9: 📚 Reading through documentation and articles...",
-    "4/9: 🔍 Cross-referencing information from multiple sources...",
-    "5/9: 🧠 Analyzing and synthesizing the findings...",
-    "6/9: 📊 Organizing data and preparing insights...",
-    "7/9: ✍️ Composing comprehensive report with citations...",
-    "8/9: ⏳ Still working... Almost there!",
-    "9/9: 🔄 Continuing deep research... Thank you for your patience!",
-];
-
-async fn send_entertainment_message(
-    subchat_tx: &Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
-    tool_call_id: &str,
-    message_idx: usize,
-) {
-    let message_text = ENTERTAINMENT_MESSAGES[message_idx % ENTERTAINMENT_MESSAGES.len()];
-    let entertainment_msg = json!({
-        "tool_call_id": tool_call_id,
-        "subchat_id": message_text,
-        "add_message": {
-            "role": "assistant",
-            "content": message_text
-        }
-    });
-    tracing::info!(
-        "deep_research: sending entertainment message: tool_call_id={}, subchat_id={}",
-        tool_call_id,
-        message_text
-    );
-    match subchat_tx.lock().await.send(entertainment_msg) {
-        Ok(_) => tracing::info!("deep_research: entertainment message sent successfully"),
-        Err(e) => tracing::error!("deep_research: failed to send entertainment message: {}", e),
-    }
-}
-
-fn spawn_entertainment_task(
-    subchat_tx: Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
-    tool_call_id: String,
-    cancel_token: tokio_util::sync::CancellationToken,
-) {
-    tokio::spawn(async move {
-        let mut message_idx = 0usize;
-        loop {
-            tokio::select! {
-                _ = cancel_token.cancelled() => {
-                    break;
-                }
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {
-                    send_entertainment_message(&subchat_tx, &tool_call_id, message_idx).await;
-                    message_idx += 1;
-                }
-            }
-        }
-    });
-}
-
 async fn execute_deep_research(
     gcx: Arc<ARwLock<GlobalContext>>,
     subchat_tx: Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
     research_query: String,
     tool_call_id: String,
+    abort_flag: Arc<std::sync::atomic::AtomicBool>,
+    parent_depth: usize,
 ) -> Result<
     (
         ChatMessage,
@@ -95,11 +39,6 @@ async fn execute_deep_research(
     ),
     String,
 > {
-    send_entertainment_message(&subchat_tx, &tool_call_id, 0).await;
-
-    let cancel_token = tokio_util::sync::CancellationToken::new();
-    spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone());
-
     let subagent_config = get_subagent_config(gcx.clone(), SUBAGENT_ID, None)
         .await
         .ok_or_else(|| format!("subagent config '{}' not found", SUBAGENT_ID))?;
@@ -113,11 +52,16 @@ async fn execute_deep_research(
         ChatMessage::new("user".to_string(), research_query),
     ];
 
-    let result = run_subchat_once(gcx, SUBAGENT_ID, messages).await;
-
-    cancel_token.cancel();
-
-    let subchat_result = result?;
+    let subchat_result = run_subchat_once_with_parent(
+        gcx,
+        SUBAGENT_ID,
+        messages,
+        tool_call_id.clone(),
+        subchat_tx,
+        abort_flag,
+        parent_depth,
+    )
+    .await?;
     let reply = subchat_result
         .messages
         .last()
@@ -177,6 +121,11 @@ impl Tool for ToolDeepResearch {
             (ccx_lock.global_context.clone(), ccx_lock.subchat_tx.clone())
         };
 
+        let (abort_flag, parent_depth) = {
+            let ccx_lock = ccx.lock().await;
+            (ccx_lock.abort_flag.clone(), ccx_lock.subchat_depth)
+        };
+
         tracing::info!("Starting deep research for query: {}", research_query);
 
         let (research_result, usage_collector, metering) = execute_deep_research(
@@ -184,6 +133,8 @@ impl Tool for ToolDeepResearch {
             subchat_tx,
             research_query.clone(),
             tool_call_id.clone(),
+            abort_flag,
+            parent_depth,
         )
         .await?;
 

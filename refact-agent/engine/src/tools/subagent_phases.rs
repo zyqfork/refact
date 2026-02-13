@@ -10,7 +10,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ChatUsage};
 use crate::files_correction::correct_to_nearest_filename;
 use crate::global_context::GlobalContext;
-use crate::subchat::{run_subchat, run_subchat_once, resolve_subchat_config_with_parent};
+use crate::subchat::{run_subchat, run_subchat_once_with_parent, resolve_subchat_config_with_parent};
 use crate::tools::tool_helpers::{load_code_subagent_config, CodeSubagentConfig};
 
 pub const DEFAULT_MAX_FILES: usize = 30;
@@ -55,49 +55,6 @@ pub async fn send_files_gathered_message(
         }
     });
     let _ = subchat_tx.lock().await.send(msg);
-}
-
-pub async fn send_entertainment_message(
-    subchat_tx: &Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
-    tool_call_id: &str,
-    messages: &[&str],
-    message_idx: usize,
-) {
-    if messages.is_empty() {
-        return;
-    }
-    let message_text = messages[message_idx % messages.len()];
-    let entertainment_msg = json!({
-        "tool_call_id": tool_call_id,
-        "subchat_id": message_text,
-        "add_message": {
-            "role": "assistant",
-            "content": message_text
-        }
-    });
-    let _ = subchat_tx.lock().await.send(entertainment_msg);
-}
-
-pub fn spawn_entertainment_task(
-    subchat_tx: Arc<AMutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
-    tool_call_id: String,
-    cancel_token: tokio_util::sync::CancellationToken,
-    messages: &'static [&'static str],
-) {
-    tokio::spawn(async move {
-        let mut message_idx = 0usize;
-        loop {
-            tokio::select! {
-                _ = cancel_token.cancelled() => {
-                    break;
-                }
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {
-                    send_entertainment_message(&subchat_tx, &tool_call_id, messages, message_idx).await;
-                    message_idx += 1;
-                }
-            }
-        }
-    });
 }
 
 pub fn parse_relevant_files(response: &str, max_files: usize) -> Vec<String> {
@@ -197,7 +154,7 @@ pub async fn gather_files_phase(
         "agent".to_string(),
         Some(tool_call_id.clone()),
         Some(parent_subchat_tx.clone()),
-        Some(parent_abort_flag),
+        Some(parent_abort_flag.clone()),
         current_depth + 1,
     )
     .await?;
@@ -237,7 +194,16 @@ pub async fn gather_files_phase(
             ..Default::default()
         });
 
-        let retry_result = run_subchat_once(gcx.clone(), gather_subagent_id, retry_messages).await?;
+        let retry_result = run_subchat_once_with_parent(
+            gcx.clone(),
+            gather_subagent_id,
+            retry_messages,
+            tool_call_id.clone(),
+            parent_subchat_tx.clone(),
+            parent_abort_flag.clone(),
+            current_depth,
+        )
+        .await?;
         let retry_response = get_last_assistant_content(&retry_result.messages);
         files = parse_relevant_files(&retry_response, max_files);
 

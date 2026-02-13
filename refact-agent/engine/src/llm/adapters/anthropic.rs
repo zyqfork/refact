@@ -469,33 +469,43 @@ fn convert_to_anthropic(
                     }
                 }
                 if !msg.citations.is_empty() {
-                    // Clean internal fields from citations before re-sending.
-                    // _content_block_index is our internal tracking field.
-                    let cleaned_citations: Vec<Value> = msg.citations.iter().map(|c| {
+                    // Clean internal fields and strip orphaned web search citations.
+                    // Web search citations (with encrypted_index) require matching
+                    // server_content_blocks; document citations (char_location etc.) are always valid.
+                    let cleaned_citations: Vec<Value> = msg.citations.iter().filter_map(|c| {
+                        let has_encrypted = c.get("encrypted_index").is_some();
+                        if has_encrypted && msg.server_content_blocks.is_empty() {
+                            tracing::warn!("stripping orphaned web search citation (no server_content_blocks)");
+                            return None;
+                        }
                         let mut cleaned = c.clone();
                         if let Some(obj) = cleaned.as_object_mut() {
                             obj.remove("_content_block_index");
                         }
-                        cleaned
+                        Some(cleaned)
                     }).collect();
-                    // Re-send citations from prior responses as content blocks with
-                    // their citation data. Anthropic expects text blocks with citations
-                    // arrays when re-sending cited content in multi-turn conversations.
-                    let text_blocks = msg_content_to_anthropic(&msg.content);
-                    if text_blocks.len() == 1 {
-                        let mut block = text_blocks.into_iter().next().unwrap();
-                        if let Some(obj) = block.as_object_mut() {
-                            obj.insert("citations".to_string(), json!(cleaned_citations));
-                        }
-                        content.push(block);
-                    } else {
-                        let mut blocks = text_blocks;
-                        if let Some(last) = blocks.last_mut() {
-                            if let Some(obj) = last.as_object_mut() {
+                    if !cleaned_citations.is_empty() {
+                        // Re-send citations from prior responses as content blocks with
+                        // their citation data. Anthropic expects text blocks with citations
+                        // arrays when re-sending cited content in multi-turn conversations.
+                        let text_blocks = msg_content_to_anthropic(&msg.content);
+                        if text_blocks.len() == 1 {
+                            let mut block = text_blocks.into_iter().next().unwrap();
+                            if let Some(obj) = block.as_object_mut() {
                                 obj.insert("citations".to_string(), json!(cleaned_citations));
                             }
+                            content.push(block);
+                        } else {
+                            let mut blocks = text_blocks;
+                            if let Some(last) = blocks.last_mut() {
+                                if let Some(obj) = last.as_object_mut() {
+                                    obj.insert("citations".to_string(), json!(cleaned_citations));
+                                }
+                            }
+                            content.extend(blocks);
                         }
-                        content.extend(blocks);
+                    } else {
+                        content.extend(msg_content_to_anthropic(&msg.content));
                     }
                 } else {
                     content.extend(msg_content_to_anthropic(&msg.content));
@@ -503,8 +513,29 @@ fn convert_to_anthropic(
                 // Insert server content blocks (server_tool_use, web_search_tool_result)
                 // before client tool_use blocks. These must be passed back verbatim
                 // for Anthropic to validate encrypted_index in citations.
+                // Strip orphaned server_tool_use blocks that lack a matching web_search_tool_result.
                 if !msg.server_content_blocks.is_empty() {
-                    content.extend(msg.server_content_blocks.iter().cloned());
+                    let result_ids: std::collections::HashSet<&str> = msg.server_content_blocks.iter()
+                        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("web_search_tool_result"))
+                        .filter_map(|b| b.get("tool_use_id").and_then(|v| v.as_str()))
+                        .collect();
+                    let filtered: Vec<Value> = msg.server_content_blocks.iter()
+                        .filter(|b| {
+                            match b.get("type").and_then(|t| t.as_str()) {
+                                Some("server_tool_use") => {
+                                    let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                    let has_result = result_ids.contains(id);
+                                    if !has_result {
+                                        tracing::warn!("stripping orphaned server_tool_use '{}' (no matching web_search_tool_result)", id);
+                                    }
+                                    has_result
+                                }
+                                _ => true,
+                            }
+                        })
+                        .cloned()
+                        .collect();
+                    content.extend(filtered);
                 }
                 if msg.role == "assistant" {
                     if let Some(tcs) = &msg.tool_calls {
@@ -1599,6 +1630,19 @@ mod tests {
                         "encrypted_index": "abc123",
                         "cited_text": "Found it.",
                         "_content_block_index": 2
+                    }),
+                ],
+                server_content_blocks: vec![
+                    json!({
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_test",
+                        "name": "web_search",
+                        "input": {"query": "something"}
+                    }),
+                    json!({
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_test",
+                        "content": [{"type": "web_search_result", "url": "https://example.com", "encrypted_content": "enc456"}]
                     }),
                 ],
                 ..Default::default()

@@ -410,12 +410,45 @@ fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage]) 
 
             if let Some(blocks) = &msg.thinking_blocks {
                 if !blocks.is_empty() {
-                    obj["thinking_blocks"] = json!(blocks);
+                    let sanitized: Vec<Value> = blocks.iter().filter_map(|block| {
+                        match block.get("type").and_then(|t| t.as_str()) {
+                            Some("thinking") => {
+                                let mut tb = json!({"type": "thinking"});
+                                if let Some(thinking) = block.get("thinking") {
+                                    tb["thinking"] = thinking.clone();
+                                }
+                                if let Some(sig) = block.get("signature") {
+                                    tb["signature"] = sig.clone();
+                                }
+                                Some(tb)
+                            }
+                            Some("redacted_thinking") => {
+                                let mut rb = json!({"type": "redacted_thinking"});
+                                if let Some(data) = block.get("data") {
+                                    rb["data"] = data.clone();
+                                }
+                                Some(rb)
+                            }
+                            _ => None,
+                        }
+                    }).collect();
+                    if !sanitized.is_empty() {
+                        obj["thinking_blocks"] = json!(sanitized);
+                    }
                 }
             }
 
             if !msg.citations.is_empty() {
-                obj["citations"] = json!(msg.citations);
+                let valid_citations: Vec<&Value> = if msg.server_content_blocks.is_empty() {
+                    msg.citations.iter()
+                        .filter(|c| c.get("encrypted_index").is_none())
+                        .collect()
+                } else {
+                    msg.citations.iter().collect()
+                };
+                if !valid_citations.is_empty() {
+                    obj["citations"] = json!(valid_citations);
+                }
             }
 
             Some(obj)

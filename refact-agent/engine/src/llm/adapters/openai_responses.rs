@@ -34,28 +34,38 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
         insert_extra_headers(&mut headers, &settings.extra_headers);
 
         let (input, instructions) = convert_to_responses_format(&req.messages);
-
         let mut body = json!({
             "model": settings.model_name,
             "stream": req.stream,
-            "max_output_tokens": req.params.max_tokens,
         });
+
+        // ChatGPT backend (Codex-style) only accepts a minimal set of fields:
+        // model, instructions, input, tools, tool_choice, parallel_tool_calls,
+        // reasoning, store, stream, include, text.
+        // It rejects max_output_tokens, temperature, frequency_penalty, stop, etc.
+        let is_chatgpt_backend = settings.endpoint.contains("chatgpt.com/backend-api");
+
+        if is_chatgpt_backend {
+            body["store"] = json!(false);
+        } else {
+            body["max_output_tokens"] = json!(req.params.max_tokens);
+
+            if settings.supports_temperature {
+                if let Some(temp) = req.params.temperature {
+                    body["temperature"] = json!(temp);
+                }
+            }
+
+            if let Some(freq_penalty) = req.params.frequency_penalty {
+                body["frequency_penalty"] = json!(freq_penalty);
+            }
+        }
 
         if !input.is_null() {
             body["input"] = input;
         }
         if let Some(inst) = instructions {
             body["instructions"] = json!(inst);
-        }
-
-        if settings.supports_temperature {
-            if let Some(temp) = req.params.temperature {
-                body["temperature"] = json!(temp);
-            }
-        }
-
-        if let Some(freq_penalty) = req.params.frequency_penalty {
-            body["frequency_penalty"] = json!(freq_penalty);
         }
 
         if settings.supports_tools {
@@ -87,7 +97,7 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             body["include"] = json!(["reasoning.encrypted_content"]);
         }
 
-        if !req.params.stop.is_empty() {
+        if !is_chatgpt_backend && !req.params.stop.is_empty() {
             body["stop"] = json!(req.params.stop);
         }
 

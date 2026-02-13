@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use futures::StreamExt;
-use reqwest_eventsource::{Event, EventSource, Error as EventSourceError};
+use eventsource_stream::Eventsource;
 use serde_json::json;
 use tokio::sync::RwLock as ARwLock;
 
@@ -158,14 +158,22 @@ pub async fn run_llm_stream<C: StreamCollector>(
         "LLM streaming request"
     );
 
-    // Create event source for streaming
-    let request = client
+    let response = client
         .post(&http_parts.url)
         .headers(http_parts.headers.clone())
-        .json(&http_parts.body);
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .json(&http_parts.body)
+        .send()
+        .await
+        .map_err(|e| format!("LLM request failed: {}", e))?;
 
-    let mut event_source = EventSource::new(request)
-        .map_err(|e| format!("Failed to create event source: {}", e))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format_llm_error_body(&format!("{}", status), &text));
+    }
+
+    let mut stream = response.bytes_stream().eventsource();
 
     let mut accumulators: Vec<ChoiceAccumulator> = vec![ChoiceAccumulator::default()];
     let mut stream_done = false;
@@ -194,9 +202,12 @@ pub async fn run_llm_stream<C: StreamCollector>(
                 }
                 continue;
             }
-            maybe_event = event_source.next() => {
+            maybe_event = stream.next() => {
                 match maybe_event {
-                    Some(e) => e,
+                    Some(Ok(ev)) => ev,
+                    Some(Err(e)) => {
+                        return Err(format!("Stream error: {}", e));
+                    }
                     None => {
                         if !stream_done && !adapter_settings.eof_is_done {
                             return Err("LLM stream ended unexpectedly without completion signal".to_string());
@@ -208,92 +219,82 @@ pub async fn run_llm_stream<C: StreamCollector>(
         };
         last_event_at = Instant::now();
 
-        match event {
-            Ok(Event::Open) => {}
-            Ok(Event::Message(msg)) => {
-                // Use adapter to parse streaming chunk
-                let deltas = match adapter.parse_stream_chunk(&msg.data) {
-                    Ok(d) => d,
-                    Err(StreamParseError::Skip) => continue,
-                    Err(StreamParseError::MalformedChunk(e)) => {
-                        tracing::warn!("Malformed stream chunk: {}", e);
-                        continue;
-                    }
-                    Err(StreamParseError::FatalError(e)) => {
-                        return Err(format!("LLM error: {}", e));
-                    }
-                };
+        let deltas = match adapter.parse_stream_chunk(&event.data) {
+            Ok(d) => d,
+            Err(StreamParseError::Skip) => continue,
+            Err(StreamParseError::MalformedChunk(e)) => {
+                tracing::warn!("Malformed stream chunk: {}", e);
+                continue;
+            }
+            Err(StreamParseError::FatalError(e)) => {
+                return Err(format!("LLM error: {}", e));
+            }
+        };
 
-                // Process deltas from adapter
-                let acc = &mut accumulators[0]; // Single choice for now
-                let mut ops = Vec::new();
+        let acc = &mut accumulators[0];
+        let mut ops = Vec::new();
 
-                for delta in deltas {
-                    match delta {
-                        LlmStreamDelta::AppendContent { text } => {
-                            acc.content.push_str(&text);
-                            ops.push(DeltaOp::AppendContent { text });
-                        }
-                        LlmStreamDelta::AppendReasoning { text } => {
-                            acc.reasoning.push_str(&text);
-                            ops.push(DeltaOp::AppendReasoning { text });
-                        }
-                        LlmStreamDelta::SetToolCalls { tool_calls } => {
-                            let tool_calls = if !params.model_rec.auth_token.is_empty() {
-                                tool_calls.into_iter().map(|mut tc| {
-                                    strip_mcp_prefix_from_tool_call(&mut tc);
-                                    tc
-                                }).collect()
-                            } else {
-                                tool_calls
-                            };
-                            for tc in &tool_calls {
-                                acc.tool_calls.merge(tc);
-                            }
-                            ops.push(DeltaOp::SetToolCalls { tool_calls: acc.tool_calls.finalize() });
-                        }
-                        LlmStreamDelta::SetThinkingBlocks { blocks } => {
-                            acc.thinking_blocks = blocks.clone();
-                            ops.push(DeltaOp::SetThinkingBlocks { blocks });
-                        }
-                        LlmStreamDelta::AddCitation { citation } => {
-                            acc.citations.push(citation.clone());
-                            ops.push(DeltaOp::AddCitation { citation });
-                        }
-                        LlmStreamDelta::AddServerContentBlock { block } => {
-                            acc.server_content_blocks.push(block.clone());
-                            ops.push(DeltaOp::AddServerContentBlock { block });
-                        }
-                        LlmStreamDelta::SetUsage { usage } => {
-                            acc.usage = Some(merge_usage(acc.usage.take(), usage.clone()));
-                            if let Some(ref merged) = acc.usage {
-                                collector.on_usage(merged);
-                                ops.push(DeltaOp::SetUsage { usage: json!(merged) });
-                            }
-                        }
-                        LlmStreamDelta::SetFinishReason { reason } => {
-                            acc.finish_reason = Some(reason);
-                        }
-                        LlmStreamDelta::MergeExtra { extra } => {
-                            for (k, v) in &extra {
-                                acc.extra.insert(k.clone(), v.clone());
-                            }
-                            ops.push(DeltaOp::MergeExtra { extra });
-                        }
-                        LlmStreamDelta::Done => {
-                            stream_done = true;
-                            break;
-                        }
+        for delta in deltas {
+            match delta {
+                LlmStreamDelta::AppendContent { text } => {
+                    acc.content.push_str(&text);
+                    ops.push(DeltaOp::AppendContent { text });
+                }
+                LlmStreamDelta::AppendReasoning { text } => {
+                    acc.reasoning.push_str(&text);
+                    ops.push(DeltaOp::AppendReasoning { text });
+                }
+                LlmStreamDelta::SetToolCalls { tool_calls } => {
+                    let tool_calls = if !params.model_rec.auth_token.is_empty() {
+                        tool_calls.into_iter().map(|mut tc| {
+                            strip_mcp_prefix_from_tool_call(&mut tc);
+                            tc
+                        }).collect()
+                    } else {
+                        tool_calls
+                    };
+                    for tc in &tool_calls {
+                        acc.tool_calls.merge(tc);
+                    }
+                    ops.push(DeltaOp::SetToolCalls { tool_calls: acc.tool_calls.finalize() });
+                }
+                LlmStreamDelta::SetThinkingBlocks { blocks } => {
+                    acc.thinking_blocks = blocks.clone();
+                    ops.push(DeltaOp::SetThinkingBlocks { blocks });
+                }
+                LlmStreamDelta::AddCitation { citation } => {
+                    acc.citations.push(citation.clone());
+                    ops.push(DeltaOp::AddCitation { citation });
+                }
+                LlmStreamDelta::AddServerContentBlock { block } => {
+                    acc.server_content_blocks.push(block.clone());
+                    ops.push(DeltaOp::AddServerContentBlock { block });
+                }
+                LlmStreamDelta::SetUsage { usage } => {
+                    acc.usage = Some(merge_usage(acc.usage.take(), usage.clone()));
+                    if let Some(ref merged) = acc.usage {
+                        collector.on_usage(merged);
+                        ops.push(DeltaOp::SetUsage { usage: json!(merged) });
                     }
                 }
-
-                if !ops.is_empty() {
-                    collector.on_delta_ops(0, ops);
+                LlmStreamDelta::SetFinishReason { reason } => {
+                    acc.finish_reason = Some(reason);
+                }
+                LlmStreamDelta::MergeExtra { extra } => {
+                    for (k, v) in &extra {
+                        acc.extra.insert(k.clone(), v.clone());
+                    }
+                    ops.push(DeltaOp::MergeExtra { extra });
+                }
+                LlmStreamDelta::Done => {
+                    stream_done = true;
+                    break;
                 }
             }
-            Err(e) => {
-                return Err(format_stream_error(e).await);
-            }
+        }
+
+        if !ops.is_empty() {
+            collector.on_delta_ops(0, ops);
         }
     }
 
@@ -405,27 +406,23 @@ pub fn normalize_tool_call(tc: &serde_json::Value) -> Option<crate::call_validat
     })
 }
 
-async fn format_stream_error(err: EventSourceError) -> String {
-    match err {
-        EventSourceError::InvalidStatusCode(status, response) => {
-            let text = response.text().await.unwrap_or_default();
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(detail) = json.get("detail") {
-                    return format!("LLM error ({}): {}", status, detail);
-                }
-                if let Some(msg) = json.pointer("/error/message") {
-                    return format!("LLM error ({}): {}", status, msg);
-                }
-                if let Some(err_obj) = json.get("error") {
-                    return format!("LLM error ({}): {}", status, err_obj);
-                }
-            }
-            let preview = safe_truncate(&text, 500);
-            format!("LLM error ({}): {}", status, preview)
+fn format_llm_error_body(status_label: &str, text: &str) -> String {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(detail) = json.get("detail") {
+            return format!("LLM error ({}): {}", status_label, detail);
         }
-        other => format!("Stream error: {}", other),
+        if let Some(msg) = json.pointer("/error/message") {
+            return format!("LLM error ({}): {}", status_label, msg);
+        }
+        if let Some(err_obj) = json.get("error") {
+            return format!("LLM error ({}): {}", status_label, err_obj);
+        }
     }
+    let preview = safe_truncate(text, 500);
+    format!("LLM error ({}): {}", status_label, preview)
 }
+
+
 
 #[cfg(test)]
 mod tests {

@@ -7,12 +7,11 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use std::collections::HashMap;
 
-use crate::subchat::{run_subchat_once, resolve_subchat_params, resolve_subchat_model};
+use crate::subchat::{run_subchat_once_with_parent, resolve_subchat_params, resolve_subchat_model};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::tools::tool_helpers::{load_code_subagent_config, CodeSubagentConfig};
 use crate::tools::subagent_phases::{
     gather_files_phase, GatherFilesParams,
-    send_entertainment_message, spawn_entertainment_task,
 };
 use crate::call_validation::{
     ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile,
@@ -32,13 +31,6 @@ pub struct ToolCodeReview {
 }
 
 static TOKENS_EXTRA_BUDGET_PERCENT: f32 = 0.06;
-
-static ENTERTAINMENT_MESSAGES: &[&str] = &[
-    "1/4: 📋 Loading files for review...",
-    "2/4: 🔍 Analyzing code quality...",
-    "3/4: 🐛 Checking for issues...",
-    "4/4: 📝 Compiling review findings...",
-];
 
 fn get_gather_files_params(config: &CodeSubagentConfig) -> GatherFilesParams<'_> {
     GatherFilesParams {
@@ -166,11 +158,14 @@ async fn execute_code_review(
     tool_call_id: String,
     config: &CodeSubagentConfig,
 ) -> Result<(String, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
-    let subchat_tx = ccx.lock().await.subchat_tx.clone();
-
-    send_entertainment_message(&subchat_tx, &tool_call_id, ENTERTAINMENT_MESSAGES, 0).await;
-    let cancel_token = tokio_util::sync::CancellationToken::new();
-    spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone(), ENTERTAINMENT_MESSAGES);
+    let (subchat_tx, abort_flag, parent_depth) = {
+        let ccx_lock = ccx.lock().await;
+        (
+            ccx_lock.subchat_tx.clone(),
+            ccx_lock.abort_flag.clone(),
+            ccx_lock.subchat_depth,
+        )
+    };
 
     let subchat_params = resolve_subchat_params(gcx.clone(), "code_review").await?;
 
@@ -185,11 +180,16 @@ async fn execute_code_review(
 
     let history: Vec<ChatMessage> = vec![ChatMessage::new("user".to_string(), prompt)];
 
-    let result = run_subchat_once(gcx.clone(), "code_review", history).await;
-
-    cancel_token.cancel();
-
-    let result = result?;
+    let result = run_subchat_once_with_parent(
+        gcx.clone(),
+        "code_review",
+        history,
+        tool_call_id.clone(),
+        subchat_tx,
+        abort_flag,
+        parent_depth,
+    )
+    .await?;
     let review_response = result
         .messages
         .last()

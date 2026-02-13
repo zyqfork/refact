@@ -7,13 +7,10 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use std::collections::HashMap;
 
-use crate::subchat::{run_subchat_once, resolve_subchat_params, resolve_subchat_model};
+use crate::subchat::{run_subchat_once_with_parent, resolve_subchat_params, resolve_subchat_model};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::tools::tool_helpers::{load_code_subagent_config};
-use crate::tools::subagent_phases::{
-    gather_files_phase, GatherFilesParams,
-    send_entertainment_message, spawn_entertainment_task,
-};
+use crate::tools::subagent_phases::{gather_files_phase, GatherFilesParams};
 use crate::call_validation::{
     ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile,
     PostprocessSettings,
@@ -35,13 +32,6 @@ pub struct ToolStrategicPlanning {
 }
 
 static TOKENS_EXTRA_BUDGET_PERCENT: f32 = 0.06;
-
-static ENTERTAINMENT_MESSAGES: &[&str] = &[
-    "1/4: 📋 Gathering context from files...",
-    "2/4: 💡 Formulating solution approaches...",
-    "3/4: 📝 Drafting the strategic plan...",
-    "4/4: 🔄 Refining the solution...",
-];
 
 fn get_gather_files_params(config: &CodeSubagentConfig) -> GatherFilesParams<'_> {
     GatherFilesParams {
@@ -167,11 +157,14 @@ async fn execute_strategic_planning(
     tool_call_id: String,
     config: &CodeSubagentConfig,
 ) -> Result<(String, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
-    let subchat_tx = ccx.lock().await.subchat_tx.clone();
-
-    send_entertainment_message(&subchat_tx, &tool_call_id, ENTERTAINMENT_MESSAGES, 0).await;
-    let cancel_token = tokio_util::sync::CancellationToken::new();
-    spawn_entertainment_task(subchat_tx, tool_call_id.clone(), cancel_token.clone(), ENTERTAINMENT_MESSAGES);
+    let (subchat_tx, abort_flag, parent_depth) = {
+        let ccx_lock = ccx.lock().await;
+        (
+            ccx_lock.subchat_tx.clone(),
+            ccx_lock.abort_flag.clone(),
+            ccx_lock.subchat_depth,
+        )
+    };
 
     let subchat_params = resolve_subchat_params(gcx.clone(), "strategic_planning").await?;
 
@@ -186,11 +179,16 @@ async fn execute_strategic_planning(
 
     let history: Vec<ChatMessage> = vec![ChatMessage::new("user".to_string(), prompt)];
 
-    let result = run_subchat_once(gcx.clone(), "strategic_planning", history).await;
-
-    cancel_token.cancel();
-
-    let result = result?;
+    let result = run_subchat_once_with_parent(
+        gcx.clone(),
+        "strategic_planning",
+        history,
+        tool_call_id.clone(),
+        subchat_tx,
+        abort_flag,
+        parent_depth,
+    )
+    .await?;
     let initial_solution = result
         .messages
         .last()

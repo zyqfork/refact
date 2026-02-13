@@ -118,17 +118,24 @@ pub struct SubchatConfig {
     pub parent_tool_call_id: Option<String>,
     pub parent_subchat_tx: Option<Arc<AMutex<mpsc::UnboundedSender<Value>>>>,
     pub abort_flag: Option<Arc<AtomicBool>>,
+    pub subchat_depth: usize,
 }
 
 fn should_stream_thinking_progress(tool_name: &str) -> bool {
-    matches!(tool_name, "deep_research" | "strategic_planning" | "code_review")
+    matches!(
+        tool_name,
+        "deep_research"
+            | "strategic_planning"
+            | "strategic_planning_gather_files"
+            | "code_review"
+            | "code_review_gather_files"
+    )
 }
 
 struct SubchatProgressCollector {
     sender: Option<mpsc::UnboundedSender<Value>>,
     tool_call_id: Option<String>,
     thinking_tail: String,
-    reasoning_tail: String,
     content_tail: String,
     last_sent: String,
     last_sent_at: std::time::Instant,
@@ -140,7 +147,6 @@ impl SubchatProgressCollector {
             sender,
             tool_call_id,
             thinking_tail: String::new(),
-            reasoning_tail: String::new(),
             content_tail: String::new(),
             last_sent: String::new(),
             last_sent_at: std::time::Instant::now()
@@ -155,14 +161,19 @@ impl SubchatProgressCollector {
         }
         buf.push_str(text);
         if buf.len() > max_chars {
-            let start = buf.len().saturating_sub(max_chars);
-            *buf = buf[start..].to_string();
+            let mut start = buf.len().saturating_sub(max_chars);
+            while start < buf.len() && !buf.is_char_boundary(start) {
+                start += 1;
+            }
+            buf.drain(..start);
         }
     }
 
     fn extract_thinking_preview(blocks: &[serde_json::Value]) -> Option<String> {
         for block in blocks.iter().rev() {
-            let obj = block.as_object()?;
+            let Some(obj) = block.as_object() else {
+                continue;
+            };
             for key in ["thinking", "text", "content"] {
                 if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
                     if !s.trim().is_empty() {
@@ -176,6 +187,8 @@ impl SubchatProgressCollector {
 
     fn normalize_preview(text: &str) -> String {
         text.replace(['\r', '\n', '\t'], " ")
+            // Don't accidentally trip frontend's /tool: filter.
+            .replace("/tool:", "/ tool:")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
@@ -191,8 +204,6 @@ impl SubchatProgressCollector {
 
         let raw = if !self.thinking_tail.trim().is_empty() {
             &self.thinking_tail
-        } else if !self.reasoning_tail.trim().is_empty() {
-            &self.reasoning_tail
         } else {
             &self.content_tail
         };
@@ -203,9 +214,9 @@ impl SubchatProgressCollector {
         }
 
         const MAX_CHARS: usize = 220;
-        if progress.len() > MAX_CHARS {
-            progress.truncate(MAX_CHARS);
-            progress.push('…');
+        let truncated = crate::llm::safe_truncate(&progress, MAX_CHARS);
+        if truncated.len() != progress.len() {
+            progress = format!("{}…", truncated);
         }
 
         if self.last_sent == progress {
@@ -234,11 +245,8 @@ impl StreamCollector for SubchatProgressCollector {
     fn on_delta_ops(&mut self, _choice_idx: usize, ops: Vec<crate::chat::types::DeltaOp>) {
         for op in ops {
             match op {
-                crate::chat::types::DeltaOp::AppendReasoning { text } => {
-                    Self::append_tail(&mut self.reasoning_tail, &text, 4_000);
-                }
                 crate::chat::types::DeltaOp::AppendContent { text } => {
-                    if self.reasoning_tail.trim().is_empty() && self.thinking_tail.trim().is_empty() {
+                    if self.thinking_tail.trim().is_empty() {
                         Self::append_tail(&mut self.content_tail, &text, 4_000);
                     }
                 }
@@ -463,6 +471,7 @@ pub async fn resolve_subchat_config_with_parent(
         parent_tool_call_id,
         parent_subchat_tx,
         abort_flag,
+        subchat_depth,
     })
 }
 
@@ -506,6 +515,8 @@ pub async fn run_subchat(
         )
         .await,
     ));
+
+    ccx.lock().await.subchat_depth = config.subchat_depth;
 
     if let Some(ref parent_tx) = config.parent_subchat_tx {
         ccx.lock().await.subchat_tx = parent_tx.clone();
@@ -609,6 +620,8 @@ pub async fn run_subchat_once(
         .await,
     ));
 
+    ccx.lock().await.subchat_depth = config.subchat_depth;
+
     let results = subchat_single_internal(
         ccx,
         &config.model,
@@ -636,6 +649,62 @@ pub async fn run_subchat_once(
         metering,
         chat_id: None,
     })
+}
+
+pub async fn run_subchat_once_with_parent(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    tool_name: &str,
+    messages: Vec<ChatMessage>,
+    parent_tool_call_id: String,
+    parent_subchat_tx: Arc<AMutex<mpsc::UnboundedSender<Value>>>,
+    parent_abort_flag: Arc<AtomicBool>,
+    parent_depth: usize,
+) -> Result<SubchatResult, String> {
+    let config = resolve_subchat_config_with_parent(
+        gcx.clone(),
+        tool_name,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(vec![]),
+        1,
+        false,
+        None,
+        "agent".to_string(),
+        Some(parent_tool_call_id),
+        Some(parent_subchat_tx),
+        Some(parent_abort_flag),
+        parent_depth + 1,
+    )
+    .await?;
+
+    run_subchat(gcx, messages, config).await
+}
+
+#[cfg(test)]
+mod progress_collector_tests {
+    use super::SubchatProgressCollector;
+    use serde_json::json;
+
+    #[test]
+    fn test_extract_thinking_preview_skips_non_objects() {
+        let blocks = vec![json!({"thinking": "hello"}), json!(123)];
+        let preview = SubchatProgressCollector::extract_thinking_preview(&blocks);
+        assert_eq!(preview.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_append_tail_unicode_no_panic() {
+        let mut s = String::new();
+        // Force truncation in the middle of multibyte chars.
+        for _ in 0..50 {
+            SubchatProgressCollector::append_tail(&mut s, "✅", 10);
+        }
+        assert!(s.is_char_boundary(s.len()));
+    }
 }
 
 fn is_aborted(abort_flag: &Option<Arc<AtomicBool>>) -> bool {

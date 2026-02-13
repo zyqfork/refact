@@ -36,11 +36,19 @@ pub struct OAuthTokens {
     /// This is what should be used against https://api.openai.com endpoints.
     #[serde(default)]
     pub openai_api_key: String,
+    /// ChatGPT workspace/account id used by ChatGPT backend endpoints.
+    #[serde(default)]
+    pub chatgpt_account_id: String,
+    /// If token-exchange to OPENAI_API_KEY fails, store a short diagnostic here.
+    #[serde(default)]
+    pub api_key_exchange_error: String,
 }
 
 impl OAuthTokens {
     pub fn is_empty(&self) -> bool {
-        self.access_token.is_empty() && self.refresh_token.is_empty()
+        self.access_token.is_empty()
+            && self.refresh_token.is_empty()
+            && self.openai_api_key.is_empty()
     }
 
     pub fn is_expired(&self) -> bool {
@@ -138,6 +146,8 @@ pub fn read_codex_cli_credentials() -> Result<OAuthTokens, String> {
             refresh_token: String::new(),
             expires_at: 0,
             openai_api_key: api_key.clone(),
+            chatgpt_account_id: String::new(),
+            api_key_exchange_error: String::new(),
         });
     }
 
@@ -155,7 +165,27 @@ pub fn read_codex_cli_credentials() -> Result<OAuthTokens, String> {
         refresh_token: tokens.refresh_token,
         expires_at: 0,
         openai_api_key: String::new(),
+        chatgpt_account_id: String::new(),
+        api_key_exchange_error: String::new(),
     })
+}
+
+fn extract_chatgpt_account_id_from_jwt(jwt: &str) -> Option<String> {
+    let mut parts = jwt.split('.');
+    let _header_b64 = parts.next()?;
+    let payload_b64 = parts.next()?;
+    let _sig_b64 = parts.next()?;
+
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .ok()?;
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+
+    payload
+        .get("https://api.openai.com/auth")
+        .and_then(|v| v.get("chatgpt_account_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 pub fn codex_cli_credentials_exist() -> bool {
@@ -284,16 +314,20 @@ pub async fn exchange_code(
         chrono::Utc::now().timestamp_millis() + 8 * 24 * 3600 * 1000
     };
 
-    let openai_api_key = if !token_resp.id_token.is_empty() {
+    let chatgpt_account_id = extract_chatgpt_account_id_from_jwt(&token_resp.id_token)
+        .or_else(|| extract_chatgpt_account_id_from_jwt(&token_resp.access_token))
+        .unwrap_or_default();
+
+    let (openai_api_key, api_key_exchange_error) = if !token_resp.id_token.is_empty() {
         match obtain_openai_api_key(http_client, &token_resp.id_token).await {
-            Ok(k) => k,
+            Ok(k) => (k, String::new()),
             Err(e) => {
                 tracing::warn!("OpenAI Codex OAuth: failed to obtain OPENAI_API_KEY via token-exchange: {e}");
-                String::new()
+                (String::new(), e)
             }
         }
     } else {
-        String::new()
+        (String::new(), "Token exchange response did not include id_token; cannot obtain OPENAI_API_KEY".to_string())
     };
 
     Ok(OAuthTokens {
@@ -301,6 +335,8 @@ pub async fn exchange_code(
         refresh_token: token_resp.refresh_token,
         expires_at,
         openai_api_key,
+        chatgpt_account_id,
+        api_key_exchange_error,
     })
 }
 
@@ -348,6 +384,8 @@ pub async fn refresh_access_token(
         },
         expires_at,
         openai_api_key: String::new(),
+        chatgpt_account_id: String::new(),
+        api_key_exchange_error: String::new(),
     })
 }
 

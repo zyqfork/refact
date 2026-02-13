@@ -94,6 +94,20 @@ export const ProviderOAuth: React.FC<ProviderOAuthProps> = ({
     }
   }, [waitingForCallback, oauthConnected]);
 
+  // If backend updated auth_status to a terminal error while we were polling,
+  // stop waiting and let the user see the status.
+  useEffect(() => {
+    if (!waitingForCallback) return;
+    if (!authStatus) return;
+    if (/failed|error|unavailable|missing/i.test(authStatus)) {
+      setWaitingForCallback(false);
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    }
+  }, [waitingForCallback, authStatus]);
+
   const handleExchangeCode = async () => {
     if (!sessionId || !code.trim()) return;
     setError(null);
