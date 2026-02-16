@@ -82,21 +82,21 @@ User sends → POST /v1/chats/{chatId}/commands {type: "user_message", content}
 
 ### SSE Event Types
 
-| Event | Purpose |
-|---|---|
-| `snapshot` | Full state sync (resets seq to 0) |
-| `stream_started` | AI response beginning |
-| `stream_delta` | Incremental content (DeltaOp[]) |
-| `stream_finished` | Complete with usage stats |
-| `message_added/updated/removed` | Message CRUD |
-| `messages_truncated` | Messages trimmed |
-| `thread_updated` | Thread metadata changed |
-| `runtime_updated` | Runtime flags changed |
-| `pause_required/cleared` | Tool confirmation |
-| `ide_tool_required` | IDE tool execution needed |
-| `subchat_update` | Nested chat update |
-| `queue_updated` | Command queue changed |
-| `ack` | Command acknowledgment |
+| Event                           | Purpose                           |
+| ------------------------------- | --------------------------------- |
+| `snapshot`                      | Full state sync (resets seq to 0) |
+| `stream_started`                | AI response beginning             |
+| `stream_delta`                  | Incremental content (DeltaOp[])   |
+| `stream_finished`               | Complete with usage stats         |
+| `message_added/updated/removed` | Message CRUD                      |
+| `messages_truncated`            | Messages trimmed                  |
+| `thread_updated`                | Thread metadata changed           |
+| `runtime_updated`               | Runtime flags changed             |
+| `pause_required/cleared`        | Tool confirmation                 |
+| `ide_tool_required`             | IDE tool execution needed         |
+| `subchat_update`                | Nested chat update                |
+| `queue_updated`                 | Command queue changed             |
+| `ack`                           | Command acknowledgment            |
 
 ### Delta Operations
 
@@ -144,38 +144,38 @@ Always use selectors. Never access `state.chat.threads[id]` directly in componen
 
 All generate hooks (`useGetCapsQuery`, etc.). Dynamic base URL from Redux state. Auto-injects auth.
 
-| API | Key Endpoints |
-|---|---|
-| capsApi | `/v1/caps` |
-| commandsApi | `/v1/at-command-completion`, `/v1/at-command-preview` |
-| toolsApi | `/v1/tools`, `/v1/tools/check_confirmation` |
-| dockerApi | `/v1/docker-container-list`, `/v1/docker-container-action` |
-| integrationsApi | `/v1/integrations-list`, `/v1/integration-get`, `/v1/integration-save` |
-| modelsApi, providersApi | `/v1/customization` |
-| checkpointsApi | `/v1/preview_checkpoints`, `/v1/restore_checkpoints` |
-| telemetryApi | `/v1/telemetry/chat` |
-| linksApi | `/v1/links` |
-| trajectoriesApi, trajectoryApi | `/v1/trajectories/*` |
-| tasksApi | Tasks CRUD |
-| chatModesApi, customizationApi | Agent modes/customization |
-| knowledgeApi, knowledgeGraphApi | Knowledge/memory |
-| smallCloudApi | `https://www.smallcloud.ai` (GraphQL) |
+| API                             | Key Endpoints                                                          |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| capsApi                         | `/v1/caps`                                                             |
+| commandsApi                     | `/v1/at-command-completion`, `/v1/at-command-preview`                  |
+| toolsApi                        | `/v1/tools`, `/v1/tools/check_confirmation`                            |
+| dockerApi                       | `/v1/docker-container-list`, `/v1/docker-container-action`             |
+| integrationsApi                 | `/v1/integrations-list`, `/v1/integration-get`, `/v1/integration-save` |
+| modelsApi, providersApi         | `/v1/customization`                                                    |
+| checkpointsApi                  | `/v1/preview_checkpoints`, `/v1/restore_checkpoints`                   |
+| telemetryApi                    | `/v1/telemetry/chat`                                                   |
+| linksApi                        | `/v1/links`                                                            |
+| trajectoriesApi, trajectoryApi  | `/v1/trajectories/*`                                                   |
+| tasksApi                        | Tasks CRUD                                                             |
+| chatModesApi, customizationApi  | Agent modes/customization                                              |
+| knowledgeApi, knowledgeGraphApi | Knowledge/memory                                                       |
+| smallCloudApi                   | `https://www.smallcloud.ai` (GraphQL)                                  |
 
 Chat uses **Commands API** + **SSE subscription**, not RTK Query.
 
 ## Key Hooks
 
-| Hook | Purpose |
-|---|---|
-| `useChatActions` | submit, abort, regenerate, respondToToolConfirmation |
-| `useChatSubscription` | Single chat SSE connection |
-| `useAllChatsSubscription` | Multi-tab SSE manager |
-| `useEnsureSubscriptionConnected` | Wait for snapshot before actions |
-| `useEventBusForApp` | IDE → GUI events (file context, new chat, tool approval) |
-| `useEventBusForIDE` | GUI → IDE events (open file, paste, tool call) |
-| `usePostMessage` | Transport: VSCode `acquireVsCodeApi`, JetBrains `postIntellijMessage`, web `postMessage` |
-| `useCheckpoints` | Checkpoint preview/restore |
-| `useActiveTeamsGroup` | Teams group management |
+| Hook                             | Purpose                                                                                  |
+| -------------------------------- | ---------------------------------------------------------------------------------------- |
+| `useChatActions`                 | submit, abort, regenerate, respondToToolConfirmation                                     |
+| `useChatSubscription`            | Single chat SSE connection                                                               |
+| `useAllChatsSubscription`        | Multi-tab SSE manager                                                                    |
+| `useEnsureSubscriptionConnected` | Wait for snapshot before actions                                                         |
+| `useEventBusForApp`              | IDE → GUI events (file context, new chat, tool approval)                                 |
+| `useEventBusForIDE`              | GUI → IDE events (open file, paste, tool call)                                           |
+| `usePostMessage`                 | Transport: VSCode `acquireVsCodeApi`, JetBrains `postIntellijMessage`, web `postMessage` |
+| `useCheckpoints`                 | Checkpoint preview/restore                                                               |
+| `useActiveTeamsGroup`            | Teams group management                                                                   |
 
 ## Components
 
@@ -183,13 +183,13 @@ Chat uses **Commands API** + **SSE subscription**, not RTK Query.
 
 Dispatches messages to specialized renderers. Iterative processing (not recursive). Groups assistant messages with related diffs + tools.
 
-| Role | Component | Notes |
-|---|---|---|
-| `user` | UserInput | Editable, checkpoints badge, images, compression hint 🗜️ |
-| `assistant` | AssistantInput | ReasoningContent → Markdown → ToolsContent → DiffContent → Citations |
-| `tool` | (inline in AssistantInput) | Skipped in top-level render |
-| `diff` | DiffContent | Grouped by tool_call_id, apply/reject UI |
-| `context_file` | ContextFiles | Memory/knowledge attachments 🗃️ |
+| Role           | Component                  | Notes                                                                |
+| -------------- | -------------------------- | -------------------------------------------------------------------- |
+| `user`         | UserInput                  | Editable, checkpoints badge, images, compression hint 🗜️             |
+| `assistant`    | AssistantInput             | ReasoningContent → Markdown → ToolsContent → DiffContent → Citations |
+| `tool`         | (inline in AssistantInput) | Skipped in top-level render                                          |
+| `diff`         | DiffContent                | Grouped by tool_call_id, apply/reject UI                             |
+| `context_file` | ContextFiles               | Memory/knowledge attachments 🗃️                                      |
 
 ### ToolsContent (src/components/ChatContent/ToolsContent.tsx)
 
