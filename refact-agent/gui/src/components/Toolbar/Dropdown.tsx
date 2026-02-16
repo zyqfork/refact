@@ -4,11 +4,13 @@ import {
   selectAddressURL,
   type Config,
 } from "../../features/Config/configSlice";
+import { push } from "../../features/Pages/pagesSlice";
 import { useTourRefs } from "../../features/Tour";
 import {
   useGetUser,
   useLogout,
   useAppSelector,
+  useAppDispatch,
   useStartPollingForUser,
   useEventsBusForIDE,
 } from "../../hooks";
@@ -76,6 +78,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
   triggerClassName,
 }: DropdownProps) => {
   const refs = useTourRefs();
+  const dispatch = useAppDispatch();
   const user = useGetUser();
   const host = useAppSelector(selectHost);
   // TODO: check how much of this is still used.
@@ -314,7 +317,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
           Your Stats
         </DropdownMenu.Item>
 
-        {addressURL?.trim().toLowerCase() === "refact" && (
+        {addressURL?.trim().toLowerCase() === "refact" && user.data ? (
           <DropdownMenu.Item
             onSelect={(event) => {
               event.preventDefault();
@@ -324,7 +327,13 @@ export const Dropdown: React.FC<DropdownProps> = ({
           >
             Logout
           </DropdownMenu.Item>
-        )}
+        ) : !user.data ? (
+          <DropdownMenu.Item
+            onSelect={() => dispatch(push({ name: "login page" }))}
+          >
+            Login to Refact Cloud
+          </DropdownMenu.Item>
+        ) : null}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   );

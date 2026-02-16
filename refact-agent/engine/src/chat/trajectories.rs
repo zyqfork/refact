@@ -355,9 +355,31 @@ pub async fn load_trajectory_for_chat(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
     fix_tool_call_indexes(&mut messages);
+    
     for msg in &mut messages {
         if msg.message_id.is_empty() {
             msg.message_id = Uuid::new_v4().to_string();
+        }
+        
+        if let Some(tool_calls) = &msg.tool_calls {
+            let filtered: Vec<_> = tool_calls.iter()
+                .filter(|tc| !tc.function.name.is_empty())
+                .cloned()
+                .collect();
+            
+            if filtered.len() != tool_calls.len() {
+                tracing::warn!(
+                    "Filtered out {} tool call(s) with empty names from message {}",
+                    tool_calls.len() - filtered.len(),
+                    msg.message_id
+                );
+            }
+            
+            msg.tool_calls = if filtered.is_empty() {
+                None
+            } else {
+                Some(filtered)
+            };
         }
     }
 

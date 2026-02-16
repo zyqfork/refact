@@ -179,7 +179,7 @@ impl ToolCallAccumulator {
     pub fn finalize(&self) -> Vec<serde_json::Value> {
         self.entries
             .iter()
-            .filter(|entry| entry.initialized)  // Filter out phantom entries
+            .filter(|entry| entry.initialized && !entry.name.is_empty())
             .map(|entry| {
                 // Use stable synthetic ID based on index, not random UUID
                 let id = entry.id.clone().unwrap_or_else(|| {
@@ -363,6 +363,15 @@ mod tests {
         assert_eq!(result[0]["id"], "call_456");
         assert_eq!(result[0]["function"]["name"], "search");
         assert_eq!(result[0]["function"]["arguments"], "{\"q\":\"test\"}");
+    }
+
+    #[test]
+    fn test_accumulator_filters_empty_name_with_arguments() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.merge(&json!({"index": 0, "id": "call_123", "function": {"arguments": "{\"q\":\"test\"}"}}));
+        
+        let result = acc.finalize();
+        assert!(result.is_empty(), "Tool call with empty name should be filtered out");
     }
 
     #[test]

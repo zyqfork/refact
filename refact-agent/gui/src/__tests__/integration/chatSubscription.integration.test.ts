@@ -41,63 +41,125 @@ function generateChatId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  retries = 3,
+  delayMs = 250,
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      const isConnectionIssue = /ECONNREFUSED|fetch failed|NetworkError/i.test(
+        message,
+      );
+      if (!isConnectionIssue || attempt === retries - 1) {
+        throw error;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, delayMs * (attempt + 1)),
+      );
+    }
+  }
+
+  throw lastError;
+}
+
 // Collect events from SSE stream
 async function collectEvents(
   chatId: string,
-  maxEvents: number,
-  timeoutMs: number,
+  {
+    maxEvents,
+    timeoutMs,
+    stopWhen,
+  }: {
+    maxEvents: number;
+    timeoutMs: number;
+    stopWhen?: (event: unknown, events: unknown[]) => boolean;
+  },
 ): Promise<unknown[]> {
   const events: unknown[] = [];
 
   return new Promise((resolve) => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       controller.abort();
       resolve(events);
+    };
+    const timeout = setTimeout(() => {
+      finish();
     }, timeoutMs);
 
     fetch(`${LSP_URL}/v1/chats/subscribe?chat_id=${chatId}`, {
       signal: controller.signal,
     })
       .then(async (response) => {
+        if (!response.ok) {
+          finish();
+          return;
+        }
+
         const reader = response.body?.getReader();
         if (!reader) {
-          clearTimeout(timeout);
-          resolve(events);
+          finish();
           return;
         }
 
         const decoder = new TextDecoder();
         let buffer = "";
 
-        while (events.length < maxEvents) {
+        while (!settled && events.length < maxEvents) {
           const { done, value } = await reader.read();
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+          const blocks = buffer.split("\n\n");
+          buffer = blocks.pop() ?? "";
 
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const event = JSON.parse(line.slice(6));
-                events.push(event);
-                if (events.length >= maxEvents) break;
-              } catch {
-                // Ignore parse errors
+          for (const block of blocks) {
+            const dataLines = block
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trimStart());
+
+            if (dataLines.length === 0) {
+              continue;
+            }
+
+            const payload = dataLines.join("\n");
+            if (payload === "[DONE]") {
+              continue;
+            }
+
+            try {
+              const event = JSON.parse(payload);
+              events.push(event);
+
+              if ((stopWhen?.(event, events) ?? false) || events.length >= maxEvents) {
+                finish();
+                return;
               }
+            } catch {
+              // Ignore parse errors
             }
           }
         }
 
-        clearTimeout(timeout);
-        controller.abort();
-        resolve(events);
+        finish();
       })
       .catch(() => {
-        clearTimeout(timeout);
-        resolve(events);
+        finish();
       });
   });
 }
@@ -189,7 +251,10 @@ describe.skipIf(!(await isServerAvailable()))(
       it("should receive snapshot on connect", async () => {
         const chatId = generateChatId("test-snapshot");
 
-        const events = await collectEvents(chatId, 1, 5000);
+        const events = await collectEvents(chatId, {
+          maxEvents: 1,
+          timeoutMs: 5000,
+        });
 
         expect(events.length).toBeGreaterThanOrEqual(1);
         expect(events[0]).toHaveProperty("type", "snapshot");
@@ -203,19 +268,24 @@ describe.skipIf(!(await isServerAvailable()))(
         const chatId = generateChatId("test-events");
 
         // Start collecting events
-        const eventsPromise = collectEvents(chatId, 10, 10000);
+        const eventsPromise = collectEvents(chatId, {
+          maxEvents: 10,
+          timeoutMs: 10000,
+        });
 
         // Wait a bit for subscription to establish
         await new Promise((r) => setTimeout(r, 300));
 
         // Send commands
-        await updateChatParams(
-          chatId,
-          { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
-          LSP_PORT,
+        await withRetry(() =>
+          updateChatParams(
+            chatId,
+            { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
+            LSP_PORT,
+          ),
         );
 
-        await sendUserMessage(chatId, "Say hi", LSP_PORT);
+        await withRetry(() => sendUserMessage(chatId, "Say hi", LSP_PORT));
 
         const events = await eventsPromise;
 
@@ -232,18 +302,23 @@ describe.skipIf(!(await isServerAvailable()))(
         const chatId = generateChatId("test-stream");
 
         // Start collecting events
-        const eventsPromise = collectEvents(chatId, 20, 15000);
+        const eventsPromise = collectEvents(chatId, {
+          maxEvents: 20,
+          timeoutMs: 15000,
+        });
 
         await new Promise((r) => setTimeout(r, 300));
 
         // Set up chat and send message
-        await updateChatParams(
-          chatId,
-          { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
-          LSP_PORT,
+        await withRetry(() =>
+          updateChatParams(
+            chatId,
+            { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
+            LSP_PORT,
+          ),
         );
 
-        await sendUserMessage(chatId, "Say hello", LSP_PORT);
+        await withRetry(() => sendUserMessage(chatId, "Say hello", LSP_PORT));
 
         const events = await eventsPromise;
         const eventTypes = events.map(
@@ -265,29 +340,39 @@ describe.skipIf(!(await isServerAvailable()))(
         const chatId = generateChatId("test-abort-stream");
 
         // Start collecting events
-        // Use a higher cap here: streaming can emit many deltas before abort lands.
-        const eventsPromise = collectEvents(chatId, 200, 15000);
+        const eventsPromise = collectEvents(chatId, {
+          maxEvents: 1000,
+          timeoutMs: 15000,
+          stopWhen: (event: unknown) => {
+            const type = (event as { type?: string }).type;
+            return type === "message_removed" || type === "stream_finished";
+          },
+        });
 
         await new Promise((r) => setTimeout(r, 300));
 
         // Set up chat with a long prompt
-        await updateChatParams(
-          chatId,
-          { model: "refact/claude-haiku-4-5", mode: "NO_TOOLS" },
-          LSP_PORT,
+        await withRetry(() =>
+          updateChatParams(
+            chatId,
+            { model: "refact/claude-haiku-4-5", mode: "NO_TOOLS" },
+            LSP_PORT,
+          ),
         );
 
-        await sendUserMessage(
-          chatId,
-          "Write a long essay about programming",
-          LSP_PORT,
+        await withRetry(() =>
+          sendUserMessage(
+            chatId,
+            "Write a long essay about programming",
+            LSP_PORT,
+          ),
         );
 
         // Wait briefly for generation to start, then abort.
         await new Promise((r) => setTimeout(r, 200));
 
         // Send abort
-        await abortGeneration(chatId, LSP_PORT);
+        await withRetry(() => abortGeneration(chatId, LSP_PORT));
 
         const events = await eventsPromise;
         const eventTypes = events.map(
@@ -311,25 +396,39 @@ describe.skipIf(!(await isServerAvailable()))(
         const chatId2 = generateChatId("test-multi-2");
 
         // Connect to both chats
-        const events1Promise = collectEvents(chatId1, 5, 8000);
-        const events2Promise = collectEvents(chatId2, 5, 8000);
+        const events1Promise = collectEvents(chatId1, {
+          maxEvents: 5,
+          timeoutMs: 8000,
+        });
+        const events2Promise = collectEvents(chatId2, {
+          maxEvents: 5,
+          timeoutMs: 8000,
+        });
 
         await new Promise((r) => setTimeout(r, 300));
 
         // Send different messages to each
-        await updateChatParams(
-          chatId1,
-          { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
-          LSP_PORT,
+        await withRetry(() =>
+          updateChatParams(
+            chatId1,
+            { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
+            LSP_PORT,
+          ),
         );
-        await updateChatParams(
-          chatId2,
-          { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
-          LSP_PORT,
+        await withRetry(() =>
+          updateChatParams(
+            chatId2,
+            { model: "refact/gpt-4.1-nano", mode: "NO_TOOLS" },
+            LSP_PORT,
+          ),
         );
 
-        await sendUserMessage(chatId1, "Chat 1 message", LSP_PORT);
-        await sendUserMessage(chatId2, "Chat 2 message", LSP_PORT);
+        await withRetry(() =>
+          sendUserMessage(chatId1, "Chat 1 message", LSP_PORT),
+        );
+        await withRetry(() =>
+          sendUserMessage(chatId2, "Chat 2 message", LSP_PORT),
+        );
 
         const [events1, events2] = await Promise.all([
           events1Promise,
