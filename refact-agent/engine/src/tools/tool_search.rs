@@ -18,6 +18,28 @@ pub struct ToolSearch {
     pub config_path: String,
 }
 
+const DEFAULT_CONTEXT_LINES: usize = 0;
+const DEFAULT_MAX_FILES: usize = 50;
+const DEFAULT_MAX_RECS_PER_FILE: usize = 10;
+const DEFAULT_MAX_TOTAL_RECS: usize = 200;
+
+fn parse_usize_arg(args: &HashMap<String, Value>, key: &str) -> Result<Option<usize>, String> {
+    match args.get(key) {
+        Some(Value::Number(n)) => Ok(Some(n.as_u64().unwrap_or(0) as usize)),
+        Some(Value::String(s)) => Ok(Some(s.parse::<usize>().unwrap_or(0))),
+        Some(v) => Err(format!("argument `{}` is not an integer: {:?}", key, v)),
+        None => Ok(None),
+    }
+}
+
+fn format_preview(lines: &[&str], start_idx: usize, end_idx_exclusive: usize) -> String {
+    lines[start_idx..end_idx_exclusive]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:>6} | {}", start_idx + i + 1, line))
+        .join("\n")
+}
+
 async fn execute_att_search(
     ccx: Arc<AMutex<AtCommandsContext>>,
     query: &String,
@@ -58,6 +80,26 @@ impl Tool for ToolSearch {
                     name: "scope".to_string(),
                     param_type: "string".to_string(),
                     description: "'workspace' to search all files in workspace, 'dir/subdir/' to search in files within a directory, 'dir/file.ext' to search in a single file.".to_string(),
+                },
+                ToolParam {
+                    name: "context_lines".to_string(),
+                    param_type: "integer".to_string(),
+                    description: "If >0, include a small line-numbered preview around each hit in the tool text output (default: 0).".to_string(),
+                },
+                ToolParam {
+                    name: "max_files".to_string(),
+                    param_type: "integer".to_string(),
+                    description: "Max distinct files to attach as context (default: 50).".to_string(),
+                },
+                ToolParam {
+                    name: "max_recs_per_file".to_string(),
+                    param_type: "integer".to_string(),
+                    description: "Max vecdb records per file to attach as context (default: 10).".to_string(),
+                },
+                ToolParam {
+                    name: "max_total_recs".to_string(),
+                    param_type: "integer".to_string(),
+                    description: "Max total vecdb records to attach as context (default: 200).".to_string(),
                 }
             ],
             parameters_required: vec!["queries".to_string(), "scope".to_string()],
@@ -84,6 +126,13 @@ impl Tool for ToolSearch {
                 return Err("Missing argument `scope` in the search_semantic() call.".to_string())
             }
         };
+
+        let context_lines = parse_usize_arg(args, "context_lines")?.unwrap_or(DEFAULT_CONTEXT_LINES);
+        let max_files = parse_usize_arg(args, "max_files")?.unwrap_or(DEFAULT_MAX_FILES);
+        let max_recs_per_file =
+            parse_usize_arg(args, "max_recs_per_file")?.unwrap_or(DEFAULT_MAX_RECS_PER_FILE);
+        let max_total_recs =
+            parse_usize_arg(args, "max_total_recs")?.unwrap_or(DEFAULT_MAX_TOTAL_RECS);
 
         let queries: Vec<String> = query_str
             .split(',')
@@ -125,28 +174,91 @@ impl Tool for ToolSearch {
                     .push(rec)
             });
 
+            // Optional: include small previews in the tool text output.
+            // This is intentionally best-effort and bounded.
+            if context_lines > 0 {
+                let gcx = ccx.lock().await.global_context.clone();
+                let mut files_sorted: Vec<String> = file_results_to_reqs.keys().cloned().collect();
+                files_sorted.sort();
+                for file in files_sorted.iter().take(max_files) {
+                    if let Some(recs) = file_results_to_reqs.get(file) {
+                        let mut recs_sorted = recs.clone();
+                        recs_sorted.sort_by(|a, b| a.line1.cmp(&b.line1));
+                        let text = match crate::files_in_workspace::get_file_text_from_memory_or_disk(
+                            gcx.clone(),
+                            &std::path::PathBuf::from(file),
+                        )
+                        .await
+                        {
+                            Ok(t) => t,
+                            Err(_) => continue,
+                        };
+                        let lines: Vec<&str> = text.lines().collect();
+                        if lines.is_empty() {
+                            continue;
+                        }
+                        all_content.push_str(&format!("\n{}:\n", file));
+                        for rec in recs_sorted.into_iter().take(max_recs_per_file) {
+                            let start_line = rec.line1.max(1);
+                            let end_line = rec.line2.max(start_line);
+                            let center = ((start_line + end_line) / 2).max(1);
+                            let start_idx = center.saturating_sub(1 + context_lines);
+                            let end_idx_excl = (center + context_lines).min(lines.len());
+                            let preview = format_preview(&lines, start_idx, end_idx_excl);
+                            all_content.push_str(&format!(
+                                "  lines {}-{} score {:.1}%\n{}\n\n",
+                                rec.line1,
+                                rec.line2,
+                                rec.usefulness,
+                                preview
+                                    .lines()
+                                    .map(|l| format!("    {}", l))
+                                    .join("\n")
+                            ));
+                        }
+                    }
+                }
+            }
+
             let mut used_files: HashSet<String> = HashSet::new();
+            let mut total_emitted: usize = 0;
             for rec in vector_of_context_file
                 .iter()
                 .sorted_by(|rec1, rec2| rec2.usefulness.total_cmp(&rec1.usefulness))
             {
+                if used_files.len() >= max_files || total_emitted >= max_total_recs {
+                    break;
+                }
                 if !used_files.contains(&rec.file_name) {
                     all_content.push_str(&format!("{}:\n", rec.file_name.clone()));
                     let file_recs = file_results_to_reqs.get(&rec.file_name).unwrap();
+                    let mut per_file_emitted: usize = 0;
                     for file_req in file_recs
                         .iter()
                         .sorted_by(|rec1, rec2| rec2.usefulness.total_cmp(&rec1.usefulness))
                     {
+                        if total_emitted >= max_total_recs || per_file_emitted >= max_recs_per_file {
+                            break;
+                        }
                         all_content.push_str(&format!(
                             "    lines {}-{} score {:.1}%\n",
                             file_req.line1, file_req.line2, file_req.usefulness
                         ));
+                        all_context_files.push((*file_req).clone());
+                        total_emitted += 1;
+                        per_file_emitted += 1;
                     }
                     used_files.insert(rec.file_name.clone());
                 }
             }
 
-            all_context_files.extend(vector_of_context_file);
+            if vector_of_context_file.len() > total_emitted {
+                all_content.push_str(&format!(
+                    "⚠️ Attached {} records (of {}). Narrow scope/query or raise max_total_recs/max_files if needed.\n",
+                    total_emitted,
+                    vector_of_context_file.len()
+                ));
+            }
         }
 
         if all_context_files.is_empty() {
