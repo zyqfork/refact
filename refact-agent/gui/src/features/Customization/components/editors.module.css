@@ -26,6 +26,7 @@
 }
 
 .suggestions {
+  composes: scrollbarThin from "../../../components/shared/scrollbar.module.css";
   position: absolute;
   top: 100%;
   left: 0;
@@ -69,6 +70,7 @@
 }
 
 .promptTextareaExpand {
+  composes: scrollbarThin from "../../../components/shared/scrollbar.module.css";
   flex: 1;
   min-height: 100px;
   font-family: var(--code-font-family);
@@ -78,6 +80,7 @@
 }
 
 .formTabContent {
+  composes: scrollbarThin from "../../../components/shared/scrollbar.module.css";
   display: flex;
   flex-direction: column;
   flex: 1;

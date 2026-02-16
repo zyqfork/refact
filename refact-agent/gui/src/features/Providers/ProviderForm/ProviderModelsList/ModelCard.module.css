@@ -22,6 +22,7 @@
 }
 
 .providerTableWrap {
+  composes: scrollbarThin from "../../../../components/shared/scrollbar.module.css";
   border: 1px solid var(--gray-a4);
   border-radius: var(--radius-3);
   padding: var(--space-2);

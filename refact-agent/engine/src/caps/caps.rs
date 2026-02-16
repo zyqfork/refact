@@ -381,7 +381,7 @@ pub async fn load_caps_value_from_url(
     gcx: Arc<ARwLock<GlobalContext>>,
 ) -> Result<(serde_json::Value, String), String> {
     let caps_urls = if cmdline.address_url.to_lowercase() == "refact" {
-        vec!["https://app.refact.ai/coding_assistant_caps.json".to_string()]
+        vec!["https://inference.smallcloud.ai/coding_assistant_caps.json".to_string()]
     } else {
         let base_url = Url::parse(&cmdline.address_url)
             .map_err(|_| "failed to parse address url".to_string())?;
@@ -544,7 +544,7 @@ fn build_chat_model_record(
             model.reasoning_effort_options.clone(),
             model.supports_thinking_budget,
             model.supports_adaptive_thinking_budget,
-            model.tokenizer.clone().unwrap_or_default(),
+            model.tokenizer.clone().unwrap_or_else(|| "fake".to_string()),
             false,
             model.max_output_tokens,
         )
@@ -876,31 +876,48 @@ pub async fn load_caps(
         )
     };
 
-    let (caps_value, caps_url) = load_caps_value_from_url(cmdline, gcx.clone()).await?;
+    let addr = cmdline.address_url.trim().to_string();
+    let is_refact = addr.eq_ignore_ascii_case("refact");
+    let has_cloud_key = !cmdline_api_key.trim().is_empty();
+    let skip_cloud = addr.is_empty() || (is_refact && !has_cloud_key);
 
-    let caps_value = convert_self_hosted_caps_if_needed(caps_value, &caps_url, &cmdline_api_key)?;
+    let (mut caps, server_providers) = if skip_cloud {
+        info!("Running in BYOK mode (local providers only), address_url={:?} has_key={}", addr, has_cloud_key);
+        (CodeAssistantCaps::default(), vec![])
+    } else {
+        match load_caps_value_from_url(cmdline, gcx.clone()).await {
+            Ok((caps_value, caps_url)) => {
+                let caps_value = convert_self_hosted_caps_if_needed(caps_value, &caps_url, &cmdline_api_key)?;
 
-    let mut caps = serde_json::from_value::<CodeAssistantCaps>(caps_value.clone())
-        .map_err_with_prefix("Failed to parse caps:")?;
-    let mut server_provider = serde_json::from_value::<CapsProvider>(caps_value)
-        .map_err_with_prefix("Failed to parse caps provider:")?;
-    resolve_relative_urls(&mut server_provider, &caps_url)?;
-    if caps.cloud_name == "refact" {
-        server_provider.wire_format = WireFormat::Refact;
-        server_provider.support_metadata = true;
-        if let Some(pricing_obj) = caps.metadata.pricing.as_object() {
-            for model_name in pricing_obj.keys() {
-                if !server_provider.running_models.contains(model_name) {
-                    server_provider.running_models.push(model_name.clone());
+                let mut caps = serde_json::from_value::<CodeAssistantCaps>(caps_value.clone())
+                    .map_err_with_prefix("Failed to parse caps:")?;
+                let mut server_provider = serde_json::from_value::<CapsProvider>(caps_value)
+                    .map_err_with_prefix("Failed to parse caps provider:")?;
+                resolve_relative_urls(&mut server_provider, &caps_url)?;
+                if caps.cloud_name == "refact" {
+                    server_provider.wire_format = WireFormat::Refact;
+                    server_provider.support_metadata = true;
+                    if let Some(pricing_obj) = caps.metadata.pricing.as_object() {
+                        for model_name in pricing_obj.keys() {
+                            if !server_provider.running_models.contains(model_name) {
+                                server_provider.running_models.push(model_name.clone());
+                            }
+                        }
+                    }
                 }
+
+                caps.telemetry_basic_dest = relative_to_full_url(&caps_url, &caps.telemetry_basic_dest)?;
+                caps.telemetry_basic_retrieve_my_own =
+                    relative_to_full_url(&caps_url, &caps.telemetry_basic_retrieve_my_own)?;
+
+                (caps, vec![server_provider])
+            }
+            Err(e) => {
+                warn!("Cloud caps fetch failed ({}), falling back to local providers only", e);
+                (CodeAssistantCaps::default(), vec![])
             }
         }
-    }
-    let server_providers = vec![server_provider];
-
-    caps.telemetry_basic_dest = relative_to_full_url(&caps_url, &caps.telemetry_basic_dest)?;
-    caps.telemetry_basic_retrieve_my_own =
-        relative_to_full_url(&caps_url, &caps.telemetry_basic_retrieve_my_own)?;
+    };
 
     let (mut providers, error_log) =
         read_providers_d(server_providers, &config_dir, experimental).await;
@@ -914,7 +931,13 @@ pub async fn load_caps(
     }
 
     let address_url = gcx.read().await.cmdline.address_url.clone();
-    let model_caps_map = get_model_caps(gcx.clone(), &address_url, false).await?;
+    let model_caps_map = match get_model_caps(gcx.clone(), &address_url, false).await {
+        Ok(map) => map,
+        Err(e) => {
+            warn!("Failed to fetch model capabilities: {}, using empty map", e);
+            HashMap::new()
+        }
+    };
     caps.model_caps = Arc::new(model_caps_map);
     if caps.cloud_name == "refact" {
         let running_models: Vec<String> = if let Some(pricing_obj) = caps.metadata.pricing.as_object() {

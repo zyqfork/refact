@@ -213,7 +213,8 @@ pub async fn save_cached_model_caps(caps: &CachedModelCaps) -> Result<(), String
 }
 
 fn build_model_caps_url(address_url: &str) -> Result<String, String> {
-    if address_url.to_lowercase() == "refact" {
+    let address_url = address_url.trim();
+    if address_url.is_empty() || address_url.eq_ignore_ascii_case("refact") {
         return Ok(SMALLCLOUD_MODEL_CAPS_URL.to_string());
     }
 

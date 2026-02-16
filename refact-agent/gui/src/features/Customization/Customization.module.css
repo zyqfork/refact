@@ -70,6 +70,7 @@
 }
 
 .listPanel {
+  composes: scrollbarThin from "../../components/shared/scrollbar.module.css";
   flex: 1;
   overflow-y: auto;
   min-height: 0;

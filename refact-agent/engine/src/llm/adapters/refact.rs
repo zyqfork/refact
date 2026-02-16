@@ -545,20 +545,22 @@ fn tool_choice_to_refact(choice: &CanonicalToolChoice) -> Value {
 fn parse_refact_usage(usage: &Value) -> Option<ChatUsage> {
     // Refact cloud uses LiteLLM to proxy various providers.
     //
-    // OUTPUT CONTRACT (what UI expects):
-    //   prompt_tokens = NON-cached input tokens only
-    //   cache_creation_tokens = newly cached tokens
-    //   cache_read_tokens = tokens read from cache
-    //   total_tokens = prompt + completion + cache_creation + cache_read
+    // OUTPUT CONTRACT (what all adapters must produce):
+    //   prompt_tokens      = non-cached, non-cache-creation input tokens
+    //                        (Anthropic's raw input_tokens)
+    //   cache_creation     = tokens being newly written to cache
+    //   cache_read         = tokens read from existing cache
+    //   total_tokens       = prompt + completion + cache_creation + cache_read
     //
-    // LiteLLM includes cached tokens in prompt_tokens for ALL providers
-    // (both Anthropic and OpenAI). We always subtract cache_read from
-    // prompt_tokens to get the non-cached portion. This matches the server's
-    // parse_usage() which does: prompt_tokens -= cache_read_input_tokens
+    // Context window used = prompt_tokens + cache_creation + cache_read
+    //
+    // LiteLLM bundles ALL input into prompt_tokens:
+    //   prompt_tokens(LiteLLM) = input + cache_creation + cache_read
+    // We subtract both cache_read AND cache_creation to isolate non-cached input.
     //
     // Cache fields location varies by provider:
     //   Anthropic: top-level cache_read_input_tokens, cache_creation_input_tokens
-    //   OpenAI: prompt_tokens_details.cached_tokens
+    //   OpenAI: prompt_tokens_details.cached_tokens (subset of prompt_tokens)
     //   LiteLLM may also nest Anthropic fields inside prompt_tokens_details
 
     let completion_tokens = parse_token_value(usage.get("completion_tokens"))
@@ -583,21 +585,15 @@ fn parse_refact_usage(usage: &Value) -> Option<ChatUsage> {
 
     let raw_prompt = parse_token_value(usage.get("prompt_tokens")).unwrap_or(0);
 
-    // Subtract cache_read from prompt_tokens (LiteLLM includes cached tokens
-    // in prompt_tokens for all providers). Guard: only subtract when
-    // raw_prompt >= cache_read to avoid clamping partial/delta chunks to 0.
+    // Subtract both cache_read and cache_creation from prompt_tokens.
+    // LiteLLM's prompt_tokens = input + cache_creation + cache_read (all input).
+    // We need: prompt_tokens = input only (non-cached, non-creation).
+    // Guard with saturating_sub for partial/delta chunks.
     let cache_read = effective_cache_read.unwrap_or(0);
-    let prompt_tokens = if raw_prompt >= cache_read {
-        raw_prompt - cache_read
-    } else {
-        raw_prompt
-    };
+    let cache_creation = effective_cache_creation.unwrap_or(0);
+    let prompt_tokens = raw_prompt.saturating_sub(cache_read).saturating_sub(cache_creation);
 
-    // Recompute total to include cache tokens (provider's total may exclude them)
-    let total_tokens = prompt_tokens
-        + completion_tokens
-        + effective_cache_creation.unwrap_or(0)
-        + cache_read;
+    let total_tokens = prompt_tokens + completion_tokens + cache_creation + cache_read;
 
     let cache_creation_out = effective_cache_creation.filter(|&v| v > 0);
     let cache_read_out = effective_cache_read.filter(|&v| v > 0);
@@ -630,7 +626,7 @@ mod tests {
         AdapterSettings {
             api_key: "test-key".to_string(),
             auth_token: String::new(),
-            endpoint: "https://app.refact.ai/v1/chat/completions".to_string(),
+            endpoint: "https://inference.smallcloud.ai/v1/chat/completions".to_string(),
             extra_headers: Default::default(),
             model_name: "gpt-4".to_string(),
             supports_tools: true,
@@ -957,8 +953,8 @@ mod tests {
 
     #[test]
     fn test_parse_usage_litellm_anthropic_style() {
-        // LiteLLM includes cached tokens in prompt_tokens for all providers.
-        // prompt_tokens = 1500 (includes 1000 cache_read), non-cached = 500
+        // LiteLLM includes ALL input in prompt_tokens:
+        //   prompt_tokens = 1500 = 200(non-cached) + 300(creation) + 1000(read)
         let usage = serde_json::json!({
             "prompt_tokens": 1500,
             "completion_tokens": 200,
@@ -969,13 +965,13 @@ mod tests {
 
         let parsed = parse_refact_usage(&usage).unwrap();
 
-        // prompt_tokens normalized: 1500 - 1000 = 500
-        assert_eq!(parsed.prompt_tokens, 500);
+        // prompt_tokens = 1500 - 1000(read) - 300(creation) = 200 (non-cached only)
+        assert_eq!(parsed.prompt_tokens, 200);
         assert_eq!(parsed.completion_tokens, 200);
         assert_eq!(parsed.cache_creation_tokens, Some(300));
         assert_eq!(parsed.cache_read_tokens, Some(1000));
-        // total recomputed: 500 + 200 + 300 + 1000 = 2000
-        assert_eq!(parsed.total_tokens, 2000);
+        // total = 200 + 200 + 300 + 1000 = 1700
+        assert_eq!(parsed.total_tokens, 1700);
     }
 
     #[test]
@@ -1040,9 +1036,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_usage_cache_read_exceeds_prompt_no_clamp() {
+    fn test_parse_usage_cache_read_exceeds_prompt_saturates() {
         // Partial/delta chunk where cache_read > prompt_tokens (e.g., streaming)
-        // Should not subtract to avoid clamping to 0
+        // saturating_sub clamps to 0
         let usage = serde_json::json!({
             "prompt_tokens": 100,
             "completion_tokens": 200,
@@ -1051,15 +1047,17 @@ mod tests {
 
         let parsed = parse_refact_usage(&usage).unwrap();
 
-        // raw_prompt < cache_read → keep raw_prompt as-is
-        assert_eq!(parsed.prompt_tokens, 100);
+        // saturating_sub: 100 - 5000 = 0
+        assert_eq!(parsed.prompt_tokens, 0);
         assert_eq!(parsed.cache_read_tokens, Some(5000));
-        assert_eq!(parsed.total_tokens, 5300);
+        // total = 0 + 200 + 5000 = 5200
+        assert_eq!(parsed.total_tokens, 5200);
     }
 
     #[test]
     fn test_parse_usage_cache_creation_in_details_only() {
         // Cache creation nested in prompt_tokens_details (LiteLLM oddity)
+        // prompt_tokens = 1000 = 200(non-cached) + 300(creation) + 500(read)
         let usage = serde_json::json!({
             "prompt_tokens": 1000,
             "completion_tokens": 200,
@@ -1071,10 +1069,12 @@ mod tests {
 
         let parsed = parse_refact_usage(&usage).unwrap();
 
-        assert_eq!(parsed.prompt_tokens, 500);
+        // 1000 - 500(read) - 300(creation) = 200
+        assert_eq!(parsed.prompt_tokens, 200);
         assert_eq!(parsed.cache_creation_tokens, Some(300));
         assert_eq!(parsed.cache_read_tokens, Some(500));
-        assert_eq!(parsed.total_tokens, 1500);
+        // total = 200 + 200 + 300 + 500 = 1200
+        assert_eq!(parsed.total_tokens, 1200);
     }
 
     #[test]

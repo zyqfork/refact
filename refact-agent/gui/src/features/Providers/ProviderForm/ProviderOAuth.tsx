@@ -7,6 +7,7 @@ import {
   providersApi,
 } from "../../../services/refact";
 import { useAppDispatch } from "../../../hooks";
+import { useOpenUrl } from "../../../hooks/useOpenUrl";
 
 const PROVIDERS_WITH_AUTO_CALLBACK = ["openai_codex"];
 
@@ -27,6 +28,7 @@ export const ProviderOAuth: React.FC<ProviderOAuthProps> = ({
   authStatus,
 }) => {
   const dispatch = useAppDispatch();
+  const openUrl = useOpenUrl();
   const [oauthStart] = useOauthStartMutation();
   const [oauthExchange] = useOauthExchangeMutation();
   const [oauthLogout] = useOauthLogoutMutation();
@@ -67,7 +69,7 @@ export const ProviderOAuth: React.FC<ProviderOAuthProps> = ({
       const result = await oauthStart({ providerName, mode: "max" }).unwrap();
       setSessionId(result.session_id);
       setAuthorizeUrl(result.authorize_url);
-      window.open(result.authorize_url, "_blank");
+      openUrl(result.authorize_url);
 
       if (isAutoCallback) {
         setWaitingForCallback(true);
@@ -212,9 +214,11 @@ export const ProviderOAuth: React.FC<ProviderOAuthProps> = ({
             <Text size="1" color="gray">
               Browser didn&apos;t open?{" "}
               <a
-                href={authorizeUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (authorizeUrl) openUrl(authorizeUrl);
+                }}
                 style={{ color: "var(--accent-9)" }}
               >
                 Click here
@@ -277,9 +281,11 @@ export const ProviderOAuth: React.FC<ProviderOAuthProps> = ({
           <Text size="1" color="gray">
             Browser didn&apos;t open?{" "}
             <a
-              href={authorizeUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                if (authorizeUrl) openUrl(authorizeUrl);
+              }}
               style={{ color: "var(--accent-9)" }}
             >
               Click here

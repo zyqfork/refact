@@ -8,7 +8,7 @@ use crate::subchat::run_subchat_once_with_parent;
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
 };
-use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ContextEnum};
+use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::global_context::GlobalContext;
 use crate::yaml_configs::customization_registry::get_subagent_config;
@@ -34,7 +34,6 @@ async fn execute_deep_research(
 ) -> Result<
     (
         ChatMessage,
-        ChatUsage,
         serde_json::Map<String, serde_json::Value>,
     ),
     String,
@@ -68,7 +67,7 @@ async fn execute_deep_research(
         .cloned()
         .ok_or("No response from deep research")?;
 
-    Ok((reply, subchat_result.usage, subchat_result.metering))
+    Ok((reply, subchat_result.metering))
 }
 
 #[async_trait]
@@ -128,7 +127,7 @@ impl Tool for ToolDeepResearch {
 
         tracing::info!("Starting deep research for query: {}", research_query);
 
-        let (research_result, usage_collector, metering) = execute_deep_research(
+        let (research_result, metering) = execute_deep_research(
             gcx,
             subchat_tx,
             research_query.clone(),
@@ -191,7 +190,7 @@ impl Tool for ToolDeepResearch {
                 content: ChatContent::SimpleText(final_message),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
-                usage: Some(usage_collector),
+                usage: None,
                 extra: metering,
                 output_filter: Some(OutputFilter::no_limits()),
                 ..Default::default()

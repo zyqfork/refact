@@ -7,7 +7,7 @@ use tokio::sync::Mutex as AMutex;
 use tokio::sync::RwLock as ARwLock;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ChatMessage, ChatContent, ChatUsage};
+use crate::call_validation::{ChatMessage, ChatContent};
 use crate::files_correction::correct_to_nearest_filename;
 use crate::global_context::GlobalContext;
 use crate::subchat::{run_subchat, run_subchat_once_with_parent, resolve_subchat_config_with_parent};
@@ -102,7 +102,7 @@ pub async fn gather_files_phase(
     tool_call_id: String,
     main_config: &CodeSubagentConfig,
     params: &GatherFilesParams<'_>,
-) -> Result<(Vec<PathBuf>, ChatUsage), String> {
+) -> Result<Vec<PathBuf>, String> {
     let (parent_chat_id, parent_root_chat_id, parent_subchat_tx, parent_abort_flag, current_depth) = {
         let ccx_lock = ccx.lock().await;
         (
@@ -235,5 +235,5 @@ pub async fn gather_files_phase(
 
     send_files_gathered_message(&parent_subchat_tx, &tool_call_id, &valid_paths).await;
 
-    Ok((valid_paths, result.usage))
+    Ok(valid_paths)
 }

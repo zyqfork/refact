@@ -1,15 +1,10 @@
 .container {
+  composes: scrollbarThin from "../../components/shared/scrollbar.module.css";
   padding: var(--space-3);
   padding-right: var(--space-4);
   background-color: var(--color-surface);
   overflow-y: auto;
   height: 100%;
-  scrollbar-width: auto;
-  scrollbar-color: var(--gray-a4) transparent;
-}
-
-.container:hover {
-  scrollbar-color: var(--gray-a6) transparent;
 }
 
 .grid {

@@ -461,25 +461,19 @@ fn parse_openai_usage(usage: &Value) -> Option<ChatUsage> {
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as usize;
 
-    // For Anthropic models (via OpenRouter), prompt_tokens includes cached tokens.
-    // Subtract cache_read to get non-cached portion.
-    // For native OpenAI, cached_tokens is already a subset, so this is a no-op.
-    let prompt_tokens = if let Some(cached) = cache_read {
-        raw_prompt.saturating_sub(cached)
-    } else {
-        raw_prompt
-    };
+    // For Anthropic models (via OpenRouter), prompt_tokens includes all input
+    // (cache_read + cache_creation + non-cached). Subtract both to isolate
+    // non-cached input only.
+    // For native OpenAI, cached_tokens is already a subset of prompt_tokens,
+    // and there's no cache_creation, so only cache_read subtraction applies.
+    let prompt_tokens = raw_prompt
+        .saturating_sub(cache_read.unwrap_or(0))
+        .saturating_sub(cache_creation.unwrap_or(0));
 
-    let total_tokens = usage
-        .get("total_tokens")
-        .and_then(|t| t.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or_else(|| {
-            prompt_tokens 
-                + completion_tokens 
-                + cache_creation.unwrap_or(0)
-                + cache_read.unwrap_or(0)
-        });
+    let total_tokens = prompt_tokens
+        + completion_tokens
+        + cache_creation.unwrap_or(0)
+        + cache_read.unwrap_or(0);
 
     Some(ChatUsage {
         prompt_tokens,

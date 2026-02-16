@@ -824,6 +824,16 @@ async fn update_model_enabled_state(
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
 
+        // Auto-create default provider if not yet configured (e.g. first model toggle on Ollama)
+        if registry.get(provider_name).is_none() {
+            let default_provider = create_provider(provider_name)
+                .ok_or_else(|| ScratchError::new(
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown provider type '{}'", provider_name),
+                ))?;
+            registry.add(default_provider);
+        }
+
         let provider = registry.get_mut(provider_name)
             .ok_or_else(|| ScratchError::new(
                 StatusCode::NOT_FOUND,
@@ -885,6 +895,15 @@ async fn update_model_selected_provider_state(
     let (config_dir, previous_selected_provider) = {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
+
+        if registry.get(provider_name).is_none() {
+            let default_provider = create_provider(provider_name)
+                .ok_or_else(|| ScratchError::new(
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown provider type '{}'", provider_name),
+                ))?;
+            registry.add(default_provider);
+        }
 
         let provider = registry.get_mut(provider_name).ok_or_else(|| {
             ScratchError::new(
@@ -958,6 +977,15 @@ pub async fn handle_v1_provider_add_custom_model(
     let (config_dir, had_existing) = {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
+
+        if registry.get(&params.name).is_none() {
+            let default_provider = create_provider(&params.name)
+                .ok_or_else(|| ScratchError::new(
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown provider type '{}'", params.name),
+                ))?;
+            registry.add(default_provider);
+        }
 
         let provider = registry.get_mut(&params.name)
             .ok_or_else(|| ScratchError::new(

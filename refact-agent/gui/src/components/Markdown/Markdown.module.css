@@ -50,6 +50,7 @@
 }
 
 .code_block {
+  composes: scrollbarThin from "../shared/scrollbar.module.css";
   color: inherit;
   background: none;
   display: block;
@@ -74,6 +75,7 @@
 }
 
 .shiki_pre {
+  composes: scrollbarThin from "../shared/scrollbar.module.css";
   position: relative;
   margin: 0;
   padding: var(--space-3);

@@ -34,16 +34,8 @@ export function useEventBusForWeb() {
 
       if (isSetupHost(event.data)) {
         const { host } = event.data.payload;
-        if (host.type === "cloud") {
-          setAddressURL("Refact");
-          setApiKey(host.apiKey);
-        } else if (host.type === "self") {
-          setAddressURL(host.endpointAddress);
-          setApiKey("any-will-work-for-local-server");
-        } else {
-          setAddressURL(host.endpointAddress);
-          setApiKey(host.apiKey);
-        }
+        setAddressURL("Refact");
+        setApiKey(host.apiKey);
         dispatch(
           updateConfig({
             addressURL: addressURLRef.current,

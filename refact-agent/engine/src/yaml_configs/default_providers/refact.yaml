@@ -1,6 +1,6 @@
 wire_format: refact
-chat_endpoint: "https://app.refact.ai/v1/chat"
-embedding_endpoint: "https://app.refact.ai/v1/embeddings"
+chat_endpoint: "https://inference.smallcloud.ai/v1/chat"
+embedding_endpoint: "https://inference.smallcloud.ai/v1/embeddings"
 supports_completion: false
 support_metadata: true
 

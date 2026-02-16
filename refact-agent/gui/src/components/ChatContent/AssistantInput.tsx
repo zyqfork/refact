@@ -16,6 +16,7 @@ import { telemetryApi } from "../../services/refact/telemetry";
 import { ReasoningContent } from "./ReasoningContent";
 import { MessageFooter, MessageWrapper } from "./MessageFooter";
 import { ServerContentBlocks } from "./ServerContentBlocks";
+import scrollbarStyles from "../shared/scrollbar.module.css";
 
 type ChatInputProps = {
   message: string | null;
@@ -168,6 +169,7 @@ const _AssistantInput: React.FC<ChatInputProps> = ({
               <Flex
                 direction="column"
                 gap="1"
+                className={scrollbarStyles.scrollbarThin}
                 style={{ maxHeight: "150px", overflowY: "auto" }}
               >
                 <Text size="1" weight="medium" color="gray">

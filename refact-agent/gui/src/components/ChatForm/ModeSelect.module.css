@@ -31,6 +31,7 @@
 }
 
 .modeList {
+  composes: scrollbarThin from "../shared/scrollbar.module.css";
   display: flex;
   flex-direction: column;
   max-height: 320px;

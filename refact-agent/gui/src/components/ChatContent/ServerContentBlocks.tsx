@@ -3,6 +3,7 @@ import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { Box, Flex, Link, Text } from "@radix-ui/themes";
 import { ToolCard } from "./ToolCard";
 import styles from "./ToolCard/OpenAIResponsesTool.module.css";
+import scrollbarStyles from "../shared/scrollbar.module.css";
 
 type ServerToolUse = {
   type: "server_tool_use";
@@ -191,6 +192,7 @@ export const ServerContentBlocks: React.FC<ServerContentBlocksProps> = ({
               overflowX: "auto",
               maxHeight: 200,
             }}
+            className={scrollbarStyles.scrollbarThin}
           >
             {JSON.stringify(ungrouped, null, 2)}
           </pre>

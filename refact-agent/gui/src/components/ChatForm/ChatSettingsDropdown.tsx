@@ -390,13 +390,15 @@ export const ChatSettingsDropdown: React.FC = () => {
       </Popover.Trigger>
 
       <Popover.Content
-        className={styles.content}
+        className={`${styles.content} ${
+          advancedOpen ? styles.contentAdvancedOpen : ""
+        }`}
         side="top"
         align="start"
         sideOffset={8}
       >
         {/* Model Section */}
-        <div className={styles.section}>
+        <div className={`${styles.section} ${styles.modelSection}`}>
           <div className={styles.modelList} ref={modelListRef}>
             {groupedModels.map((group, groupIndex) => (
               <React.Fragment key={group.provider}>

@@ -12,7 +12,7 @@ use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType
 use crate::tools::tool_helpers::{load_code_subagent_config};
 use crate::tools::subagent_phases::{gather_files_phase, GatherFilesParams};
 use crate::call_validation::{
-    ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile,
+    ChatMessage, ChatContent, ContextEnum, SubchatParameters, ContextFile,
     PostprocessSettings,
 };
 use crate::at_commands::at_commands::AtCommandsContext;
@@ -156,7 +156,7 @@ async fn execute_strategic_planning(
     external_messages: Vec<ChatMessage>,
     tool_call_id: String,
     config: &CodeSubagentConfig,
-) -> Result<(String, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<(String, serde_json::Map<String, serde_json::Value>), String> {
     let (subchat_tx, abort_flag, parent_depth) = {
         let ccx_lock = ccx.lock().await;
         (
@@ -234,7 +234,7 @@ async fn execute_strategic_planning(
     let final_message = format!("{}{}", solution_content, memory_note);
     let metering = result.metering;
 
-    Ok((final_message, result.usage, metering))
+    Ok((final_message, metering))
 }
 
 #[async_trait]
@@ -279,7 +279,7 @@ impl Tool for ToolStrategicPlanning {
         let gather_params = get_gather_files_params(&config);
 
         tracing::info!("strategic_planning: phase 1 - gathering relevant files");
-        let (important_paths, gather_usage) = gather_files_phase(
+        let important_paths = gather_files_phase(
             gcx.clone(),
             ccx.clone(),
             external_messages.clone(),
@@ -294,7 +294,7 @@ impl Tool for ToolStrategicPlanning {
             important_paths.len()
         );
 
-        let (final_message, plan_usage, metering) = execute_strategic_planning(
+        let (final_message, metering) = execute_strategic_planning(
             gcx,
             ccx.clone(),
             important_paths,
@@ -304,13 +304,6 @@ impl Tool for ToolStrategicPlanning {
         )
         .await?;
 
-        let combined_usage = ChatUsage {
-            prompt_tokens: gather_usage.prompt_tokens + plan_usage.prompt_tokens,
-            completion_tokens: gather_usage.completion_tokens + plan_usage.completion_tokens,
-            total_tokens: gather_usage.total_tokens + plan_usage.total_tokens,
-            ..Default::default()
-        };
-
         Ok((
             false,
             vec![
@@ -319,7 +312,7 @@ impl Tool for ToolStrategicPlanning {
                     content: ChatContent::SimpleText(final_message),
                     tool_calls: None,
                     tool_call_id: tool_call_id.clone(),
-                    usage: Some(combined_usage),
+                    usage: None,
                     extra: metering,
                     output_filter: Some(OutputFilter::no_limits()),
                     ..Default::default()

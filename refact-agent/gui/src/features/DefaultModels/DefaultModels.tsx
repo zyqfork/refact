@@ -1,21 +1,15 @@
 import React, { useState, useCallback, useEffect, useMemo } from "react";
-import {
-  Flex,
-  Button,
-  Text,
-  Card,
-  Heading,
-  Callout,
-  TextField,
-  Switch,
-  Select,
-} from "@radix-ui/themes";
+import { Flex, Button, Text, Card, Heading, Callout } from "@radix-ui/themes";
 import { ArrowLeftIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
 
 import { ScrollArea } from "../../components/ScrollArea";
 import { PageWrapper } from "../../components/PageWrapper";
 import { Spinner } from "../../components/Spinner";
 import { ModelSelector } from "../../components/Chat/ModelSelector";
+import {
+  ModelSamplingParams,
+  type SamplingValues,
+} from "../../components/ModelSamplingParams";
 
 import {
   useGetDefaultsQuery,
@@ -55,8 +49,6 @@ const MODEL_TYPE_LABELS: Record<
   },
 };
 
-const REASONING_EFFORT_OPTIONS = ["low", "medium", "high"] as const;
-
 const ModelTypeSection: React.FC<{
   typeKey: ModelTypeKey;
   config: ModelTypeDefaults;
@@ -65,15 +57,21 @@ const ModelTypeSection: React.FC<{
 }> = ({ typeKey, config, capsDefault, onChange }) => {
   const { title, description } = MODEL_TYPE_LABELS[typeKey];
 
-  const handleChange = useCallback(
-    <K extends keyof ModelTypeDefaults>(
-      field: K,
-      value: ModelTypeDefaults[K],
-    ) => {
+  const handleModelChange = useCallback(
+    (model: string) => {
+      onChange(typeKey, { ...config, model });
+    },
+    [typeKey, config, onChange],
+  );
+
+  const handleSamplingChange = useCallback(
+    <K extends keyof SamplingValues>(field: K, value: SamplingValues[K]) => {
       onChange(typeKey, { ...config, [field]: value });
     },
     [typeKey, config, onChange],
   );
+
+  const effectiveModel = config.model ?? capsDefault;
 
   return (
     <Card className={styles.modelTypeCard}>
@@ -91,127 +89,19 @@ const ModelTypeSection: React.FC<{
           </Text>
           <ModelSelector
             value={config.model}
-            onValueChange={(model) => handleChange("model", model)}
+            onValueChange={handleModelChange}
             defaultValue={capsDefault}
             showLabel={false}
             compact={false}
           />
         </Flex>
 
-        <Flex gap="3" wrap="wrap">
-          <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 100 }}>
-            <Text size="1" color="gray">
-              Max Tokens
-            </Text>
-            <TextField.Root
-              size="2"
-              type="number"
-              value={config.max_new_tokens?.toString() ?? ""}
-              onChange={(e) =>
-                handleChange(
-                  "max_new_tokens",
-                  e.target.value ? parseInt(e.target.value, 10) : undefined,
-                )
-              }
-              placeholder="Default"
-            />
-          </Flex>
-          <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 100 }}>
-            <Text size="1" color="gray">
-              Temperature
-            </Text>
-            <TextField.Root
-              size="2"
-              type="number"
-              step="0.1"
-              min="0"
-              max="2"
-              value={config.temperature?.toString() ?? ""}
-              onChange={(e) =>
-                handleChange(
-                  "temperature",
-                  e.target.value ? parseFloat(e.target.value) : undefined,
-                )
-              }
-              placeholder="Default"
-            />
-          </Flex>
-          <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 100 }}>
-            <Text size="1" color="gray">
-              Top P
-            </Text>
-            <TextField.Root
-              size="2"
-              type="number"
-              step="0.1"
-              min="0"
-              max="1"
-              value={config.top_p?.toString() ?? ""}
-              onChange={(e) =>
-                handleChange(
-                  "top_p",
-                  e.target.value ? parseFloat(e.target.value) : undefined,
-                )
-              }
-              placeholder="Default"
-            />
-          </Flex>
-        </Flex>
-
-        <Flex gap="3" wrap="wrap" align="center">
-          <Flex align="center" gap="2">
-            <Switch
-              size="1"
-              checked={config.boost_reasoning ?? false}
-              onCheckedChange={(checked) =>
-                handleChange("boost_reasoning", checked || undefined)
-              }
-            />
-            <Text size="2">Boost Reasoning</Text>
-          </Flex>
-          <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 120 }}>
-            <Text size="1" color="gray">
-              Reasoning Effort
-            </Text>
-            <Select.Root
-              size="2"
-              value={config.reasoning_effort ?? "__default__"}
-              onValueChange={(v) =>
-                handleChange(
-                  "reasoning_effort",
-                  v === "__default__" ? undefined : v,
-                )
-              }
-            >
-              <Select.Trigger placeholder="Default" />
-              <Select.Content>
-                <Select.Item value="__default__">Default</Select.Item>
-                {REASONING_EFFORT_OPTIONS.map((opt) => (
-                  <Select.Item key={opt} value={opt}>
-                    {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select.Root>
-          </Flex>
-          <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 120 }}>
-            <Text size="1" color="gray">
-              Thinking Budget
-            </Text>
-            <TextField.Root
-              size="2"
-              type="number"
-              value={config.thinking_budget?.toString() ?? ""}
-              onChange={(e) =>
-                handleChange(
-                  "thinking_budget",
-                  e.target.value ? parseInt(e.target.value, 10) : undefined,
-                )
-              }
-              placeholder="Default"
-            />
-          </Flex>
-        </Flex>
+        <ModelSamplingParams
+          model={effectiveModel}
+          values={config}
+          onChange={handleSamplingChange}
+          size="2"
+        />
       </Flex>
     </Card>
   );

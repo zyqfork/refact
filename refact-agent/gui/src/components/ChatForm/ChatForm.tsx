@@ -110,6 +110,7 @@ import {
   selectThreadImages,
   selectThreadMode,
   setThreadMode,
+  DEFAULT_MODE,
 } from "../../features/Chat";
 import { telemetryApi } from "../../services/refact";
 import { push } from "../../features/Pages/pagesSlice";
@@ -572,7 +573,7 @@ export const ChatForm: React.FC<ChatFormProps> = ({
           <Flex gap="2" wrap="wrap" py="2" px="3" align="center">
             <ChatSettingsDropdown />
             <ModeSelect
-              selectedMode={threadMode ?? "AGENT"}
+              selectedMode={threadMode ?? DEFAULT_MODE}
               onModeChange={onSetMode}
               disabled={isModeDisabled}
             />

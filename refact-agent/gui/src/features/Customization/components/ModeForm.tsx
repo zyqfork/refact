@@ -23,6 +23,10 @@ import { useGetCapsQuery } from "../../../services/refact/caps";
 import { useCapsForToolUse } from "../../../hooks";
 import { enrichAndGroupModels } from "../../../utils/enrichModels";
 import { RichModelSelectItem } from "../../../components/Select/RichModelSelectItem";
+import {
+  ModelSamplingParams,
+  type SamplingValues,
+} from "../../../components/ModelSamplingParams";
 import styles from "./editors.module.css";
 import selectStyles from "../../../components/Select/select.module.css";
 
@@ -48,23 +52,6 @@ const ModelTypeSection: React.FC<ModelTypeSectionProps> = ({
   onPatch,
 }) => {
   const model = safeString(config.model);
-  const maxNewTokens =
-    typeof config.max_new_tokens === "number"
-      ? config.max_new_tokens
-      : undefined;
-  const temperature =
-    typeof config.temperature === "number" ? config.temperature : undefined;
-  const topP = typeof config.top_p === "number" ? config.top_p : undefined;
-  const boostReasoning =
-    typeof config.boost_reasoning === "boolean"
-      ? config.boost_reasoning
-      : false;
-  const reasoningEffort =
-    typeof config.reasoning_effort === "string" ? config.reasoning_effort : "";
-  const thinkingBudget =
-    typeof config.thinking_budget === "number"
-      ? config.thinking_budget
-      : undefined;
   const toolChoice =
     typeof config.tool_choice === "string" ? config.tool_choice : "";
   const parallelToolCalls =
@@ -72,7 +59,42 @@ const ModelTypeSection: React.FC<ModelTypeSectionProps> = ({
       ? config.parallel_tool_calls
       : false;
 
-  const basePath = ["model_defaults", typeKey];
+  const basePath = useMemo(
+    () => ["model_defaults", typeKey] as const,
+    [typeKey],
+  );
+
+  const samplingValues: SamplingValues = useMemo(
+    () => ({
+      temperature:
+        typeof config.temperature === "number" ? config.temperature : undefined,
+      max_new_tokens:
+        typeof config.max_new_tokens === "number"
+          ? config.max_new_tokens
+          : undefined,
+      top_p: typeof config.top_p === "number" ? config.top_p : undefined,
+      boost_reasoning:
+        typeof config.boost_reasoning === "boolean"
+          ? config.boost_reasoning
+          : undefined,
+      reasoning_effort:
+        typeof config.reasoning_effort === "string"
+          ? config.reasoning_effort
+          : undefined,
+      thinking_budget:
+        typeof config.thinking_budget === "number"
+          ? config.thinking_budget
+          : undefined,
+    }),
+    [config],
+  );
+
+  const handleSamplingChange = useCallback(
+    <K extends keyof SamplingValues>(field: K, value: SamplingValues[K]) => {
+      onPatch([...basePath, field], value);
+    },
+    [onPatch, basePath],
+  );
 
   return (
     <Flex
@@ -135,72 +157,14 @@ const ModelTypeSection: React.FC<ModelTypeSectionProps> = ({
           </Select.Content>
         </Select.Root>
       </Flex>
-      <Flex gap="2" wrap="wrap">
-        <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 70 }}>
-          <Text size="1" color="gray">
-            Max Tokens
-          </Text>
-          <TextField.Root
-            size="1"
-            type="number"
-            value={maxNewTokens?.toString() ?? ""}
-            placeholder="Default"
-            onChange={(e) =>
-              onPatch(
-                [...basePath, "max_new_tokens"],
-                e.target.value ? parseInt(e.target.value, 10) : undefined,
-              )
-            }
-          />
-        </Flex>
-        <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 70 }}>
-          <Text size="1" color="gray">
-            Temp
-          </Text>
-          <TextField.Root
-            size="1"
-            type="number"
-            step="0.1"
-            value={temperature?.toString() ?? ""}
-            placeholder="Default"
-            onChange={(e) =>
-              onPatch(
-                [...basePath, "temperature"],
-                e.target.value ? parseFloat(e.target.value) : undefined,
-              )
-            }
-          />
-        </Flex>
-        <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 70 }}>
-          <Text size="1" color="gray">
-            Top P
-          </Text>
-          <TextField.Root
-            size="1"
-            type="number"
-            step="0.1"
-            value={topP?.toString() ?? ""}
-            placeholder="Default"
-            onChange={(e) =>
-              onPatch(
-                [...basePath, "top_p"],
-                e.target.value ? parseFloat(e.target.value) : undefined,
-              )
-            }
-          />
-        </Flex>
-      </Flex>
+
+      <ModelSamplingParams
+        model={model || undefined}
+        values={samplingValues}
+        onChange={handleSamplingChange}
+      />
+
       <Flex gap="2" wrap="wrap" align="center">
-        <Flex align="center" gap="1">
-          <Switch
-            size="1"
-            checked={boostReasoning}
-            onCheckedChange={(c) =>
-              onPatch([...basePath, "boost_reasoning"], c || undefined)
-            }
-          />
-          <Text size="1">Boost</Text>
-        </Flex>
         <Flex align="center" gap="1">
           <Switch
             size="1"
@@ -209,23 +173,7 @@ const ModelTypeSection: React.FC<ModelTypeSectionProps> = ({
               onPatch([...basePath, "parallel_tool_calls"], c || undefined)
             }
           />
-          <Text size="1">Parallel</Text>
-        </Flex>
-        <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 80 }}>
-          <Text size="1" color="gray">
-            Effort
-          </Text>
-          <TextField.Root
-            size="1"
-            value={reasoningEffort}
-            placeholder="low/medium/high/xhigh/max"
-            onChange={(e) =>
-              onPatch(
-                [...basePath, "reasoning_effort"],
-                e.target.value || undefined,
-              )
-            }
-          />
+          <Text size="1">Parallel Tool Calls</Text>
         </Flex>
         <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 80 }}>
           <Text size="1" color="gray">
@@ -237,23 +185,6 @@ const ModelTypeSection: React.FC<ModelTypeSectionProps> = ({
             placeholder="auto/none"
             onChange={(e) =>
               onPatch([...basePath, "tool_choice"], e.target.value || undefined)
-            }
-          />
-        </Flex>
-        <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 80 }}>
-          <Text size="1" color="gray">
-            Think Budget
-          </Text>
-          <TextField.Root
-            size="1"
-            type="number"
-            value={thinkingBudget?.toString() ?? ""}
-            placeholder="Default"
-            onChange={(e) =>
-              onPatch(
-                [...basePath, "thinking_budget"],
-                e.target.value ? parseInt(e.target.value, 10) : undefined,
-              )
             }
           />
         </Flex>

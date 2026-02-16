@@ -114,7 +114,7 @@ available:
         Ok(ProviderRuntime {
             name: self.name().to_string(),
             display_name: self.display_name().to_string(),
-            enabled: self.enabled && !self.running_models.is_empty(),
+            enabled: self.enabled && !self.running_models.is_empty() && !api_key.is_empty(),
             readonly: false,
             wire_format: self.default_wire_format(),
             chat_endpoint: format!("{}/v1/chat/completions", base_url),
@@ -136,7 +136,8 @@ available:
     }
 
     fn has_credentials(&self) -> bool {
-        true
+        let resolved = resolve_env_var(&self.api_key, "", "refact api_key");
+        !resolved.is_empty()
     }
 
     fn model_source(&self) -> ModelSource {

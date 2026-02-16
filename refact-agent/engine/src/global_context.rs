@@ -49,7 +49,7 @@ pub struct CommandLine {
         long,
         short = "u",
         default_value = "",
-        help = "URL to use: \"Refact\" for Cloud, or your Self-Hosted Server URL. To bring your own keys, use \"Refact\" and set up providers."
+        help = "URL to use: \"Refact\" for Cloud, or your Server URL. Leave empty for BYOK mode (configure providers via UI)."
     )]
     /// Inference server URL, or "Refact" for cloud
     pub address_url: String,

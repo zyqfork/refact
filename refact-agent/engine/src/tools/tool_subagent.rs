@@ -332,7 +332,7 @@ impl Tool for ToolSubagent {
                 content: ChatContent::SimpleText(result_message),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
-                usage: Some(result.usage),
+                usage: None,
                 extra: result.metering,
                 output_filter: Some(OutputFilter::no_limits()),
                 ..Default::default()

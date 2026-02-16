@@ -14,7 +14,7 @@ use crate::tools::subagent_phases::{
     gather_files_phase, GatherFilesParams,
 };
 use crate::call_validation::{
-    ChatMessage, ChatContent, ChatUsage, ContextEnum, SubchatParameters, ContextFile,
+    ChatMessage, ChatContent, ContextEnum, SubchatParameters, ContextFile,
     PostprocessSettings,
 };
 use crate::at_commands::at_commands::AtCommandsContext;
@@ -157,7 +157,7 @@ async fn execute_code_review(
     external_messages: Vec<ChatMessage>,
     tool_call_id: String,
     config: &CodeSubagentConfig,
-) -> Result<(String, ChatUsage, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<(String, serde_json::Map<String, serde_json::Value>), String> {
     let (subchat_tx, abort_flag, parent_depth) = {
         let ccx_lock = ccx.lock().await;
         (
@@ -210,7 +210,7 @@ async fn execute_code_review(
     let review_content = format!("{}# Code Review\n{}", files_section, review_response.content.to_text_with_image_placeholders());
     let metering = result.metering;
 
-    Ok((review_content, result.usage, metering))
+    Ok((review_content, metering))
 }
 
 #[async_trait]
@@ -253,7 +253,7 @@ impl Tool for ToolCodeReview {
         let gather_params = get_gather_files_params(&config);
 
         tracing::info!("code_review: phase 1 - gathering relevant files");
-        let (important_paths, gather_usage) = gather_files_phase(
+        let important_paths = gather_files_phase(
             gcx.clone(),
             ccx.clone(),
             external_messages.clone(),
@@ -268,7 +268,7 @@ impl Tool for ToolCodeReview {
             important_paths.len()
         );
 
-        let (final_message, review_usage, metering) = execute_code_review(
+        let (final_message, metering) = execute_code_review(
             gcx,
             ccx.clone(),
             important_paths,
@@ -281,13 +281,6 @@ impl Tool for ToolCodeReview {
         let guardrails_prompt = config.guardrails_prompt.clone()
             .ok_or("guardrails_prompt not configured for code_review")?;
 
-        let combined_usage = ChatUsage {
-            prompt_tokens: gather_usage.prompt_tokens + review_usage.prompt_tokens,
-            completion_tokens: gather_usage.completion_tokens + review_usage.completion_tokens,
-            total_tokens: gather_usage.total_tokens + review_usage.total_tokens,
-            ..Default::default()
-        };
-
         Ok((
             false,
             vec![
@@ -296,7 +289,7 @@ impl Tool for ToolCodeReview {
                     content: ChatContent::SimpleText(final_message),
                     tool_calls: None,
                     tool_call_id: tool_call_id.clone(),
-                    usage: Some(combined_usage),
+                    usage: None,
                     extra: metering,
                     output_filter: Some(OutputFilter::no_limits()),
                     ..Default::default()

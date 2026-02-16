@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useMemo } from "react";
-import { selectHost, type Config } from "../../features/Config/configSlice";
+import {
+  selectHost,
+  selectAddressURL,
+  type Config,
+} from "../../features/Config/configSlice";
 import { useTourRefs } from "../../features/Tour";
 import {
   useGetUser,
@@ -77,6 +81,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
   // TODO: check how much of this is still used.
   // const { maxAgentUsageAmount, currentAgentUsage } = useAgentUsage();
   const coinBalance = useCoinBallance();
+  const addressURL = useAppSelector(selectAddressURL);
   const logout = useLogout();
   const { startPollingForUser } = useStartPollingForUser();
 
@@ -309,15 +314,17 @@ export const Dropdown: React.FC<DropdownProps> = ({
           Your Stats
         </DropdownMenu.Item>
 
-        <DropdownMenu.Item
-          onSelect={(event) => {
-            event.preventDefault();
-            logout();
-            handleNavigation("login page");
-          }}
-        >
-          Logout
-        </DropdownMenu.Item>
+        {addressURL?.trim().toLowerCase() === "refact" && (
+          <DropdownMenu.Item
+            onSelect={(event) => {
+              event.preventDefault();
+              logout();
+              handleNavigation("login page");
+            }}
+          >
+            Logout
+          </DropdownMenu.Item>
+        )}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   );

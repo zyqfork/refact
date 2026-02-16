@@ -23,6 +23,7 @@ import {
   setEnabledCheckpoints,
   setToolUse,
   setChatMode,
+  setThreadMode,
   setChatModel,
   setAutoApproveEditingTools,
   setAutoApproveDangerousCommands,
@@ -398,6 +399,18 @@ startListening({
       listenerApi.dispatch(setError(message));
       listenerApi.dispatch(setIsAuthError(isAuthError));
     }
+  },
+});
+
+startListening({
+  matcher: isAnyOf(
+    providersApi.endpoints.updateProvider.matchFulfilled,
+    providersApi.endpoints.oauthExchange.matchFulfilled,
+  ),
+  effect: (_action, listenerApi) => {
+    listenerApi.dispatch(clearError());
+    listenerApi.dispatch(capsApi.util.resetApiState());
+    listenerApi.dispatch(modelsApi.util.resetApiState());
   },
 });
 
@@ -1039,6 +1052,32 @@ startListening({
 });
 
 startListening({
+  actionCreator: setThreadMode,
+  effect: async (action, listenerApi) => {
+    const state = listenerApi.getState();
+    const port = state.config.lspPort;
+    const apiKey = state.config.apiKey;
+    const chatId = action.payload.chatId;
+    const runtime = state.chat.threads[chatId];
+
+    if (!port || !chatId || !runtime) return;
+    if (runtime.thread.messages.length > 0) return;
+
+    try {
+      const { sendChatCommand } = await import(
+        "../services/refact/chatCommands"
+      );
+      await sendChatCommand(chatId, port, apiKey ?? undefined, {
+        type: "set_params",
+        patch: { mode: action.payload.mode },
+      });
+    } catch {
+      // Silently ignore - backend may not support this command
+    }
+  },
+});
+
+startListening({
   actionCreator: setChatModel,
   effect: async (action, listenerApi) => {
     const state = listenerApi.getState();
@@ -1076,11 +1115,15 @@ startListening({
     setEnabledCheckpoints,
     setAreFollowUpsEnabled,
     setChatMode,
+    setThreadMode,
     setSystemPrompt,
   ),
   effect: (_action, listenerApi) => {
     const state = listenerApi.getState();
-    const runtime = state.chat.threads[state.chat.current_thread_id];
+    const chatId = setThreadMode.match(_action)
+      ? _action.payload.chatId
+      : state.chat.current_thread_id;
+    const runtime = state.chat.threads[chatId];
     if (!runtime) return;
 
     const isUnstartedChat = runtime.thread.messages.length === 0;

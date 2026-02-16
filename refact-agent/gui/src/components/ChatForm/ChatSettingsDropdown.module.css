@@ -42,8 +42,16 @@
   min-width: 300px;
   max-width: 400px;
   max-height: 480px;
-  overflow-y: auto;
+  overflow: hidden;
   padding: var(--space-2);
+}
+
+.contentAdvancedOpen {
+  max-height: 620px;
+}
+
+.modelSection {
+  overflow: hidden;
 }
 
 .section {
@@ -79,10 +87,17 @@
 }
 
 .modelList {
+  composes: scrollbarThin from "../shared/scrollbar.module.css";
   display: flex;
   flex-direction: column;
   max-height: 220px;
   overflow-y: auto;
+}
+
+/* When the outer popover grows, let the list grow too,
+   reducing the chance of nested scrollbars. */
+.contentAdvancedOpen .modelList {
+  max-height: 320px;
 }
 
 .item {
