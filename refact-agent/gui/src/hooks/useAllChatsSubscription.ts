@@ -7,6 +7,7 @@ import {
 } from "../features/Chat/Thread/actions";
 import {
   selectCurrentThreadId,
+  selectOpenThreadIds,
   selectSseRefreshRequested,
 } from "../features/Chat/Thread/selectors";
 import { selectLspPort, selectApiKey } from "../features/Config/configSlice";
@@ -24,6 +25,7 @@ export function useAllChatsSubscription() {
   const port = useAppSelector(selectLspPort);
   const apiKey = useAppSelector(selectApiKey);
   const currentThreadId = useAppSelector(selectCurrentThreadId);
+  const openThreadIds = useAppSelector(selectOpenThreadIds);
   const sseRefreshRequested = useAppSelector(selectSseRefreshRequested);
 
   const subscriptionsRef = useRef<Map<string, () => void>>(new Map());
@@ -115,7 +117,9 @@ export function useAllChatsSubscription() {
             dispatch(applyChatEvent(envelope));
           },
           onConnected: () => {
-            dispatch(setSseStatus({ chatId, status: "connecting" }));
+            // Transport is connected. Snapshot may still be pending, but we
+            // should not keep the global UI in a perpetual "Connecting...".
+            dispatch(setSseStatus({ chatId, status: "connected" }));
           },
           onError: (error) => {
             subscriptionsRef.current.delete(chatId);
@@ -193,6 +197,8 @@ export function useAllChatsSubscription() {
     }
     subscriptionsRef.current.clear();
     seqMapRef.current.clear();
+    manualCloseRef.current.clear();
+    desiredIdsRef.current.clear();
     retryCountRef.current.clear();
     timeoutRef.current.clear();
     lastActivityDispatchRef.current.clear();
@@ -209,30 +215,32 @@ export function useAllChatsSubscription() {
 
     if (!port) return;
 
-    const desiredId = activeChatId;
-    desiredIdsRef.current = desiredId ? new Set([desiredId]) : new Set();
+    const desired = new Set(openThreadIds);
+    if (activeChatId) desired.add(activeChatId);
+    desiredIdsRef.current = desired;
     const subscribedIds = Array.from(subscriptionsRef.current.keys());
 
     for (const id of subscribedIds) {
-      if (id !== desiredId) {
+      if (!desiredIdsRef.current.has(id)) {
         unsubscribe(id);
       }
     }
 
-    if (desiredId && !subscriptionsRef.current.has(desiredId)) {
-      subscribe(desiredId);
+    for (const id of desiredIdsRef.current) {
+      if (!subscriptionsRef.current.has(id)) {
+        subscribe(id);
+      }
     }
-  }, [activeChatId, port, apiKey, subscribe, unsubscribe, unsubscribeAll]);
+  }, [activeChatId, openThreadIds, port, apiKey, subscribe, unsubscribe, unsubscribeAll]);
 
   useEffect(() => {
     if (!sseRefreshRequested) return;
-    if (!activeChatId || sseRefreshRequested !== activeChatId) return;
     if (!portRef.current) return;
 
     dispatch(clearSseRefreshRequest());
-    unsubscribe(activeChatId);
-    setTimeout(() => subscribe(activeChatId), 50);
-  }, [sseRefreshRequested, activeChatId, dispatch, subscribe, unsubscribe]);
+    unsubscribe(sseRefreshRequested);
+    setTimeout(() => subscribe(sseRefreshRequested), 50);
+  }, [sseRefreshRequested, dispatch, subscribe, unsubscribe]);
 
   useEffect(() => {
     return () => {
@@ -243,23 +251,22 @@ export function useAllChatsSubscription() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        const chatId = Array.from(desiredIdsRef.current)[0];
-        if (!chatId) return;
+        for (const chatId of desiredIdsRef.current) {
+          const lastActivity = lastActivityAtRef.current.get(chatId) ?? 0;
+          const isStale =
+            lastActivity > 0 && Date.now() - lastActivity > STALE_THRESHOLD_MS;
 
-        const lastActivity = lastActivityAtRef.current.get(chatId) ?? 0;
-        const isStale =
-          lastActivity > 0 && Date.now() - lastActivity > STALE_THRESHOLD_MS;
+          if (isStale && subscriptionsRef.current.has(chatId)) {
+            retryCountRef.current.set(chatId, 0);
+            unsubscribe(chatId);
+            subscribe(chatId);
+            continue;
+          }
 
-        if (isStale && subscriptionsRef.current.has(chatId)) {
-          retryCountRef.current.set(chatId, 0);
-          unsubscribe(chatId);
-          subscribe(chatId);
-          return;
-        }
-
-        if (!subscriptionsRef.current.has(chatId)) {
-          retryCountRef.current.set(chatId, 0);
-          subscribe(chatId);
+          if (!subscriptionsRef.current.has(chatId)) {
+            retryCountRef.current.set(chatId, 0);
+            subscribe(chatId);
+          }
         }
       }
     };

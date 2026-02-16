@@ -602,6 +602,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
     // for threads with an active chat SSE; only update session_state for
     // display purposes (tabs, StatusDot).
     if (rt.snapshot_received) {
+      // Keep the last known session_state for display (tabs/StatusDot), but do
+      // not overwrite streaming/waiting flags.
       rt.session_state = sessionState;
       if (sessionState === "error") {
         rt.error = action.payload.error ?? "An error occurred";

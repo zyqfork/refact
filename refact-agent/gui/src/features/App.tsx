@@ -11,6 +11,7 @@ import {
   useSidebarSubscription,
   useAllChatsSubscription,
 } from "../hooks";
+import { useGetPing } from "../hooks/useGetPing";
 import { useBrowserOnlineStatus } from "../hooks/useBrowserOnlineStatus";
 import { FIMDebug } from "./FIM";
 import { store, persistor, RootState } from "../app/store";
@@ -80,6 +81,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   usePatchesAndDiffsEventsForIDE();
   useSidebarSubscription();
   useAllChatsSubscription();
+  useGetPing();
   useBrowserOnlineStatus();
 
   const [isPaddingApplied, setIsPaddingApplied] = useState<boolean>(false);

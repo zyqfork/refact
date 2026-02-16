@@ -887,6 +887,22 @@ async fn handle_tool_decisions(
         )
         .await;
 
+        // Determine tool-requested final state before checking abort.
+        // Some tools (ask_questions/task_done) set abort_flag=true as part of
+        // normal operation to stop further LLM generation.
+        let mut final_state = SessionState::Idle;
+        for tool_call in &tool_calls_to_execute {
+            match tool_call.function.name.as_str() {
+                "ask_questions" => final_state = SessionState::WaitingUserInput,
+                "task_done" => final_state = SessionState::Completed,
+                _ => {}
+            }
+        }
+        let tool_initiated_stop = matches!(
+            final_state,
+            SessionState::Completed | SessionState::WaitingUserInput
+        );
+
         // Check if we were aborted during tool execution
         let was_aborted = {
             let session = session_arc.lock().await;
@@ -898,15 +914,19 @@ async fn handle_tool_decisions(
             for result_msg in tool_results {
                 session.add_message(result_msg);
             }
-            // Always transition to Idle — either normally or after user abort.
-            // abort_stream() may have already set Idle, but set_runtime_state
-            // is idempotent and ensures the UI gets the RuntimeUpdated event.
-            session.set_runtime_state(SessionState::Idle, None);
+            if tool_initiated_stop {
+                session.set_runtime_state(final_state, None);
+            } else {
+                // Always transition to Idle — either normally or after user abort.
+                // abort_stream() may have already set Idle, but set_runtime_state
+                // is idempotent and ensures the UI gets the RuntimeUpdated event.
+                session.set_runtime_state(SessionState::Idle, None);
+            }
         }
 
         maybe_save_trajectory(gcx.clone(), session_arc.clone()).await;
 
-        if was_aborted {
+        if was_aborted || tool_initiated_stop {
             return;
         }
     }
