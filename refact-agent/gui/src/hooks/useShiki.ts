@@ -23,10 +23,9 @@ function enqueueHighlight<T>(fn: () => T): Promise<T> {
     () => yieldToMain().then(fn),
     () => yieldToMain().then(fn),
   );
-  highlightQueue = task.then(
-    () => {},
-    () => {},
-  );
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  const noop = () => {};
+  highlightQueue = task.then(noop, noop);
   return task;
 }
 
