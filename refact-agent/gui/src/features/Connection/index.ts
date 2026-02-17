@@ -12,6 +12,7 @@ export {
   selectBackendLastOkAt,
   selectSseConnections,
   selectSseConnectionForChat,
+  selectSseStatusForChat,
   selectCurrentChatSseStatus,
   selectGlobalSseStatus,
   selectIsFullyConnected,

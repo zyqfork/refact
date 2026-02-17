@@ -14,6 +14,7 @@ import {
   DiffMessage,
   isChatContextFileMessage,
   isDiffMessage,
+  isAssistantMessage,
   isToolMessage,
   isSystemMessage,
   UserMessage,
@@ -47,7 +48,7 @@ import { popBackTo } from "../../features/Pages/pagesSlice";
 import { ChatLinks, UncommittedChangesWarning } from "../ChatLinks";
 import { PlaceHolderText } from "./PlaceHolderText";
 import { QueuedMessage } from "./QueuedMessage";
-import { selectSseConnectionForChat } from "../../features/Connection";
+import { selectSseStatusForChat } from "../../features/Connection";
 import { LogoAnimation } from "../LogoAnimation/LogoAnimation.tsx";
 import { ChatLoading } from "./ChatLoading";
 import {
@@ -92,10 +93,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
     selectSnapshotReceivedById(s, renderChatId),
   );
   const thread = useAppSelector((s) => selectThreadById(s, renderChatId));
-  const sseConnection = useAppSelector((s) =>
-    selectSseConnectionForChat(s, renderChatId),
-  );
-  const sseStatus = sseConnection?.status ?? null;
+  const sseStatus = useAppSelector((s) => selectSseStatusForChat(s, renderChatId));
 
   const isConfig = thread !== null && thread.mode === "CONFIGURE";
   const isWaiting = useAppSelector((s) => selectIsWaitingById(s, renderChatId));
@@ -108,10 +106,14 @@ export const ChatContent: React.FC<ChatContentProps> = ({
 
   const collapsibleState = useCollapsibleState(false);
   const prevChatIdRef = useRef(renderChatId);
+  const prevDisplayMessagesRef = useRef<ChatMessages | null>(null);
+  const prevDisplayItemsRef = useRef<DisplayItem[] | null>(null);
 
   useEffect(() => {
     if (prevChatIdRef.current !== renderChatId) {
       collapsibleState.reset();
+      prevDisplayMessagesRef.current = null;
+      prevDisplayItemsRef.current = null;
       prevChatIdRef.current = renderChatId;
     }
   }, [renderChatId, collapsibleState]);
@@ -196,10 +198,24 @@ export const ChatContent: React.FC<ChatContentProps> = ({
     (!snapshotReceived && messages.length === 0) ||
     (sseStatus === "connecting" && messages.length === 0);
 
-  const displayItems = useMemo(
-    () => buildDisplayItems(messages, isStreaming),
-    [messages, isStreaming],
-  );
+  const displayItems = useMemo(() => {
+    const prevMessages = prevDisplayMessagesRef.current;
+    const prevItems = prevDisplayItemsRef.current;
+
+    const incremental = tryIncrementalDisplayItemsUpdate(
+      prevMessages,
+      messages,
+      prevItems,
+      isStreaming,
+    );
+
+    const nextItems = incremental ?? buildDisplayItems(messages, isStreaming);
+
+    prevDisplayMessagesRef.current = messages;
+    prevDisplayItemsRef.current = nextItems;
+
+    return nextItems;
+  }, [messages, isStreaming]);
 
   const initialScrollIndex = useMemo(() => {
     return displayItems.length > 0 ? displayItems.length - 1 : undefined;
@@ -347,6 +363,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
         renderItem={renderDisplayItem}
         initialScrollIndex={initialScrollIndex}
         footer={virtuosoFooter}
+        isStreaming={isStreaming}
       />
 
       <Box
@@ -692,6 +709,83 @@ function buildDisplayItems(
   }
 
   return items;
+}
+
+function tryIncrementalDisplayItemsUpdate(
+  previousMessages: ChatMessages | null,
+  nextMessages: ChatMessages,
+  previousItems: DisplayItem[] | null,
+  isStreaming: boolean,
+): DisplayItem[] | null {
+  if (!previousMessages || !previousItems) return null;
+  if (previousMessages.length !== nextMessages.length) return null;
+
+  let changedIndex = -1;
+  for (let i = 0; i < nextMessages.length; i++) {
+    if (previousMessages[i] !== nextMessages[i]) {
+      if (changedIndex !== -1) return null;
+      changedIndex = i;
+    }
+  }
+
+  let lastAssistantIdx = -1;
+  for (let i = nextMessages.length - 1; i >= 0; i--) {
+    if (nextMessages[i].role === "assistant") {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+
+  if (changedIndex === -1) {
+    let needsStreamingPatch = false;
+    for (const item of previousItems) {
+      if (item.type !== "assistant") continue;
+      const shouldStream = isStreaming && item.index === lastAssistantIdx;
+      if (shouldStream !== item.isStreaming) {
+        needsStreamingPatch = true;
+        break;
+      }
+    }
+    if (!needsStreamingPatch) return previousItems;
+    return previousItems.map((item) => {
+      if (item.type !== "assistant") return item;
+      const shouldStream = isStreaming && item.index === lastAssistantIdx;
+      return shouldStream === item.isStreaming
+        ? item
+        : { ...item, isStreaming: shouldStream };
+    });
+  }
+
+  const changedMessage = nextMessages[changedIndex];
+  if (changedMessage.role !== "assistant") return null;
+
+  let patched = false;
+  const nextItems = previousItems.map((item) => {
+    if (item.type !== "assistant") return item;
+    if (item.index !== changedIndex) {
+      const shouldStream = isStreaming && item.index === lastAssistantIdx;
+      return shouldStream === item.isStreaming
+        ? item
+        : {
+            ...item,
+            isStreaming: shouldStream,
+          };
+    }
+
+    if (!isAssistantMessage(changedMessage)) return item;
+    patched = true;
+    return {
+      ...item,
+      message: changedMessage,
+      isStreaming: isStreaming && item.index === lastAssistantIdx,
+    };
+  });
+
+  if (!patched) {
+    return null;
+  }
+
+  return nextItems;
 }
 
 function extractUserMessageText(content: UserMessage["content"]): string {

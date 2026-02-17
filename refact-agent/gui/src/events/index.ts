@@ -18,7 +18,6 @@ import { request, ready, receive, error } from "../features/FIM/actions";
 import type { HistoryState } from "../features/History/historySlice";
 import type { TipOfTheDayState } from "../features/TipOfTheDay";
 import type { PageSliceState } from "../features/Pages/pagesSlice";
-import type { TourState } from "../features/Tour";
 import type { FIMDebugState } from "../hooks";
 import { CurrentProjectInfo } from "../features/Chat/currentProject";
 import { TeamsSliceState } from "../features/Teams";
@@ -52,7 +51,6 @@ export type {
 export type InitialState = {
   teams: TeamsSliceState;
   fim: FIMDebugState;
-  tour: TourState;
   tipOfTheDay: TipOfTheDayState;
   config: Config;
   active_file: FileInfo;

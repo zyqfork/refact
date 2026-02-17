@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::Write;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde_json::{json, Value};
 
@@ -221,6 +223,16 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
 
         let json: Value = serde_json::from_str(trimmed)
             .map_err(|e| StreamParseError::MalformedChunk(format!("json parse: {e}")))?;
+
+        // Append to JSONL log file
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("responses.jsonl")
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "{}", trimmed);
+        }
 
         let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let mut deltas = Vec::new();

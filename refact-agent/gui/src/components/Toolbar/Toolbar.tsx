@@ -5,7 +5,6 @@ import classNames from "classnames";
 import { RefactIcon } from "../../images";
 import { newChatAction } from "../../events";
 import { getStatusFromSessionState } from "../../utils/sessionStatus";
-import { restart, useTourRefs } from "../../features/Tour";
 import { popBackTo, push } from "../../features/Pages/pagesSlice";
 import {
   useCreateTaskMutation,
@@ -84,7 +83,6 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
 
-  const refs = useTourRefs();
   const [sendTelemetryEvent] =
     telemetryApi.useLazySendTelemetryChatEventQuery();
 
@@ -132,15 +130,6 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
         dispatch(push({ name: "statistics page" }));
         void sendTelemetryEvent({
           scope: `openStats`,
-          success: true,
-          error_message: "",
-        });
-      } else if (to === "restart tour") {
-        dispatch(popBackTo({ name: "login page" }));
-        dispatch(push({ name: "welcome" }));
-        dispatch(restart());
-        void sendTelemetryEvent({
-          scope: `restartTour`,
           success: true,
           error_message: "",
         });
@@ -389,7 +378,6 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
             <button
               type="button"
               className={classNames(styles.iconButton, styles.homeButton)}
-              ref={(x) => refs.setBack(x)}
               onClick={() => {
                 setRenameState(null);
                 goToTab({ type: "dashboard" });
@@ -578,7 +566,6 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
             <button
               type="button"
               className={styles.iconButton}
-              ref={(x) => refs.setNewChat(x)}
               onClick={onCreateNewChat}
               disabled={!newChatEnabled}
               aria-label="New Chat"

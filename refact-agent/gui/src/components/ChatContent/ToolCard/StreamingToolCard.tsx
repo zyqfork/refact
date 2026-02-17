@@ -92,7 +92,9 @@ export const StreamingToolCard: React.FC<StreamingToolCardProps> = ({
     const el = entertainmentRef.current;
     if (!el) return;
     if (userScrolledRef.current) return;
-    el.scrollTop = el.scrollHeight;
+    if (el.scrollTop + el.clientHeight + 20 < el.scrollHeight) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [status, entertainmentMessage?.text]);
 
   const header = (

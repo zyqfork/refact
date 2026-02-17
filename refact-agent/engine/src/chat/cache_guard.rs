@@ -142,6 +142,14 @@ pub async fn check_or_pause_cache_guard(
         return Ok(None);
     }
 
+    // OpenAI Responses API stateful mode: when previous_response_id is present,
+    // the server handles caching via response chaining. The request body intentionally
+    // sends only tail items (not the full conversation), so the append-only prefix
+    // check does not apply.
+    if request_body.get("previous_response_id").is_some_and(|v| !v.is_null()) {
+        return Ok(None);
+    }
+
     let sanitized = sanitize_body_for_cache_guard(request_body);
 
     let maybe_violation_prev = {
@@ -320,5 +328,36 @@ mod tests {
         assert!(is_cache_guard_pause_reason(&reason));
         assert!(is_cache_guard_pause_id("cacheguard_force_once"));
         assert!(!is_cache_guard_pause_id("call_123"));
+    }
+
+    #[test]
+    fn test_append_only_prefix_ignores_previous_response_id() {
+        // When previous_response_id is present, the request body uses tail-only mode
+        // (only new messages after last assistant), so the full-body comparison is invalid.
+        // The cache guard should skip validation in this case.
+        let prev = json!({
+            "model": "gpt-4.1",
+            "instructions": "You are helpful",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+            ],
+            "store": true
+        });
+        let next_stateful = json!({
+            "model": "gpt-4.1",
+            "instructions": "You are helpful",
+            "input": [
+                {"type": "function_call_output", "call_id": "call_1", "output": "result"}
+            ],
+            "store": true,
+            "previous_response_id": "resp_abc123"
+        });
+        // This SHOULD fail the append-only check (different input, extra key)
+        assert!(!is_append_only_prefix(
+            &sanitize_body_for_cache_guard(&prev),
+            &sanitize_body_for_cache_guard(&next_stateful),
+        ));
+        // The check_or_pause_cache_guard function would skip entirely when
+        // previous_response_id is present, avoiding this false violation.
     }
 }

@@ -441,7 +441,7 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
   const meteringTokens = useTotalTokenMeteringForChat();
   const cost = useTotalCostForChat();
   const usdCost = useTotalUsdForChat();
-  const tokenMap = useTokenMap();
+  const tokenMap = useTokenMap(open);
 
   const totalCoins = useMemo(() => {
     return (

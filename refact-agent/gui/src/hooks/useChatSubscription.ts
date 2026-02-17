@@ -79,21 +79,89 @@ export function useChatSubscription(
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const streamDeltaFlushRef = useRef<number | null>(null);
+  const pendingStreamDeltaRef =
+    useRef<Extract<ChatEventEnvelope, { type: "stream_delta" }> | null>(null);
   const connectingRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   const connectRef = useRef<() => void>(() => {});
+
+  const MAX_MERGED_DELTA_OPS = 256;
+
+  const clearStreamDeltaFlush = useCallback(() => {
+    const flushId = streamDeltaFlushRef.current;
+    if (flushId == null) return;
+    if (
+      typeof window !== "undefined" &&
+      typeof window.cancelAnimationFrame === "function"
+    ) {
+      window.cancelAnimationFrame(flushId);
+    } else {
+      clearTimeout(flushId);
+    }
+    streamDeltaFlushRef.current = null;
+  }, []);
+
+  const flushPendingStreamDelta = useCallback(() => {
+    const pending = pendingStreamDeltaRef.current;
+    if (!pending) return;
+    pendingStreamDeltaRef.current = null;
+    dispatch(applyChatEvent(pending));
+    callbacksRef.current.onEvent?.(pending);
+  }, [dispatch]);
+
+  const scheduleStreamDeltaFlush = useCallback(() => {
+    if (streamDeltaFlushRef.current != null) return;
+    if (
+      typeof window !== "undefined" &&
+      typeof window.requestAnimationFrame === "function"
+    ) {
+      streamDeltaFlushRef.current = window.requestAnimationFrame(() => {
+        streamDeltaFlushRef.current = null;
+        flushPendingStreamDelta();
+      });
+      return;
+    }
+    streamDeltaFlushRef.current = window.setTimeout(() => {
+      streamDeltaFlushRef.current = null;
+      flushPendingStreamDelta();
+    }, 16);
+  }, [flushPendingStreamDelta]);
+
+  const enqueueStreamDelta = useCallback(
+    (envelope: Extract<ChatEventEnvelope, { type: "stream_delta" }>) => {
+      const pending = pendingStreamDeltaRef.current;
+      if (pending && pending.message_id === envelope.message_id) {
+        const mergedOpsLen = pending.ops.length + envelope.ops.length;
+        if (mergedOpsLen <= MAX_MERGED_DELTA_OPS) {
+          pending.seq = envelope.seq;
+          pending.ops.push(...envelope.ops);
+        } else {
+          flushPendingStreamDelta();
+          pendingStreamDeltaRef.current = envelope;
+        }
+      } else {
+        flushPendingStreamDelta();
+        pendingStreamDeltaRef.current = envelope;
+      }
+      scheduleStreamDeltaFlush();
+    },
+    [flushPendingStreamDelta, scheduleStreamDeltaFlush],
+  );
 
   const cleanup = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
+    clearStreamDeltaFlush();
+    pendingStreamDeltaRef.current = null;
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
       unsubscribeRef.current = null;
     }
     connectingRef.current = false;
-  }, []);
+  }, [clearStreamDeltaFlush]);
 
   const scheduleReconnect = useCallback(
     (delayMs: number) => {
@@ -153,6 +221,7 @@ export function useChatSubscription(
                     envelope.seq,
                   );
                 }
+                flushPendingStreamDelta();
                 cleanup();
                 setStatus("disconnected");
                 scheduleReconnect(0);
@@ -161,8 +230,13 @@ export function useChatSubscription(
               lastSeqRef.current = seq;
             }
             lastActivityAtRef.current = Date.now();
-            dispatch(applyChatEvent(envelope));
-            callbacksRef.current.onEvent?.(envelope);
+            if (envelope.type === "stream_delta") {
+              enqueueStreamDelta(envelope);
+            } else {
+              flushPendingStreamDelta();
+              dispatch(applyChatEvent(envelope));
+              callbacksRef.current.onEvent?.(envelope);
+            }
           } catch (err) {
             // Error processing event - likely malformed data
             callbacksRef.current.onError?.(
@@ -177,12 +251,14 @@ export function useChatSubscription(
           callbacksRef.current.onConnected?.();
         },
         onDisconnected: () => {
+          flushPendingStreamDelta();
           connectingRef.current = false;
           setStatus("disconnected");
           callbacksRef.current.onDisconnected?.();
           scheduleReconnect(reconnectDelay);
         },
         onError: (err) => {
+          flushPendingStreamDelta();
           connectingRef.current = false;
           setStatus("disconnected");
           setError(err);
@@ -199,6 +275,8 @@ export function useChatSubscription(
     apiKey,
     enabled,
     cleanup,
+    enqueueStreamDelta,
+    flushPendingStreamDelta,
     dispatch,
     scheduleReconnect,
     reconnectDelay,

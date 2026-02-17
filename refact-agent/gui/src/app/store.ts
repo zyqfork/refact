@@ -36,7 +36,6 @@ import { customizationApi } from "../services/refact/customization";
 import { projectInformationApi } from "../services/refact/projectInformation";
 import { smallCloudApi } from "../services/smallcloud";
 import { reducer as fimReducer } from "../features/FIM/reducer";
-import { tourReducer } from "../features/Tour";
 import { tipOfTheDaySlice } from "../features/TipOfTheDay";
 import { reducer as configReducer } from "../features/Config/configSlice";
 import { activeFileReducer } from "../features/Chat/activeFile";
@@ -80,7 +79,6 @@ const persistedTipOfTheDayReducer = persistReducer<
 const rootReducer = combineSlices(
   {
     fim: fimReducer,
-    tour: tourReducer,
     // tipOfTheDay: persistedTipOfTheDayReducer,
     [tipOfTheDaySlice.reducerPath]: persistedTipOfTheDayReducer,
     config: configReducer,
@@ -130,7 +128,7 @@ const rootReducer = combineSlices(
 const rootPersistConfig = {
   key: "root",
   storage: storage(),
-  whitelist: ["tour", userSurveySlice.reducerPath],
+  whitelist: [userSurveySlice.reducerPath],
   stateReconciler: mergeInitialState,
 };
 

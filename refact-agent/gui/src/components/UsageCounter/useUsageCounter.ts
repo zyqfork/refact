@@ -14,27 +14,22 @@ export function useUsageCounter() {
   const messages = useAppSelector(selectMessages);
   const maxContextTokens = useAppSelector(selectEffectiveMaxContextTokens);
 
-  // Memoize assistant messages list
-  const assistantMessages = useMemo(
-    () => messages.filter(isAssistantMessage),
-    [messages],
-  );
+  const {
+    assistantMessages,
+    currentThreadUsage,
+    lastAssistantMessage,
+  } = useMemo(() => {
+    const assistants = messages.filter(isAssistantMessage);
+    const mergedUsage = mergeUsages(assistants.map((msg) => msg.usage));
+    const lastAssistant =
+      assistants.length > 0 ? assistants[assistants.length - 1] : undefined;
 
-  // Memoize usages list
-  const usages = useMemo(
-    () => assistantMessages.map((msg) => msg.usage),
-    [assistantMessages],
-  );
-
-  const currentThreadUsage = mergeUsages(usages);
-
-  const lastAssistantMessage = useMemo(
-    () =>
-      assistantMessages.length > 0
-        ? assistantMessages[assistantMessages.length - 1]
-        : undefined,
-    [assistantMessages],
-  );
+    return {
+      assistantMessages: assistants,
+      currentThreadUsage: mergedUsage,
+      lastAssistantMessage: lastAssistant,
+    };
+  }, [messages]);
 
   // Check if the last message has server-executed tools (like web_search)
   // These can cause temporary inflated token counts during streaming.
@@ -42,12 +37,10 @@ export function useUsageCounter() {
   // with srvtoolu_ prefix (visible during streaming)
   const hasServerExecutedTools = useMemo(() => {
     if (!lastAssistantMessage) return false;
-    // Check post-processed server_executed_tools
     const serverTools = lastAssistantMessage.server_executed_tools;
     if (Array.isArray(serverTools) && serverTools.length > 0) {
       return true;
     }
-    // Check tool_calls during streaming (before post-processing)
     const toolCalls = lastAssistantMessage.tool_calls;
     if (Array.isArray(toolCalls)) {
       return toolCalls.some((tc) => tc.id?.startsWith("srvtoolu_"));

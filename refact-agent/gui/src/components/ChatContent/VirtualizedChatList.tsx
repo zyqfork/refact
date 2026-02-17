@@ -9,6 +9,7 @@ export type VirtualizedChatListProps<T extends { key: string }> = {
   renderItem: (item: T) => React.ReactNode;
   initialScrollIndex?: number;
   footer?: React.ReactNode;
+  isStreaming?: boolean;
 };
 
 export function VirtualizedChatList<T extends { key: string }>({
@@ -16,20 +17,35 @@ export function VirtualizedChatList<T extends { key: string }>({
   renderItem,
   initialScrollIndex,
   footer,
+  isStreaming = false,
 }: VirtualizedChatListProps<T>) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const [atBottom, setAtBottom] = useState(true);
-  const [followMode, setFollowMode] = useState(false);
+  const [showFollowButton, setShowFollowButton] = useState(false);
+  const autoFollowRef = useRef(true);
+  const userScrolledUpRef = useRef(false);
+  const lastScrollTopRef = useRef(0);
+  const wasScrollingDownRef = useRef(false);
 
   const handleAtBottomChange = useCallback((bottom: boolean) => {
-    setAtBottom(bottom);
-    if (bottom) {
-      setFollowMode(false);
+    if (bottom && userScrolledUpRef.current) {
+      // Only re-arm auto-follow if the user actively scrolled down to
+      // reach the bottom.  Content height changes (tool cards
+      // expanding/collapsing, task_done rendering) can passively move the
+      // bottom threshold to the user — that must NOT re-arm follow.
+      const activeScroll = wasScrollingDownRef.current;
+      wasScrollingDownRef.current = false;
+      userScrolledUpRef.current = false;
+      if (activeScroll) {
+        autoFollowRef.current = true;
+      }
     }
+    setShowFollowButton(!bottom && userScrolledUpRef.current);
   }, []);
 
   const handleFollowClick = useCallback(() => {
-    setFollowMode(true);
+    autoFollowRef.current = true;
+    userScrolledUpRef.current = false;
+    setShowFollowButton(false);
     virtuosoRef.current?.scrollToIndex({
       index: items.length - 1,
       align: "end",
@@ -37,12 +53,16 @@ export function VirtualizedChatList<T extends { key: string }>({
     });
   }, [items.length]);
 
-  const followOutput = useCallback((isAtBottom: boolean) => {
-    if (isAtBottom) {
-      return "smooth";
-    }
-    return false;
-  }, []);
+  const followOutput = useCallback(
+    (isAtBottom: boolean) => {
+      if (userScrolledUpRef.current) return false;
+      if (isAtBottom && autoFollowRef.current) {
+        return isStreaming ? "auto" : "smooth";
+      }
+      return false;
+    },
+    [isStreaming],
+  );
 
   const computeItemKey = useCallback((_index: number, item: T) => item.key, []);
 
@@ -56,7 +76,33 @@ export function VirtualizedChatList<T extends { key: string }>({
       HTMLDivElement,
       React.HTMLAttributes<HTMLDivElement>
       // eslint-disable-next-line react/prop-types
-    >(function VirtuosoScroller({ children, style, ...props }, ref) {
+    >(function VirtuosoScroller(
+      { children, style, onWheel, onScroll, ...props },
+      ref,
+    ) {
+      const handleWheel: React.WheelEventHandler<HTMLDivElement> = (event) => {
+        if (event.deltaY < 0) {
+          autoFollowRef.current = false;
+          userScrolledUpRef.current = true;
+          setShowFollowButton(true);
+        }
+        onWheel?.(event);
+      };
+
+      const handleScroll: React.UIEventHandler<HTMLDivElement> = (event) => {
+        const nextScrollTop = event.currentTarget.scrollTop;
+        if (nextScrollTop + 1 < lastScrollTopRef.current) {
+          autoFollowRef.current = false;
+          userScrolledUpRef.current = true;
+          wasScrollingDownRef.current = false;
+          setShowFollowButton(true);
+        } else if (nextScrollTop > lastScrollTopRef.current + 1) {
+          wasScrollingDownRef.current = true;
+        }
+        lastScrollTopRef.current = nextScrollTop;
+        onScroll?.(event);
+      };
+
       return (
         <div
           ref={ref}
@@ -67,6 +113,8 @@ export function VirtualizedChatList<T extends { key: string }>({
           }}
           className={styles.virtuosoScroller}
           {...props}
+          onWheel={handleWheel}
+          onScroll={handleScroll}
         >
           {children}
         </div>
@@ -113,7 +161,13 @@ export function VirtualizedChatList<T extends { key: string }>({
     [Scroller, List, Footer],
   );
 
-  const showFollowButton = !atBottom && !followMode;
+  const viewportPadding = useMemo(
+    () =>
+      isStreaming
+        ? { top: 800, bottom: 1200 }
+        : { top: 1600, bottom: 2200 },
+    [isStreaming],
+  );
 
   return (
     <Box style={{ flexGrow: 1, height: "100%", position: "relative" }}>
@@ -130,8 +184,8 @@ export function VirtualizedChatList<T extends { key: string }>({
             ? { index: initialScrollIndex, align: "end" }
             : undefined
         }
-        atBottomThreshold={50}
-        increaseViewportBy={{ top: 5000, bottom: 5000 }}
+        atBottomThreshold={20}
+        increaseViewportBy={viewportPadding}
       />
       {showFollowButton && <ScrollToBottomButton onClick={handleFollowClick} />}
     </Box>

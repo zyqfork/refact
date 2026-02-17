@@ -8,6 +8,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{
     ChatContent, ChatMessage, ChatMeta, ChatUsage, SamplingParameters, is_agentic_mode_id,
 };
+use crate::chat::tool_call_recovery;
 use crate::global_context::GlobalContext;
 use crate::llm::LlmRequest;
 use crate::llm::params::CacheControl;
@@ -514,43 +515,163 @@ async fn run_streaming_generation(
             supports_temperature: model_rec.supports_temperature,
         };
 
-        enum CollectorEvent {
+        enum CollectorEventPayload {
             DeltaOps(Vec<DeltaOp>),
             Usage(ChatUsage),
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CollectorEvent>();
+        const EMITTER_QUEUE_CAPACITY: usize = 256;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<CollectorEventPayload>(EMITTER_QUEUE_CAPACITY);
+        let overflow_usage = Arc::new(std::sync::Mutex::new(None::<ChatUsage>));
+        let dropped_events = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         struct SessionCollector {
-            tx: tokio::sync::mpsc::UnboundedSender<CollectorEvent>,
+            tx: tokio::sync::mpsc::Sender<CollectorEventPayload>,
+            overflow_usage: Arc<std::sync::Mutex<Option<ChatUsage>>>,
+            dropped_events: Arc<std::sync::atomic::AtomicUsize>,
         }
 
         impl StreamCollector for SessionCollector {
             fn on_delta_ops(&mut self, _choice_idx: usize, ops: Vec<DeltaOp>) {
-                let _ = self.tx.send(CollectorEvent::DeltaOps(ops));
+                match self.tx.try_send(CollectorEventPayload::DeltaOps(ops)) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_event)) => {
+                        self.dropped_events.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_event)) => {}
+                }
             }
 
             fn on_usage(&mut self, usage: &ChatUsage) {
-                let _ = self.tx.send(CollectorEvent::Usage(usage.clone()));
+                let usage_clone = usage.clone();
+                match self.tx.try_send(CollectorEventPayload::Usage(usage_clone.clone())) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_event)) => {
+                        if let Ok(mut guard) = self.overflow_usage.lock() {
+                            *guard = Some(usage_clone);
+                        }
+                        self.dropped_events.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_event)) => {}
+                }
             }
 
             fn on_finish(&mut self, _choice_idx: usize, _finish_reason: Option<String>) {}
         }
 
-        let mut collector = SessionCollector { tx };
+        let mut collector = SessionCollector {
+            tx,
+            overflow_usage: overflow_usage.clone(),
+            dropped_events: dropped_events.clone(),
+        };
 
         let session_arc_emitter = session_arc.clone();
         let emitter_task = tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                let mut session = session_arc_emitter.lock().await;
-                match event {
-                    CollectorEvent::DeltaOps(ops) => {
-                        session.emit_stream_delta(ops);
-                    }
-                    CollectorEvent::Usage(usage) => {
-                        session.draft_usage = Some(usage);
+            fn merge_events(
+                events: &mut Vec<CollectorEventPayload>,
+                batched_ops: &mut Vec<DeltaOp>,
+                latest_usage: &mut Option<ChatUsage>,
+            ) {
+                for event in events.drain(..) {
+                    match event {
+                        CollectorEventPayload::DeltaOps(ops) => {
+                            batched_ops.extend(ops);
+                        }
+                        CollectorEventPayload::Usage(usage) => {
+                            *latest_usage = Some(usage);
+                        }
                     }
                 }
+            }
+
+            fn split_utf8_chunks(text: &str, max_bytes: usize) -> Vec<String> {
+                if text.len() <= max_bytes {
+                    return vec![text.to_string()];
+                }
+                let mut chunks = Vec::new();
+                let mut start = 0usize;
+                while start < text.len() {
+                    let mut end = (start + max_bytes).min(text.len());
+                    while end > start && !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    if end == start {
+                        end = text[start..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| start + i)
+                            .unwrap_or(text.len());
+                    }
+                    chunks.push(text[start..end].to_string());
+                    start = end;
+                }
+                chunks
+            }
+
+            fn split_large_text_ops(ops: Vec<DeltaOp>, max_text_bytes: usize) -> Vec<DeltaOp> {
+                let mut out = Vec::new();
+                for op in ops {
+                    match op {
+                        DeltaOp::AppendContent { text } => {
+                            for chunk in split_utf8_chunks(&text, max_text_bytes) {
+                                out.push(DeltaOp::AppendContent { text: chunk });
+                            }
+                        }
+                        DeltaOp::AppendReasoning { text } => {
+                            for chunk in split_utf8_chunks(&text, max_text_bytes) {
+                                out.push(DeltaOp::AppendReasoning { text: chunk });
+                            }
+                        }
+                        other => out.push(other),
+                    }
+                }
+                out
+            }
+
+            const MAX_BATCH_EVENTS: usize = 64;
+            const MAX_DELTA_OPS_PER_EMIT: usize = 128;
+            const MAX_DELTA_TEXT_BYTES: usize = 16 * 1024;
+            let mut pending = Vec::<CollectorEventPayload>::new();
+
+            while let Some(first_event) = rx.recv().await {
+                pending.push(first_event);
+
+                while pending.len() < MAX_BATCH_EVENTS {
+                    match rx.try_recv() {
+                        Ok(event) => pending.push(event),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                    }
+                }
+
+                let mut batched_ops = Vec::new();
+                let mut latest_usage: Option<ChatUsage> = None;
+                merge_events(&mut pending, &mut batched_ops, &mut latest_usage);
+                if let Ok(mut guard) = overflow_usage.lock() {
+                    if let Some(usage) = guard.take() {
+                        latest_usage = Some(usage);
+                    }
+                }
+
+                let batched_ops = split_large_text_ops(batched_ops, MAX_DELTA_TEXT_BYTES);
+
+                let mut session = session_arc_emitter.lock().await;
+                if !batched_ops.is_empty() {
+                    for chunk in batched_ops.chunks(MAX_DELTA_OPS_PER_EMIT) {
+                        session.emit_stream_delta(chunk.to_vec());
+                    }
+                }
+                if let Some(usage) = latest_usage {
+                    session.draft_usage = Some(usage);
+                }
+            }
+
+            let dropped = dropped_events.load(Ordering::Relaxed);
+            if dropped > 0 {
+                tracing::warn!(
+                    "Dropped {} collector events due to saturated emitter queue",
+                    dropped
+                );
             }
         });
 
@@ -593,6 +714,36 @@ async fn run_streaming_generation(
                     "Empty assistant response after {} attempts (T={:.1})",
                     max_attempts, effective_temp
                 ));
+            }
+        }
+
+        // --- Tool call recovery ---
+        // GPT-5 Codex models occasionally leak tool calls into text content instead of
+        // emitting structured function_call events. Detect and recover them.
+        let allowed_tools = tool_call_recovery::allowed_tool_names(&llm_request.tools);
+
+        // 1. Unwrap multi_tool_use.parallel wrappers in structured tool_calls
+        if !result.tool_calls_raw.is_empty() {
+            result.tool_calls_raw = tool_call_recovery::unwrap_multi_tool_use_parallel(
+                &result.tool_calls_raw,
+                &allowed_tools,
+            );
+        }
+
+        // 2. Recover tool calls from garbled ChatML content (when no structured calls exist)
+        if result.tool_calls_raw.is_empty() && !allowed_tools.is_empty() {
+            if let Some((cleaned_content, recovered_calls)) =
+                tool_call_recovery::recover_tool_calls_from_chatml_content(
+                    &result.content,
+                    &allowed_tools,
+                )
+            {
+                warn!(
+                    "tool_call_recovery: recovered {} tool call(s) from garbled content",
+                    recovered_calls.len()
+                );
+                result.content = cleaned_content;
+                result.tool_calls_raw = recovered_calls;
             }
         }
 

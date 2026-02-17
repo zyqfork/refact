@@ -6,7 +6,6 @@ import userEvent from "@testing-library/user-event";
 import { Theme } from "@radix-ui/themes";
 import { Provider } from "react-redux";
 import { AppStore, RootState, setUpStore } from "../app/store";
-import { TourProvider } from "../features/Tour";
 import { AbortControllerProvider } from "../contexts/AbortControllers";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatThreadRuntime } from "../features/Chat/Thread/types";
@@ -80,8 +79,6 @@ const customRender = (
     preloadedState,
     // Automatically create a store instance if no store was passed in
     store = setUpStore({
-      // @ts-expect-error finished
-      tour: { type: "finished", step: 0 },
       // Provide default chat state with a thread for tests
       chat: createDefaultChatState(),
       ...preloadedState,
@@ -92,9 +89,7 @@ const customRender = (
   const Wrapper = ({ children }: PropsWithChildren) => (
     <Provider store={store}>
       <Theme>
-        <TourProvider>
-          <AbortControllerProvider>{children}</AbortControllerProvider>
-        </TourProvider>
+        <AbortControllerProvider>{children}</AbortControllerProvider>
       </Theme>
     </Provider>
   );

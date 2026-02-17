@@ -19,6 +19,7 @@ import {
   clearAllSseConnections,
 } from "../features/Connection";
 import { calculateBackoff } from "../utils/backoff";
+import type { ChatEventEnvelope } from "../services/refact/chatSubscription";
 
 export function useAllChatsSubscription() {
   const dispatch = useAppDispatch();
@@ -38,6 +39,10 @@ export function useAllChatsSubscription() {
   );
   const lastActivityDispatchRef = useRef<Map<string, number>>(new Map());
   const lastActivityAtRef = useRef<Map<string, number>>(new Map());
+  const streamDeltaFlushRef = useRef<Map<string, number>>(new Map());
+  const pendingStreamDeltaRef = useRef<
+    Map<string, Extract<ChatEventEnvelope, { type: "stream_delta" }>>
+  >(new Map());
   const portRef = useRef(port);
   const apiKeyRef = useRef(apiKey);
   const subscribeRef = useRef<((chatId: string) => void) | null>(null);
@@ -45,6 +50,7 @@ export function useAllChatsSubscription() {
   const STALE_THRESHOLD_MS = 45_000;
 
   const ACTIVITY_THROTTLE_MS = 500;
+  const MAX_MERGED_DELTA_OPS = 256;
 
   const activeChatId = currentThreadId;
 
@@ -55,6 +61,77 @@ export function useAllChatsSubscription() {
       timeoutRef.current.delete(chatId);
     }
   }, []);
+
+  const clearStreamDeltaFlushForChat = useCallback((chatId: string) => {
+    const flushId = streamDeltaFlushRef.current.get(chatId);
+    if (flushId == null) return;
+    if (
+      typeof window !== "undefined" &&
+      typeof window.cancelAnimationFrame === "function"
+    ) {
+      window.cancelAnimationFrame(flushId);
+    } else {
+      clearTimeout(flushId);
+    }
+    streamDeltaFlushRef.current.delete(chatId);
+  }, []);
+
+  const flushPendingStreamDeltaForChat = useCallback(
+    (chatId: string) => {
+      const pending = pendingStreamDeltaRef.current.get(chatId);
+      if (!pending) return;
+      pendingStreamDeltaRef.current.delete(chatId);
+      dispatch(applyChatEvent(pending));
+    },
+    [dispatch],
+  );
+
+  const scheduleStreamDeltaFlushForChat = useCallback(
+    (chatId: string) => {
+      if (streamDeltaFlushRef.current.has(chatId)) return;
+      const flush = () => {
+        streamDeltaFlushRef.current.delete(chatId);
+        flushPendingStreamDeltaForChat(chatId);
+      };
+
+      if (
+        typeof window !== "undefined" &&
+        typeof window.requestAnimationFrame === "function"
+      ) {
+        const id = window.requestAnimationFrame(flush);
+        streamDeltaFlushRef.current.set(chatId, id);
+        return;
+      }
+
+      const id = window.setTimeout(flush, 16);
+      streamDeltaFlushRef.current.set(chatId, id);
+    },
+    [flushPendingStreamDeltaForChat],
+  );
+
+  const enqueueStreamDelta = useCallback(
+    (
+      chatId: string,
+      envelope: Extract<ChatEventEnvelope, { type: "stream_delta" }>,
+    ) => {
+      const pending = pendingStreamDeltaRef.current.get(chatId);
+      if (pending && pending.message_id === envelope.message_id) {
+        const mergedOpsLen = pending.ops.length + envelope.ops.length;
+        if (mergedOpsLen <= MAX_MERGED_DELTA_OPS) {
+          pending.seq = envelope.seq;
+          pending.ops.push(...envelope.ops);
+        } else {
+          flushPendingStreamDeltaForChat(chatId);
+          pendingStreamDeltaRef.current.set(chatId, envelope);
+        }
+      } else {
+        flushPendingStreamDeltaForChat(chatId);
+        pendingStreamDeltaRef.current.set(chatId, envelope);
+      }
+      scheduleStreamDeltaFlushForChat(chatId);
+    },
+    [flushPendingStreamDeltaForChat, scheduleStreamDeltaFlushForChat],
+  );
 
   const scheduleResubscribe = useCallback(
     (chatId: string, useBackoff = false) => {
@@ -95,12 +172,14 @@ export function useAllChatsSubscription() {
             const lastSeq = seqMapRef.current.get(chatId) ?? 0n;
 
             if (envelope.type === "snapshot") {
+              flushPendingStreamDeltaForChat(chatId);
               seqMapRef.current.set(chatId, seq);
               retryCountRef.current.set(chatId, 0);
               dispatch(setSseStatus({ chatId, status: "connected" }));
             } else {
               if (seq <= lastSeq) return;
               if (seq > lastSeq + 1n) {
+                flushPendingStreamDeltaForChat(chatId);
                 const unsub = subscriptionsRef.current.get(chatId);
                 if (unsub) {
                   manualCloseRef.current.add(chatId);
@@ -113,8 +192,12 @@ export function useAllChatsSubscription() {
               }
               seqMapRef.current.set(chatId, seq);
             }
-            dispatch(sseEventReceived({ chatId }));
-            dispatch(applyChatEvent(envelope));
+            if (envelope.type === "stream_delta") {
+              enqueueStreamDelta(chatId, envelope);
+            } else {
+              flushPendingStreamDeltaForChat(chatId);
+              dispatch(applyChatEvent(envelope));
+            }
           },
           onConnected: () => {
             // Transport is connected. Snapshot may still be pending, but we
@@ -122,6 +205,8 @@ export function useAllChatsSubscription() {
             dispatch(setSseStatus({ chatId, status: "connected" }));
           },
           onError: (error) => {
+            clearStreamDeltaFlushForChat(chatId);
+            flushPendingStreamDeltaForChat(chatId);
             subscriptionsRef.current.delete(chatId);
             const count = (retryCountRef.current.get(chatId) ?? 0) + 1;
             retryCountRef.current.set(chatId, count);
@@ -137,6 +222,8 @@ export function useAllChatsSubscription() {
             }
           },
           onDisconnected: () => {
+            clearStreamDeltaFlushForChat(chatId);
+            flushPendingStreamDeltaForChat(chatId);
             subscriptionsRef.current.delete(chatId);
             const count = (retryCountRef.current.get(chatId) ?? 0) + 1;
             retryCountRef.current.set(chatId, count);
@@ -171,6 +258,8 @@ export function useAllChatsSubscription() {
     (chatId: string) => {
       manualCloseRef.current.add(chatId);
       clearPendingTimeout(chatId);
+      clearStreamDeltaFlushForChat(chatId);
+      pendingStreamDeltaRef.current.delete(chatId);
       const unsub = subscriptionsRef.current.get(chatId);
       if (unsub) {
         unsub();
@@ -182,7 +271,7 @@ export function useAllChatsSubscription() {
         dispatch(removeSseConnection({ chatId }));
       }
     },
-    [dispatch, clearPendingTimeout],
+    [dispatch, clearPendingTimeout, clearStreamDeltaFlushForChat],
   );
 
   const unsubscribeAll = useCallback(() => {
@@ -195,6 +284,16 @@ export function useAllChatsSubscription() {
     for (const timeoutId of timeoutRef.current.values()) {
       clearTimeout(timeoutId);
     }
+    for (const flushId of streamDeltaFlushRef.current.values()) {
+      if (
+        typeof window !== "undefined" &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.cancelAnimationFrame(flushId);
+      } else {
+        clearTimeout(flushId);
+      }
+    }
     subscriptionsRef.current.clear();
     seqMapRef.current.clear();
     manualCloseRef.current.clear();
@@ -203,6 +302,8 @@ export function useAllChatsSubscription() {
     timeoutRef.current.clear();
     lastActivityDispatchRef.current.clear();
     lastActivityAtRef.current.clear();
+    streamDeltaFlushRef.current.clear();
+    pendingStreamDeltaRef.current.clear();
     dispatch(clearAllSseConnections());
   }, [dispatch]);
 

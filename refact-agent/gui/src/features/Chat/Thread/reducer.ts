@@ -190,6 +190,47 @@ const getCurrentRuntime = (
   return getRuntime(state, state.current_thread_id);
 };
 
+function rebuildMessageIndexById(
+  messages: ChatMessages,
+): Record<string, number> {
+  const index: Record<string, number> = Object.create(null) as Record<
+    string,
+    number
+  >;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if ("message_id" in msg && msg.message_id) {
+      index[msg.message_id] = i;
+    }
+  }
+  return index;
+}
+
+function findMessageIndexById(
+  rt: Draft<ChatThreadRuntime>,
+  messageId: string,
+): number {
+  const indexed = rt.message_index_by_id?.[messageId];
+  if (indexed != null) {
+    const maybeMsg = rt.thread.messages[indexed];
+    if (maybeMsg && "message_id" in maybeMsg && maybeMsg.message_id === messageId) {
+      return indexed;
+    }
+  }
+  return rt.thread.messages.findIndex(
+    (m) => "message_id" in m && m.message_id === messageId,
+  );
+}
+
+function parseEventSeq(seq: string): bigint | null {
+  if (!/^\d+$/.test(seq)) return null;
+  try {
+    return BigInt(seq);
+  } catch {
+    return null;
+  }
+}
+
 export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(setToolUse, (state, action) => {
     state.tool_use = action.payload;
@@ -938,6 +979,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
           },
           snapshot_received: true,
           task_widget_expanded: existingRuntime?.task_widget_expanded ?? false,
+          last_applied_seq: event.seq,
+          message_index_by_id: rebuildMessageIndexById(snapshotMessages),
         };
 
         state.threads[chat_id] = newRt;
@@ -953,6 +996,12 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
       case "thread_updated": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         const { type: _, ...params } = event;
         if ("model" in params && typeof params.model === "string")
           rt.thread.model = params.model;
@@ -1040,90 +1089,144 @@ export const chatReducer = createReducer(initialState, (builder) => {
             (id) => id !== chat_id,
           );
         }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "message_added": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         const msg = normalizeMessage(event.message);
         const messageId = "message_id" in msg ? msg.message_id : null;
         if (messageId) {
-          const existingIdx = rt.thread.messages.findIndex(
-            (m) => "message_id" in m && m.message_id === messageId,
-          );
+          const existingIdx = findMessageIndexById(rt, messageId);
           if (existingIdx >= 0) {
             const existing = rt.thread.messages[existingIdx];
             if (isAssistantMessage(existing) && isAssistantMessage(msg)) {
               const merged: AssistantMessage = {
                 ...msg,
                 tool_calls: msg.tool_calls ?? existing.tool_calls,
+                server_executed_tools:
+                  msg.server_executed_tools ?? existing.server_executed_tools,
+                server_content_blocks:
+                  msg.server_content_blocks ?? existing.server_content_blocks,
                 reasoning_content:
                   msg.reasoning_content ?? existing.reasoning_content,
                 thinking_blocks:
                   msg.thinking_blocks ?? existing.thinking_blocks,
                 citations: msg.citations ?? existing.citations,
                 usage: msg.usage ?? existing.usage,
+                extra: msg.extra ?? existing.extra,
                 finish_reason: msg.finish_reason ?? existing.finish_reason,
               };
               rt.thread.messages[existingIdx] = merged;
             } else {
               rt.thread.messages[existingIdx] = msg;
             }
+            rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
+            rt.last_applied_seq = event.seq;
             break;
           }
         }
-        const clampedIndex = Math.min(event.index, rt.thread.messages.length);
+        const clampedIndex = Math.max(
+          0,
+          Math.min(event.index, rt.thread.messages.length),
+        );
         rt.thread.messages.splice(clampedIndex, 0, msg);
+        rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "message_updated": {
         if (!rt) break;
-        const idx = rt.thread.messages.findIndex(
-          (m) => "message_id" in m && m.message_id === event.message_id,
-        );
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
+        const idx = findMessageIndexById(rt, event.message_id);
         if (idx >= 0) {
           rt.thread.messages[idx] = normalizeMessage(event.message);
+          rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
         }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "message_removed": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         rt.thread.messages = rt.thread.messages.filter(
           (m) => !("message_id" in m) || m.message_id !== event.message_id,
         );
+        rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "messages_truncated": {
         if (!rt) break;
-        const clampedIndex = Math.min(
-          event.from_index,
-          rt.thread.messages.length,
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
+        const clampedIndex = Math.max(
+          0,
+          Math.min(event.from_index, rt.thread.messages.length),
         );
         rt.thread.messages = rt.thread.messages.slice(0, clampedIndex);
+        rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "stream_started": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
+        const existingIdx = findMessageIndexById(rt, event.message_id);
         rt.streaming = true;
         rt.waiting_for_response = true;
         rt.session_state = "generating";
-        rt.thread.messages.push({
-          role: "assistant",
-          content: "",
-          message_id: event.message_id,
-        } as ChatMessages[number]);
+        if (existingIdx < 0) {
+          rt.thread.messages.push({
+            role: "assistant",
+            content: "",
+            message_id: event.message_id,
+          } as ChatMessages[number]);
+          rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
+        }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "stream_delta": {
         if (!rt) break;
-        const msgIdx = rt.thread.messages.findIndex(
-          (m) => "message_id" in m && m.message_id === event.message_id,
-        );
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
+        const msgIdx = findMessageIndexById(rt, event.message_id);
         if (msgIdx >= 0) {
           const msg = rt.thread.messages[msgIdx];
           rt.thread.messages[msgIdx] = applyDeltaOps(
@@ -1132,11 +1235,18 @@ export const chatReducer = createReducer(initialState, (builder) => {
           );
           state.stream_version = (state.stream_version + 1) % 1_000_000;
         }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "stream_finished": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         rt.streaming = false;
         if (
           event.finish_reason === "stop" ||
@@ -1160,11 +1270,18 @@ export const chatReducer = createReducer(initialState, (builder) => {
               event.finish_reason as AssistantMessage["finish_reason"];
           }
         }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "pause_required": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         rt.streaming = false;
         rt.waiting_for_response = false;
         rt.session_state = "paused";
@@ -1173,24 +1290,46 @@ export const chatReducer = createReducer(initialState, (builder) => {
           event.reasons as ToolConfirmationPauseReason[];
         rt.confirmation.status.wasInteracted = false;
         rt.confirmation.status.confirmationStatus = false;
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "pause_cleared": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         rt.confirmation.pause = false;
         rt.confirmation.pause_reasons = [];
         rt.confirmation.status.wasInteracted = false;
         rt.confirmation.status.confirmationStatus = true;
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "ide_tool_required": {
+        if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "subchat_update": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         for (const msg of rt.thread.messages) {
           if (!isAssistantMessage(msg) || !msg.tool_calls) continue;
           const tc = msg.tool_calls.find((t) => t.id === event.tool_call_id);
@@ -1219,21 +1358,44 @@ export const chatReducer = createReducer(initialState, (builder) => {
             break;
           }
         }
+        rt.last_applied_seq = event.seq;
         break;
       }
 
-      case "ack":
+      case "ack": {
+        if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
+        rt.last_applied_seq = event.seq;
         break;
+      }
 
       case "queue_updated": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         rt.queued_items =
           event.queued_items as ChatThreadRuntime["queued_items"];
+        rt.last_applied_seq = event.seq;
         break;
       }
 
       case "runtime_updated": {
         if (!rt) break;
+        const eventSeq = parseEventSeq(event.seq);
+        const lastSeq =
+          rt.last_applied_seq != null ? parseEventSeq(rt.last_applied_seq) : null;
+        if (eventSeq != null && lastSeq != null && eventSeq <= lastSeq) {
+          break;
+        }
         const newState = event.state;
         rt.session_state = newState;
 
@@ -1268,6 +1430,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
         } else if (newState !== "error") {
           rt.error = null;
         }
+        rt.last_applied_seq = event.seq;
         break;
       }
     }

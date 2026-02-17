@@ -3,7 +3,10 @@ import { expect, test, describe, beforeEach } from "vitest";
 import { chatReducer } from "./reducer";
 import type { Chat } from "./types";
 import { newChatAction, applyChatEvent } from "./actions";
-import type { ChatEventEnvelope } from "../../../services/refact/chatSubscription";
+import type {
+  ChatEventEnvelope,
+  DeltaOp,
+} from "../../../services/refact/chatSubscription";
 
 describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
   let initialState: Chat;
@@ -399,6 +402,176 @@ describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
       // Content should be the final version, not streaming version
       expect(runtime.thread.messages[1].content).toBe("Final complete content");
     });
+
+    test("should preserve server fields and update seq when replacing assistant message", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "generating",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "stream_started",
+          message_id: "msg-assistant-1",
+        }),
+      );
+
+      const deltaOps: DeltaOp[] = [
+        {
+          op: "set_tool_calls",
+          tool_calls: [
+            { id: "call-1", function: { name: "web", arguments: "{}" } },
+          ],
+        },
+        {
+          op: "add_server_content_block",
+          block: { type: "text", text: "server block" },
+        },
+        {
+          op: "merge_extra",
+          extra: { metering_balance: 42 },
+        },
+        {
+          op: "append_reasoning",
+          text: "stream reasoning",
+        },
+      ];
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "3",
+          type: "stream_delta",
+          message_id: "msg-assistant-1",
+          ops: deltaOps,
+        }),
+      );
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "4",
+          type: "message_added",
+          message: {
+            role: "assistant",
+            content: "Final",
+            message_id: "msg-assistant-1",
+          },
+          index: 1,
+        }),
+      );
+
+      const runtime = state.threads[chatId]!;
+      const assistant = runtime.thread.messages[1];
+      if (assistant.role !== "assistant") {
+        throw new Error("Expected assistant message");
+      }
+      expect(assistant.tool_calls).toHaveLength(1);
+      expect(assistant.server_content_blocks).toHaveLength(1);
+      expect(assistant.extra).toEqual({ metering_balance: 42 });
+      expect(assistant.reasoning_content).toBe("stream reasoning");
+      expect(runtime.last_applied_seq).toBe("4");
+
+      const replayed = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "4",
+          type: "message_added",
+          message: {
+            role: "assistant",
+            content: "Should be ignored",
+            message_id: "msg-assistant-1",
+          },
+          index: 1,
+        }),
+      );
+
+      const replayedAssistant = replayed.threads[chatId]!.thread.messages[1];
+      expect(replayedAssistant.content).toBe("Final");
+    });
+
+    test("should clamp negative message_added index to start", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [
+          { role: "user", content: "Existing-1", message_id: "m1" },
+          { role: "assistant", content: "Existing-2", message_id: "m2" },
+        ],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "message_added",
+          message: {
+            role: "user",
+            content: "Inserted at start",
+            message_id: "m-new",
+          },
+          index: -5,
+        }),
+      );
+
+      const runtime = state.threads[chatId]!;
+      expect(runtime.thread.messages[0].content).toBe("Inserted at start");
+      expect(runtime.thread.messages).toHaveLength(3);
+    });
   });
 
   describe("applyChatEvent - pause_required", () => {
@@ -756,6 +929,53 @@ describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
 
       expect(runtime.thread.messages).toHaveLength(0);
     });
+
+    test("should clamp negative truncate index to 0", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [
+          { role: "user", content: "A", message_id: "m1" },
+          { role: "assistant", content: "B", message_id: "m2" },
+        ],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "messages_truncated",
+          from_index: -1,
+        }),
+      );
+
+      const runtime = state.threads[chatId]!;
+      expect(runtime.thread.messages).toHaveLength(0);
+    });
   });
 
   describe("applyChatEvent - thread_updated", () => {
@@ -883,6 +1103,398 @@ describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
       expect(runtime.waiting_for_response).toBe(false);
       expect(runtime.thread.messages).toHaveLength(2);
       expect(runtime.thread.messages[1].content).toBe("Hello!");
+    });
+  });
+
+  describe("applyChatEvent - ack and ide_tool_required seq guards", () => {
+    test("ack should advance last_applied_seq", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "5",
+          type: "ack",
+          client_request_id: "req-1",
+          accepted: true,
+          result: null,
+        }),
+      );
+
+      const runtime = state.threads[chatId]!;
+      expect(runtime.last_applied_seq).toBe("5");
+    });
+
+    test("ack should reject replayed seq", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      // Advance to seq 5 via ack
+      state = chatReducer(
+        state,
+        applyChatEvent({ chat_id: chatId, seq: "5", type: "ack", client_request_id: "req-1", accepted: true, result: null }),
+      );
+
+      // Replay old ack at seq 3 - should be ignored
+      state = chatReducer(
+        state,
+        applyChatEvent({ chat_id: chatId, seq: "3", type: "ack", client_request_id: "req-2", accepted: true, result: null }),
+      );
+
+      expect(state.threads[chatId]!.last_applied_seq).toBe("5");
+    });
+
+    test("ack then old message_added should be rejected", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [{ role: "user", content: "Hello", message_id: "m1" }],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      // ack advances watermark to seq 5
+      state = chatReducer(
+        state,
+        applyChatEvent({ chat_id: chatId, seq: "5", type: "ack", client_request_id: "req-1", accepted: true, result: null }),
+      );
+
+      // Old message_added at seq 4 should be rejected
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "4",
+          type: "message_added",
+          message: { role: "assistant", content: "Should be rejected", message_id: "m-stale" },
+          index: 1,
+        }),
+      );
+
+      expect(state.threads[chatId]!.thread.messages).toHaveLength(1);
+    });
+
+    test("ide_tool_required should advance last_applied_seq with guard", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      // Advance to seq 7
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "7",
+          type: "ide_tool_required",
+          tool_call_id: "tc-1",
+          tool_name: "shell",
+          args: "{}",
+        }),
+      );
+      expect(state.threads[chatId]!.last_applied_seq).toBe("7");
+
+      // Replay old seq 3 should be ignored
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "3",
+          type: "ide_tool_required",
+          tool_call_id: "tc-2",
+          tool_name: "shell",
+          args: "{}",
+        }),
+      );
+      expect(state.threads[chatId]!.last_applied_seq).toBe("7");
+    });
+  });
+
+  describe("message_index_by_id - prototype pollution protection", () => {
+    test("should safely handle __proto__ as message_id", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [
+          { role: "user", content: "Test", message_id: "__proto__" },
+          { role: "assistant", content: "Reply", message_id: "constructor" },
+        ],
+      };
+
+      const state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+      const runtime = state.threads[chatId]!;
+
+      // Messages should be stored correctly
+      expect(runtime.thread.messages).toHaveLength(2);
+      expect(runtime.thread.messages[0].content).toBe("Test");
+      expect(runtime.thread.messages[1].content).toBe("Reply");
+
+      // Index should work without polluting Object prototype
+      expect(runtime.message_index_by_id).toBeDefined();
+      const emptyObj = {};
+      // Verify Object.prototype was not polluted
+      expect(Object.getPrototypeOf(emptyObj)).toBe(Object.prototype);
+      expect(emptyObj.constructor).toBe(Object);
+
+      // Can update message with __proto__ id without crash
+      const updateState = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "message_updated",
+          message_id: "__proto__",
+          message: { role: "user", content: "Updated", message_id: "__proto__" },
+        }),
+      );
+      expect(updateState.threads[chatId]!.thread.messages[0].content).toBe("Updated");
+    });
+  });
+
+  describe("isStreaming flag transitions", () => {
+    test("stream_finished should clear streaming flag", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "generating",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+      expect(state.threads[chatId]!.streaming).toBe(true);
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "stream_started",
+          message_id: "msg-1",
+        }),
+      );
+      expect(state.threads[chatId]!.streaming).toBe(true);
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "3",
+          type: "stream_delta",
+          message_id: "msg-1",
+          ops: [{ op: "append_content", text: "content" }],
+        }),
+      );
+      expect(state.threads[chatId]!.streaming).toBe(true);
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "4",
+          type: "stream_finished",
+          message_id: "msg-1",
+          finish_reason: "stop",
+        }),
+      );
+      expect(state.threads[chatId]!.streaming).toBe(false);
+      expect(state.threads[chatId]!.waiting_for_response).toBe(false);
+    });
+
+    test("stream_finished with tool_calls should keep waiting_for_response", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4",
+          mode: "AGENT",
+          tool_use: "agent",
+          boost_reasoning: false,
+          context_tokens_cap: null,
+          include_project_info: true,
+          checkpoints_enabled: true,
+          is_title_generated: false,
+        },
+        runtime: {
+          state: "generating",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      let state = chatReducer(initialState, applyChatEvent(snapshotEvent));
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "stream_started",
+          message_id: "msg-1",
+        }),
+      );
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "3",
+          type: "stream_finished",
+          message_id: "msg-1",
+          finish_reason: "tool_calls",
+        }),
+      );
+
+      const runtime = state.threads[chatId]!;
+      expect(runtime.streaming).toBe(false);
+      // tool_calls finish reason means tools are about to execute
+      expect(runtime.session_state).toBe("executing_tools");
     });
   });
 });

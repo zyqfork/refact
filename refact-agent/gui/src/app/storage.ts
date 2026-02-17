@@ -12,7 +12,6 @@ function removeOldEntry(key: string) {
 
 function cleanOldEntries() {
   if (typeof localStorage === "undefined") return;
-  removeOldEntry("tour");
   removeOldEntry("tipOfTheDay");
   removeOldEntry("chatHistory");
 }

@@ -177,6 +177,7 @@ export interface AssistantMessage extends BaseMessage, CostInfo {
   citations?: WebSearchCitation[] | null;
   finish_reason?: "stop" | "length" | "abort" | "tool_calls" | "error" | null;
   usage?: Usage | null;
+  extra?: Record<string, unknown>;
 }
 
 export interface ToolCallMessage extends AssistantMessage {

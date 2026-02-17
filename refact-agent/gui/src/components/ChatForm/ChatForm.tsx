@@ -81,7 +81,6 @@ import {
   getErrorMessage,
   getErrorType,
 } from "../../features/Errors/errorsSlice";
-import { useTourRefs } from "../../features/Tour";
 import { useAttachedFiles, useCheckboxes } from "./useCheckBoxes";
 import { useInputValue } from "./useInputValue";
 import {
@@ -171,11 +170,7 @@ export const ChatForm: React.FC<ChatFormProps> = ({
     [dispatch, chatId],
   );
 
-  const isModeDisabled = useMemo(
-    () => isStreaming || isWaiting,
-    [isStreaming, isWaiting],
-  );
-  // Note: Mode is also locked after first message (see ModeSelect component)
+  const isModeDisabled = useMemo(() => isStreaming, [isStreaming]);
   const attachedFiles = useAttachedFiles();
   const shouldShowBalanceLow = useAppSelector(showBalanceLowCallout);
   const attachedImages = useAppSelector(selectThreadImages);
@@ -284,8 +279,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
       checkboxes,
       attachedFiles.addFilesToInput,
     );
-
-  const refs = useTourRefs();
 
   const handleSubmit = useCallback(
     (sendPolicy: SendPolicy = "after_flow") => {
@@ -488,7 +481,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
       )}
 
       <Flex
-        ref={(x) => refs.setChat(x)}
         style={{
           flexDirection: "column",
           alignSelf: "stretch",
@@ -582,7 +574,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
               <AgentIntegrationsButton
                 title="Set up Agent Integrations"
                 onClick={handleAgentIntegrationsClick}
-                ref={(x) => refs.setSetupIntegrations(x)}
               />
               {onClose && (
                 <BackToSideBarButton

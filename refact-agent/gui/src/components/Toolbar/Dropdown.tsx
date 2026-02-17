@@ -5,7 +5,6 @@ import {
   type Config,
 } from "../../features/Config/configSlice";
 import { push } from "../../features/Pages/pagesSlice";
-import { useTourRefs } from "../../features/Tour";
 import {
   useGetUser,
   useLogout,
@@ -43,7 +42,6 @@ export type DropdownNavigationOptions =
   | "stats"
   | "settings"
   | "hot keys"
-  | "restart tour"
   | "login page"
   | "integrations"
   | "providers"
@@ -77,7 +75,6 @@ export const Dropdown: React.FC<DropdownProps> = ({
   handleNavigation,
   triggerClassName,
 }: DropdownProps) => {
-  const refs = useTourRefs();
   const dispatch = useAppDispatch();
   const user = useGetUser();
   const host = useAppSelector(selectHost);
@@ -120,7 +117,6 @@ export const Dropdown: React.FC<DropdownProps> = ({
             <button
               type="button"
               className={triggerClassName ?? styles.iconButton}
-              ref={(x) => refs.setMore(x)}
               aria-label="Menu"
             >
               <HamburgerMenuIcon />
@@ -295,10 +291,6 @@ export const Dropdown: React.FC<DropdownProps> = ({
         </DropdownMenu.Item>
 
         <DropdownMenu.Separator />
-
-        <DropdownMenu.Item onSelect={() => handleNavigation("restart tour")}>
-          Restart tour
-        </DropdownMenu.Item>
 
         <DropdownMenu.Item
           onSelect={(event) => {

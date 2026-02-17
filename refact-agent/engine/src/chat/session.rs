@@ -755,6 +755,7 @@ mod tests {
     use super::*;
     use super::super::types::{ChatCommand, CommandRequest};
     use serde_json::json;
+    use std::time::Instant;
 
     fn make_session() -> ChatSession {
         ChatSession::new("test-chat".to_string())
@@ -1430,5 +1431,107 @@ mod tests {
 
         assert_eq!(session.messages.len(), 0,
             "Truly empty assistant message should be discarded");
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_emit_and_snapshot_large_history_baseline() {
+        const MESSAGE_COUNT: usize = 2_000;
+        const MESSAGE_SIZE: usize = 2_048;
+        const SNAPSHOT_RUNS: usize = 200;
+
+        let mut session = make_session();
+
+        for i in 0..MESSAGE_COUNT {
+            session.add_message(ChatMessage {
+                message_id: format!("m{}", i),
+                role: if i % 2 == 0 { "user".to_string() } else { "assistant".to_string() },
+                content: ChatContent::SimpleText("x".repeat(MESSAGE_SIZE)),
+                ..Default::default()
+            });
+        }
+
+        let emit_start = Instant::now();
+        for _ in 0..1_500 {
+            session.emit(ChatEvent::QueueUpdated {
+                queue_size: 0,
+                queued_items: vec![],
+            });
+        }
+        let emit_elapsed = emit_start.elapsed();
+
+        let snapshot_start = Instant::now();
+        for _ in 0..SNAPSHOT_RUNS {
+            let snapshot = session.snapshot();
+            if let ChatEvent::Snapshot { messages, .. } = snapshot {
+                assert_eq!(messages.len(), MESSAGE_COUNT);
+            } else {
+                panic!("Expected Snapshot event");
+            }
+        }
+        let snapshot_elapsed = snapshot_start.elapsed();
+
+        println!(
+            "STRESS_BASELINE session_emit_snapshot: messages={}, msg_size={}, emits=1500, snapshots={}, emit_ms={}, snapshot_ms={}",
+            MESSAGE_COUNT,
+            MESSAGE_SIZE,
+            SNAPSHOT_RUNS,
+            emit_elapsed.as_millis(),
+            snapshot_elapsed.as_millis(),
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_broadcast_lag_recovery_baseline() {
+        let event_count = limits().event_channel_capacity * 3;
+
+        let mut session = make_session();
+        let mut slow_rx = session.subscribe();
+
+        let emit_start = Instant::now();
+        for i in 0..event_count {
+            session.emit(ChatEvent::MessageAdded {
+                message: ChatMessage {
+                    message_id: format!("lag-{}", i),
+                    role: "assistant".to_string(),
+                    content: ChatContent::SimpleText("delta".to_string()),
+                    ..Default::default()
+                },
+                index: i,
+            });
+        }
+        let emit_elapsed = emit_start.elapsed();
+
+        let recv_start = Instant::now();
+        let mut received = 0usize;
+        let mut lagged = 0usize;
+        loop {
+            match slow_rx.try_recv() {
+                Ok(_envelope) => {
+                    received += 1;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_skipped)) => {
+                    lagged += 1;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                | Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+        let recv_elapsed = recv_start.elapsed();
+
+        assert!(lagged > 0, "Expected lagged receiver under saturation");
+
+        println!(
+            "STRESS_BASELINE broadcast_lag: emitted={}, received={}, lagged_events={}, emit_ms={}, drain_ms={}, channel_capacity={}",
+            event_count,
+            received,
+            lagged,
+            emit_elapsed.as_millis(),
+            recv_elapsed.as_millis(),
+            limits().event_channel_capacity,
+        );
     }
 }

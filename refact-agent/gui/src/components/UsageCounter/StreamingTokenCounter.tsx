@@ -8,7 +8,6 @@ import {
   selectIsStreaming,
   selectIsWaiting,
   selectMessages,
-  selectStreamVersion,
 } from "../../features/Chat";
 import {
   AssistantMessage,
@@ -54,7 +53,6 @@ export const StreamingTokenCounter: React.FC = () => {
   const isStreaming = useAppSelector(selectIsStreaming);
   const isWaiting = useAppSelector(selectIsWaiting);
   const messages = useAppSelector(selectMessages);
-  void useAppSelector(selectStreamVersion);
 
   const [visible, setVisible] = useState(() => isStreaming || isWaiting);
   const [displayTokens, setDisplayTokens] = useState(0);

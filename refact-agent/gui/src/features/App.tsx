@@ -15,22 +15,18 @@ import {
 import { useGetPing } from "../hooks/useGetPing";
 import { useBrowserOnlineStatus } from "../hooks/useBrowserOnlineStatus";
 import { FIMDebug } from "./FIM";
-import { store, persistor, RootState } from "../app/store";
+import { store, persistor } from "../app/store";
 import { Provider } from "react-redux";
 import { PersistGate } from "redux-persist/integration/react";
 import { Theme } from "../components/Theme";
 import { useEventBusForWeb } from "../hooks/useEventBusForWeb";
 import { Statistics } from "./Statistics";
-import { Welcome } from "../components/Tour";
 import {
   push,
   popBackTo,
   pop,
   selectPages,
 } from "../features/Pages/pagesSlice";
-import { TourProvider } from "./Tour";
-import { Tour } from "../components/Tour";
-import { TourEnd } from "../components/Tour/TourEnd";
 import { useEventBusForApp } from "../hooks/useEventBusForApp";
 import { AbortControllerProvider } from "../contexts/AbortControllers";
 import { Toolbar } from "../components/Toolbar";
@@ -74,8 +70,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
 
   const { chatPageChange, setIsChatStreaming, setIsChatReady } =
     useEventsBusForIDE();
-  const tourState = useAppSelector((state: RootState) => state.tour);
-  const historyState = useAppSelector((state: RootState) => state.history);
+  const historyState = useAppSelector((state) => state.history);
   const maybeCurrentActiveGroup = useAppSelector(selectActiveGroup);
   const chatId = useAppSelector(selectChatId);
   const providersQuery = useGetConfiguredProvidersQuery();
@@ -118,7 +113,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
 
   const isLoggedIn =
     isPageInHistory("history") ||
-    isPageInHistory("welcome") ||
     isPageInHistory("chat");
 
   const hasCloudSession =
@@ -137,9 +131,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
 
   useEffect(() => {
     if (canAccessApp && !isLoggedIn) {
-      if (tourState.type === "in_progress" && tourState.step === 1) {
-        dispatch(push({ name: "welcome" }));
-      } else if (
+      if (
         !historyState.isLoading &&
         Object.keys(historyState.chats).length === 0 &&
         maybeCurrentActiveGroup
@@ -160,7 +152,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
     canResolveProviderAccess,
     isLoggedIn,
     dispatch,
-    tourState,
     historyState,
     maybeCurrentActiveGroup,
   ]);
@@ -179,10 +170,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   useEffectOnce(() => {
     setIsChatReady(true);
   });
-
-  const startTour = () => {
-    dispatch(push({ name: "history" }));
-  };
 
   const goBack = useCallback(() => {
     dispatch(pop());
@@ -240,10 +227,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
         <UserSurvey />
         {renderedPage.name === "login page" && <LoginPage />}
         {pageSwitching && <ChatLoading />}
-        {!pageSwitching && renderedPage.name === "welcome" && (
-          <Welcome onPressNext={startTour} />
-        )}
-        {!pageSwitching && renderedPage.name === "tour end" && <TourEnd />}
         {!pageSwitching && renderedPage.name === "history" && (
           <Sidebar
             takingNotes={false}
@@ -322,9 +305,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
           />
         )}
       </PageWrapper>
-      {renderedPage.name !== "welcome" && (
-        <Tour page={pages[pages.length - 1].name} />
-      )}
     </Flex>
   );
 };
@@ -336,11 +316,9 @@ export const App = () => {
       <UrqlProvider>
         <PersistGate persistor={persistor}>
           <Theme>
-            <TourProvider>
-              <AbortControllerProvider>
-                <InnerApp />
-              </AbortControllerProvider>
-            </TourProvider>
+            <AbortControllerProvider>
+              <InnerApp />
+            </AbortControllerProvider>
           </Theme>
         </PersistGate>
       </UrqlProvider>

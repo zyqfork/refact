@@ -41,13 +41,13 @@
 .content {
   min-width: 300px;
   max-width: 400px;
-  max-height: 480px;
-  overflow: hidden;
+  max-height: 600px;
+  overflow: visible;
   padding: var(--space-2);
 }
 
 .contentAdvancedOpen {
-  max-height: 620px;
+  max-height: 780px;
 }
 
 .modelSection {

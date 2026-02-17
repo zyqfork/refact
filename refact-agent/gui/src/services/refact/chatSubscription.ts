@@ -206,6 +206,8 @@ export type SubscriptionOptions = {
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 45_000;
+const MAX_SSE_BUFFER_CHARS = 8_000_000;
+const MAX_SSE_EVENT_CHARS = 4_000_000;
 
 export function subscribeToChatEvents(
   chatId: string,
@@ -295,8 +297,17 @@ export function subscribeToChatEvents(
 
         armIdleTimer();
         callbacks.onActivity?.();
-        buffer += decoder.decode(value, { stream: true });
-        buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const chunk = decoder
+          .decode(value, { stream: true })
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n");
+        buffer += chunk;
+
+        if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+          abortReason = `SSE buffer exceeded ${MAX_SSE_BUFFER_CHARS} chars`;
+          abortController.abort();
+          break;
+        }
 
         const blocks = buffer.split("\n\n");
         buffer = blocks.pop() ?? "";
@@ -316,6 +327,15 @@ export function subscribeToChatEvents(
 
           const dataStr = dataLines.join("\n");
           if (dataStr === "[DONE]") continue;
+          if (dataStr.length > MAX_SSE_EVENT_CHARS) {
+            if (process.env.NODE_ENV === "development") {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[SSE] Event too large (${dataStr.length} chars), skipping`,
+              );
+            }
+            continue;
+          }
 
           try {
             const parsed = JSON.parse(dataStr) as unknown;

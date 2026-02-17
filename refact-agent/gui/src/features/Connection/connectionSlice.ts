@@ -134,6 +134,9 @@ export const selectSseConnections = (state: RootState) =>
 export const selectSseConnectionForChat = (state: RootState, chatId: string) =>
   state.connection.sseConnections[chatId];
 
+export const selectSseStatusForChat = (state: RootState, chatId: string) =>
+  state.connection.sseConnections[chatId]?.status ?? null;
+
 export const selectCurrentChatSseStatus = (
   state: RootState,
 ): SseStatus | null => {

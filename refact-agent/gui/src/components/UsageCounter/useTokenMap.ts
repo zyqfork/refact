@@ -115,11 +115,12 @@ function createEmptyCategoryTokens(): CategoryTokens {
   };
 }
 
-export function useTokenMap(): TokenMap | null {
+export function useTokenMap(enabled = true): TokenMap | null {
   const messages = useAppSelector(selectMessages);
   const maxContextTokens = useAppSelector(selectEffectiveMaxContextTokens) ?? 0;
 
   return useMemo(() => {
+    if (!enabled) return null;
     if (messages.length === 0) return null;
 
     const assistantIndices: number[] = [];
@@ -277,5 +278,5 @@ export function useTokenMap(): TokenMap | null {
       segments,
       top_items,
     };
-  }, [messages, maxContextTokens]);
+  }, [enabled, messages, maxContextTokens]);
 }

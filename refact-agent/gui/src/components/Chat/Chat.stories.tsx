@@ -22,7 +22,6 @@ import {
   noTools,
   // noChatLinks,
 } from "../../__fixtures__/msw";
-import { TourProvider } from "../../features/Tour";
 import { Flex } from "@radix-ui/themes";
 import { http, HttpResponse } from "msw";
 
@@ -40,9 +39,6 @@ const Template: React.FC<{
   };
   const threadId = threadData.id;
   const store = setUpStore({
-    tour: {
-      type: "finished",
-    },
     chat: {
       current_thread_id: threadId,
       open_thread_ids: [threadId],
@@ -78,19 +74,17 @@ const Template: React.FC<{
   return (
     <Provider store={store}>
       <Theme>
-        <TourProvider>
-          <AbortControllerProvider>
-            <Flex direction="column" align="stretch" height="100dvh">
-              <Chat
-                unCalledTools={false}
-                host="web"
-                tabbed={false}
-                backFromChat={() => ({})}
-                maybeSendToSidebar={() => ({})}
-              />
-            </Flex>
-          </AbortControllerProvider>
-        </TourProvider>
+        <AbortControllerProvider>
+          <Flex direction="column" align="stretch" height="100dvh">
+            <Chat
+              unCalledTools={false}
+              host="web"
+              tabbed={false}
+              backFromChat={() => ({})}
+              maybeSendToSidebar={() => ({})}
+            />
+          </Flex>
+        </AbortControllerProvider>
       </Theme>
     </Provider>
   );

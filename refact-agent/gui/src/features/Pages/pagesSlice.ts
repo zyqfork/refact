@@ -1,13 +1,5 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 
-export interface Welcome {
-  name: "welcome";
-}
-
-export interface TourEnd {
-  name: "tour end";
-}
-
 export interface HistoryList {
   name: "history";
 }
@@ -83,8 +75,6 @@ export interface IntegrationsSetupPage {
 
 export type Page =
   | ChatPage
-  | Welcome
-  | TourEnd
   | HistoryList
   | FIMDebugPage
   | StatisticsPage

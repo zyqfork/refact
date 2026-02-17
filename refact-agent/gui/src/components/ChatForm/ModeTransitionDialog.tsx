@@ -22,6 +22,20 @@ import { selectLspPort, selectApiKey } from "../../features/Config/configSlice";
 import { regenerate } from "../../services/refact/chatCommands";
 import styles from "./ModeTransitionDialog.module.css";
 
+function extractErrorMessage(err: unknown): string {
+  if (err && typeof err === "object") {
+    const obj = err as Record<string, unknown>;
+    if (obj.data && typeof obj.data === "object") {
+      const data = obj.data as Record<string, unknown>;
+      if (typeof data.detail === "string") return data.detail;
+    }
+    if (typeof obj.data === "string") return obj.data;
+    if (typeof obj.message === "string") return obj.message;
+  }
+  if (err instanceof Error) return err.message;
+  return "Failed to apply transition";
+}
+
 type ModeTransitionDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -84,12 +98,7 @@ export const ModeTransitionDialog: React.FC<ModeTransitionDialogProps> = ({
 
       await regenerate(result.new_chat_id, port, apiKey ?? undefined);
     } catch (err) {
-      const errorMessage =
-        err && typeof err === "object" && "data" in err
-          ? String((err as { data?: unknown }).data)
-          : err instanceof Error
-            ? err.message
-            : "Failed to apply transition";
+      const errorMessage = extractErrorMessage(err);
       setError(errorMessage);
     }
   }, [

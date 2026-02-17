@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo } from "react";
 import { Text, Flex, Skeleton, Box } from "@radix-ui/themes";
 import { Select, type SelectProps } from "../Select";
-import { useTourRefs } from "../../features/Tour";
 import { useCapsForToolUse } from "../../hooks";
 import { useAppDispatch } from "../../hooks";
 import { push } from "../../features/Pages/pagesSlice";
@@ -9,7 +8,6 @@ import { RichModelSelectItem } from "../Select/RichModelSelectItem";
 import { enrichAndGroupModels } from "../../utils/enrichModels";
 
 export const CapsSelect: React.FC<{ disabled?: boolean }> = ({ disabled }) => {
-  const refs = useTourRefs();
   const caps = useCapsForToolUse();
   const dispatch = useAppDispatch();
 
@@ -86,7 +84,7 @@ export const CapsSelect: React.FC<{ disabled?: boolean }> = ({ disabled }) => {
   });
 
   return (
-    <Flex gap="2" align="center" wrap="wrap" ref={(x) => refs.setUseModel(x)}>
+    <Flex gap="2" align="center" wrap="wrap">
       <Skeleton loading={caps.loading}>
         <Box>
           {allDisabled ? (

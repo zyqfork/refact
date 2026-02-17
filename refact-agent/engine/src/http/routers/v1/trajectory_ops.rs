@@ -415,11 +415,11 @@ pub async fn handle_mode_transition_apply(
         )
     };
 
-    // Check session state - only allow when idle or error
-    if !matches!(session_state, SessionState::Idle | SessionState::Error | SessionState::Completed) {
+    // Check session state - only block when actively streaming (generating)
+    if matches!(session_state, SessionState::Generating) {
         return Err(ScratchError::new(
             StatusCode::CONFLICT,
-            format!("Cannot transition chat in state '{}', must be idle, completed, or error", session_state),
+            format!("Cannot transition chat while generating, please wait or abort first"),
         ));
     }
 

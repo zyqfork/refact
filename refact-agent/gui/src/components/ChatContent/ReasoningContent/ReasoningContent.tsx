@@ -113,7 +113,10 @@ export const ReasoningContent: React.FC<ReasoningContentProps> = ({
       contentRef.current &&
       !userScrolledRef.current
     ) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+      const el = contentRef.current;
+      if (el.scrollTop + el.clientHeight + 20 < el.scrollHeight) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   }, [reasoningContent, isStreaming, isOpen]);
 

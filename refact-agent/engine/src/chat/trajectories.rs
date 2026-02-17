@@ -1143,7 +1143,7 @@ pub fn validate_trajectory_id(id: &str) -> Result<(), ScratchError> {
 
 async fn atomic_write_json(path: &PathBuf, data: &impl Serialize) -> Result<(), String> {
     let tmp_path = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
     fs::write(&tmp_path, &json)
         .await
         .map_err(|e| e.to_string())?;
@@ -2685,5 +2685,114 @@ mod tests {
         assert!(snapshot.is_title_generated);
         assert_eq!(snapshot.version, 5);
         assert_eq!(snapshot.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn stress_atomic_write_json_pressure_baseline() {
+        const MESSAGE_COUNT: usize = 1_000;
+        const MESSAGE_SIZE: usize = 1_024;
+        const WRITE_RUNS: usize = 120;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("stress-trajectory.json");
+
+        let mut messages = Vec::with_capacity(MESSAGE_COUNT);
+        for i in 0..MESSAGE_COUNT {
+            messages.push(json!({
+                "message_id": format!("m{}", i),
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "x".repeat(MESSAGE_SIZE),
+            }));
+        }
+
+        let payload = json!({
+            "id": "stress-chat",
+            "title": "Stress",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "model": "test/model",
+            "mode": "agent",
+            "tool_use": "agent",
+            "messages": messages,
+            "isTitleGenerated": false,
+        });
+
+        let start = Instant::now();
+        for _ in 0..WRITE_RUNS {
+            atomic_write_json(&file_path, &payload).await.unwrap();
+        }
+        let elapsed = start.elapsed();
+
+        assert!(file_path.exists());
+        let content = fs::read_to_string(&file_path).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.get("id").and_then(|v| v.as_str()), Some("stress-chat"));
+        assert_eq!(
+            parsed
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.len()),
+            Some(MESSAGE_COUNT)
+        );
+
+        println!(
+            "STRESS_BASELINE trajectory_atomic_write: writes={}, messages={}, msg_size={}, elapsed_ms={}",
+            WRITE_RUNS,
+            MESSAGE_COUNT,
+            MESSAGE_SIZE,
+            elapsed.as_millis(),
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn stress_trajectory_json_read_parse_baseline() {
+        const MESSAGE_COUNT: usize = 1_200;
+        const MESSAGE_SIZE: usize = 512;
+        const PARSE_RUNS: usize = 400;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("stress-parse.json");
+
+        let mut messages = Vec::with_capacity(MESSAGE_COUNT);
+        for i in 0..MESSAGE_COUNT {
+            messages.push(json!({
+                "message_id": format!("msg-{}", i),
+                "role": if i % 3 == 0 { "assistant" } else { "user" },
+                "content": "y".repeat(MESSAGE_SIZE),
+            }));
+        }
+
+        let data = TrajectoryData {
+            id: "parse-chat".to_string(),
+            title: "Parse".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            model: "test/model".to_string(),
+            mode: "agent".to_string(),
+            tool_use: "agent".to_string(),
+            messages,
+            extra: serde_json::Map::new(),
+        };
+
+        atomic_write_json(&file_path, &data).await.unwrap();
+        let content = fs::read_to_string(&file_path).await.unwrap();
+
+        let start = Instant::now();
+        for _ in 0..PARSE_RUNS {
+            let parsed: TrajectoryData = serde_json::from_str(&content).unwrap();
+            assert_eq!(parsed.id, "parse-chat");
+            assert_eq!(parsed.messages.len(), MESSAGE_COUNT);
+        }
+        let elapsed = start.elapsed();
+
+        println!(
+            "STRESS_BASELINE trajectory_read_parse: parses={}, messages={}, msg_size={}, elapsed_ms={}",
+            PARSE_RUNS,
+            MESSAGE_COUNT,
+            MESSAGE_SIZE,
+            elapsed.as_millis(),
+        );
     }
 }
