@@ -76,24 +76,12 @@ async fn mark_agent_as_failed(
 
             if card.column == "done" || card.column == "failed" {
                 let card_title = card.title.clone();
-                let _ = card;
-                let agents_active = board
-                    .cards
-                    .iter()
-                    .filter(|c| c.column == "doing" && c.assignee.is_some())
-                    .count();
-                return Ok((card_title, agents_active == 0));
+                return Ok((card_title, false));
             }
 
             if card.column != "doing" {
                 let card_title = card.title.clone();
-                let _ = card;
-                let agents_active = board
-                    .cards
-                    .iter()
-                    .filter(|c| c.column == "doing" && c.assignee.is_some())
-                    .count();
-                return Ok((card_title, agents_active == 0));
+                return Ok((card_title, false));
             }
 
             if let Some(ref expected_id) = expected_agent_id_owned {
@@ -105,13 +93,7 @@ async fn mark_agent_as_failed(
                         card.assignee
                     );
                     let card_title = card.title.clone();
-                    let _ = card;
-                    let agents_active = board
-                        .cards
-                        .iter()
-                        .filter(|c| c.column == "doing" && c.assignee.is_some())
-                        .count();
-                    return Ok((card_title, agents_active == 0));
+                    return Ok((card_title, false));
                 }
             }
 
