@@ -8,6 +8,7 @@
 // use crate::yaml_configs::create_configs::{integrations_enabled_cfg, read_yaml_into_value};
 
 pub mod browser_runtime;
+pub mod browser_types;
 pub mod integr_abstract;
 pub mod integr_bitbucket;
 pub mod integr_chrome;
