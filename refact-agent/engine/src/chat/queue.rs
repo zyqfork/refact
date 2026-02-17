@@ -9,6 +9,7 @@ use crate::call_validation::{ChatContent, ChatMessage};
 use crate::global_context::GlobalContext;
 
 use super::types::*;
+use super::browser_context;
 use super::content::parse_content_with_attachments;
 use super::generation::{start_generation, prepare_session_preamble_and_knowledge};
 use super::tools::execute_tools_with_session;
@@ -469,9 +470,45 @@ pub async fn process_command_queue(
                     Vec::new()
                 };
 
+                let (has_browser_meta, attach_screenshot_on_send, browser_chat_id) = {
+                    let session = session_arc.lock().await;
+                    let bm = session.thread.browser_meta.as_ref();
+                    (
+                        bm.is_some(),
+                        bm.map_or(false, |m| m.attach_screenshot_on_send),
+                        session.chat_id.clone(),
+                    )
+                };
+
+                let browser_ctx_result = browser_context::maybe_insert_browser_context(
+                    gcx.clone(),
+                    &browser_chat_id,
+                    has_browser_meta,
+                    attach_screenshot_on_send,
+                ).await;
+
+                let is_oversize = browser_ctx_result.as_ref().map_or(false, |(_, oversize)| oversize.is_some());
+
+                if is_oversize {
+                    if let Some((_, Some(ref info))) = browser_ctx_result {
+                        let mut session = session_arc.lock().await;
+                        tracing::warn!(
+                            "Browser context oversize for chat {}: {} bytes ({} actions, {} console, {} network)",
+                            browser_chat_id, info.total_bytes, info.action_count, info.console_count, info.network_count
+                        );
+                        session.set_runtime_state(SessionState::Idle, None);
+                    }
+                    continue;
+                }
+
                 // Reacquire lock to add messages
                 {
                     let mut session = session_arc.lock().await;
+
+                    if let Some((ctx_msg, _)) = browser_ctx_result {
+                        session.add_message(ctx_msg);
+                    }
+
                     let parsed_content = parse_content_with_attachments(&content, &attachments);
                     let user_message = ChatMessage {
                         message_id: Uuid::new_v4().to_string(),
