@@ -9,6 +9,7 @@ import { popBackTo, push } from "../../features/Pages/pagesSlice";
 import {
   useCreateTaskMutation,
   useUpdateTaskMetaMutation,
+  useListTasksQuery,
 } from "../../services/refact/tasks";
 import {
   selectOpenTasksFromRoot,
@@ -92,6 +93,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const openTasks = useAppSelector(selectOpenTasksFromRoot);
   const { newChatEnabled } = useActiveTeamsGroup();
   const { data: modesData } = useGetChatModesQuery(undefined);
+  const { data: tasksList = [] } = useListTasksQuery(undefined);
 
   const { openSettings, openHotKeys } = useEventsBusForIDE();
   const [createTask] = useCreateTaskMutation();
@@ -427,6 +429,8 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
               );
             }
 
+            const taskMeta = tasksList.find((t) => t.id === task.id);
+
             return (
               <div
                 key={`task-${task.id}`}
@@ -447,7 +451,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                   title={taskName}
                 >
                   <span className={styles.tabStatus}>
-                    <StatusDot state="idle" size="small" />
+                    <StatusDot state={getStatusFromSessionState(taskMeta?.planner_session_state)} size="small" />
                   </span>
                   <span className={styles.tabTitle}>{taskName}</span>
                 </button>
