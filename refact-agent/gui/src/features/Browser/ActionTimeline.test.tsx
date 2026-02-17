@@ -35,6 +35,8 @@ function makeRuntime(overrides?: Partial<BrowserRuntime>): BrowserRuntime {
     timeline_open: false,
     timeline_filter_source: "all",
     timeline_filter_type: null,
+    notification: null,
+    oversize_info: null,
     ...overrides,
   };
 }

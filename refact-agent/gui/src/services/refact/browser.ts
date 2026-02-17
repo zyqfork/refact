@@ -10,6 +10,7 @@ import {
   BROWSER_RECORD_ANIMATION,
   BROWSER_HANDOFF,
   BROWSER_STATUS,
+  BROWSER_CONTEXT_ESTIMATE,
 } from "./consts";
 
 export type BrowserStartRequest = {
@@ -84,6 +85,22 @@ export type BrowserHandoffResponse = {
   status: string;
   from_chat_id: string;
   to_chat_id: string;
+};
+
+export type BrowserContextEstimateRequest = {
+  chat_id: string;
+  include_actions: boolean;
+  include_console: boolean;
+  include_network: boolean;
+  include_mutations: boolean;
+  include_screenshot: boolean;
+  last_n_actions: number;
+  last_n_console: number;
+  last_n_network: number;
+};
+
+export type BrowserContextEstimateResponse = {
+  estimated_bytes: number;
 };
 
 export type BrowserStatusRequest = {
@@ -267,6 +284,24 @@ export const browserApi = createApi({
         });
         if (response.error) return { error: response.error };
         return { data: response.data as BrowserStatusResponse };
+      },
+    }),
+    browserContextEstimate: builder.mutation<
+      BrowserContextEstimateResponse,
+      BrowserContextEstimateRequest
+    >({
+      async queryFn(args, api, extraOptions, baseQuery) {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort as unknown as number;
+        const url = `http://127.0.0.1:${port}${BROWSER_CONTEXT_ESTIMATE}`;
+        const response = await baseQuery({
+          url,
+          method: "POST",
+          body: args,
+          ...extraOptions,
+        });
+        if (response.error) return { error: response.error };
+        return { data: response.data as BrowserContextEstimateResponse };
       },
     }),
   }),

@@ -48,7 +48,12 @@ export const BrowserPanel = ({ chatId }: BrowserPanelProps) => {
             latest_frame: null,
             picker_active: false,
             attach_screenshot_on_send: false,
+            timeline: [],
+            timeline_open: false,
+            timeline_filter_source: "all",
+            timeline_filter_type: null,
             notification: null,
+            oversize_info: null,
           },
         }),
       );

@@ -15,6 +15,8 @@ import { useCheckpoints } from "../../hooks/useCheckpoints";
 import { Checkpoints } from "../../features/Checkpoints";
 import { TaskProgressWidget } from "../TaskProgressWidget";
 import { BrowserPanel } from "../../features/Browser/BrowserPanel";
+import { BrowserContextGuard } from "../../features/Browser/BrowserContextGuard";
+import { selectBrowserContextOversize } from "../../features/Browser/browserSlice";
 import { selectThreadById } from "../../features/Chat/Thread/selectors";
 
 export type ChatProps = {
@@ -39,6 +41,9 @@ export const Chat: React.FC<ChatProps> = ({
   const chatId = useAppSelector(selectChatId);
   const thread = useAppSelector((state) => selectThreadById(state, chatId));
   const isBrowserMode = thread?.mode === "browser";
+  const browserOversizeInfo = useAppSelector((state) =>
+    selectBrowserContextOversize(state, chatId),
+  );
 
   const { submit, abort, retryFromIndex } = useChatActions();
 
@@ -92,6 +97,12 @@ export const Chat: React.FC<ChatProps> = ({
           </Container>
 
           {shouldCheckpointsPopupBeShown && <Checkpoints />}
+
+          {browserOversizeInfo && (
+            <Container>
+              <BrowserContextGuard chatId={chatId} />
+            </Container>
+          )}
 
           {!isStreaming && preventSend && unCalledTools && (
             <Flex py="4">

@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { RootState } from "../../app/store";
+import { applyChatEvent } from "../Chat/Thread/actions";
 
 export type DiffBox = {
   x: number;
@@ -35,6 +36,17 @@ export type BrowserNotification = {
   message: string;
 };
 
+export type BrowserContextOversizeInfo = {
+  total_bytes: number;
+  action_count: number;
+  action_bytes: number;
+  console_count: number;
+  console_bytes: number;
+  network_count: number;
+  network_bytes: number;
+  mutation_bytes: number;
+};
+
 
 export type BrowserRuntime = {
   runtime_id: string;
@@ -51,6 +63,7 @@ export type BrowserRuntime = {
   timeline_filter_source: TimelineFilterSource;
   timeline_filter_type: string | null;
   notification: BrowserNotification | null;
+  oversize_info: BrowserContextOversizeInfo | null;
 };
 
 export type BrowserState = {
@@ -202,6 +215,45 @@ export const browserSlice = createSlice({
         };
       }
     },
+    setBrowserContextOversize(
+      state,
+      action: PayloadAction<{
+        chatId: string;
+        info: BrowserContextOversizeInfo;
+      }>,
+    ) {
+      const rt = state.runtimes[action.payload.chatId];
+      if (rt) {
+        rt.oversize_info = action.payload.info;
+      }
+    },
+    clearBrowserContextOversize(
+      state,
+      action: PayloadAction<{ chatId: string }>,
+    ) {
+      const rt = state.runtimes[action.payload.chatId];
+      if (rt) {
+        rt.oversize_info = null;
+      }
+    },
+  },
+  extraReducers: (builder) => {
+    builder.addCase(applyChatEvent, (state, action) => {
+      const event = action.payload;
+      if (event.type !== "browser_context_oversize") return;
+      const rt = state.runtimes[event.chat_id];
+      if (!rt) return;
+      rt.oversize_info = {
+        total_bytes: event.total_bytes,
+        action_count: event.action_count,
+        action_bytes: event.action_bytes,
+        console_count: event.console_count,
+        console_bytes: event.console_bytes,
+        network_count: event.network_count,
+        network_bytes: event.network_bytes,
+        mutation_bytes: event.mutation_bytes,
+      };
+    });
   },
 });
 
@@ -220,6 +272,8 @@ export const {
   setBrowserNotification,
   markBrowserDetached,
   markBrowserClosed,
+  setBrowserContextOversize,
+  clearBrowserContextOversize,
 } = browserSlice.actions;
 
 export const selectBrowserRuntime = (
@@ -251,3 +305,9 @@ export const selectTimelineFilterType = (
   chatId: string,
 ): string | null =>
   state.browser.runtimes[chatId]?.timeline_filter_type ?? null;
+
+export const selectBrowserContextOversize = (
+  state: RootState,
+  chatId: string,
+): BrowserContextOversizeInfo | null =>
+  state.browser.runtimes[chatId]?.oversize_info ?? null;

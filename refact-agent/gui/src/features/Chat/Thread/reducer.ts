@@ -1461,6 +1461,14 @@ export const chatReducer = createReducer(initialState, (builder) => {
         rt.last_applied_seq = event.seq;
         break;
       }
+
+      case "browser_context_oversize": {
+        if (!rt) break;
+        rt.streaming = false;
+        rt.waiting_for_response = false;
+        rt.last_applied_seq = event.seq;
+        break;
+      }
     }
   });
 

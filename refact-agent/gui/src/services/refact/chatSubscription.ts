@@ -185,6 +185,19 @@ export type EventEnvelope =
       type: "runtime_updated";
       state: string;
       error?: string;
+    }
+  | {
+      chat_id: string;
+      seq: string;
+      type: "browser_context_oversize";
+      total_bytes: number;
+      action_count: number;
+      action_bytes: number;
+      console_count: number;
+      console_bytes: number;
+      network_count: number;
+      network_bytes: number;
+      mutation_bytes: number;
     };
 
 export type ChatEventEnvelope = EventEnvelope;

@@ -105,6 +105,7 @@ export const BrowserToolbar = ({ chatId }: BrowserToolbarProps) => {
             timeline_filter_source: "all",
             timeline_filter_type: null,
             notification: null,
+            oversize_info: null,
           },
         }),
       );
@@ -267,10 +268,15 @@ export const BrowserToolbar = ({ chatId }: BrowserToolbarProps) => {
               latest_frame: runtime?.latest_frame ?? null,
               picker_active: false,
               attach_screenshot_on_send: false,
+              timeline: [],
+              timeline_open: false,
+              timeline_filter_source: "all",
+              timeline_filter_type: null,
               notification: {
                 type: "attached",
                 message: "Browser session attached",
               },
+              oversize_info: null,
             },
           }),
         );
