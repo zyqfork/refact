@@ -10,6 +10,7 @@ use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::tasks::storage;
 use crate::tasks::types::StatusUpdate;
+use crate::tasks::events::{TaskEvent, emit_task_event};
 
 fn make_source() -> ToolSource {
     ToolSource {
@@ -78,7 +79,12 @@ impl Tool for ToolTaskAgentUpdate {
         });
         board.rev += 1;
 
-        storage::save_board(gcx, &task_id, &board).await?;
+        storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx, TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
 
         let result = format!("Added status update to card {}", card_id);
         Ok((
@@ -163,6 +169,11 @@ impl Tool for ToolTaskAgentComplete {
         board.rev += 1;
 
         storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
         storage::update_task_stats(gcx, &task_id).await?;
 
         let result = format!("Completed card {} and moved to Done", card_id);
@@ -249,6 +260,11 @@ impl Tool for ToolTaskAgentFail {
         board.rev += 1;
 
         storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
         storage::update_task_stats(gcx, &task_id).await?;
 
         let result = format!(
@@ -346,6 +362,11 @@ impl Tool for ToolTaskAssignAgent {
         board.rev += 1;
 
         storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
         storage::update_task_stats(gcx, &task_id).await?;
 
         let result = format!(

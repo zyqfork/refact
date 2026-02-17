@@ -11,6 +11,7 @@ use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
 use crate::tasks::storage;
 use crate::tasks::types::BoardCard;
+use crate::tasks::events::{TaskEvent, emit_task_event};
 
 fn make_source() -> ToolSource {
     ToolSource {
@@ -232,6 +233,11 @@ impl Tool for ToolTaskBoardCreateCard {
         board.rev += 1;
 
         storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
         storage::update_task_stats(gcx, &task_id).await?;
 
         let result = format!("Created card {} in Planned column", card_id);
@@ -355,7 +361,12 @@ impl Tool for ToolTaskBoardUpdateCard {
         }
 
         board.rev += 1;
-        storage::save_board(gcx, &task_id, &board).await?;
+        storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx, TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
 
         let result = format!("Updated card {}", card_id);
         Ok((
@@ -487,6 +498,11 @@ impl Tool for ToolTaskBoardMoveCard {
         board.rev += 1;
 
         storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
         storage::update_task_stats(gcx, &task_id).await?;
 
         let result = format!("Moved card {} from {} to {}", card_id, old_column, column);
@@ -584,6 +600,11 @@ impl Tool for ToolTaskBoardDeleteCard {
         board.rev += 1;
 
         storage::save_board(gcx.clone(), &task_id, &board).await?;
+        emit_task_event(gcx.clone(), TaskEvent::BoardChanged {
+            task_id: task_id.to_string(),
+            rev: board.rev,
+            board: board.clone(),
+        }).await;
         storage::update_task_stats(gcx, &task_id).await?;
 
         let result = format!("Deleted card {}", card_id);
