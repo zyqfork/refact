@@ -303,9 +303,10 @@ pub struct GlobalContext {
     pub voice_service: SharedVoiceService,
     pub project_registry_cache: Arc<StdRwLock<RegistryCacheManager>>,
     pub providers: Arc<ARwLock<ProviderRegistry>>,
-
     // Fast in-memory index for knowledge cards. Built asynchronously.
     pub knowledge_index: Arc<AMutex<KnowledgeIndex>>,
+
+    pub llm_stats_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::stats::event::LlmCallEvent>>,
 }
 
 pub type SharedGlobalContext = Arc<ARwLock<GlobalContext>>; // TODO: remove this type alias, confusing
@@ -604,6 +605,7 @@ pub async fn create_global_context(
                 .unwrap_or_default()
         )),
         knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
+        llm_stats_sender: None,
     };
     let gcx = Arc::new(ARwLock::new(cx));
     crate::files_in_workspace::watcher_init(gcx.clone()).await;
@@ -707,8 +709,8 @@ pub mod tests {
             project_registry_cache: Arc::new(StdRwLock::new(RegistryCacheManager::new())),
             providers: Arc::new(ARwLock::new(ProviderRegistry::default())),
             knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
+            llm_stats_sender: None,
         };
-
         Arc::new(ARwLock::new(cx))
     }
 }

@@ -70,6 +70,7 @@ mod knowledge_graph;
 mod knowledge_index;
 mod memories;
 mod privacy;
+mod stats;
 mod tasks;
 mod trajectory_memos;
 mod voice;
