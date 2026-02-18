@@ -41,7 +41,7 @@ pub async fn start_background_tasks(
     gcx: Arc<ARwLock<GlobalContext>>,
     _config_dir: &PathBuf,
 ) -> BackgroundTasksHolder {
-    let (stats_tx, stats_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stats_tx, stats_rx) = tokio::sync::mpsc::channel(1000);
     {
         let mut gcx_locked = gcx.write().await;
         gcx_locked.llm_stats_sender = Some(stats_tx);

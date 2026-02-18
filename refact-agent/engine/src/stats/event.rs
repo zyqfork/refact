@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmCallEvent {
+    pub id: String,
     pub ts_start: String,
     pub ts_end: String,
     pub duration_ms: u64,

@@ -9,6 +9,8 @@ use crate::global_context::GlobalContext;
 use crate::stats::event::LlmCallEvent;
 
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
+const BATCH_SIZE: usize = 32;
+const BATCH_TIMEOUT_MS: u64 = 100;
 
 async fn find_current_sequence(stats_dir: &PathBuf) -> u32 {
     let mut max_seq: u32 = 0;
@@ -35,9 +37,13 @@ fn seq_filename(stats_dir: &PathBuf, seq: u32) -> PathBuf {
     stats_dir.join(format!("{:08}.jsonl", seq))
 }
 
+async fn get_initial_file_size(path: &PathBuf) -> u64 {
+    fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
+}
+
 pub async fn stats_writer_task(
     gcx: Arc<ARwLock<GlobalContext>>,
-    mut receiver: tokio::sync::mpsc::UnboundedReceiver<LlmCallEvent>,
+    mut receiver: tokio::sync::mpsc::Receiver<LlmCallEvent>,
 ) {
     let stats_dir = crate::stats::get_stats_dir(gcx.clone()).await;
     if let Err(e) = fs::create_dir_all(&stats_dir).await {
@@ -59,45 +65,64 @@ pub async fn stats_writer_task(
             return;
         }
     };
+    let mut current_size = get_initial_file_size(&current_path).await;
 
     loop {
-        let event = match receiver.recv().await {
-            Some(e) => e,
-            None => break,
-        };
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
 
-        let line = match serde_json::to_string(&event) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("stats: failed to serialize event: {}", e);
-                continue;
+        let first = tokio::time::timeout(
+            std::time::Duration::from_millis(BATCH_TIMEOUT_MS),
+            receiver.recv(),
+        ).await;
+
+        match first {
+            Ok(Some(event)) => {
+                batch.push(event);
+                while batch.len() < BATCH_SIZE {
+                    match receiver.try_recv() {
+                        Ok(e) => batch.push(e),
+                        Err(_) => break,
+                    }
+                }
             }
-        };
+            Ok(None) => break,
+            Err(_) => continue,
+        }
 
-        let need_rotation = match file_size(&current_path).await {
-            Ok(sz) => sz >= MAX_FILE_SIZE,
-            Err(_) => false,
-        };
-
-        if need_rotation {
-            let _ = file.flush().await;
-            drop(file);
-            seq += 1;
-            current_path = seq_filename(&stats_dir, seq);
-            file = match open_append(&current_path).await {
-                Ok(f) => f,
+        for event in batch {
+            let line = match serde_json::to_string(&event) {
+                Ok(s) => s,
                 Err(e) => {
-                    warn!("stats: failed to open new file {:?}: {}", current_path, e);
-                    return;
+                    warn!("stats: failed to serialize event: {}", e);
+                    continue;
                 }
             };
+
+            let bytes = format!("{}\n", line);
+            let byte_len = bytes.len() as u64;
+
+            if current_size + byte_len > MAX_FILE_SIZE {
+                let _ = file.flush().await;
+                drop(file);
+                seq += 1;
+                current_path = seq_filename(&stats_dir, seq);
+                file = match open_append(&current_path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        warn!("stats: failed to open new file {:?}: {}", current_path, e);
+                        return;
+                    }
+                };
+                current_size = 0;
+            }
+
+            if let Err(e) = file.write_all(bytes.as_bytes()).await {
+                warn!("stats: write failed: {}", e);
+                continue;
+            }
+            current_size += byte_len;
         }
 
-        let bytes = format!("{}\n", line);
-        if let Err(e) = file.write_all(bytes.as_bytes()).await {
-            warn!("stats: write failed: {}", e);
-            continue;
-        }
         if let Err(e) = file.flush().await {
             warn!("stats: flush failed: {}", e);
         }
@@ -112,11 +137,6 @@ async fn open_append(path: &PathBuf) -> std::io::Result<fs::File> {
         .await
 }
 
-async fn file_size(path: &PathBuf) -> std::io::Result<u64> {
-    let meta = fs::metadata(path).await?;
-    Ok(meta.len())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +145,7 @@ mod tests {
 
     fn make_event(i: u64) -> LlmCallEvent {
         LlmCallEvent {
+            id: format!("test-id-{}", i),
             ts_start: "2024-01-01T00:00:00Z".to_string(),
             ts_end: "2024-01-01T00:00:01Z".to_string(),
             duration_ms: i * 100,
@@ -161,7 +182,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stats_dir = dir.path().to_path_buf();
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LlmCallEvent>();
+        let (tx, rx) = tokio::sync::mpsc::channel::<LlmCallEvent>(1000);
 
         let stats_dir_clone = stats_dir.clone();
         let handle = tokio::spawn(async move {
@@ -178,8 +199,8 @@ mod tests {
             }
         });
 
-        tx.send(make_event(1)).unwrap();
-        tx.send(make_event(2)).unwrap();
+        tx.send(make_event(1)).await.unwrap();
+        tx.send(make_event(2)).await.unwrap();
         drop(tx);
         handle.await.unwrap();
 
@@ -204,13 +225,13 @@ mod tests {
         let large_content = "x".repeat((MAX_FILE_SIZE) as usize);
         fs::write(&file1_path, &large_content).await.unwrap();
 
-        let current_size = file_size(&file1_path).await.unwrap();
-        assert!(current_size >= MAX_FILE_SIZE, "file should be at/above limit");
+        let initial_size = get_initial_file_size(&file1_path).await;
+        assert!(initial_size >= MAX_FILE_SIZE, "file should be at/above limit");
 
         let seq = find_current_sequence(&stats_dir).await;
         assert_eq!(seq, 1);
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LlmCallEvent>();
+        let (tx, rx) = tokio::sync::mpsc::channel::<LlmCallEvent>(1000);
         let stats_dir_clone = stats_dir.clone();
 
         let handle = tokio::spawn(async move {
@@ -218,24 +239,28 @@ mod tests {
             if current_seq == 0 { current_seq = 1; }
             let mut current_path = seq_filename(&stats_dir_clone, current_seq);
             let mut file = open_append(&current_path).await.unwrap();
+            let mut current_size = get_initial_file_size(&current_path).await;
 
             let mut receiver = rx;
             while let Some(event) = receiver.recv().await {
-                let need_rotation = file_size(&current_path).await.map(|sz| sz >= MAX_FILE_SIZE).unwrap_or(false);
-                if need_rotation {
+                let line = serde_json::to_string(&event).unwrap();
+                let bytes = format!("{}\n", line);
+                let byte_len = bytes.len() as u64;
+                if current_size + byte_len > MAX_FILE_SIZE {
                     file.flush().await.unwrap();
                     drop(file);
                     current_seq += 1;
                     current_path = seq_filename(&stats_dir_clone, current_seq);
                     file = open_append(&current_path).await.unwrap();
+                    current_size = 0;
                 }
-                let line = serde_json::to_string(&event).unwrap();
-                file.write_all(format!("{}\n", line).as_bytes()).await.unwrap();
+                file.write_all(bytes.as_bytes()).await.unwrap();
+                current_size += byte_len;
                 file.flush().await.unwrap();
             }
         });
 
-        tx.send(make_event(42)).unwrap();
+        tx.send(make_event(42)).await.unwrap();
         drop(tx);
         handle.await.unwrap();
 

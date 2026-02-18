@@ -29,8 +29,9 @@ pub struct StatsEventsQuery {
 #[derive(serde::Serialize)]
 struct EventsResponse<'a> {
     events: &'a [crate::stats::event::LlmCallEvent],
-    total_count: usize,
-    has_more: bool,
+    total: usize,
+    limit: usize,
+    offset: usize,
 }
 
 pub async fn handle_v1_stats_llm_summary(
@@ -74,22 +75,22 @@ pub async fn handle_v1_stats_llm_events(
         events.retain(|e| e.success == success);
     }
 
-    let total_count = events.len();
+    let total = events.len();
     let limit = params.limit.unwrap_or(100).min(1000);
     let offset = params.offset.unwrap_or(0);
 
-    let page: &[_] = if offset >= total_count {
+    let page: &[_] = if offset >= total {
         &[]
     } else {
-        let end = (offset + limit).min(total_count);
+        let end = (offset + limit).min(total);
         &events[offset..end]
     };
-    let has_more = offset + limit < total_count;
 
     let resp = EventsResponse {
         events: page,
-        total_count,
-        has_more,
+        total,
+        limit,
+        offset,
     };
     let body = serde_json::to_string(&resp).map_err(|e| {
         ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("serialization error: {}", e))

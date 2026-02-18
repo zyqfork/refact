@@ -42,12 +42,12 @@ pub fn read_stats_events_filtered(
             match serde_json::from_str::<LlmCallEvent>(line) {
                 Ok(event) => {
                     if let Some(from) = from {
-                        if event.ts_start.as_str() < from {
+                        if event.ts_start.get(..10).unwrap_or("") < from.get(..10).unwrap_or("") {
                             continue;
                         }
                     }
                     if let Some(to) = to {
-                        if event.ts_start.as_str() > to {
+                        if event.ts_start.get(..10).unwrap_or("") > to.get(..10).unwrap_or("") {
                             continue;
                         }
                     }
@@ -90,45 +90,58 @@ pub struct StatsByModel {
     pub model_id: String,
     pub provider: String,
     pub model: String,
-    pub calls: usize,
-    pub prompt_tokens: usize,
-    pub completion_tokens: usize,
+    pub total_calls: usize,
+    pub successful_calls: usize,
+    pub failed_calls: usize,
+    pub total_prompt_tokens: usize,
+    pub total_completion_tokens: usize,
     pub total_tokens: usize,
-    pub cost_usd: f64,
+    pub total_cache_read_tokens: usize,
+    pub total_cache_creation_tokens: usize,
+    pub total_cost_usd: f64,
+    pub total_duration_ms: u64,
     pub avg_duration_ms: u64,
 }
 
 #[derive(serde::Serialize)]
 pub struct StatsByProvider {
     pub provider: String,
-    pub calls: usize,
+    pub total_calls: usize,
+    pub successful_calls: usize,
+    pub failed_calls: usize,
+    pub total_prompt_tokens: usize,
+    pub total_completion_tokens: usize,
     pub total_tokens: usize,
-    pub cost_usd: f64,
+    pub total_cost_usd: f64,
+    pub total_duration_ms: u64,
 }
 
 #[derive(serde::Serialize)]
 pub struct StatsByDay {
     pub date: String,
-    pub calls: usize,
-    pub prompt_tokens: usize,
-    pub completion_tokens: usize,
-    pub cost_usd: f64,
+    pub total_calls: usize,
+    pub successful_calls: usize,
+    pub total_prompt_tokens: usize,
+    pub total_completion_tokens: usize,
+    pub total_tokens: usize,
+    pub total_cost_usd: f64,
+    pub total_duration_ms: u64,
 }
 
 #[derive(serde::Serialize)]
 pub struct StatsByMode {
     pub mode: String,
-    pub calls: usize,
+    pub total_calls: usize,
     pub total_tokens: usize,
-    pub cost_usd: f64,
+    pub total_cost_usd: f64,
 }
 
 #[derive(serde::Serialize)]
 pub struct TopConversation {
     pub chat_id: String,
-    pub calls: usize,
+    pub total_calls: usize,
     pub total_tokens: usize,
-    pub cost_usd: f64,
+    pub total_cost_usd: f64,
     pub model_id: String,
 }
 
@@ -165,41 +178,51 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
     struct ModelAcc {
         provider: String,
         model: String,
-        calls: usize,
-        prompt_tokens: usize,
-        completion_tokens: usize,
+        total_calls: usize,
+        successful_calls: usize,
+        total_prompt_tokens: usize,
+        total_completion_tokens: usize,
         total_tokens: usize,
-        cost_usd: f64,
-        duration_ms: u64,
+        total_cache_read_tokens: usize,
+        total_cache_creation_tokens: usize,
+        total_cost_usd: f64,
+        total_duration_ms: u64,
     }
     let mut by_model_map: HashMap<String, ModelAcc> = HashMap::new();
 
     struct ProviderAcc {
-        calls: usize,
+        total_calls: usize,
+        successful_calls: usize,
+        total_prompt_tokens: usize,
+        total_completion_tokens: usize,
         total_tokens: usize,
-        cost_usd: f64,
+        total_cost_usd: f64,
+        total_duration_ms: u64,
     }
     let mut by_provider_map: HashMap<String, ProviderAcc> = HashMap::new();
 
     struct DayAcc {
-        calls: usize,
-        prompt_tokens: usize,
-        completion_tokens: usize,
-        cost_usd: f64,
+        total_calls: usize,
+        successful_calls: usize,
+        total_prompt_tokens: usize,
+        total_completion_tokens: usize,
+        total_tokens: usize,
+        total_cost_usd: f64,
+        total_duration_ms: u64,
     }
     let mut by_day_map: HashMap<String, DayAcc> = HashMap::new();
 
     struct ModeAcc {
-        calls: usize,
+        total_calls: usize,
         total_tokens: usize,
-        cost_usd: f64,
+        total_cost_usd: f64,
     }
     let mut by_mode_map: HashMap<String, ModeAcc> = HashMap::new();
 
     struct ConvAcc {
-        calls: usize,
+        total_calls: usize,
         total_tokens: usize,
-        cost_usd: f64,
+        total_cost_usd: f64,
         model_id: String,
     }
     let mut conv_map: HashMap<String, ConvAcc> = HashMap::new();
@@ -220,59 +243,79 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         let model_acc = by_model_map.entry(event.model_id.clone()).or_insert_with(|| ModelAcc {
             provider: event.provider.clone(),
             model: event.model.clone(),
-            calls: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
+            total_calls: 0,
+            successful_calls: 0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
             total_tokens: 0,
-            cost_usd: 0.0,
-            duration_ms: 0,
+            total_cache_read_tokens: 0,
+            total_cache_creation_tokens: 0,
+            total_cost_usd: 0.0,
+            total_duration_ms: 0,
         });
-        model_acc.calls += 1;
-        model_acc.prompt_tokens += event.prompt_tokens;
-        model_acc.completion_tokens += event.completion_tokens;
+        model_acc.total_calls += 1;
+        if event.success { model_acc.successful_calls += 1; }
+        model_acc.total_prompt_tokens += event.prompt_tokens;
+        model_acc.total_completion_tokens += event.completion_tokens;
         model_acc.total_tokens += event.total_tokens;
-        model_acc.cost_usd += event.cost_usd.unwrap_or(0.0);
-        model_acc.duration_ms += event.duration_ms;
+        model_acc.total_cache_read_tokens += event.cache_read_tokens.unwrap_or(0);
+        model_acc.total_cache_creation_tokens += event.cache_creation_tokens.unwrap_or(0);
+        model_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
+        model_acc.total_duration_ms += event.duration_ms;
 
         let provider_acc = by_provider_map.entry(event.provider.clone()).or_insert_with(|| ProviderAcc {
-            calls: 0,
+            total_calls: 0,
+            successful_calls: 0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
             total_tokens: 0,
-            cost_usd: 0.0,
+            total_cost_usd: 0.0,
+            total_duration_ms: 0,
         });
-        provider_acc.calls += 1;
+        provider_acc.total_calls += 1;
+        if event.success { provider_acc.successful_calls += 1; }
+        provider_acc.total_prompt_tokens += event.prompt_tokens;
+        provider_acc.total_completion_tokens += event.completion_tokens;
         provider_acc.total_tokens += event.total_tokens;
-        provider_acc.cost_usd += event.cost_usd.unwrap_or(0.0);
+        provider_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
+        provider_acc.total_duration_ms += event.duration_ms;
 
         let day = event.ts_start.get(..10).unwrap_or("").to_string();
         let day_acc = by_day_map.entry(day).or_insert_with(|| DayAcc {
-            calls: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            cost_usd: 0.0,
+            total_calls: 0,
+            successful_calls: 0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            total_tokens: 0,
+            total_cost_usd: 0.0,
+            total_duration_ms: 0,
         });
-        day_acc.calls += 1;
-        day_acc.prompt_tokens += event.prompt_tokens;
-        day_acc.completion_tokens += event.completion_tokens;
-        day_acc.cost_usd += event.cost_usd.unwrap_or(0.0);
+        day_acc.total_calls += 1;
+        if event.success { day_acc.successful_calls += 1; }
+        day_acc.total_prompt_tokens += event.prompt_tokens;
+        day_acc.total_completion_tokens += event.completion_tokens;
+        day_acc.total_tokens += event.prompt_tokens + event.completion_tokens;
+        day_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
+        day_acc.total_duration_ms += event.duration_ms;
 
         let mode_acc = by_mode_map.entry(event.mode.clone()).or_insert_with(|| ModeAcc {
-            calls: 0,
+            total_calls: 0,
             total_tokens: 0,
-            cost_usd: 0.0,
+            total_cost_usd: 0.0,
         });
-        mode_acc.calls += 1;
+        mode_acc.total_calls += 1;
         mode_acc.total_tokens += event.total_tokens;
-        mode_acc.cost_usd += event.cost_usd.unwrap_or(0.0);
+        mode_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
 
         let conv_acc = conv_map.entry(event.chat_id.clone()).or_insert_with(|| ConvAcc {
-            calls: 0,
+            total_calls: 0,
             total_tokens: 0,
-            cost_usd: 0.0,
+            total_cost_usd: 0.0,
             model_id: event.model_id.clone(),
         });
-        conv_acc.calls += 1;
+        conv_acc.total_calls += 1;
         conv_acc.total_tokens += event.total_tokens;
-        conv_acc.cost_usd += event.cost_usd.unwrap_or(0.0);
+        conv_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
         conv_acc.model_id = event.model_id.clone();
     }
 
@@ -287,12 +330,17 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
             model_id,
             provider: acc.provider,
             model: acc.model,
-            calls: acc.calls,
-            prompt_tokens: acc.prompt_tokens,
-            completion_tokens: acc.completion_tokens,
+            total_calls: acc.total_calls,
+            successful_calls: acc.successful_calls,
+            failed_calls: acc.total_calls - acc.successful_calls,
+            total_prompt_tokens: acc.total_prompt_tokens,
+            total_completion_tokens: acc.total_completion_tokens,
             total_tokens: acc.total_tokens,
-            cost_usd: acc.cost_usd,
-            avg_duration_ms: if acc.calls > 0 { acc.duration_ms / acc.calls as u64 } else { 0 },
+            total_cache_read_tokens: acc.total_cache_read_tokens,
+            total_cache_creation_tokens: acc.total_cache_creation_tokens,
+            total_cost_usd: acc.total_cost_usd,
+            total_duration_ms: acc.total_duration_ms,
+            avg_duration_ms: if acc.total_calls > 0 { acc.total_duration_ms / acc.total_calls as u64 } else { 0 },
         })
         .collect();
     by_model.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
@@ -301,9 +349,14 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         .into_iter()
         .map(|(provider, acc)| StatsByProvider {
             provider,
-            calls: acc.calls,
+            total_calls: acc.total_calls,
+            successful_calls: acc.successful_calls,
+            failed_calls: acc.total_calls - acc.successful_calls,
+            total_prompt_tokens: acc.total_prompt_tokens,
+            total_completion_tokens: acc.total_completion_tokens,
             total_tokens: acc.total_tokens,
-            cost_usd: acc.cost_usd,
+            total_cost_usd: acc.total_cost_usd,
+            total_duration_ms: acc.total_duration_ms,
         })
         .collect();
     by_provider.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
@@ -312,10 +365,13 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         .into_iter()
         .map(|(date, acc)| StatsByDay {
             date,
-            calls: acc.calls,
-            prompt_tokens: acc.prompt_tokens,
-            completion_tokens: acc.completion_tokens,
-            cost_usd: acc.cost_usd,
+            total_calls: acc.total_calls,
+            successful_calls: acc.successful_calls,
+            total_prompt_tokens: acc.total_prompt_tokens,
+            total_completion_tokens: acc.total_completion_tokens,
+            total_tokens: acc.total_tokens,
+            total_cost_usd: acc.total_cost_usd,
+            total_duration_ms: acc.total_duration_ms,
         })
         .collect();
     by_day.sort_by(|a, b| a.date.cmp(&b.date));
@@ -324,9 +380,9 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         .into_iter()
         .map(|(mode, acc)| StatsByMode {
             mode,
-            calls: acc.calls,
+            total_calls: acc.total_calls,
             total_tokens: acc.total_tokens,
-            cost_usd: acc.cost_usd,
+            total_cost_usd: acc.total_cost_usd,
         })
         .collect();
     by_mode.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
@@ -335,9 +391,9 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         .into_iter()
         .map(|(chat_id, acc)| TopConversation {
             chat_id,
-            calls: acc.calls,
+            total_calls: acc.total_calls,
             total_tokens: acc.total_tokens,
-            cost_usd: acc.cost_usd,
+            total_cost_usd: acc.total_cost_usd,
             model_id: acc.model_id,
         })
         .collect();
@@ -377,6 +433,7 @@ mod tests {
 
     fn make_event(i: u64, success: bool) -> LlmCallEvent {
         LlmCallEvent {
+            id: format!("test-id-{}", i),
             ts_start: format!("2026-02-{:02}T00:00:00Z", i + 1),
             ts_end: format!("2026-02-{:02}T00:00:01Z", i + 1),
             duration_ms: 1000 + i * 100,
@@ -452,8 +509,13 @@ mod tests {
         assert_eq!(summary.totals.total_messages_sent, 9);
         assert!((summary.totals.total_cost_usd - 0.003).abs() < 1e-9);
         assert_eq!(summary.by_model.len(), 1);
+        assert_eq!(summary.by_model[0].total_calls, 3);
+        assert_eq!(summary.by_model[0].successful_calls, 2);
+        assert_eq!(summary.by_model[0].failed_calls, 1);
         assert_eq!(summary.by_mode.len(), 1);
+        assert_eq!(summary.by_mode[0].total_calls, 3);
         assert_eq!(summary.top_conversations.len(), 3);
+        assert_eq!(summary.top_conversations[0].total_calls, 1);
     }
 
     #[test]
@@ -466,8 +528,36 @@ mod tests {
             let line = serde_json::to_string(&event).unwrap();
             writeln!(file, "{}", line).unwrap();
         }
-        let events = read_stats_events_filtered(dir.path(), Some("2026-02-03T"), Some("2026-02-05T"));
-        assert_eq!(events.len(), 2, "should include events on day 3 and 4 only");
+        let events = read_stats_events_filtered(dir.path(), Some("2026-02-03"), Some("2026-02-05"));
+        assert_eq!(events.len(), 3, "should include events on days 3, 4, and 5 (inclusive)");
+    }
+
+    #[test]
+    fn test_date_filter_inclusive_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("00000001.jsonl");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        for i in 1u64..=5 {
+            let event = make_event(i, true);
+            let line = serde_json::to_string(&event).unwrap();
+            writeln!(file, "{}", line).unwrap();
+        }
+        let events = read_stats_events_filtered(dir.path(), Some("2026-02-03"), Some("2026-02-03"));
+        assert_eq!(events.len(), 1, "should include exactly the event on the boundary date");
+        assert_eq!(events[0].chat_id, "chat-2");
+    }
+
+    #[test]
+    fn test_date_filter_date_only_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("00000001.jsonl");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        let mut event = make_event(1, true);
+        event.ts_start = "2026-02-05T23:59:59Z".to_string();
+        let line = serde_json::to_string(&event).unwrap();
+        writeln!(file, "{}", line).unwrap();
+        let events = read_stats_events_filtered(dir.path(), None, Some("2026-02-05"));
+        assert_eq!(events.len(), 1, "event at 23:59:59 on to-date should be included");
     }
 
     #[test]

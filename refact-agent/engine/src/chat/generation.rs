@@ -528,7 +528,7 @@ async fn run_streaming_generation(
     };
     let mut attempt = 0;
 
-    let result = loop {
+    let (result, pending_success_event) = loop {
         attempt += 1;
         if can_retry_with_temp_bump && attempt > 1 {
             let retry_temp = TEMPERATURE_BUMP * (attempt - 2) as f32;
@@ -787,6 +787,7 @@ async fn run_streaming_generation(
             Err(e) => {
                 let (provider, model) = split_model_provider(&model_id_for_stats);
                 let event = LlmCallEvent {
+                    id: uuid::Uuid::new_v4().to_string(),
                     ts_start: call_ts_start.clone(),
                     ts_end: call_ts_end.clone(),
                     duration_ms,
@@ -817,7 +818,9 @@ async fn run_streaming_generation(
                     cost_usd: None,
                 };
                 if let Some(sender) = &gcx.read().await.llm_stats_sender {
-                    let _ = sender.send(event);
+                    if sender.try_send(event).is_err() {
+                        tracing::warn!("stats: channel full, dropping LLM call event");
+                    }
                 }
             }
             Ok(_) => {}
@@ -834,6 +837,7 @@ async fn run_streaming_generation(
             };
             let (provider, model) = split_model_provider(&model_id_for_stats);
             let event = LlmCallEvent {
+                id: uuid::Uuid::new_v4().to_string(),
                 ts_start: call_ts_start,
                 ts_end: call_ts_end,
                 duration_ms,
@@ -864,7 +868,9 @@ async fn run_streaming_generation(
                 cost_usd: draft_usage.as_ref().and_then(|u| u.metering_usd.as_ref()).map(|m| m.total_usd),
             };
             if let Some(sender) = &gcx.read().await.llm_stats_sender {
-                let _ = sender.send(event);
+                if sender.try_send(event).is_err() {
+                    tracing::warn!("stats: channel full, dropping LLM call event");
+                }
             }
 
             if attempt < max_attempts && can_retry_with_temp_bump {
@@ -967,7 +973,8 @@ async fn run_streaming_generation(
         };
         let usage_for_event = result.usage.as_ref().or(draft_usage_for_success.as_ref());
         let (provider, model) = split_model_provider(&model_id_for_stats);
-        let success_event = LlmCallEvent {
+        let pending_success_event = LlmCallEvent {
+            id: uuid::Uuid::new_v4().to_string(),
             ts_start: call_ts_start,
             ts_end: call_ts_end,
             duration_ms,
@@ -995,13 +1002,10 @@ async fn run_streaming_generation(
             cache_read_tokens: usage_for_event.and_then(|u| u.cache_read_tokens),
             cache_creation_tokens: usage_for_event.and_then(|u| u.cache_creation_tokens),
             total_tokens: usage_for_event.map(|u| u.total_tokens).unwrap_or(0),
-            cost_usd: usage_for_event.and_then(|u| u.metering_usd.as_ref()).map(|m| m.total_usd),
+            cost_usd: None,
         };
-        if let Some(sender) = &gcx.read().await.llm_stats_sender {
-            let _ = sender.send(success_event);
-        }
 
-        break result;
+        break (result, pending_success_event);
     };
 
     let (model_id, usage_for_pricing) = {
@@ -1017,6 +1021,16 @@ async fn run_streaming_generation(
     } else {
         None
     };
+
+    {
+        let mut success_event = pending_success_event;
+        success_event.cost_usd = metering_usd.as_ref().map(|m| m.total_usd);
+        if let Some(sender) = &gcx.read().await.llm_stats_sender {
+            if sender.try_send(success_event).is_err() {
+                tracing::warn!("stats: channel full, dropping LLM call event");
+            }
+        }
+    }
 
     {
         let mut session = session_arc.lock().await;

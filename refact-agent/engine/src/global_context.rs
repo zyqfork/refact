@@ -306,7 +306,7 @@ pub struct GlobalContext {
     // Fast in-memory index for knowledge cards. Built asynchronously.
     pub knowledge_index: Arc<AMutex<KnowledgeIndex>>,
 
-    pub llm_stats_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::stats::event::LlmCallEvent>>,
+    pub llm_stats_sender: Option<tokio::sync::mpsc::Sender<crate::stats::event::LlmCallEvent>>,
 }
 
 pub type SharedGlobalContext = Arc<ARwLock<GlobalContext>>; // TODO: remove this type alias, confusing
