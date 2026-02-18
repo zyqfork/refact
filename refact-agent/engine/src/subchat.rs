@@ -24,6 +24,7 @@ use crate::chat::tools::{execute_tools, ExecuteToolsOptions};
 use crate::chat::types::ThreadParams;
 use crate::chat::trajectories::save_trajectory_as;
 use crate::chat::trajectory_ops::sanitize_messages_for_new_thread;
+use crate::stats::event::{LlmCallEvent, split_model_provider, sum_metering_coins};
 
 
 fn get_context_files_from_messages(messages: &[ChatMessage]) -> Vec<String> {
@@ -1102,6 +1103,22 @@ async fn subchat_stream(
         return Ok(vec![messages]);
     }
 
+    let messages_count = messages.len();
+    let tools_count = tools.len();
+
+    let (stats_chat_id, stats_root_chat_id, stats_task_id, stats_task_role, stats_agent_id, stats_card_id) = {
+        let ccx_locked = ccx.lock().await;
+        let tm = ccx_locked.task_meta.as_ref();
+        (
+            ccx_locked.chat_id.clone(),
+            ccx_locked.root_chat_id.clone(),
+            tm.map(|t| t.task_id.clone()),
+            tm.map(|t| t.role.clone()),
+            tm.and_then(|t| t.agent_id.clone()),
+            tm.and_then(|t| t.card_id.clone()),
+        )
+    };
+
     let prepared = prepare_chat_passthrough(
         gcx.clone(),
         ccx.clone(),
@@ -1141,7 +1158,101 @@ async fn subchat_stream(
         progress_sender,
         progress_tool_call_id.map(|s| s.to_string()),
     );
-    let results = run_llm_stream(gcx.clone(), params, &mut collector).await?;
+
+    let call_ts_start = chrono::Utc::now().to_rfc3339();
+    let call_start = std::time::Instant::now();
+
+    let results = run_llm_stream(gcx.clone(), params, &mut collector).await;
+
+    let duration_ms = call_start.elapsed().as_millis() as u64;
+    let call_ts_end = chrono::Utc::now().to_rfc3339();
+
+    let (provider, model_short) = split_model_provider(model_id);
+
+    match &results {
+        Err(e) => {
+            let event = LlmCallEvent {
+                id: uuid::Uuid::new_v4().to_string(),
+                ts_start: call_ts_start,
+                ts_end: call_ts_end,
+                duration_ms,
+                chat_id: stats_chat_id,
+                root_chat_id: Some(stats_root_chat_id),
+                mode: mode_id.to_string(),
+                task_id: stats_task_id,
+                task_role: stats_task_role,
+                agent_id: stats_agent_id,
+                card_id: stats_card_id,
+                model_id: model_id.to_string(),
+                provider,
+                model: model_short,
+                messages_count,
+                tools_count,
+                max_tokens: max_new_tokens,
+                temperature,
+                success: false,
+                error_message: Some(e.chars().take(200).collect()),
+                finish_reason: None,
+                attempt_n: 1,
+                retry_reason: None,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                total_tokens: 0,
+                cost_usd: None,
+                cost_coins: None,
+            };
+            if let Some(sender) = &gcx.read().await.llm_stats_sender {
+                if sender.try_send(event).is_err() {
+                    tracing::warn!("stats: channel full, dropping LLM call event");
+                }
+            }
+        }
+        Ok(ref results_ok) => {
+            let usage = results_ok.first().and_then(|r| r.usage.as_ref());
+            let cost_coins = results_ok.first().map(|r| &r.extra).and_then(|e| sum_metering_coins(e));
+            let event = LlmCallEvent {
+                id: uuid::Uuid::new_v4().to_string(),
+                ts_start: call_ts_start,
+                ts_end: call_ts_end,
+                duration_ms,
+                chat_id: stats_chat_id,
+                root_chat_id: Some(stats_root_chat_id),
+                mode: mode_id.to_string(),
+                task_id: stats_task_id,
+                task_role: stats_task_role,
+                agent_id: stats_agent_id,
+                card_id: stats_card_id,
+                model_id: model_id.to_string(),
+                provider,
+                model: model_short,
+                messages_count,
+                tools_count,
+                max_tokens: max_new_tokens,
+                temperature,
+                success: true,
+                error_message: None,
+                finish_reason: results_ok.first().and_then(|r| r.finish_reason.clone()),
+                attempt_n: 1,
+                retry_reason: None,
+                prompt_tokens: usage.map(|u| u.prompt_tokens).unwrap_or(0),
+                completion_tokens: usage.map(|u| u.completion_tokens).unwrap_or(0),
+                cache_read_tokens: usage.and_then(|u| u.cache_read_tokens),
+                cache_creation_tokens: usage.and_then(|u| u.cache_creation_tokens),
+                total_tokens: usage.map(|u| u.total_tokens).unwrap_or(0),
+                cost_usd: usage.and_then(|u| u.metering_usd.as_ref()).map(|m| m.total_usd),
+                cost_coins,
+            };
+            if let Some(sender) = &gcx.read().await.llm_stats_sender {
+                if sender.try_send(event).is_err() {
+                    tracing::warn!("stats: channel full, dropping LLM call event");
+                }
+            }
+        }
+    }
+
+    let results = results?;
 
     info!(
         "stream generation took {:?}ms",
