@@ -16,7 +16,7 @@ import { ErrorCallout } from "../../../components/Callout";
 import { useAppearance } from "../../../hooks";
 import {
   formatTokenCount,
-  formatCost,
+  formatCostDisplay,
   formatDuration,
 } from "../utils/formatters";
 import { dateRangeToApiArgs } from "../utils/dateRange";
@@ -65,12 +65,28 @@ function sortProviders(
   });
 }
 
+function getCssVar(name: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return value || fallback;
+}
+
 export const UsageTab: React.FC<Props> = ({ dateRange }) => {
   const { data, isLoading, isError } = useGetStatsSummaryQuery(
     dateRangeToApiArgs(dateRange),
   );
   const { isDarkMode } = useAppearance();
-  const axisColor = isDarkMode ? "#ffffff" : "#646464";
+  const axisColor = getCssVar("--gray-11", isDarkMode ? "#ffffff" : "#646464");
+  const chartPalette = [
+    getCssVar("--accent-9", "#5470c6"),
+    getCssVar("--accent-7", "#91cc75"),
+    getCssVar("--yellow-9", "#fac858"),
+    getCssVar("--crimson-9", "#ee6666"),
+    getCssVar("--cyan-9", "#73c0de"),
+    getCssVar("--orange-9", "#fc8452"),
+  ];
 
   const [modelSort, setModelSort] = useState<{ key: SortKey; asc: boolean }>({
     key: "total_tokens",
@@ -104,8 +120,15 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
   );
 
   const barOption = {
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    legend: { data: ["Prompt Tokens", "Completion Tokens"] },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      textStyle: { color: getCssVar("--gray-12", axisColor) },
+    },
+    legend: {
+      data: ["Prompt Tokens", "Completion Tokens"],
+      textStyle: { color: getCssVar("--gray-12", axisColor) },
+    },
     grid: {
       left: "3%",
       right: "4%",
@@ -124,6 +147,9 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
       {
         type: "value",
         axisLine: { lineStyle: { color: axisColor } },
+        splitLine: {
+          lineStyle: { color: getCssVar("--gray-5", "#333") },
+        },
       },
     ],
     series: [
@@ -132,14 +158,14 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
         type: "bar",
         stack: "tokens",
         data: days.map((d) => d.total_prompt_tokens),
-        itemStyle: { color: "#5470c6" },
+        itemStyle: { color: chartPalette[0] },
       },
       {
         name: "Completion Tokens",
         type: "bar",
         stack: "tokens",
         data: days.map((d) => d.total_completion_tokens),
-        itemStyle: { color: "#91cc75" },
+        itemStyle: { color: chartPalette[1] },
       },
     ],
   };
@@ -150,7 +176,15 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
   }));
 
   const pieOption = {
-    tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+    tooltip: {
+      trigger: "item",
+      formatter: "{b}: {c} ({d}%)",
+      textStyle: { color: getCssVar("--gray-12", axisColor) },
+    },
+    legend: {
+      textStyle: { color: getCssVar("--gray-12", axisColor) },
+    },
+    color: chartPalette,
     series: [
       {
         type: "pie",
@@ -272,7 +306,9 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
                   <td className={styles.td}>
                     {formatTokenCount(p.total_tokens)}
                   </td>
-                  <td className={styles.td}>{formatCost(p.total_cost_usd)}</td>
+                  <td className={styles.td}>
+                    {formatCostDisplay(p.total_cost_usd, p.total_cost_coins)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -352,7 +388,9 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
                   <td className={styles.td}>
                     {formatTokenCount(m.total_completion_tokens)}
                   </td>
-                  <td className={styles.td}>{formatCost(m.total_cost_usd)}</td>
+                  <td className={styles.td}>
+                    {formatCostDisplay(m.total_cost_usd, m.total_cost_coins)}
+                  </td>
                   <td className={styles.td}>
                     {formatDuration(m.avg_duration_ms)}
                   </td>

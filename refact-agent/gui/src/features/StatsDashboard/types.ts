@@ -11,6 +11,7 @@ export interface ModelStats {
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
   total_cost_usd: number;
+  total_cost_coins: number | null;
   total_duration_ms: number;
   avg_duration_ms: number;
 }
@@ -24,6 +25,7 @@ export interface ProviderStats {
   total_completion_tokens: number;
   total_tokens: number;
   total_cost_usd: number;
+  total_cost_coins: number | null;
   total_duration_ms: number;
 }
 
@@ -35,6 +37,7 @@ export interface DayStats {
   total_completion_tokens: number;
   total_tokens: number;
   total_cost_usd: number;
+  total_cost_coins: number | null;
   total_duration_ms: number;
 }
 
@@ -43,6 +46,7 @@ export interface ModeStats {
   total_calls: number;
   total_tokens: number;
   total_cost_usd: number;
+  total_cost_coins: number | null;
 }
 
 export interface ConversationStats {
@@ -50,6 +54,7 @@ export interface ConversationStats {
   total_calls: number;
   total_tokens: number;
   total_cost_usd: number;
+  total_cost_coins: number | null;
   model_id: string;
 }
 
@@ -65,6 +70,7 @@ export interface StatsSummary {
     total_cache_read_tokens: number;
     total_cache_creation_tokens: number;
     total_cost_usd: number | null;
+    total_cost_coins: number | null;
     total_duration_ms: number;
     avg_duration_ms: number;
     total_conversations: number;
@@ -115,6 +121,7 @@ export interface StatsEvent {
   cache_creation_tokens: number | null;
   total_tokens: number;
   cost_usd: number | null;
+  cost_coins: number | null;
   duration_ms: number;
 }
 

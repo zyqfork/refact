@@ -3,7 +3,7 @@ import { Box, Flex, Text } from "@radix-ui/themes";
 import { useGetStatsSummaryQuery } from "../../../services/refact/stats";
 import { Spinner } from "../../../components/Spinner";
 import { ErrorCallout } from "../../../components/Callout";
-import { formatTokenCount, formatCost } from "../utils/formatters";
+import { formatTokenCount, formatCostDisplay } from "../utils/formatters";
 import { dateRangeToApiArgs } from "../utils/dateRange";
 import type { DateRange } from "../types";
 import styles from "./TasksTab.module.css";
@@ -48,7 +48,9 @@ export const TasksTab: React.FC<Props> = ({ dateRange }) => {
                 <td className={styles.td}>
                   {formatTokenCount(m.total_tokens)}
                 </td>
-                <td className={styles.td}>{formatCost(m.total_cost_usd)}</td>
+                <td className={styles.td}>
+                  {formatCostDisplay(m.total_cost_usd, m.total_cost_coins)}
+                </td>
               </tr>
             ))}
           </tbody>

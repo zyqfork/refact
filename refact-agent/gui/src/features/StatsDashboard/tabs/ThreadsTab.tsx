@@ -3,7 +3,11 @@ import { Box, Flex, Text } from "@radix-ui/themes";
 import { useListTrajectoriesPaginatedQuery } from "../../../services/refact/trajectories";
 import { Spinner } from "../../../components/Spinner";
 import { ErrorCallout } from "../../../components/Callout";
-import { formatTokenCount, formatCost, formatDate } from "../utils/formatters";
+import {
+  formatTokenCount,
+  formatCostDisplay,
+  formatDate,
+} from "../utils/formatters";
 import { dateRangeToApiArgs } from "../utils/dateRange";
 import type { DateRange } from "../types";
 import styles from "./ThreadsTab.module.css";
@@ -171,7 +175,10 @@ export const ThreadsTab: React.FC<Props> = ({ dateRange }) => {
                     {formatTokenCount(c.total_completion_tokens ?? 0)}
                   </td>
                   <td className={styles.td}>
-                    {formatCost(c.total_cost_usd ?? null)}
+                    {formatCostDisplay(
+                      c.total_cost_usd ?? null,
+                      c.total_coins ?? null,
+                    )}
                   </td>
                 </tr>
               ))}

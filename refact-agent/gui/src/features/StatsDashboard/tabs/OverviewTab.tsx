@@ -4,7 +4,11 @@ import { useGetStatsSummaryQuery } from "../../../services/refact/stats";
 import { Spinner } from "../../../components/Spinner";
 import { ErrorCallout } from "../../../components/Callout";
 import { StatCard } from "../components/StatCard";
-import { formatTokenCount } from "../utils/formatters";
+import {
+  formatTokenCount,
+  formatCostDisplay,
+  formatDuration,
+} from "../utils/formatters";
 import { dateRangeToApiArgs } from "../utils/dateRange";
 import type { DateRange } from "../types";
 import styles from "./OverviewTab.module.css";
@@ -40,6 +44,14 @@ export const OverviewTab: React.FC<Props> = ({ dateRange }) => {
     t.total_tokens > 0
       ? Math.round((t.total_completion_tokens / t.total_tokens) * 100)
       : 0;
+  const successRate =
+    t.total_calls > 0
+      ? Math.round((t.successful_calls / t.total_calls) * 100)
+      : 0;
+  const cacheEfficiency =
+    t.total_tokens > 0
+      ? Math.round((t.total_cache_read_tokens / t.total_tokens) * 100)
+      : 0;
 
   return (
     <Flex direction="column" gap="4">
@@ -69,6 +81,26 @@ export const OverviewTab: React.FC<Props> = ({ dateRange }) => {
           title="AI Wrote"
           value={formatTokenCount(t.total_completion_tokens)}
           subtitle={`${completionPct}% of total — most usage is from reading context`}
+        />
+        <StatCard
+          title="Success Rate"
+          value={`${successRate}%`}
+          subtitle={`${t.successful_calls} of ${t.total_calls} calls succeeded`}
+        />
+        <StatCard
+          title="Total Cost"
+          value={formatCostDisplay(t.total_cost_usd, t.total_cost_coins)}
+          subtitle="across all providers"
+        />
+        <StatCard
+          title="Avg Duration"
+          value={formatDuration(t.avg_duration_ms)}
+          subtitle="average per LLM call"
+        />
+        <StatCard
+          title="Cache Efficiency"
+          value={`${cacheEfficiency}%`}
+          subtitle={`${formatTokenCount(t.total_cache_read_tokens)} tokens read from cache`}
         />
       </Flex>
     </Flex>

@@ -10,6 +10,17 @@ export function formatCost(usd: number | null): string {
   return `$${usd.toFixed(2)}`;
 }
 
+export function formatCostDisplay(
+  usd: number | null,
+  coins: number | null,
+): string {
+  if (usd != null && usd > 0) return `$${usd.toFixed(2)}`;
+  if (coins != null && coins > 0) return `${coins.toFixed(1)} coins`;
+  if (usd != null) return `$${usd.toFixed(2)}`;
+  if (coins != null) return `${coins.toFixed(1)} coins`;
+  return "—";
+}
+
 export function formatDuration(ms: number): string {
   if (ms >= 60000) return `${(ms / 60000).toFixed(1)}min`;
   return `${(ms / 1000).toFixed(1)}s`;
