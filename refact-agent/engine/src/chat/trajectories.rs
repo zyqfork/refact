@@ -77,6 +77,12 @@ pub struct TrajectoryEvent {
     pub tasks_done: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tasks_failed: Option<i32>,
+    pub total_prompt_tokens: Option<u64>,
+    pub total_completion_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub total_cache_read_tokens: Option<u64>,
+    pub total_cache_creation_tokens: Option<u64>,
+    pub total_cost_usd: Option<f64>,
 }
 
 pub async fn get_session_state_for_chat(
@@ -130,6 +136,18 @@ pub struct TrajectoryMeta {
     pub tasks_done: i32,
     #[serde(default)]
     pub tasks_failed: i32,
+    #[serde(default)]
+    pub total_prompt_tokens: u64,
+    #[serde(default)]
+    pub total_completion_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub total_cache_read_tokens: u64,
+    #[serde(default)]
+    pub total_cache_creation_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -764,6 +782,7 @@ pub async fn save_trajectory_snapshot(
         let total_coins = calculate_total_coins_from_chat_messages(&snapshot.messages);
         let (total_lines_added, total_lines_removed) = calculate_line_changes_from_chat_messages(&snapshot.messages);
         let (tasks_total, tasks_done, tasks_failed) = calculate_task_progress_from_chat_messages(&snapshot.messages);
+        let token_totals = calculate_token_totals_from_chat_messages(&snapshot.messages);
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let event = TrajectoryEvent {
                 event_type: "updated".to_string(),
@@ -785,6 +804,12 @@ pub async fn save_trajectory_snapshot(
                 tasks_total: Some(tasks_total),
                 tasks_done: Some(tasks_done),
                 tasks_failed: Some(tasks_failed),
+                total_prompt_tokens: Some(token_totals.prompt_tokens),
+                total_completion_tokens: Some(token_totals.completion_tokens),
+                total_tokens: Some(token_totals.total_tokens),
+                total_cache_read_tokens: Some(token_totals.cache_read_tokens),
+                total_cache_creation_tokens: Some(token_totals.cache_creation_tokens),
+                total_cost_usd: token_totals.cost_usd,
             };
             let _ = tx.send(event);
         }
@@ -910,16 +935,23 @@ async fn process_trajectory_change(
                 tasks_total: None,
                 tasks_done: None,
                 tasks_failed: None,
+                total_prompt_tokens: None,
+                total_completion_tokens: None,
+                total_tokens: None,
+                total_cache_read_tokens: None,
+                total_cache_creation_tokens: None,
+                total_cost_usd: None,
             });
         }
     } else {
         let loaded = load_trajectory_for_chat(gcx.clone(), chat_id).await;
-        let (updated_at, title, is_title_generated, message_count, parent_id, link_type, root_chat_id, model, mode, total_coins, total_lines_added, total_lines_removed, tasks_total, tasks_done, tasks_failed) =
-            loaded.map(|t| {
+        let (updated_at, title, is_title_generated, message_count, parent_id, link_type, root_chat_id, model, mode, total_coins, total_lines_added, total_lines_removed, tasks_total, tasks_done, tasks_failed, token_totals) =
+            if let Some(t) = loaded {
                 let effective_root = t.thread.root_chat_id.clone().unwrap_or_else(|| t.thread.id.clone());
                 let coins = calculate_total_coins_from_chat_messages(&t.messages);
                 let (lines_added, lines_removed) = calculate_line_changes_from_chat_messages(&t.messages);
                 let (t_total, t_done, t_failed) = calculate_task_progress_from_chat_messages(&t.messages);
+                let tok = calculate_token_totals_from_chat_messages(&t.messages);
                 (
                     Some(t.updated_at),
                     Some(t.thread.title),
@@ -936,8 +968,11 @@ async fn process_trajectory_change(
                     Some(t_total),
                     Some(t_done),
                     Some(t_failed),
+                    Some(tok),
                 )
-            }).unwrap_or((None, None, None, None, None, None, None, None, None, None, None, None, None, None, None));
+            } else {
+                (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+            };
         let (session_state, session_error) = get_session_state_for_chat(&sessions, chat_id).await;
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let _ = tx.send(TrajectoryEvent {
@@ -960,6 +995,12 @@ async fn process_trajectory_change(
                 tasks_total,
                 tasks_done,
                 tasks_failed,
+                total_prompt_tokens: token_totals.as_ref().map(|t| t.prompt_tokens),
+                total_completion_tokens: token_totals.as_ref().map(|t| t.completion_tokens),
+                total_tokens: token_totals.as_ref().map(|t| t.total_tokens),
+                total_cache_read_tokens: token_totals.as_ref().map(|t| t.cache_read_tokens),
+                total_cache_creation_tokens: token_totals.as_ref().map(|t| t.cache_creation_tokens),
+                total_cost_usd: token_totals.and_then(|t| t.cost_usd),
             });
         }
     }
@@ -1413,6 +1454,12 @@ fn spawn_title_generation_task(
             tasks_total: None,
             tasks_done: None,
             tasks_failed: None,
+            total_prompt_tokens: None,
+            total_completion_tokens: None,
+            total_tokens: None,
+            total_cache_read_tokens: None,
+            total_cache_creation_tokens: None,
+            total_cost_usd: None,
         };
         if let Some(tx) = &gcx.read().await.trajectory_events_tx {
             let _ = tx.send(event);
@@ -1723,6 +1770,105 @@ fn calculate_task_progress_from_chat_messages(messages: &[ChatMessage]) -> (i32,
     (0, 0, 0)
 }
 
+struct TokenTotals {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    cost_usd: Option<f64>,
+}
+
+fn calculate_token_totals_from_messages(messages: &[serde_json::Value]) -> TokenTotals {
+    let mut prompt_tokens: u64 = 0;
+    let mut completion_tokens: u64 = 0;
+    let mut total_tokens: u64 = 0;
+    let mut cache_read_tokens: u64 = 0;
+    let mut cache_creation_tokens: u64 = 0;
+    let mut cost_usd: Option<f64> = None;
+
+    for msg in messages {
+        let usage = match msg.get("usage") {
+            Some(u) if !u.is_null() => u,
+            _ => continue,
+        };
+        if let Some(v) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
+            prompt_tokens += v;
+        }
+        if let Some(v) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
+            completion_tokens += v;
+        }
+        if let Some(v) = usage.get("total_tokens").and_then(|v| v.as_u64()) {
+            total_tokens += v;
+        }
+        for key in &["cache_read_input_tokens", "cache_read_tokens"] {
+            if let Some(v) = usage.get(key).and_then(|v| v.as_u64()) {
+                cache_read_tokens += v;
+                break;
+            }
+        }
+        for key in &["cache_creation_input_tokens", "cache_creation_tokens"] {
+            if let Some(v) = usage.get(key).and_then(|v| v.as_u64()) {
+                cache_creation_tokens += v;
+                break;
+            }
+        }
+        if let Some(total) = usage
+            .get("metering_usd")
+            .and_then(|m| m.get("total_usd"))
+            .and_then(|v| v.as_f64())
+        {
+            *cost_usd.get_or_insert(0.0) += total;
+        }
+    }
+
+    TokenTotals {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        cost_usd,
+    }
+}
+
+fn calculate_token_totals_from_chat_messages(messages: &[ChatMessage]) -> TokenTotals {
+    let mut prompt_tokens: u64 = 0;
+    let mut completion_tokens: u64 = 0;
+    let mut total_tokens: u64 = 0;
+    let mut cache_read_tokens: u64 = 0;
+    let mut cache_creation_tokens: u64 = 0;
+    let mut cost_usd: Option<f64> = None;
+
+    for msg in messages {
+        let usage = match &msg.usage {
+            Some(u) => u,
+            None => continue,
+        };
+        prompt_tokens += usage.prompt_tokens as u64;
+        completion_tokens += usage.completion_tokens as u64;
+        total_tokens += usage.total_tokens as u64;
+        if let Some(v) = usage.cache_read_tokens {
+            cache_read_tokens += v as u64;
+        }
+        if let Some(v) = usage.cache_creation_tokens {
+            cache_creation_tokens += v as u64;
+        }
+        if let Some(ref m) = usage.metering_usd {
+            *cost_usd.get_or_insert(0.0) += m.total_usd;
+        }
+    }
+
+    TokenTotals {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        cost_usd,
+    }
+}
+
 fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
     let task_meta_json = data.extra.get("task_meta");
     let task_id = task_meta_json
@@ -1761,6 +1907,7 @@ fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
     let total_coins = calculate_total_coins_from_messages(&data.messages);
     let (total_lines_added, total_lines_removed) = calculate_line_changes_from_messages(&data.messages);
     let (tasks_total, tasks_done, tasks_failed) = calculate_task_progress_from_messages(&data.messages);
+    let token_totals = calculate_token_totals_from_messages(&data.messages);
 
     TrajectoryMeta {
         id: data.id.clone(),
@@ -1784,6 +1931,12 @@ fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
         tasks_total,
         tasks_done,
         tasks_failed,
+        total_prompt_tokens: token_totals.prompt_tokens,
+        total_completion_tokens: token_totals.completion_tokens,
+        total_tokens: token_totals.total_tokens,
+        total_cache_read_tokens: token_totals.cache_read_tokens,
+        total_cache_creation_tokens: token_totals.cache_creation_tokens,
+        total_cost_usd: token_totals.cost_usd,
     }
 }
 
@@ -2167,6 +2320,7 @@ pub async fn handle_v1_trajectories_save(
     let total_coins = calculate_total_coins_from_messages(&data.messages);
     let (total_lines_added, total_lines_removed) = calculate_line_changes_from_messages(&data.messages);
     let (tasks_total, tasks_done, tasks_failed) = calculate_task_progress_from_messages(&data.messages);
+    let token_totals = calculate_token_totals_from_messages(&data.messages);
     let event = TrajectoryEvent {
         event_type: if is_new {
             "created".to_string()
@@ -2191,6 +2345,12 @@ pub async fn handle_v1_trajectories_save(
         tasks_total: Some(tasks_total),
         tasks_done: Some(tasks_done),
         tasks_failed: Some(tasks_failed),
+        total_prompt_tokens: Some(token_totals.prompt_tokens),
+        total_completion_tokens: Some(token_totals.completion_tokens),
+        total_tokens: Some(token_totals.total_tokens),
+        total_cache_read_tokens: Some(token_totals.cache_read_tokens),
+        total_cache_creation_tokens: Some(token_totals.cache_creation_tokens),
+        total_cost_usd: token_totals.cost_usd,
     };
     if let Some(tx) = &gcx.read().await.trajectory_events_tx {
         let _ = tx.send(event);
@@ -2243,6 +2403,12 @@ pub async fn handle_v1_trajectories_delete(
         tasks_total: None,
         tasks_done: None,
         tasks_failed: None,
+        total_prompt_tokens: None,
+        total_completion_tokens: None,
+        total_tokens: None,
+        total_cache_read_tokens: None,
+        total_cache_creation_tokens: None,
+        total_cost_usd: None,
     };
     if let Some(tx) = &gcx.read().await.trajectory_events_tx {
         let _ = tx.send(event);
@@ -2581,6 +2747,153 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_token_totals_from_messages_with_usage() {
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "content": "Hello",
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                    "cache_read_input_tokens": 3,
+                    "cache_creation_input_tokens": 2,
+                    "metering_usd": {
+                        "prompt_usd": 0.001,
+                        "generated_usd": 0.002,
+                        "total_usd": 0.003
+                    }
+                }
+            }),
+            json!({
+                "role": "assistant",
+                "content": "World",
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 10,
+                    "total_tokens": 30,
+                    "metering_usd": {
+                        "prompt_usd": 0.002,
+                        "generated_usd": 0.004,
+                        "total_usd": 0.006
+                    }
+                }
+            }),
+        ];
+        let totals = calculate_token_totals_from_messages(&messages);
+        assert_eq!(totals.prompt_tokens, 30);
+        assert_eq!(totals.completion_tokens, 15);
+        assert_eq!(totals.total_tokens, 45);
+        assert_eq!(totals.cache_read_tokens, 3);
+        assert_eq!(totals.cache_creation_tokens, 2);
+        let cost = totals.cost_usd.unwrap();
+        assert!((cost - 0.009).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_calculate_token_totals_from_messages_no_usage() {
+        let messages = vec![
+            json!({"role": "user", "content": "Hello"}),
+            json!({"role": "assistant", "content": "Hi"}),
+        ];
+        let totals = calculate_token_totals_from_messages(&messages);
+        assert_eq!(totals.prompt_tokens, 0);
+        assert_eq!(totals.completion_tokens, 0);
+        assert_eq!(totals.total_tokens, 0);
+        assert_eq!(totals.cache_read_tokens, 0);
+        assert_eq!(totals.cache_creation_tokens, 0);
+        assert!(totals.cost_usd.is_none());
+    }
+
+    #[test]
+    fn test_calculate_token_totals_from_messages_null_usage() {
+        let messages = vec![
+            json!({"role": "assistant", "content": "Hi", "usage": null}),
+        ];
+        let totals = calculate_token_totals_from_messages(&messages);
+        assert_eq!(totals.prompt_tokens, 0);
+        assert!(totals.cost_usd.is_none());
+    }
+
+    #[test]
+    fn test_calculate_token_totals_from_messages_alias_keys() {
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "content": "Hi",
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 3,
+                    "total_tokens": 8,
+                    "cache_read_tokens": 7,
+                    "cache_creation_tokens": 4,
+                }
+            }),
+        ];
+        let totals = calculate_token_totals_from_messages(&messages);
+        assert_eq!(totals.cache_read_tokens, 7);
+        assert_eq!(totals.cache_creation_tokens, 4);
+    }
+
+    #[test]
+    fn test_calculate_token_totals_from_chat_messages_with_usage() {
+        use crate::call_validation::{ChatUsage, MeteringUsd};
+        let messages = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                usage: Some(ChatUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 50,
+                    total_tokens: 150,
+                    cache_read_tokens: Some(10),
+                    cache_creation_tokens: Some(5),
+                    metering_usd: Some(MeteringUsd {
+                        prompt_usd: 0.01,
+                        generated_usd: 0.02,
+                        cache_read_usd: None,
+                        cache_creation_usd: None,
+                        total_usd: 0.03,
+                    }),
+                }),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                usage: Some(ChatUsage {
+                    prompt_tokens: 200,
+                    completion_tokens: 100,
+                    total_tokens: 300,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
+                    metering_usd: None,
+                }),
+                ..Default::default()
+            },
+        ];
+        let totals = calculate_token_totals_from_chat_messages(&messages);
+        assert_eq!(totals.prompt_tokens, 300);
+        assert_eq!(totals.completion_tokens, 150);
+        assert_eq!(totals.total_tokens, 450);
+        assert_eq!(totals.cache_read_tokens, 10);
+        assert_eq!(totals.cache_creation_tokens, 5);
+        let cost = totals.cost_usd.unwrap();
+        assert!((cost - 0.03).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_calculate_token_totals_from_chat_messages_no_usage() {
+        let messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                ..Default::default()
+            },
+        ];
+        let totals = calculate_token_totals_from_chat_messages(&messages);
+        assert_eq!(totals.prompt_tokens, 0);
+        assert!(totals.cost_usd.is_none());
+    }
+
+    #[test]
     fn test_trajectory_event_serialization() {
         let event = TrajectoryEvent {
             event_type: "updated".to_string(),
@@ -2602,6 +2915,12 @@ mod tests {
             tasks_total: Some(5),
             tasks_done: Some(3),
             tasks_failed: Some(1),
+            total_prompt_tokens: Some(1000),
+            total_completion_tokens: Some(500),
+            total_tokens: Some(1500),
+            total_cache_read_tokens: Some(100),
+            total_cache_creation_tokens: Some(50),
+            total_cost_usd: Some(0.042),
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "updated");
@@ -2617,6 +2936,12 @@ mod tests {
         assert_eq!(json["tasks_total"], 5);
         assert_eq!(json["tasks_done"], 3);
         assert_eq!(json["tasks_failed"], 1);
+        assert_eq!(json["total_prompt_tokens"], 1000);
+        assert_eq!(json["total_completion_tokens"], 500);
+        assert_eq!(json["total_tokens"], 1500);
+        assert_eq!(json["total_cache_read_tokens"], 100);
+        assert_eq!(json["total_cache_creation_tokens"], 50);
+        assert!((json["total_cost_usd"].as_f64().unwrap() - 0.042).abs() < 1e-9);
     }
 
     #[test]

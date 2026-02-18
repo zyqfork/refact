@@ -313,6 +313,12 @@ impl ChatSession {
                 tasks_total: None,
                 tasks_done: None,
                 tasks_failed: None,
+                total_prompt_tokens: None,
+                total_completion_tokens: None,
+                total_tokens: None,
+                total_cache_read_tokens: None,
+                total_cache_creation_tokens: None,
+                total_cost_usd: None,
             };
             let _ = tx.send(event);
         }
@@ -555,6 +561,12 @@ impl ChatSession {
                 tasks_total: None,
                 tasks_done: None,
                 tasks_failed: None,
+                total_prompt_tokens: None,
+                total_completion_tokens: None,
+                total_tokens: None,
+                total_cache_read_tokens: None,
+                total_cache_creation_tokens: None,
+                total_cost_usd: None,
             };
             let _ = tx.send(event);
         }
