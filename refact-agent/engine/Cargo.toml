@@ -6,7 +6,7 @@ lto = true
 
 [package]
 name = "refact-lsp"
-version = "7.0.1"
+version = "7.0.2"
 edition = "2021"
 build = "build.rs"
 
@@ -107,7 +107,7 @@ typetag = "0.2"
 url = "2.4.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2.3"
-which = "7.0.1"
+which = "7.0.2"
 petgraph = "0.6"
 zerocopy = "0.8.14"
 
