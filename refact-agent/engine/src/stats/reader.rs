@@ -115,6 +115,8 @@ pub struct StatsByProvider {
     pub total_prompt_tokens: usize,
     pub total_completion_tokens: usize,
     pub total_tokens: usize,
+    pub total_cache_read_tokens: usize,
+    pub total_cache_creation_tokens: usize,
     pub total_cost_usd: f64,
     pub total_cost_coins: Option<f64>,
     pub total_duration_ms: u64,
@@ -128,6 +130,8 @@ pub struct StatsByDay {
     pub total_prompt_tokens: usize,
     pub total_completion_tokens: usize,
     pub total_tokens: usize,
+    pub total_cache_read_tokens: usize,
+    pub total_cache_creation_tokens: usize,
     pub total_cost_usd: f64,
     pub total_cost_coins: Option<f64>,
     pub total_duration_ms: u64,
@@ -205,6 +209,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         total_prompt_tokens: usize,
         total_completion_tokens: usize,
         total_tokens: usize,
+        total_cache_read_tokens: usize,
+        total_cache_creation_tokens: usize,
         total_cost_usd: f64,
         total_cost_coins: Option<f64>,
         total_duration_ms: u64,
@@ -217,6 +223,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         total_prompt_tokens: usize,
         total_completion_tokens: usize,
         total_tokens: usize,
+        total_cache_read_tokens: usize,
+        total_cache_creation_tokens: usize,
         total_cost_usd: f64,
         total_cost_coins: Option<f64>,
         total_duration_ms: u64,
@@ -289,6 +297,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
             total_tokens: 0,
+            total_cache_read_tokens: 0,
+            total_cache_creation_tokens: 0,
             total_cost_usd: 0.0,
             total_cost_coins: None,
             total_duration_ms: 0,
@@ -298,6 +308,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         provider_acc.total_prompt_tokens += event.prompt_tokens;
         provider_acc.total_completion_tokens += event.completion_tokens;
         provider_acc.total_tokens += event.total_tokens;
+        provider_acc.total_cache_read_tokens += event.cache_read_tokens.unwrap_or(0);
+        provider_acc.total_cache_creation_tokens += event.cache_creation_tokens.unwrap_or(0);
         provider_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
         if let Some(coins) = event.cost_coins {
             *provider_acc.total_cost_coins.get_or_insert(0.0) += coins;
@@ -311,6 +323,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
             total_tokens: 0,
+            total_cache_read_tokens: 0,
+            total_cache_creation_tokens: 0,
             total_cost_usd: 0.0,
             total_cost_coins: None,
             total_duration_ms: 0,
@@ -320,6 +334,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
         day_acc.total_prompt_tokens += event.prompt_tokens;
         day_acc.total_completion_tokens += event.completion_tokens;
         day_acc.total_tokens += event.total_tokens;
+        day_acc.total_cache_read_tokens += event.cache_read_tokens.unwrap_or(0);
+        day_acc.total_cache_creation_tokens += event.cache_creation_tokens.unwrap_or(0);
         day_acc.total_cost_usd += event.cost_usd.unwrap_or(0.0);
         if let Some(coins) = event.cost_coins {
             *day_acc.total_cost_coins.get_or_insert(0.0) += coins;
@@ -392,6 +408,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
             total_prompt_tokens: acc.total_prompt_tokens,
             total_completion_tokens: acc.total_completion_tokens,
             total_tokens: acc.total_tokens,
+            total_cache_read_tokens: acc.total_cache_read_tokens,
+            total_cache_creation_tokens: acc.total_cache_creation_tokens,
             total_cost_usd: acc.total_cost_usd,
             total_cost_coins: acc.total_cost_coins,
             total_duration_ms: acc.total_duration_ms,
@@ -408,6 +426,8 @@ pub fn aggregate_summary(events: &[LlmCallEvent], from: Option<&str>, to: Option
             total_prompt_tokens: acc.total_prompt_tokens,
             total_completion_tokens: acc.total_completion_tokens,
             total_tokens: acc.total_tokens,
+            total_cache_read_tokens: acc.total_cache_read_tokens,
+            total_cache_creation_tokens: acc.total_cache_creation_tokens,
             total_cost_usd: acc.total_cost_usd,
             total_cost_coins: acc.total_cost_coins,
             total_duration_ms: acc.total_duration_ms,
@@ -663,5 +683,43 @@ mod tests {
         let events = vec![e];
         let summary = aggregate_summary(&events, None, None);
         assert_eq!(summary.by_day[0].total_tokens, 200, "by_day.total_tokens should use event.total_tokens, not prompt+completion");
+    }
+
+    #[test]
+    fn test_summary_cache_tokens_by_day_and_provider() {
+        let mut e1 = make_event(1, true);
+        e1.cache_read_tokens = Some(200);
+        e1.cache_creation_tokens = Some(100);
+
+        let mut e2 = make_event(1, true);
+        e2.chat_id = "chat-1b".to_string();
+        e2.cache_read_tokens = Some(50);
+        e2.cache_creation_tokens = None;
+
+        let mut e3 = make_event(2, true);
+        e3.provider = "openai".to_string();
+        e3.model_id = "openai/gpt-4".to_string();
+        e3.model = "gpt-4".to_string();
+        e3.cache_read_tokens = None;
+        e3.cache_creation_tokens = Some(300);
+
+        let events = vec![e1, e2, e3];
+        let summary = aggregate_summary(&events, None, None);
+
+        let anthropic = summary.by_provider.iter().find(|p| p.provider == "anthropic").unwrap();
+        assert_eq!(anthropic.total_cache_read_tokens, 250);
+        assert_eq!(anthropic.total_cache_creation_tokens, 100);
+
+        let openai = summary.by_provider.iter().find(|p| p.provider == "openai").unwrap();
+        assert_eq!(openai.total_cache_read_tokens, 0);
+        assert_eq!(openai.total_cache_creation_tokens, 300);
+
+        let day1 = summary.by_day.iter().find(|d| d.date == "2026-02-02").unwrap();
+        assert_eq!(day1.total_cache_read_tokens, 250);
+        assert_eq!(day1.total_cache_creation_tokens, 100);
+
+        let day2 = summary.by_day.iter().find(|d| d.date == "2026-02-03").unwrap();
+        assert_eq!(day2.total_cache_read_tokens, 0);
+        assert_eq!(day2.total_cache_creation_tokens, 300);
     }
 }
