@@ -247,6 +247,7 @@ async fn main() {
         let _ = main_handle.unwrap().await;
     }
 
+    chat::close_all_chat_sessions(gcx.clone()).await;
     background_tasks.abort().await;
     git::checkpoints::abort_init_shadow_repos(gcx.clone()).await;
     integrations::sessions::stop_sessions(gcx.clone()).await;

@@ -1,7 +1,12 @@
 import { providersApi } from "../services/refact";
+import { useAppSelector } from "./useAppSelector";
+import { selectBackendStatus } from "../features/Connection";
 
 export function useGetConfiguredProvidersQuery() {
-  return providersApi.useGetConfiguredProvidersQuery(undefined);
+  const backendStatus = useAppSelector(selectBackendStatus);
+  return providersApi.useGetConfiguredProvidersQuery(undefined, {
+    skip: backendStatus === "unknown",
+  });
 }
 
 export function useGetProviderQuery({

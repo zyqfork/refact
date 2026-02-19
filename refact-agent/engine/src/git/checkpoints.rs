@@ -418,13 +418,16 @@ pub async fn enqueue_init_shadow_repos(gcx: Arc<ARwLock<GlobalContext>>) {
 }
 
 pub async fn abort_init_shadow_repos(gcx: Arc<ARwLock<GlobalContext>>) {
-    let mut gcx_locked = gcx.write().await;
-    // NOTE: actually we can't abort git tasks, so we should use atomic abort_flag here
-    gcx_locked
-        .git_operations_abort_flag
-        .store(true, Ordering::SeqCst);
-    gcx_locked
-        .init_shadow_repos_background_task_holder
-        .abort()
-        .await;
+    // NOTE: git2 operations are synchronous and can't be cancelled by tokio abort;
+    // we set the abort flag and wait with a timeout to avoid hanging shutdown.
+    let holder = {
+        let mut gcx_locked = gcx.write().await;
+        gcx_locked
+            .git_operations_abort_flag
+            .store(true, Ordering::SeqCst);
+        std::mem::take(&mut gcx_locked.init_shadow_repos_background_task_holder)
+    };
+    // holder.abort() already has an internal timeout, but we call it here after releasing the lock
+    let mut holder = holder;
+    holder.abort().await;
 }

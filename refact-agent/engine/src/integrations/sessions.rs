@@ -1,9 +1,12 @@
 use std::{any::Any, sync::Arc};
+use std::time::Duration;
 use tokio::sync::RwLock as ARwLock;
 use tokio::sync::Mutex as AMutex;
 use std::future::Future;
 
 use crate::global_context::GlobalContext;
+
+const STOP_SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub trait IntegrationSession: Any + Send + Sync {
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -68,7 +71,12 @@ pub async fn stop_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
     let mut futures = Vec::new();
     for session in sessions {
         let future = Box::into_pin(session.lock().await.try_stop(session.clone()));
-        futures.push(future);
+        futures.push(tokio::time::timeout(STOP_SESSION_TIMEOUT, future));
     }
-    futures::future::join_all(futures).await;
+    let results = futures::future::join_all(futures).await;
+    for result in results {
+        if result.is_err() {
+            tracing::warn!("stop_sessions: a session did not stop within {:?}, continuing shutdown", STOP_SESSION_TIMEOUT);
+        }
+    }
 }

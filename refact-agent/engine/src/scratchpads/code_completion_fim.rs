@@ -94,14 +94,13 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
             .to_string();
         self.extra_stop_tokens = patch
             .get("extra_stop_tokens")
-            .map(|x| {
-                x.as_array()
-                    .unwrap()
-                    .into_iter()
-                    .map(|x| x.as_str().unwrap().to_string())
+            .and_then(|x| x.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
                     .collect::<Vec<String>>()
             })
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
         self.t.eot = patch
             .get("eot")
             .and_then(|x| x.as_str())

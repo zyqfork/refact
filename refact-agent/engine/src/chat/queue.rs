@@ -743,8 +743,8 @@ pub async fn process_command_queue(
                     let mut msgs = Vec::new();
                     let mut found = false;
                     for m in &source_session.messages {
-                        if is_allowed_role_for_restore(&m.role) {
-                            msgs.push(sanitize_message_for_restore(m));
+                        if is_allowed_role_for_branch(&m.role) {
+                            msgs.push(sanitize_message_for_branch(m));
                         }
                         if m.message_id == up_to_message_id {
                             found = true;
@@ -851,27 +851,52 @@ fn is_allowed_role_for_restore(role: &str) -> bool {
     matches!(role, "user" | "assistant" | "system" | "tool")
 }
 
-/// Sanitize message for branching - preserves conversation structure but strips:
-/// - tool_calls from assistant messages (security: prevents prerun of injected tool calls)
-/// - transient metadata (usage, checkpoints, etc.)
+/// Sanitize message for restoring from external trajectory — strips tool_calls for security
+/// and transient metadata.
 fn sanitize_message_for_restore(msg: &ChatMessage) -> ChatMessage {
     ChatMessage {
         message_id: Uuid::new_v4().to_string(),
         role: msg.role.clone(),
         content: msg.content.clone(),
         tool_calls: None,  // Security: strip tool_calls to prevent prerun of restored messages
-        tool_call_id: msg.tool_call_id.clone(),  // Preserve for tool result messages
-        tool_failed: msg.tool_failed,  // Preserve tool execution status
-        usage: None,  // Strip metering data
-        checkpoints: vec![],  // Strip checkpoint data
+        tool_call_id: msg.tool_call_id.clone(),
+        tool_failed: msg.tool_failed,
+        usage: None,
+        checkpoints: vec![],
         reasoning_content: msg.reasoning_content.clone(),
         thinking_blocks: msg.thinking_blocks.clone(),
-        citations: msg.citations.clone(),  // Preserve citations (e.g., from web_search)
-        server_content_blocks: msg.server_content_blocks.clone(),  // Preserve for multi-turn web_search
-        finish_reason: None,  // Strip finish reason
-        extra: serde_json::Map::new(),  // Strip extra provider-specific data
+        citations: msg.citations.clone(),
+        server_content_blocks: msg.server_content_blocks.clone(),
+        finish_reason: None,
+        extra: serde_json::Map::new(),
         output_filter: None,
     }
+}
+
+/// Sanitize message for branching — preserves the conversation structure (including tool_calls
+/// and context_file messages) but strips thinking blocks and transient metadata.
+fn sanitize_message_for_branch(msg: &ChatMessage) -> ChatMessage {
+    ChatMessage {
+        message_id: Uuid::new_v4().to_string(),
+        role: msg.role.clone(),
+        content: msg.content.clone(),
+        tool_calls: msg.tool_calls.clone(),
+        tool_call_id: msg.tool_call_id.clone(),
+        tool_failed: msg.tool_failed,
+        usage: None,
+        checkpoints: msg.checkpoints.clone(),
+        reasoning_content: msg.reasoning_content.clone(),
+        thinking_blocks: None,
+        citations: msg.citations.clone(),
+        server_content_blocks: msg.server_content_blocks.clone(),
+        finish_reason: None,
+        extra: serde_json::Map::new(),
+        output_filter: None,
+    }
+}
+
+fn is_allowed_role_for_branch(role: &str) -> bool {
+    matches!(role, "user" | "assistant" | "system" | "tool" | "context_file")
 }
 
 async fn handle_tool_decisions(

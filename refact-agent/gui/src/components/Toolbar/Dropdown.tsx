@@ -1,9 +1,5 @@
 import React, { useCallback, useEffect, useMemo } from "react";
-import {
-  selectHost,
-  selectAddressURL,
-  type Config,
-} from "../../features/Config/configSlice";
+import { selectHost, type Config } from "../../features/Config/configSlice";
 import { push } from "../../features/Pages/pagesSlice";
 import {
   useGetUser,
@@ -81,7 +77,6 @@ export const Dropdown: React.FC<DropdownProps> = ({
   // TODO: check how much of this is still used.
   // const { maxAgentUsageAmount, currentAgentUsage } = useAgentUsage();
   const coinBalance = useCoinBallance();
-  const addressURL = useAppSelector(selectAddressURL);
   const logout = useLogout();
   const { startPollingForUser } = useStartPollingForUser();
 
@@ -309,7 +304,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
           Usage Dashboard
         </DropdownMenu.Item>
 
-        {addressURL?.trim().toLowerCase() === "refact" && user.data ? (
+        {user.data ? (
           <DropdownMenu.Item
             onSelect={(event) => {
               event.preventDefault();
@@ -319,13 +314,13 @@ export const Dropdown: React.FC<DropdownProps> = ({
           >
             Logout
           </DropdownMenu.Item>
-        ) : !user.data ? (
+        ) : (
           <DropdownMenu.Item
             onSelect={() => dispatch(push({ name: "login page" }))}
           >
             Login to Refact Cloud
           </DropdownMenu.Item>
-        ) : null}
+        )}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   );

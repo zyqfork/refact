@@ -191,13 +191,13 @@ pub async fn cached_tokenizer(
 
     if tok_file_path.as_os_str().is_empty() {
         let tokenizer_cache_dir = std::path::PathBuf::from(cache_dir).join("tokenizers");
-        let sanitized_model_id = model_id
+        let sanitized_tok_key = tok_url
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect::<String>();
 
         tok_file_path = tokenizer_cache_dir
-            .join(&sanitized_model_id)
+            .join(&sanitized_tok_key)
             .join("tokenizer.json");
 
         try_download_tokenizer_file_and_open(

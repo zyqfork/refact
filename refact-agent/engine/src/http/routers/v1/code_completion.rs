@@ -38,9 +38,7 @@ pub async fn handle_v1_code_completion(
     if code_completion_post.parameters.max_new_tokens == 0 {
         code_completion_post.parameters.max_new_tokens = 50;
     }
-    if code_completion_post.model == "" {
-        code_completion_post.model = model_rec.base.id.clone();
-    }
+    code_completion_post.model = model_rec.base.id.clone();
     info!(
         "chosen completion model: {}, scratchpad: {}",
         code_completion_post.model, model_rec.scratchpad

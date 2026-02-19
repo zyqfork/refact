@@ -20,6 +20,7 @@ import { ErrorCallout } from "../Callout";
 import { getErrorMessage, clearError } from "../../features/Errors/errorsSlice";
 import classNames from "classnames";
 import { selectHost } from "../../features/Config/configSlice";
+import { selectBackendStatus } from "../../features/Connection";
 import styles from "./Sidebar.module.css";
 import {
   useListTasksQuery,
@@ -44,6 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
   const dispatch = useAppDispatch();
   const globalError = useAppSelector(getErrorMessage);
   const currentHost = useAppSelector(selectHost);
+  const backendStatus = useAppSelector(selectBackendStatus);
   const history = useAppSelector((app) => app.history.chats, {
     devModeChecks: { stabilityCheck: "never" },
   });
@@ -65,6 +67,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
     error: loadMoreError,
     retry: retryLoadMore,
   } = useLoadMoreHistory();
+
+  const hasConnectionError =
+    backendStatus !== "unknown" && (Boolean(historyLoadError) || tasksIsError);
 
   const loadMoreHistory = useCallback(() => {
     void loadMoreHistoryAsync();
@@ -146,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ takingNotes, style }) => {
             isLoadingMore={isLoadingMoreHistory}
             loadMoreError={loadMoreError}
             onRetryLoadMore={retryLoadMore}
-            hasConnectionError={!!historyLoadError || tasksIsError}
+            hasConnectionError={hasConnectionError}
             compactView={true}
             noScroll={true}
             scrollContainerRef={scrollAreaRef}

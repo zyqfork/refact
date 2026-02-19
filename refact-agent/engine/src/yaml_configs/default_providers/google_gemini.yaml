@@ -11,7 +11,3 @@ running_models:
   - gemini-2.0-flash
   - gemini-2.0-flash-lite
 
-embedding_model:
-  name: text-embedding-004
-  embedding_size: 768
-  n_ctx: 2048

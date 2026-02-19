@@ -15,8 +15,3 @@ running_models:
   - o3-mini
   - o1-mini
   - o1
-
-embedding_model:
-  name: text-embedding-3-small
-  embedding_size: 1536
-  n_ctx: 8191

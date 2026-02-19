@@ -348,30 +348,30 @@ pub struct DefaultModels {
 }
 
 impl DefaultModels {
+    fn qualify_model(model: &str, provider_name: Option<&str>) -> String {
+        let Some(provider) = provider_name else { return model.to_string() };
+        if model.is_empty() {
+            return String::new();
+        }
+        if model.starts_with(&format!("{}/", provider)) {
+            model.to_string()
+        } else {
+            format!("{}/{}", provider, model)
+        }
+    }
+
     pub fn apply_override(&mut self, other: &DefaultModels, provider_name: Option<&str>) {
         if !other.completion_default_model.is_empty() {
-            self.completion_default_model = match provider_name {
-                Some(provider) => format!("{}/{}", provider, other.completion_default_model),
-                None => other.completion_default_model.clone(),
-            };
+            self.completion_default_model = Self::qualify_model(&other.completion_default_model, provider_name);
         }
         if !other.chat_default_model.is_empty() {
-            self.chat_default_model = match provider_name {
-                Some(provider) => format!("{}/{}", provider, other.chat_default_model),
-                None => other.chat_default_model.clone(),
-            };
+            self.chat_default_model = Self::qualify_model(&other.chat_default_model, provider_name);
         }
         if !other.chat_thinking_model.is_empty() {
-            self.chat_thinking_model = match provider_name {
-                Some(provider) => format!("{}/{}", provider, other.chat_thinking_model),
-                None => other.chat_thinking_model.clone(),
-            };
+            self.chat_thinking_model = Self::qualify_model(&other.chat_thinking_model, provider_name);
         }
         if !other.chat_light_model.is_empty() {
-            self.chat_light_model = match provider_name {
-                Some(provider) => format!("{}/{}", provider, other.chat_light_model),
-                None => other.chat_light_model.clone(),
-            };
+            self.chat_light_model = Self::qualify_model(&other.chat_light_model, provider_name);
         }
     }
 }
@@ -729,9 +729,36 @@ pub async fn populate_chat_models_from_providers(
             caps.defaults.chat_thinking_model = caps.defaults.chat_default_model.clone();
         }
     }
+
+    if !caps.completion_models.is_empty() {
+        let need_new_default = caps.defaults.completion_default_model.is_empty()
+            || !caps
+                .completion_models
+                .contains_key(&caps.defaults.completion_default_model);
+
+        if need_new_default {
+            let mut candidates: Vec<&String> = caps.completion_models.keys().collect();
+            // In cloud mode, prefer cloud completion models over local ones
+            if !caps.cloud_name.is_empty() {
+                let cloud_prefix = format!("{}/", caps.cloud_name);
+                let cloud_candidates: Vec<&String> = candidates.iter()
+                    .filter(|id| id.starts_with(&cloud_prefix))
+                    .cloned()
+                    .collect();
+                if !cloud_candidates.is_empty() {
+                    candidates = cloud_candidates;
+                }
+            }
+            candidates.sort();
+            if let Some(first_model_id) = candidates.first() {
+                info!("Auto-selecting default completion model: {}", first_model_id);
+                caps.defaults.completion_default_model = (*first_model_id).clone();
+            }
+        }
+    }
 }
 
-fn convert_self_hosted_caps_if_needed(
+pub(crate) fn convert_self_hosted_caps_if_needed(
     caps_value: serde_json::Value,
     caps_url: &str,
     cmdline_api_key: &str,
@@ -741,8 +768,9 @@ fn convert_self_hosted_caps_if_needed(
         None => return Ok(caps_value),
     };
 
-    let has_nested_chat = obj.get("chat").and_then(|v| v.get("models")).is_some();
-    if !has_nested_chat {
+    let is_nested_format = ["chat", "completion", "embedding"].iter()
+        .any(|key| obj.get(*key).and_then(|v| v.get("models")).is_some());
+    if !is_nested_format {
         return Ok(caps_value);
     }
 
@@ -850,6 +878,44 @@ fn convert_self_hosted_caps_if_needed(
             result_obj.insert("completion_endpoint".to_string(), serde_json::json!(full_comp_endpoint));
         }
 
+        if let Some(embedding) = obj.get("embedding").and_then(|v| v.as_object()) {
+            let emb_endpoint = embedding.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
+            if !emb_endpoint.is_empty() {
+                let full_emb_endpoint = relative_to_full_url(caps_url, emb_endpoint)
+                    .unwrap_or(emb_endpoint.to_string());
+                result_obj.insert("embedding_endpoint".to_string(), serde_json::json!(full_emb_endpoint));
+            }
+
+            let emb_models = embedding.get("models").and_then(|v| v.as_object());
+
+            // Resolve default model: explicit default_model, or fall back to first in models
+            let default_model_name = embedding.get("default_model")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .or_else(|| emb_models.and_then(|m| m.keys().next().map(|s| s.as_str())));
+
+            if let Some(dm) = default_model_name {
+                // Build a full embedding_model object with n_ctx/embedding_size from models section
+                let mut emb_record = serde_json::json!({"name": dm, "enabled": true});
+                if let Some(model_info) = emb_models.and_then(|m| m.get(dm)).and_then(|v| v.as_object()) {
+                    if let Some(n_ctx) = model_info.get("n_ctx").and_then(|v| v.as_u64()) {
+                        emb_record["n_ctx"] = serde_json::json!(n_ctx);
+                    }
+                    if let Some(size) = model_info.get("size").and_then(|v| v.as_u64()) {
+                        emb_record["embedding_size"] = serde_json::json!(size);
+                    }
+                }
+                if let Some(tok_url) = tokenizer_endpoints.get(dm) {
+                    if let Some(tok_str) = tok_url.as_str() {
+                        let full_tok = relative_to_full_url(caps_url, tok_str)
+                            .unwrap_or(tok_str.to_string());
+                        emb_record["tokenizer"] = serde_json::json!(full_tok);
+                    }
+                }
+                result_obj.insert("default_embeddings_model".to_string(), emb_record);
+            }
+        }
+
         if let Some(telem) = obj.get("telemetry_endpoints").and_then(|v| v.as_object()) {
             if let Some(basic) = telem.get("telemetry_basic_endpoint").and_then(|v| v.as_str()) {
                 result_obj.insert("telemetry_basic_dest".to_string(), serde_json::json!(basic));
@@ -891,8 +957,9 @@ pub async fn load_caps(
 
                 let mut caps = serde_json::from_value::<CodeAssistantCaps>(caps_value.clone())
                     .map_err_with_prefix("Failed to parse caps:")?;
-                let mut server_provider = serde_json::from_value::<CapsProvider>(caps_value)
+                let mut server_provider = serde_json::from_value::<CapsProvider>(caps_value.clone())
                     .map_err_with_prefix("Failed to parse caps provider:")?;
+
                 resolve_relative_urls(&mut server_provider, &caps_url)?;
                 if caps.cloud_name == "refact" {
                     server_provider.wire_format = WireFormat::Refact;
@@ -905,6 +972,14 @@ pub async fn load_caps(
                         }
                     }
                 }
+
+                info!(
+                    "server_provider running_models({})={:?}, completion_endpoint={:?}, completion_default_model={:?}",
+                    server_provider.running_models.len(),
+                    server_provider.running_models.iter().take(10).collect::<Vec<_>>(),
+                    server_provider.completion_endpoint,
+                    server_provider.completion_default_model,
+                );
 
                 caps.telemetry_basic_dest = relative_to_full_url(&caps_url, &caps.telemetry_basic_dest)?;
                 caps.telemetry_basic_retrieve_my_own =
@@ -919,7 +994,7 @@ pub async fn load_caps(
         }
     };
 
-    let (mut providers, error_log) =
+    let (mut providers, error_log): (Vec<CapsProvider>, Vec<_>) =
         read_providers_d(server_providers, &config_dir, experimental).await;
     providers.retain(|p| p.enabled);
     for e in error_log {
@@ -940,8 +1015,8 @@ pub async fn load_caps(
     };
     caps.model_caps = Arc::new(model_caps_map);
     if caps.cloud_name == "refact" {
-        let running_models: Vec<String> = if let Some(pricing_obj) = caps.metadata.pricing.as_object() {
-            pricing_obj.keys().cloned().collect()
+        let running_models = if let Some(pricing_obj) = caps.metadata.pricing.as_object() {
+            pricing_obj.keys().cloned().collect::<Vec<String>>()
         } else {
             Vec::new()
         };

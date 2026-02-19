@@ -1,15 +1,24 @@
 use std::iter::IntoIterator;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::vec;
 use tokio::sync::RwLock as ARwLock;
 use tokio::task::JoinHandle;
+
+const ABORT_TIMEOUT: Duration = Duration::from_secs(10);
 
 use crate::global_context::GlobalContext;
 use crate::knowledge_index::build_knowledge_index;
 
 pub struct BackgroundTasksHolder {
     tasks: Vec<JoinHandle<()>>,
+}
+
+impl Default for BackgroundTasksHolder {
+    fn default() -> Self {
+        BackgroundTasksHolder { tasks: vec![] }
+    }
 }
 
 impl BackgroundTasksHolder {
@@ -31,9 +40,14 @@ impl BackgroundTasksHolder {
     pub async fn abort(&mut self) {
         for task in self.tasks.iter_mut() {
             task.abort();
-            let _ = task.await;
         }
-        self.tasks.clear();
+        let join_all = futures::future::join_all(self.tasks.drain(..));
+        if tokio::time::timeout(ABORT_TIMEOUT, join_all).await.is_err() {
+            tracing::warn!(
+                "background_tasks: some tasks did not finish within {:?} after abort, continuing shutdown",
+                ABORT_TIMEOUT
+            );
+        }
     }
 }
 

@@ -52,12 +52,17 @@ pub async fn start_server(
             Ok(builder) => {
                 info!("HTTP server listening on {}", addr);
                 let router = make_refact_http_server().layer(Extension(gcx.clone()));
-                let server = builder
-                    .serve(router.into_make_service())
-                    .with_graceful_shutdown(crate::global_context::block_until_signal(
+                let gcx_for_shutdown = gcx.clone();
+                let shutdown = async move {
+                    crate::global_context::block_until_signal(
                         ask_shutdown_receiver,
                         shutdown_flag,
-                    ));
+                    ).await;
+                    crate::chat::close_all_chat_sessions(gcx_for_shutdown).await;
+                };
+                let server = builder
+                    .serve(router.into_make_service())
+                    .with_graceful_shutdown(shutdown);
                 let resp = server
                     .await
                     .map_err(|e| format!("HTTP server error: {}", e));

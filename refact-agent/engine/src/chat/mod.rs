@@ -25,7 +25,7 @@ pub mod types;
 
 pub use session::{
     SessionsMap, create_sessions_map, start_session_cleanup_task,
-    get_or_create_session_with_trajectory,
+    get_or_create_session_with_trajectory, close_all_chat_sessions,
 };
 pub use queue::process_command_queue;
 pub use trajectories::{

@@ -9,8 +9,3 @@ running_models:
   - anthropic/claude-3.7-sonnet
   - openai/o3-mini
   - openai/gpt-4.1
-
-embedding_model:
-  name: openai/text-embedding-3-small
-  embedding_size: 1536
-  n_ctx: 8191

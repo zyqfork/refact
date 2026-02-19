@@ -708,6 +708,37 @@ pub async fn get_or_create_session_with_trajectory(
     session_arc
 }
 
+pub async fn close_all_chat_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
+    let sessions = {
+        let gcx_locked = gcx.read().await;
+        gcx_locked.chat_sessions.clone()
+    };
+    let session_arcs: Vec<Arc<AMutex<ChatSession>>> = {
+        let sessions_read = sessions.read().await;
+        sessions_read.values().cloned().collect()
+    };
+    for session_arc in session_arcs {
+        let lock_result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            session_arc.lock(),
+        ).await;
+        match lock_result {
+            Ok(mut session) => {
+                session.closed = true;
+                session.abort_stream();
+                session.close_event_channel();
+                session.queue_notify.notify_waiters();
+            }
+            Err(_) => {
+                // Could not acquire lock within timeout — notify_waiters best-effort
+                // so the queue processor can eventually notice the shutdown flag.
+                warn!("close_all_chat_sessions: session lock timeout, notifying waiters without lock");
+                session_arc.try_lock().map(|s| s.queue_notify.notify_waiters()).ok();
+            }
+        }
+    }
+}
+
 pub fn start_session_cleanup_task(gcx: Arc<ARwLock<GlobalContext>>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(session_cleanup_interval());
