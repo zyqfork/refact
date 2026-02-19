@@ -100,7 +100,9 @@ export const OverviewTab: React.FC<Props> = ({ dateRange }) => {
         <StatCard
           title="Cache Efficiency"
           value={`${cacheEfficiency}%`}
-          subtitle={`${formatTokenCount(t.total_cache_read_tokens)} tokens read from cache`}
+          subtitle={`${formatTokenCount(
+            t.total_cache_read_tokens,
+          )} tokens read from cache`}
         />
       </Flex>
     </Flex>

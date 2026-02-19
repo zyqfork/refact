@@ -22,7 +22,7 @@
     style.textContent = [
         ':host{all:initial}',
         '.refact-bar{display:flex;align-items:center;gap:2px;background:rgba(24,24,27,0.92);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:4px 6px;box-shadow:0 4px 24px rgba(0,0,0,0.4);backdrop-filter:blur(12px);user-select:none;-webkit-user-select:none}',
-        '.refact-logo{width:28px;height:28px;border-radius:6px;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;transition:background 0.15s;color:#7c6aef}',
+        '.refact-logo{width:28px;height:28px;border-radius:6px;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;transition:background 0.15s;color:#E7150D}',
         '.refact-logo:hover{background:rgba(255,255,255,0.1)}',
         '.refact-logo svg{width:18px;height:18px}',
         '.refact-sep{width:1px;height:20px;background:rgba(255,255,255,0.15);margin:0 4px;flex-shrink:0}',
@@ -36,8 +36,7 @@
         '.refact-buttons.expanded{max-width:600px;opacity:1}',
         '.refact-tip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:rgba(24,24,27,0.95);color:rgba(255,255,255,0.9);font-size:11px;line-height:1;padding:5px 8px;border-radius:5px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 0.15s;border:1px solid rgba(255,255,255,0.08)}',
         '.refact-btn:hover .refact-tip{opacity:1}',
-        '.refact-badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:rgba(124,106,239,0.95);color:white;font-size:10px;line-height:16px;text-align:center;pointer-events:none}',
-        '.refact-counts{display:flex;align-items:center;gap:6px;margin-left:8px;padding-left:8px;border-left:1px solid rgba(255,255,255,0.12);font-size:10px;line-height:1;color:rgba(255,255,255,0.75)}',
+        '.refact-badge{position:absolute;top:-3px;right:-3px;min-width:12px;height:12px;padding:0 3px;border-radius:999px;background:rgba(124,106,239,0.95);color:white;font-size:8px;line-height:12px;text-align:center;pointer-events:none}',
     ].join('\n');
 
     var icons = {
@@ -97,13 +96,6 @@
     var buttonsContainer = document.createElement('div');
     buttonsContainer.className = 'refact-buttons expanded';
 
-    var countsEl = document.createElement('div');
-    countsEl.className = 'refact-counts';
-    function renderCounts() {
-        countsEl.textContent = 'A:' + counts.actions + ' C:' + counts.console + ' N:' + counts.network + ' M:' + counts.mutations;
-    }
-    renderCounts();
-
     for (var i = 0; i < buttons.length; i++) {
         var def = buttons[i];
         if (def.sep) {
@@ -130,8 +122,6 @@
         buttonsContainer.appendChild(btn);
     }
 
-    buttonsContainer.appendChild(countsEl);
-
     bar.appendChild(buttonsContainer);
     shadow.appendChild(style);
     shadow.appendChild(bar);
@@ -142,7 +132,6 @@
         counts.console = Number(next.console || 0);
         counts.network = Number(next.network || 0);
         counts.mutations = Number(next.mutations || 0);
-        renderCounts();
 
         try {
             var badges = shadow.querySelectorAll('.refact-badge[data-count]');
