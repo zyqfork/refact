@@ -137,7 +137,7 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
 
         if settings.supports_reasoning {
             if let Some(effort) = req.reasoning.to_openai_effort() {
-                body["reasoning"] = json!({"effort": effort});
+                body["reasoning"] = json!({"effort": effort, "summary": "auto"});
             }
         }
 
