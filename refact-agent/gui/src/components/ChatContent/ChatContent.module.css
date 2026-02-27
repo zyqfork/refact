@@ -215,6 +215,14 @@
   word-break: break-word;
 }
 
+.queuedMessageEditable {
+  cursor: pointer;
+}
+
+.queuedMessageEditable:hover {
+  color: var(--gray-12);
+}
+
 .plainTextTrigger {
   cursor: pointer;
   color: var(--gray-10);

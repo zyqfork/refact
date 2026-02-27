@@ -2440,8 +2440,13 @@ pub async fn handle_v1_trajectories_subscribe(
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    let json = serde_json::to_string(&event).unwrap_or_default();
-                    yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
+                    match serde_json::to_string(&event) {
+                        Ok(json) => yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json)),
+                        Err(e) => {
+                            tracing::error!("Failed to serialize trajectory SSE event: {}", e);
+                            break;
+                        }
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -2996,6 +3001,7 @@ mod tests {
             trajectory_version: 5,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             closed: false,
+            closed_flag: Arc::new(AtomicBool::new(false)),
             external_reload_pending: false,
             last_prompt_messages: Vec::new(),
             cache_guard_snapshot: None,

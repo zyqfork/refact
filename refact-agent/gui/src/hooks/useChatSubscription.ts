@@ -87,17 +87,19 @@ export function useChatSubscription(
     { type: "stream_delta" }
   > | null>(null);
   const streamedBytesRef = useRef(0);
+  const pendingBytesRef = useRef(0);
   const connectingRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   const connectRef = useRef<() => void>(() => {});
 
   const MAX_MERGED_DELTA_OPS = 256;
 
-  // Adaptive flush thresholds (bytes of accumulated content)
+  // Adaptive flush thresholds (JS string length units, i.e. UTF-16 code units)
   const FLUSH_TIER_FAST_BYTES = 8_192;
   const FLUSH_TIER_MEDIUM_BYTES = 200_000;
   const FLUSH_MS_MEDIUM = 150;
   const FLUSH_MS_SLOW = 500;
+  // Hard cap: force flush if buffered char-count (UTF-16 units) exceeds this
   const MAX_BUFFERED_BYTES = 2_000_000;
 
   const clearStreamDeltaFlush = useCallback(() => {
@@ -112,6 +114,7 @@ export function useChatSubscription(
     const pending = pendingStreamDeltaRef.current;
     if (!pending) return;
     pendingStreamDeltaRef.current = null;
+    pendingBytesRef.current = 0;
     dispatch(applyChatEvent(pending));
     callbacksRef.current.onEvent?.(pending);
   }, [dispatch]);
@@ -139,28 +142,41 @@ export function useChatSubscription(
 
   const enqueueStreamDelta = useCallback(
     (envelope: Extract<ChatEventEnvelope, { type: "stream_delta" }>) => {
+      // streamedBytesRef: total chars seen this stream (never decrements),
+      // drives flush-tier selection.
+      // pendingBytesRef: chars currently buffered, updated precisely after
+      // merge/replace decision — drives the force-flush cap.
+      let deltaTextLen = 0;
       for (const op of envelope.ops) {
         if (op.op === "append_content" || op.op === "append_reasoning") {
-          streamedBytesRef.current += op.text.length;
+          deltaTextLen += op.text.length;
         }
       }
+      streamedBytesRef.current += deltaTextLen;
 
       const pending = pendingStreamDeltaRef.current;
       if (pending && pending.message_id === envelope.message_id) {
         const mergedOpsLen = pending.ops.length + envelope.ops.length;
         if (mergedOpsLen <= MAX_MERGED_DELTA_OPS) {
+          // Merging: add incoming chars to existing pending buffer
           pending.seq = envelope.seq;
           pending.ops.push(...envelope.ops);
+          pendingBytesRef.current += deltaTextLen;
         } else {
-          flushPendingStreamDelta();
+          // Too many ops: flush existing, start fresh with incoming envelope
+          flushPendingStreamDelta(); // resets pendingBytesRef to 0
           pendingStreamDeltaRef.current = envelope;
+          pendingBytesRef.current = deltaTextLen;
         }
       } else {
-        flushPendingStreamDelta();
+        // Different message or no pending: flush existing, start with incoming
+        flushPendingStreamDelta(); // resets pendingBytesRef to 0
         pendingStreamDeltaRef.current = envelope;
+        pendingBytesRef.current = deltaTextLen;
       }
 
-      if (streamedBytesRef.current > MAX_BUFFERED_BYTES) {
+      // Force immediate flush if *buffered* (not total) chars exceed the cap
+      if (pendingBytesRef.current > MAX_BUFFERED_BYTES) {
         clearStreamDeltaFlush();
         flushPendingStreamDelta();
         return;
@@ -179,6 +195,7 @@ export function useChatSubscription(
     clearStreamDeltaFlush();
     pendingStreamDeltaRef.current = null;
     streamedBytesRef.current = 0;
+    pendingBytesRef.current = 0;
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
       unsubscribeRef.current = null;
@@ -230,6 +247,7 @@ export function useChatSubscription(
                 );
               }
               streamedBytesRef.current = 0;
+              pendingBytesRef.current = 0;
               lastSeqRef.current = seq;
             } else {
               if (seq <= lastSeqRef.current) {
@@ -260,6 +278,7 @@ export function useChatSubscription(
               flushPendingStreamDelta();
               if (envelope.type === "stream_finished") {
                 streamedBytesRef.current = 0;
+                pendingBytesRef.current = 0;
               }
               dispatch(applyChatEvent(envelope));
               callbacksRef.current.onEvent?.(envelope);

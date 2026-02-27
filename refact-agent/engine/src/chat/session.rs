@@ -47,6 +47,7 @@ impl ChatSession {
             trajectory_version: 0,
             created_at: chrono::Utc::now().to_rfc3339(),
             closed: false,
+            closed_flag: Arc::new(AtomicBool::new(false)),
             external_reload_pending: false,
             last_prompt_messages: Vec::new(),
             cache_guard_snapshot: None,
@@ -84,6 +85,7 @@ impl ChatSession {
             trajectory_version: 0,
             created_at,
             closed: false,
+            closed_flag: Arc::new(AtomicBool::new(false)),
             last_prompt_messages: Vec::new(),
             cache_guard_snapshot: None,
             cache_guard_force_next: false,
@@ -112,6 +114,8 @@ impl ChatSession {
     }
 
     pub fn close_event_channel(&mut self) {
+        self.closed = true;
+        self.closed_flag.store(true, Ordering::Relaxed);
         let (new_tx, _) = broadcast::channel(limits().event_channel_capacity);
         self.event_tx = new_tx;
     }
@@ -724,9 +728,8 @@ pub async fn close_all_chat_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
         ).await;
         match lock_result {
             Ok(mut session) => {
-                session.closed = true;
                 session.abort_stream();
-                session.close_event_channel();
+                session.close_event_channel(); // sets closed + closed_flag
                 session.queue_notify.notify_waiters();
             }
             Err(_) => {
@@ -776,8 +779,7 @@ pub fn start_session_cleanup_task(gcx: Arc<ARwLock<GlobalContext>>) {
             for (chat_id, session_arc) in &to_cleanup {
                 {
                     let mut session = session_arc.lock().await;
-                    session.closed = true;
-                    session.close_event_channel();
+                    session.close_event_channel(); // sets closed + closed_flag
                     session.queue_notify.notify_waiters();
                 }
                 {
@@ -804,6 +806,16 @@ mod tests {
 
     fn make_session() -> ChatSession {
         ChatSession::new("test-chat".to_string())
+    }
+
+    /// Creates a session with a small broadcast channel capacity, useful for
+    /// triggering `RecvError::Lagged` quickly in tests without emitting
+    /// thousands of events.
+    fn make_session_with_capacity(capacity: usize) -> ChatSession {
+        let (event_tx, _) = broadcast::channel(capacity);
+        let mut session = ChatSession::new("test-chat-small".to_string());
+        session.event_tx = event_tx;
+        session
     }
 
     #[test]
@@ -1476,6 +1488,77 @@ mod tests {
 
         assert_eq!(session.messages.len(), 0,
             "Truly empty assistant message should be discarded");
+    }
+
+    /// Regression test: after a broadcast::Receiver lags, the handler must
+    /// re-subscribe (`rx = session.subscribe()`) before capturing `event_seq`
+    /// for the recovery snapshot.  Without re-subscribing, the old receiver
+    /// resumes from the oldest ring-buffer entry whose seq is *lower* than the
+    /// snapshot seq, causing the frontend to silently drop every subsequent event.
+    ///
+    /// This test simulates the handler's Lagged recovery path and asserts that
+    /// the first event received after the snapshot has seq == snapshot_seq + 1.
+    #[tokio::test]
+    async fn test_lagged_recovery_seq_monotonicity() {
+        use tokio::sync::broadcast::error::RecvError;
+
+        // Use a tiny channel capacity so we only need to emit a handful of
+        // events to trigger Lagged rather than the default 4096+.
+        const SMALL_CAP: usize = 8;
+        let mut session = make_session_with_capacity(SMALL_CAP);
+
+        // Subscribe a "slow" receiver that we will intentionally lag.
+        let mut slow_rx = session.subscribe();
+
+        // Emit capacity+1 events so slow_rx is guaranteed to lag.
+        let overflow_count = SMALL_CAP + 1;
+        for _ in 0..overflow_count {
+            session.emit(ChatEvent::QueueUpdated {
+                queue_size: 0,
+                queued_items: vec![],
+            });
+        }
+
+        // Confirm that slow_rx is lagged.
+        assert!(
+            matches!(slow_rx.recv().await, Err(RecvError::Lagged(_))),
+            "slow_rx should be lagged after overflow"
+        );
+
+        // --- Simulate the handler's recovery path ---
+        // After Lagged, the handler must:
+        //   1. Lock the session
+        //   2. Re-subscribe to get a fresh receiver
+        //   3. Capture event_seq for the recovery snapshot
+        //   4. Drop the lock
+        //   5. Emit one more event (from some background task)
+        //   6. Assert first recv() on fresh_rx has seq == snapshot_seq + 1
+
+        // Step 2-3: re-subscribe while holding the "lock" (single-threaded here).
+        let mut fresh_rx = session.subscribe();
+        let snapshot_seq = session.event_seq;
+
+        // Step 5: emit one more event (e.g. a RuntimeUpdated broadcast).
+        session.emit(ChatEvent::QueueUpdated {
+            queue_size: 0,
+            queued_items: vec![],
+        });
+
+        // Step 6: the first event from fresh_rx must have seq == snapshot_seq + 1.
+        let envelope = fresh_rx
+            .recv()
+            .await
+            .expect("fresh_rx should receive an event");
+
+        assert_eq!(
+            envelope.seq,
+            snapshot_seq + 1,
+            "First event after re-subscribe must have seq == snapshot_seq + 1, \
+             got {} (snapshot_seq={}). \
+             If seq < snapshot_seq the frontend drops all events forever.",
+            envelope.seq,
+            snapshot_seq
+        );
     }
 
     #[test]

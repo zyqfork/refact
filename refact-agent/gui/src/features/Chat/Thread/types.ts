@@ -33,6 +33,7 @@ export type QueuedItem = {
   priority: boolean;
   command_type: string;
   preview: string;
+  content?: string;
 };
 
 export type IntegrationMeta = {

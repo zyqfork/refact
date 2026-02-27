@@ -7,6 +7,10 @@ import type { Element } from "hast";
 import { trimIndent } from "../../utils";
 import { useShiki } from "../../hooks/useShiki";
 import { useAppearance } from "../../hooks/useAppearance";
+import { MermaidBlock } from "./MermaidBlock";
+import { SvgBlock } from "./SvgBlock";
+
+const DIAGRAM_LANGUAGES = new Set(["mermaid", "svg"]);
 
 export type MarkdownControls = {
   onCopyClick: (str: string) => void;
@@ -94,6 +98,16 @@ const _ShikiCodeBlock: React.FC<ShikiCodeBlockProps> = ({
     }
     return {};
   }, [onCopyClick, textWithOutIndent]);
+
+  if (isBlock && DIAGRAM_LANGUAGES.has(language)) {
+    const diagramCode = textWithOutIndent ?? String(children);
+    if (language === "mermaid") {
+      return <MermaidBlock code={diagramCode} onCopyClick={onCopyClick} />;
+    }
+    if (language === "svg") {
+      return <SvgBlock code={diagramCode} onCopyClick={onCopyClick} />;
+    }
+  }
 
   if (!isBlock) {
     return (

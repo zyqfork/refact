@@ -684,6 +684,7 @@ mod tests {
                     priority: false,
                     command_type: "user_message".to_string(),
                     preview: "Hello".to_string(),
+                    content: "Hello".to_string(),
                 },
             ],
         };

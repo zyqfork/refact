@@ -30,6 +30,15 @@ export function useInputValue(
 
   const handleEvent = useCallback(
     (event: MessageEvent) => {
+      const isSameWindowPost =
+        event.source === window && window.location.origin !== "null";
+      const isSameOrigin =
+        window.location.origin !== "null" &&
+        event.origin === window.location.origin;
+      if (isSameWindowPost && !isSameOrigin) {
+        return;
+      }
+
       if (addInputValue.match(event.data) || setInputValue.match(event.data)) {
         const { payload } = event.data;
         debugRefact(

@@ -532,7 +532,7 @@ fn build_chat_model_record(
     } else {
         (
             model.n_ctx,
-            model.supports_tools,
+            false,
             model.supports_multimodality,
             model.reasoning_effort_options.clone(),
             model.supports_thinking_budget,

@@ -46,12 +46,20 @@ pub async fn handle_v1_chat_subscribe(
         event: snapshot,
     };
 
+    let initial_json = match serde_json::to_string(&initial_envelope) {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::error!("Failed to serialize initial SSE snapshot for {}: {}", chat_id, e);
+            return Err(ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, "snapshot serialization failed".to_string()));
+        }
+    };
+
     let session_for_stream = session_arc.clone();
     let chat_id_for_stream = chat_id.clone();
+    let closed_flag = session_arc.lock().await.closed_flag.clone();
 
     let stream = async_stream::stream! {
-        let json = serde_json::to_string(&initial_envelope).unwrap_or_default();
-        yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
+        yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", initial_json));
 
         let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -61,26 +69,42 @@ pub async fn handle_v1_chat_subscribe(
                 result = rx.recv() => {
                     match result {
                         Ok(envelope) => {
-                            let json = serde_json::to_string(&envelope).unwrap_or_default();
-                            yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
+                            match serde_json::to_string(&envelope) {
+                                Ok(json) => yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json)),
+                                Err(e) => {
+                                    tracing::error!("Failed to serialize SSE event for {}: {}", chat_id_for_stream, e);
+                                    break;
+                                }
+                            }
                         }
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {
                             tracing::info!("SSE subscriber lagged, skipped {} events, sending fresh snapshot", skipped);
                             let session = session_for_stream.lock().await;
+                            if session.closed {
+                                break;
+                            }
+                            // Re-subscribe BEFORE capturing event_seq so we don't miss events
+                            // emitted between snapshot and the new receiver start.
+                            rx = session.subscribe();
                             let recovery_envelope = EventEnvelope {
                                 chat_id: chat_id_for_stream.clone(),
                                 seq: session.event_seq,
                                 event: session.snapshot(),
                             };
                             drop(session);
-                            let json = serde_json::to_string(&recovery_envelope).unwrap_or_default();
-                            yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
+                            match serde_json::to_string(&recovery_envelope) {
+                                Ok(json) => yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json)),
+                                Err(e) => {
+                                    tracing::error!("Failed to serialize SSE recovery snapshot for {}: {}", chat_id_for_stream, e);
+                                    break;
+                                }
+                            }
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
                 _ = heartbeat_interval.tick() => {
-                    if session_for_stream.lock().await.closed {
+                    if closed_flag.load(std::sync::atomic::Ordering::Relaxed) {
                         break;
                     }
                     yield Ok::<_, std::convert::Infallible>(format!(": hb {}\n\n", chrono::Utc::now().timestamp()));

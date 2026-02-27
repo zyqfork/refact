@@ -206,6 +206,8 @@ pub struct QueuedItem {
     pub priority: bool,
     pub command_type: String,
     pub preview: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,56 +512,98 @@ pub struct CommandRequest {
 
 impl CommandRequest {
     pub fn to_queued_item(&self) -> QueuedItem {
-        let (command_type, preview) = match &self.command {
+        let (command_type, preview, content) = match &self.command {
             ChatCommand::UserMessage { content, .. } => {
-                ("user_message".to_string(), extract_preview(content))
+                let full = extract_full_text_capped(content);
+                let preview = extract_preview(content);
+                ("user_message".to_string(), preview, full)
             }
             ChatCommand::RetryFromIndex { content, index, .. } => (
                 "retry_from_index".to_string(),
                 format!("@{}: {}", index, extract_preview(content)),
+                String::new(),
             ),
             ChatCommand::SetParams { patch } => {
                 let model = patch.get("model").and_then(|v| v.as_str()).unwrap_or("");
-                ("set_params".to_string(), format!("model={}", model))
+                ("set_params".to_string(), format!("model={}", model), String::new())
             }
-            ChatCommand::Abort {} => ("abort".to_string(), String::new()),
+            ChatCommand::Abort {} => ("abort".to_string(), String::new(), String::new()),
             ChatCommand::ToolDecision {
                 tool_call_id,
                 accepted,
             } => (
                 "tool_decision".to_string(),
                 format!("{}: {}", tool_call_id, accepted),
+                String::new(),
             ),
             ChatCommand::ToolDecisions { decisions } => (
                 "tool_decisions".to_string(),
                 format!("{} decisions", decisions.len()),
+                String::new(),
             ),
             ChatCommand::IdeToolResult { tool_call_id, .. } => {
-                ("ide_tool_result".to_string(), tool_call_id.clone())
+                ("ide_tool_result".to_string(), tool_call_id.clone(), String::new())
             }
             ChatCommand::UpdateMessage { message_id, .. } => {
-                ("update_message".to_string(), message_id.clone())
+                ("update_message".to_string(), message_id.clone(), String::new())
             }
             ChatCommand::RemoveMessage { message_id, .. } => {
-                ("remove_message".to_string(), message_id.clone())
+                ("remove_message".to_string(), message_id.clone(), String::new())
             }
-            ChatCommand::Regenerate {} => ("regenerate".to_string(), String::new()),
-            ChatCommand::RestoreMessages { messages } => {
-                ("restore_messages".to_string(), format!("{} messages", messages.len()))
-            }
-            ChatCommand::BranchFromChat { source_chat_id, .. } => {
-                ("branch_from_chat".to_string(), source_chat_id.clone())
-            }
-            ChatCommand::BrowserContextDecision { pending_message_id, .. } => {
-                ("browser_context_decision".to_string(), pending_message_id.clone())
-            }
+            ChatCommand::Regenerate {} => ("regenerate".to_string(), String::new(), String::new()),
+            ChatCommand::RestoreMessages { messages } => (
+                "restore_messages".to_string(),
+                format!("{} messages", messages.len()),
+                String::new(),
+            ),
+            ChatCommand::BranchFromChat { source_chat_id, .. } => (
+                "branch_from_chat".to_string(),
+                source_chat_id.clone(),
+                String::new(),
+            ),
+            ChatCommand::BrowserContextDecision { pending_message_id, .. } => (
+                "browser_context_decision".to_string(),
+                pending_message_id.clone(),
+                String::new(),
+            ),
         };
         QueuedItem {
             client_request_id: self.client_request_id.clone(),
             priority: self.priority,
             command_type,
             preview,
+            content,
         }
+    }
+}
+
+const MAX_CONTENT_CHARS: usize = 8192;
+
+fn extract_full_text(content: &serde_json::Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        return arr
+            .iter()
+            .find_map(|item| {
+                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    item.get("text").and_then(|t| t.as_str()).map(String::from)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+    }
+    String::new()
+}
+
+fn extract_full_text_capped(content: &serde_json::Value) -> String {
+    let text = extract_full_text(content);
+    if text.chars().count() > MAX_CONTENT_CHARS {
+        format!("{}…", text.chars().take(MAX_CONTENT_CHARS).collect::<String>())
+    } else {
+        text
     }
 }
 
@@ -607,6 +651,9 @@ pub struct ChatSession {
     pub trajectory_version: u64,
     pub created_at: String,
     pub closed: bool,
+    /// Mirrors `closed` as an atomic so SSE heartbeat loops can check it
+    /// without acquiring the session mutex on every tick.
+    pub closed_flag: Arc<AtomicBool>,
     pub external_reload_pending: bool,
     pub last_prompt_messages: Vec<ChatMessage>,
     pub cache_guard_snapshot: Option<serde_json::Value>,
