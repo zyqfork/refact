@@ -134,6 +134,7 @@ mod customization_editor;
 pub mod project_information;
 mod v1_browser;
 mod stats;
+mod plugins;
 
 use crate::http::routers::v1::ext_management::{
     handle_v1_ext_registry,
@@ -153,6 +154,11 @@ use crate::http::routers::v1::project_information::{
 };
 use crate::http::routers::v1::stats::{
     handle_v1_stats_llm_summary, handle_v1_stats_llm_events,
+};
+use crate::http::routers::v1::plugins::{
+    handle_list_marketplaces, handle_add_marketplace, handle_delete_marketplace,
+    handle_list_marketplace_plugins, handle_install_plugin,
+    handle_list_installed, handle_uninstall_plugin,
 };
 use crate::http::routers::v1::v1_browser::{
     handle_browser_start, handle_browser_stop, handle_browser_screenshot,
@@ -410,7 +416,14 @@ pub fn make_v1_router() -> Router {
         .route("/ext/commands/:name", delete(handle_v1_ext_command_delete))
         .route("/ext/hooks", get(handle_v1_ext_hooks_get))
         .route("/ext/hooks", put(handle_v1_ext_hooks_put))
-        .route("/ext/hooks/:index", delete(handle_v1_ext_hooks_delete_by_index));
+        .route("/ext/hooks/:index", delete(handle_v1_ext_hooks_delete_by_index))
+        .route("/plugins/marketplaces", get(handle_list_marketplaces))
+        .route("/plugins/marketplaces", post(handle_add_marketplace))
+        .route("/plugins/marketplaces/:name", delete(handle_delete_marketplace))
+        .route("/plugins/marketplace/:name/plugins", get(handle_list_marketplace_plugins))
+        .route("/plugins/install", post(handle_install_plugin))
+        .route("/plugins/installed", get(handle_list_installed))
+        .route("/plugins/installed/:name", delete(handle_uninstall_plugin));
 
     builder.layer(axum::middleware::from_fn(telemetry_middleware))
 }

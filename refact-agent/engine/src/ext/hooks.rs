@@ -138,7 +138,7 @@ async fn load_hooks_from_claude_settings(path: &Path, source: CommandSource) -> 
 pub async fn load_hooks(ext_dirs: &ExtDirs) -> Vec<HookConfig> {
     let mut result = Vec::new();
     for dir in ext_dirs.all_dirs_in_order() {
-        let source = source_for_dir(dir, &ext_dirs.global_dirs);
+        let source = source_for_dir(dir, &ext_dirs.global_dirs, &ext_dirs.installed_dirs);
         if is_claude_dir(dir) {
             let settings_path = dir.join("settings.json");
             let hooks = load_hooks_from_claude_settings(&settings_path, source.clone()).await;
@@ -181,7 +181,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 2);
@@ -232,7 +233,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![claude_dir.clone()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 2);
@@ -251,7 +253,8 @@ hooks:
     async fn test_load_hooks_missing_file() {
         let ext_dirs = ExtDirs {
             global_dirs: vec![PathBuf::from("/nonexistent/path")],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert!(hooks.is_empty());
@@ -264,7 +267,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert!(hooks.is_empty());
@@ -279,7 +283,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![claude_dir.clone()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert!(hooks.is_empty());
@@ -303,7 +308,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 1);
@@ -356,7 +362,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 9);
@@ -377,7 +384,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 1);
@@ -410,7 +418,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![claude_dir.clone()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 1);
@@ -457,7 +466,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![claude_dir.clone()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 2);
@@ -504,7 +514,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![claude_dir.clone()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 2);
@@ -532,7 +543,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
-            project_dirs: vec![],
+            installed_dirs: vec![],
+        project_dirs: vec![],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 1);
@@ -561,7 +573,8 @@ hooks:
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![global_tmp.path().to_path_buf()],
-            project_dirs: vec![project_tmp.path().to_path_buf()],
+            installed_dirs: vec![],
+        project_dirs: vec![project_tmp.path().to_path_buf()],
         };
         let hooks = load_hooks(&ext_dirs).await;
         assert_eq!(hooks.len(), 2);

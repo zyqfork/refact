@@ -162,7 +162,7 @@ pub async fn load_skill_indices(ext_dirs: &ExtDirs) -> Vec<SkillIndex> {
     let mut seen: std::collections::HashMap<String, SkillIndex> = std::collections::HashMap::new();
     for dir in ext_dirs.all_dirs_in_order() {
         let skills_dir = dir.join("skills");
-        let source = source_for_dir(dir, &ext_dirs.global_dirs);
+        let source = source_for_dir(dir, &ext_dirs.global_dirs, &ext_dirs.installed_dirs);
         let skill_dirs = scan_skills_dir(&skills_dir).await;
         for skill_dir in skill_dirs {
             if let Some(index) = load_skill_index_only(&skill_dir, source.clone()).await {
@@ -179,7 +179,7 @@ pub async fn load_skill_full(ext_dirs: &ExtDirs, name: &str) -> Option<SkillFull
     let mut found: Option<SkillFull> = None;
     for dir in ext_dirs.all_dirs_in_order() {
         let skills_dir = dir.join("skills");
-        let source = source_for_dir(dir, &ext_dirs.global_dirs);
+        let source = source_for_dir(dir, &ext_dirs.global_dirs, &ext_dirs.installed_dirs);
         let candidate = skills_dir.join(name);
         if let Some(full) = load_skill_from_dir(&candidate, source).await {
             if full.index.name == name {
@@ -353,6 +353,7 @@ mod tests {
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let indices = load_skill_indices(&ext_dirs).await;
@@ -383,6 +384,7 @@ mod tests {
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![global_tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![project_tmp.path().to_path_buf()],
         };
         let indices = load_skill_indices(&ext_dirs).await;
@@ -404,6 +406,7 @@ mod tests {
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let full = load_skill_full(&ext_dirs, "finder").await;
@@ -415,6 +418,7 @@ mod tests {
     async fn test_load_skill_full_not_found() {
         let ext_dirs = ExtDirs {
             global_dirs: vec![PathBuf::from("/nonexistent")],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let full = load_skill_full(&ext_dirs, "nonexistent").await;
@@ -480,6 +484,7 @@ mod tests {
     async fn test_load_skill_no_skills_dir() {
         let ext_dirs = ExtDirs {
             global_dirs: vec![PathBuf::from("/nonexistent/path")],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let indices = load_skill_indices(&ext_dirs).await;
@@ -535,6 +540,7 @@ mod tests {
 
         let ext_dirs = ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let indices = load_skill_indices(&ext_dirs).await;

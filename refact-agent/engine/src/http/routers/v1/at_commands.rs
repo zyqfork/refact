@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tokio::sync::RwLock as ARwLock;
@@ -86,6 +87,7 @@ struct SlashCacheEntry {
     commands: Vec<SlashCommand>,
     skills: Vec<SkillIndex>,
     loaded_at: Instant,
+    generation: u64,
 }
 
 static SLASH_CACHE: OnceLock<tokio::sync::RwLock<Option<SlashCacheEntry>>> = OnceLock::new();
@@ -99,11 +101,12 @@ pub async fn invalidate_slash_cache() {
 async fn load_slash_commands_and_skills(
     gcx: Arc<ARwLock<GlobalContext>>,
 ) -> (Vec<SlashCommand>, Vec<SkillIndex>) {
+    let current_gen = gcx.read().await.ext_cache_generation.load(Ordering::Relaxed);
     let lock = SLASH_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
     {
         let read = lock.read().await;
         if let Some(entry) = &*read {
-            if entry.loaded_at.elapsed() < SLASH_CACHE_TTL {
+            if entry.loaded_at.elapsed() < SLASH_CACHE_TTL && entry.generation == current_gen {
                 return (entry.commands.clone(), entry.skills.clone());
             }
         }
@@ -116,6 +119,7 @@ async fn load_slash_commands_and_skills(
         commands: commands.clone(),
         skills: skills.clone(),
         loaded_at: Instant::now(),
+        generation: current_gen,
     });
     (commands, skills)
 }
@@ -126,6 +130,7 @@ fn source_label(source: &CommandSource) -> String {
         CommandSource::GlobalRefact => "global_refact".to_string(),
         CommandSource::ProjectClaude(_) => "project_claude".to_string(),
         CommandSource::ProjectRefact(_) => "project_refact".to_string(),
+        CommandSource::InstalledPlugin(name) => format!("plugin:{}", name),
     }
 }
 

@@ -138,7 +138,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_ext_dirs(config_dir: PathBuf) -> ExtDirs {
-        ExtDirs { global_dirs: vec![config_dir], project_dirs: vec![] }
+        ExtDirs { global_dirs: vec![config_dir], installed_dirs: vec![], project_dirs: vec![] }
     }
 
     #[test]

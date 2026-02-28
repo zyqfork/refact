@@ -120,7 +120,7 @@ pub async fn load_slash_commands(ext_dirs: &ExtDirs) -> Vec<SlashCommand> {
     let mut commands: HashMap<String, SlashCommand> = HashMap::new();
     for dir in ext_dirs.all_dirs_in_order() {
         let commands_dir = dir.join("commands");
-        let source = source_for_dir(dir, &ext_dirs.global_dirs);
+        let source = source_for_dir(dir, &ext_dirs.global_dirs, &ext_dirs.installed_dirs);
         let files = collect_md_files_recursive(&commands_dir).await;
         for file in files {
             if let Some(cmd) = load_command_from_file(&file, source.clone()).await {
@@ -217,6 +217,7 @@ mod tests {
 
         let ext_dirs = crate::ext::config_dirs::ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let commands = load_slash_commands(&ext_dirs).await;
@@ -257,6 +258,7 @@ mod tests {
 
         let ext_dirs = crate::ext::config_dirs::ExtDirs {
             global_dirs: vec![global_tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![project_tmp.path().to_path_buf()],
         };
 
@@ -275,6 +277,7 @@ mod tests {
 
         let ext_dirs = crate::ext::config_dirs::ExtDirs {
             global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let commands = load_slash_commands(&ext_dirs).await;
@@ -286,6 +289,7 @@ mod tests {
     async fn test_load_slash_commands_missing_dir() {
         let ext_dirs = crate::ext::config_dirs::ExtDirs {
             global_dirs: vec![PathBuf::from("/nonexistent/path/that/does/not/exist")],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let commands = load_slash_commands(&ext_dirs).await;

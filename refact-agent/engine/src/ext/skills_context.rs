@@ -160,6 +160,7 @@ mod tests {
     fn make_ext_dirs(root: &Path) -> ExtDirs {
         ExtDirs {
             global_dirs: vec![root.to_path_buf()],
+            installed_dirs: vec![],
             project_dirs: vec![],
         }
     }
@@ -230,6 +231,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ext_dirs = ExtDirs {
             global_dirs: vec![PathBuf::from("/nonexistent")],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let index = build_skills_index_from_dirs(&ext_dirs).await;
@@ -436,6 +438,7 @@ mod tests {
     async fn test_skills_context_messages_no_skills() {
         let ext_dirs = ExtDirs {
             global_dirs: vec![PathBuf::from("/nonexistent")],
+            installed_dirs: vec![],
             project_dirs: vec![],
         };
         let msgs = build_context_messages_from_dirs(&ext_dirs, "any message", None).await;
