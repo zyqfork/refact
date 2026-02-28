@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncReadExt;
 
 use crate::ext::config_dirs::{source_for_dir, CommandSource, ExtDirs};
 use crate::ext::slash_commands::{parse_frontmatter_and_body};
@@ -106,6 +107,41 @@ async fn load_skill_from_dir(
     })
 }
 
+const SKILL_INDEX_READ_BYTES: usize = 4096;
+
+async fn load_skill_index_only(skill_dir: &Path, source: CommandSource) -> Option<SkillIndex> {
+    let skill_md = skill_dir.join("SKILL.md");
+    if !skill_md.exists() {
+        return None;
+    }
+    let mut file = match tokio::fs::File::open(&skill_md).await {
+        Ok(f) => f,
+        Err(_) => return None,
+    };
+    let mut buf = vec![0u8; SKILL_INDEX_READ_BYTES];
+    let n = match file.read(&mut buf).await {
+        Ok(n) => n,
+        Err(_) => return None,
+    };
+    let header = String::from_utf8_lossy(&buf[..n]);
+    let (fm, _) = parse_frontmatter_and_body(&header);
+    let name = yaml_str(&fm, "name");
+    if name.is_empty() {
+        return None;
+    }
+    let description = yaml_str(&fm, "description");
+    if description.is_empty() {
+        return None;
+    }
+    Some(SkillIndex {
+        name,
+        description,
+        user_invocable: yaml_bool(&fm, "user-invocable", true),
+        disable_model_invocation: yaml_bool(&fm, "disable-model-invocation", false),
+        source,
+    })
+}
+
 async fn scan_skills_dir(skills_dir: &Path) -> Vec<PathBuf> {
     let mut skill_dirs = Vec::new();
     let mut entries = match tokio::fs::read_dir(skills_dir).await {
@@ -129,8 +165,8 @@ pub async fn load_skill_indices(ext_dirs: &ExtDirs) -> Vec<SkillIndex> {
         let source = source_for_dir(dir, &ext_dirs.global_dirs);
         let skill_dirs = scan_skills_dir(&skills_dir).await;
         for skill_dir in skill_dirs {
-            if let Some(full) = load_skill_from_dir(&skill_dir, source.clone()).await {
-                seen.insert(full.index.name.clone(), full.index);
+            if let Some(index) = load_skill_index_only(&skill_dir, source.clone()).await {
+                seen.insert(index.name.clone(), index);
             }
         }
     }
@@ -448,6 +484,46 @@ mod tests {
         };
         let indices = load_skill_indices(&ext_dirs).await;
         assert!(indices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_skill_index_only_no_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("skills").join("large_skill");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+
+        let body = "x".repeat(50 * 1024);
+        let content = format!("---\nname: large_skill\ndescription: Large body skill\n---\n{}", body);
+        tokio::fs::write(skill_dir.join("SKILL.md"), &content).await.unwrap();
+
+        let index = load_skill_index_only(&skill_dir, CommandSource::GlobalRefact).await;
+        assert!(index.is_some());
+        let index = index.unwrap();
+        assert_eq!(index.name, "large_skill");
+        assert_eq!(index.description, "Large body skill");
+        assert!(index.user_invocable);
+        assert!(!index.disable_model_invocation);
+    }
+
+    #[tokio::test]
+    async fn test_skill_index_only_missing_skill_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("no_skill");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+
+        let index = load_skill_index_only(&skill_dir, CommandSource::GlobalRefact).await;
+        assert!(index.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_skill_index_only_missing_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("skills").join("no_name");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+        tokio::fs::write(skill_dir.join("SKILL.md"), "---\ndescription: No name\n---\nBody").await.unwrap();
+
+        let index = load_skill_index_only(&skill_dir, CommandSource::GlobalRefact).await;
+        assert!(index.is_none());
     }
 
     #[tokio::test]

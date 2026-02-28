@@ -255,7 +255,7 @@ pub async fn handle_v1_command_completion(
         );
         info!("args: {:?}", args);
         let focused_slash = args.iter().find(|a| a.focused && a.value.starts_with('/'));
-        if let Some(focused) = focused_slash {
+        if let Some(focused) = focused_slash.filter(|f| is_slash_token_first_in_line(&args, f)) {
             let (slash_cmds, skills) = load_slash_commands_and_skills(global_context.clone()).await;
             let (raw_completions, details) = slash_completions_for_prefix(&slash_cmds, &skills, &focused.value);
             is_cmd_executable = raw_completions.iter().any(|c| c == &focused.value);
@@ -676,6 +676,14 @@ async fn command_completion_options(
         .collect()
 }
 
+fn is_slash_token_first_in_line(args: &[QueryLineArg], focused: &QueryLineArg) -> bool {
+    args.iter()
+        .filter(|a| !a.value.trim().is_empty())
+        .next()
+        .map(|first| first.pos1 == focused.pos1)
+        .unwrap_or(false)
+}
+
 pub fn query_line_args(
     line: &String,
     cursor_rel: i64,
@@ -847,6 +855,55 @@ mod tests {
         let (_, details) = slash_completions_for_prefix(&commands, &[], "/");
         let detail = details.get("/no-hint").unwrap();
         assert!(detail.argument_hint.is_none());
+    }
+
+    fn make_arg(value: &str, pos1: i64, pos2: i64, focused: bool) -> QueryLineArg {
+        QueryLineArg { value: value.to_string(), pos1, pos2, focused }
+    }
+
+    #[test]
+    fn test_slash_completion_not_triggered_mid_text() {
+        let args = vec![
+            make_arg("some", 0, 4, false),
+            make_arg("text", 5, 9, false),
+            make_arg("/usr/bin", 10, 18, true),
+        ];
+        let focused_slash = args.iter().find(|a| a.focused && a.value.starts_with('/'));
+        assert!(focused_slash.is_some());
+        let focused = focused_slash.unwrap();
+        assert!(!is_slash_token_first_in_line(&args, focused));
+    }
+
+    #[test]
+    fn test_slash_completion_triggered_at_start() {
+        let args = vec![
+            make_arg("/opt", 0, 4, true),
+        ];
+        let focused_slash = args.iter().find(|a| a.focused && a.value.starts_with('/'));
+        assert!(focused_slash.is_some());
+        let focused = focused_slash.unwrap();
+        assert!(is_slash_token_first_in_line(&args, focused));
+    }
+
+    #[test]
+    fn test_slash_completion_triggered_when_only_token() {
+        let args = vec![
+            make_arg("/review", 0, 7, true),
+        ];
+        let focused_slash = args.iter().find(|a| a.focused && a.value.starts_with('/'));
+        let focused = focused_slash.unwrap();
+        assert!(is_slash_token_first_in_line(&args, focused));
+    }
+
+    #[test]
+    fn test_slash_completion_not_triggered_after_at_command() {
+        let args = vec![
+            make_arg("@file", 0, 5, false),
+            make_arg("/usr/local", 6, 16, true),
+        ];
+        let focused_slash = args.iter().find(|a| a.focused && a.value.starts_with('/'));
+        let focused = focused_slash.unwrap();
+        assert!(!is_slash_token_first_in_line(&args, focused));
     }
 
     #[test]

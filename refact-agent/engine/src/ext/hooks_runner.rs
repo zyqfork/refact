@@ -1,17 +1,18 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock as ARwLock;
 use serde::Serialize;
 
-use crate::ext::config_dirs::{get_ext_dirs, CommandSource};
+use crate::ext::config_dirs::{get_ext_dirs, CommandSource, ExtDirs};
 use crate::ext::hooks::{HookConfig, HookEvent, load_hooks};
 use crate::global_context::GlobalContext;
 
 const HOOK_MAX_OUTPUT_BYTES: usize = 10 * 1024;
 const HOOK_DEFAULT_TIMEOUT_SECS: u64 = 30;
+const HOOKS_CACHE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HookPayload {
@@ -38,21 +39,66 @@ pub enum HookResult {
     Timeout,
 }
 
-fn matcher_matches(matcher: &Option<String>, tool_name: Option<&str>) -> bool {
-    match matcher {
+#[derive(Clone)]
+struct CompiledHook {
+    config: HookConfig,
+    compiled_matcher: Option<regex::Regex>,
+}
+
+struct HooksCacheEntry {
+    hooks: Vec<CompiledHook>,
+    loaded_at: Instant,
+}
+
+static HOOKS_CACHE: OnceLock<tokio::sync::RwLock<Option<HooksCacheEntry>>> = OnceLock::new();
+
+fn compile_hooks(hooks: Vec<HookConfig>) -> Vec<CompiledHook> {
+    let mut result = Vec::new();
+    for config in hooks {
+        let compiled_matcher = match &config.matcher {
+            None => None,
+            Some(p) if p.is_empty() => None,
+            Some(p) => match regex::Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    tracing::warn!("hooks_runner: invalid matcher regex '{}': {}", p, e);
+                    continue;
+                }
+            },
+        };
+        result.push(CompiledHook { config, compiled_matcher });
+    }
+    result
+}
+
+fn compiled_matcher_matches(compiled: Option<&regex::Regex>, tool_name: Option<&str>) -> bool {
+    match compiled {
         None => true,
-        Some(pattern) => {
-            if pattern.is_empty() {
-                return true;
-            }
-            match tool_name {
-                Some(name) => regex::Regex::new(pattern)
-                    .map(|re| re.is_match(name))
-                    .unwrap_or(false),
-                None => false,
+        Some(re) => match tool_name {
+            Some(name) => re.is_match(name),
+            None => false,
+        },
+    }
+}
+
+async fn get_compiled_hooks_from_ext_dirs(ext_dirs: &ExtDirs) -> Vec<CompiledHook> {
+    let lock = HOOKS_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
+    {
+        let read = lock.read().await;
+        if let Some(entry) = &*read {
+            if entry.loaded_at.elapsed() < HOOKS_CACHE_TTL {
+                return entry.hooks.clone();
             }
         }
     }
+    let raw_hooks = load_hooks(ext_dirs).await;
+    let compiled = compile_hooks(raw_hooks);
+    let mut write = lock.write().await;
+    *write = Some(HooksCacheEntry {
+        hooks: compiled.clone(),
+        loaded_at: Instant::now(),
+    });
+    compiled
 }
 
 pub async fn get_project_dir_string(gcx: Arc<ARwLock<GlobalContext>>) -> String {
@@ -88,12 +134,13 @@ pub async fn get_hooks_for_event(
     tool_name: Option<&str>,
 ) -> Vec<HookConfig> {
     let ext_dirs = get_ext_dirs(gcx).await;
-    let hooks = load_hooks(&ext_dirs).await;
-    let trusted = filter_trusted_hooks(hooks);
-    trusted
+    let compiled_hooks = get_compiled_hooks_from_ext_dirs(&ext_dirs).await;
+    compiled_hooks
         .into_iter()
-        .filter(|h| h.event == event)
-        .filter(|h| matcher_matches(&h.matcher, tool_name))
+        .filter(|h| is_global_source(&h.config.source))  // Trust gating: only global hooks
+        .filter(|h| h.config.event == event)
+        .filter(|h| compiled_matcher_matches(h.compiled_matcher.as_ref(), tool_name))
+        .map(|h| h.config)
         .collect()
 }
 
@@ -260,6 +307,16 @@ mod tests {
         }
     }
 
+    fn make_hook_config(event: HookEvent, matcher: Option<&str>, command: &str) -> HookConfig {
+        crate::ext::hooks::HookConfig {
+            event,
+            matcher: matcher.map(|s| s.to_string()),
+            command: command.to_string(),
+            timeout: Some(5),
+            source: crate::ext::config_dirs::CommandSource::GlobalRefact,
+        }
+    }
+
     #[test]
     fn test_payload_serialization_minimal() {
         let payload = make_payload("PreToolUse", None);
@@ -294,53 +351,80 @@ mod tests {
     }
 
     #[test]
-    fn test_matcher_matches_none_matches_all() {
-        assert!(matcher_matches(&None, Some("shell")));
-        assert!(matcher_matches(&None, Some("cat")));
-        assert!(matcher_matches(&None, None));
+    fn test_compiled_matcher_matches_none_matches_all() {
+        assert!(compiled_matcher_matches(None, Some("shell")));
+        assert!(compiled_matcher_matches(None, Some("cat")));
+        assert!(compiled_matcher_matches(None, None));
     }
 
     #[test]
-    fn test_matcher_matches_empty_pattern_matches_all() {
-        assert!(matcher_matches(&Some("".to_string()), Some("shell")));
-        assert!(matcher_matches(&Some("".to_string()), None));
+    fn test_compiled_matcher_matches_pattern_with_tool_name() {
+        let re = regex::Regex::new("Bash|shell").unwrap();
+        assert!(compiled_matcher_matches(Some(&re), Some("shell")));
+        assert!(compiled_matcher_matches(Some(&re), Some("Bash")));
+        assert!(!compiled_matcher_matches(Some(&re), Some("cat")));
     }
 
     #[test]
-    fn test_matcher_matches_pattern_with_tool_name() {
-        assert!(matcher_matches(
-            &Some("Bash|shell".to_string()),
-            Some("shell")
-        ));
-        assert!(matcher_matches(
-            &Some("Bash|shell".to_string()),
-            Some("Bash")
-        ));
-        assert!(!matcher_matches(
-            &Some("Bash|shell".to_string()),
-            Some("cat")
-        ));
+    fn test_compiled_matcher_matches_pattern_without_tool_name_returns_false() {
+        let re = regex::Regex::new("shell").unwrap();
+        assert!(!compiled_matcher_matches(Some(&re), None));
     }
 
     #[test]
-    fn test_matcher_matches_pattern_without_tool_name_returns_false() {
-        assert!(!matcher_matches(&Some("shell".to_string()), None));
+    fn test_compile_hooks_skips_invalid_regex() {
+        let configs = vec![
+            make_hook_config(HookEvent::PreToolUse, Some("[invalid"), "cmd1"),
+            make_hook_config(HookEvent::PreToolUse, Some("shell"), "cmd2"),
+        ];
+        let compiled = compile_hooks(configs);
+        assert_eq!(compiled.len(), 1);
+        assert_eq!(compiled[0].config.command, "cmd2");
     }
 
     #[test]
-    fn test_matcher_invalid_regex_returns_false() {
-        assert!(!matcher_matches(&Some("[invalid".to_string()), Some("shell")));
+    fn test_compile_hooks_none_matcher_becomes_match_all() {
+        let configs = vec![
+            make_hook_config(HookEvent::SessionStart, None, "cmd"),
+        ];
+        let compiled = compile_hooks(configs);
+        assert_eq!(compiled.len(), 1);
+        assert!(compiled[0].compiled_matcher.is_none());
+        assert!(compiled_matcher_matches(compiled[0].compiled_matcher.as_ref(), Some("anything")));
+        assert!(compiled_matcher_matches(compiled[0].compiled_matcher.as_ref(), None));
+    }
+
+    #[test]
+    fn test_compile_hooks_empty_matcher_becomes_match_all() {
+        let configs = vec![
+            make_hook_config(HookEvent::SessionStart, Some(""), "cmd"),
+        ];
+        let compiled = compile_hooks(configs);
+        assert_eq!(compiled.len(), 1);
+        assert!(compiled[0].compiled_matcher.is_none());
+    }
+
+    #[test]
+    fn test_hooks_cache_returns_same_result() {
+        let configs = vec![
+            make_hook_config(HookEvent::PreToolUse, Some("shell|bash"), "cmd1"),
+            make_hook_config(HookEvent::PostToolUse, None, "cmd2"),
+        ];
+        let compiled1 = compile_hooks(configs.clone());
+        let compiled2 = compile_hooks(configs);
+        assert_eq!(compiled1.len(), compiled2.len());
+        assert_eq!(compiled1.len(), 2);
+        assert!(compiled_matcher_matches(compiled1[0].compiled_matcher.as_ref(), Some("shell")));
+        assert!(compiled_matcher_matches(compiled2[0].compiled_matcher.as_ref(), Some("shell")));
+        assert!(!compiled_matcher_matches(compiled1[0].compiled_matcher.as_ref(), Some("cat")));
+        assert!(!compiled_matcher_matches(compiled2[0].compiled_matcher.as_ref(), Some("cat")));
+        assert!(compiled_matcher_matches(compiled1[1].compiled_matcher.as_ref(), None));
+        assert!(compiled_matcher_matches(compiled2[1].compiled_matcher.as_ref(), None));
     }
 
     #[tokio::test]
     async fn test_run_single_hook_success() {
-        let config = crate::ext::hooks::HookConfig {
-            event: HookEvent::PreToolUse,
-            matcher: None,
-            command: "echo success_output".to_string(),
-            timeout: Some(5),
-            source: crate::ext::config_dirs::CommandSource::GlobalRefact,
-        };
+        let config = make_hook_config(HookEvent::PreToolUse, None, "echo success_output");
         let payload = make_payload("PreToolUse", Some("shell"));
         let result = run_single_hook(&config, &payload).await;
         match result {
@@ -351,13 +435,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_single_hook_exit_2_blocks() {
-        let config = crate::ext::hooks::HookConfig {
-            event: HookEvent::PreToolUse,
-            matcher: None,
-            command: "sh -c 'echo block_reason >&2; exit 2'".to_string(),
-            timeout: Some(5),
-            source: crate::ext::config_dirs::CommandSource::GlobalRefact,
-        };
+        let config = make_hook_config(
+            HookEvent::PreToolUse,
+            None,
+            "sh -c 'echo block_reason >&2; exit 2'",
+        );
         let payload = make_payload("PreToolUse", Some("shell"));
         let result = run_single_hook(&config, &payload).await;
         match result {
@@ -368,13 +450,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_single_hook_nonzero_exit_warning() {
-        let config = crate::ext::hooks::HookConfig {
-            event: HookEvent::PostToolUse,
-            matcher: None,
-            command: "sh -c 'echo warn_output >&2; exit 1'".to_string(),
-            timeout: Some(5),
-            source: crate::ext::config_dirs::CommandSource::GlobalRefact,
-        };
+        let config = make_hook_config(
+            HookEvent::PostToolUse,
+            None,
+            "sh -c 'echo warn_output >&2; exit 1'",
+        );
         let payload = make_payload("PostToolUse", Some("cat"));
         let result = run_single_hook(&config, &payload).await;
         match result {
@@ -385,13 +465,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_single_hook_timeout() {
-        let config = crate::ext::hooks::HookConfig {
-            event: HookEvent::SessionStart,
-            matcher: None,
-            command: "sleep 60".to_string(),
-            timeout: Some(1),
-            source: crate::ext::config_dirs::CommandSource::GlobalRefact,
-        };
+        let mut config = make_hook_config(HookEvent::SessionStart, None, "sleep 60");
+        config.timeout = Some(1);
         let payload = make_payload("SessionStart", None);
         let result = run_single_hook(&config, &payload).await;
         assert!(matches!(result, HookResult::Timeout));
