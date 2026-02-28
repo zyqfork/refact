@@ -12,7 +12,7 @@ use super::system_context::{
     self, create_instruction_files_message, create_memories_message, gather_system_context,
     generate_git_info_prompt, gather_git_info, PROJECT_CONTEXT_MARKER,
 };
-use crate::ext::skills_context::{build_skills_context_messages, SKILLS_CONTEXT_MARKER};
+use crate::ext::skills_context::{build_skills_context_messages_tracked, SkillsTrackingInfo, SKILLS_CONTEXT_MARKER};
 use crate::yaml_configs::project_information::load_project_information_config;
 use crate::call_validation::{ChatMessage, ChatContent, ContextFile, canonical_mode_id};
 use crate::tasks::storage::infer_task_id_from_chat_id;
@@ -382,10 +382,10 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
     tool_names: HashSet<String>,
     mode_id: &str,
     model_id: &str,
-) -> Vec<call_validation::ChatMessage> {
+) -> (Vec<call_validation::ChatMessage>, SkillsTrackingInfo) {
     if messages.is_empty() {
         tracing::error!("What's that? Messages list is empty");
-        return messages;
+        return (messages, SkillsTrackingInfo::default());
     }
 
     let have_system = messages
@@ -438,9 +438,10 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
         }
     }
 
+    let mut skills_tracking = SkillsTrackingInfo::default();
     if chat_meta.include_project_info && !have_project_context {
         match gather_and_inject_system_context(&gcx, &mut messages, stream_back_to_user).await {
-            Ok(()) => {}
+            Ok(info) => { skills_tracking = info; }
             Err(e) => {
                 tracing::warn!("Failed to gather system context: {}", e);
             }
@@ -464,7 +465,7 @@ pub async fn prepend_the_right_system_prompt_and_maybe_more_initial_messages(
     }
 
     tracing::info!("\n\nSYSTEM PROMPT MIXER chat_mode={:?}", chat_meta.chat_mode);
-    messages
+    (messages, skills_tracking)
 }
 
 const TASK_MEMORIES_CONTEXT_MARKER: &str = "task_memories_context";
@@ -475,7 +476,7 @@ async fn gather_and_inject_system_context(
     gcx: &Arc<ARwLock<GlobalContext>>,
     messages: &mut Vec<ChatMessage>,
     stream_back_to_user: &mut HasRagResults,
-) -> Result<(), String> {
+) -> Result<SkillsTrackingInfo, String> {
     let context = gather_system_context(gcx.clone(), false, 4).await?;
 
     if !context.instruction_files.is_empty() {
@@ -539,7 +540,7 @@ async fn gather_and_inject_system_context(
     let have_skills_context = messages
         .iter()
         .any(|m| m.role == "context_file" && m.tool_call_id == SKILLS_CONTEXT_MARKER);
-    if !have_skills_context {
+    let skills_tracking = if !have_skills_context {
         let last_user_text = messages
             .iter()
             .rev()
@@ -549,7 +550,7 @@ async fn gather_and_inject_system_context(
                 _ => None,
             })
             .unwrap_or_default();
-        let skills_msgs = build_skills_context_messages(gcx.clone(), &last_user_text, None).await;
+        let (skills_msgs, tracking) = build_skills_context_messages_tracked(gcx.clone(), &last_user_text, None).await;
         for skills_msg in skills_msgs {
             let insert_pos = messages
                 .iter()
@@ -558,9 +559,12 @@ async fn gather_and_inject_system_context(
             stream_back_to_user.push_in_json(serde_json::json!(skills_msg));
             messages.insert(insert_pos, skills_msg);
         }
-    }
+        tracking
+    } else {
+        SkillsTrackingInfo::default()
+    };
 
-    Ok(())
+    Ok(skills_tracking)
 }
 
 pub async fn inject_task_memories(

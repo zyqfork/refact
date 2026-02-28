@@ -10,6 +10,12 @@ use crate::global_context::GlobalContext;
 
 pub const SKILLS_CONTEXT_MARKER: &str = "skills_context";
 
+#[derive(Debug, Default, Clone)]
+pub struct SkillsTrackingInfo {
+    pub available_count: usize,
+    pub included_names: Vec<String>,
+}
+
 const MAX_INCLUDE_FILE_SIZE: usize = 50 * 1024;
 const MAX_INCLUDES: usize = 5;
 
@@ -73,8 +79,24 @@ async fn build_context_messages_from_dirs(
     ext_dirs: &ExtDirs,
     user_message: &str,
     explicit_skill: Option<&str>,
-) -> Vec<ChatMessage> {
-    let index_str = build_skills_index_from_dirs(ext_dirs).await;
+) -> (Vec<ChatMessage>, SkillsTrackingInfo) {
+    let indices = load_skill_indices(ext_dirs).await;
+    let available_count = indices.len();
+    let index_str = if indices.iter().any(|s| s.user_invocable) {
+        let displayable: Vec<_> = indices.iter().filter(|s| s.user_invocable).collect();
+        let mut lines = vec![
+            "## Available Skills".to_string(),
+            "The following skills are available. They may be auto-loaded when relevant, or invoked explicitly with /skill-name.".to_string(),
+            String::new(),
+        ];
+        for skill in &displayable {
+            lines.push(format!("- **{}**: {}", skill.name, skill.description));
+        }
+        lines.join("\n")
+    } else {
+        String::new()
+    };
+
     let mut context_files: Vec<ContextFile> = Vec::new();
 
     if !index_str.is_empty() {
@@ -98,8 +120,17 @@ async fn build_context_messages_from_dirs(
             None => vec![],
         }
     } else {
-        auto_select_skills_from_dirs(ext_dirs, user_message).await
+        let selected_names = select_relevant_skills(&indices, user_message, 2, 0.5);
+        let mut result = Vec::new();
+        for name in &selected_names {
+            if let Some(full) = load_skill_full(ext_dirs, name).await {
+                result.push(full);
+            }
+        }
+        result
     };
+
+    let included_names: Vec<String> = skills_to_load.iter().map(|s| s.index.name.clone()).collect();
 
     for skill in &skills_to_load {
         let body = expand_skill_includes(&skill.body, &skill.skill_dir).await;
@@ -117,16 +148,18 @@ async fn build_context_messages_from_dirs(
         });
     }
 
+    let tracking = SkillsTrackingInfo { available_count, included_names };
+
     if context_files.is_empty() {
-        return Vec::new();
+        return (Vec::new(), tracking);
     }
 
-    vec![ChatMessage {
+    (vec![ChatMessage {
         role: "context_file".to_string(),
         content: ChatContent::ContextFiles(context_files),
         tool_call_id: SKILLS_CONTEXT_MARKER.to_string(),
         ..Default::default()
-    }]
+    }], tracking)
 }
 
 pub async fn build_skills_index(gcx: Arc<ARwLock<GlobalContext>>) -> String {
@@ -147,6 +180,16 @@ pub async fn build_skills_context_messages(
     user_message: &str,
     explicit_skill: Option<&str>,
 ) -> Vec<ChatMessage> {
+    let ext_dirs = get_ext_dirs(gcx).await;
+    let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, user_message, explicit_skill).await;
+    msgs
+}
+
+pub async fn build_skills_context_messages_tracked(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    user_message: &str,
+    explicit_skill: Option<&str>,
+) -> (Vec<ChatMessage>, SkillsTrackingInfo) {
     let ext_dirs = get_ext_dirs(gcx).await;
     build_context_messages_from_dirs(&ext_dirs, user_message, explicit_skill).await
 }
@@ -322,7 +365,7 @@ mod tests {
         .await;
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "anything", Some("my-skill")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("my-skill")).await;
         assert!(!msgs.is_empty(), "Should return messages for explicit skill invocation");
 
         let files = match &msgs[0].content {
@@ -348,7 +391,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "anything", Some("with-include")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("with-include")).await;
         assert!(!msgs.is_empty());
 
         let files = match &msgs[0].content {
@@ -379,7 +422,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "anything", Some("big-include")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("big-include")).await;
         assert!(!msgs.is_empty());
 
         let files = match &msgs[0].content {
@@ -415,7 +458,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "anything", Some("many-includes")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("many-includes")).await;
         assert!(!msgs.is_empty());
 
         let files = match &msgs[0].content {
@@ -441,7 +484,7 @@ mod tests {
             installed_dirs: vec![],
             project_dirs: vec![],
         };
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "any message", None).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "any message", None).await;
         assert!(msgs.is_empty(), "No skills = no messages");
     }
 
@@ -457,7 +500,7 @@ mod tests {
         .await;
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "unrelated message", None).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "unrelated message", None).await;
         assert!(!msgs.is_empty(), "Skills index should always be included when skills exist");
         assert_eq!(msgs[0].tool_call_id, SKILLS_CONTEXT_MARKER);
 
@@ -483,7 +526,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let msgs = build_context_messages_from_dirs(&ext_dirs, "anything", Some("empty-body")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("empty-body")).await;
         assert!(!msgs.is_empty(), "Should still return index even with empty skill body");
     }
 }

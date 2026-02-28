@@ -3012,6 +3012,8 @@ mod tests {
             slash_allowed_tools: Vec::new(),
             slash_model_override: None,
             slash_source_command: String::new(),
+            skills_available_count: 0,
+            skills_included: Vec::new(),
         };
 
         let snapshot = TrajectorySnapshot::from_session(&session);

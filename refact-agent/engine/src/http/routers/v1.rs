@@ -135,6 +135,7 @@ pub mod project_information;
 mod v1_browser;
 mod stats;
 mod plugins;
+mod skills_status;
 
 use crate::http::routers::v1::ext_management::{
     handle_v1_ext_registry,
@@ -160,6 +161,7 @@ use crate::http::routers::v1::plugins::{
     handle_list_marketplace_plugins, handle_install_plugin,
     handle_list_installed, handle_uninstall_plugin,
 };
+use crate::http::routers::v1::skills_status::handle_v1_skills_status;
 use crate::http::routers::v1::v1_browser::{
     handle_browser_start, handle_browser_stop, handle_browser_screenshot,
     handle_browser_context, handle_browser_context_commit,
@@ -319,6 +321,7 @@ pub fn make_v1_router() -> Router {
         .route("/trajectories/:id", delete(handle_v1_trajectories_delete))
         .route("/chats/subscribe", get(handle_v1_chat_subscribe))
         .route("/chats/:chat_id/commands", post(handle_v1_chat_command))
+        .route("/chats/:chat_id/skills-status", get(handle_v1_skills_status))
         .route(
             "/chats/:chat_id/queue/:client_request_id",
             delete(handle_v1_chat_cancel_queued),

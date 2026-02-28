@@ -86,7 +86,7 @@ pub async fn prepare_session_preamble_and_knowledge(
             session.messages.clone()
         };
         let mut has_rag_results = crate::scratchpads::scratchpad_utils::HasRagResults::new();
-        let messages_with_preamble =
+        let (messages_with_preamble, skills_info) =
             prepend_the_right_system_prompt_and_maybe_more_initial_messages(
                 gcx.clone(),
                 messages,
@@ -103,6 +103,15 @@ pub async fn prepare_session_preamble_and_knowledge(
             .iter()
             .position(|m| m.role == "user" || m.role == "assistant")
             .unwrap_or(messages_with_preamble.len());
+
+        {
+            let mut session = session_arc.lock().await;
+            session.skills_included = Vec::new();
+            if skills_info.available_count > 0 {
+                session.skills_available_count = skills_info.available_count;
+                session.skills_included = skills_info.included_names.clone();
+            }
+        }
 
         if first_conv_idx > 0 {
             let mut session = session_arc.lock().await;

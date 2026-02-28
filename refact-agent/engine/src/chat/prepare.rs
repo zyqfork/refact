@@ -133,7 +133,7 @@ pub async fn prepare_chat_passthrough(
     };
     let task_meta = ccx.lock().await.task_meta.clone();
     let messages = if options.prepend_system_prompt {
-        prepend_the_right_system_prompt_and_maybe_more_initial_messages(
+        let (msgs, _) = prepend_the_right_system_prompt_and_maybe_more_initial_messages(
             gcx.clone(),
             messages,
             meta,
@@ -143,7 +143,8 @@ pub async fn prepare_chat_passthrough(
             mode_id,
             model_id,
         )
-        .await
+        .await;
+        msgs
     } else {
         messages
     };
