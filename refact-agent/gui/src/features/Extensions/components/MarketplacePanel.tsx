@@ -132,7 +132,7 @@ export const MarketplacePanel: React.FC = () => {
     [debouncedSetSearch],
   );
 
-  const { data: marketplacesData, isLoading: loadingMarketplaces } =
+  const { data: marketplacesData, isLoading: loadingMarketplaces, isError: marketplacesError, refetch } =
     useGetMarketplacesQuery(undefined);
   const { data: installedData } = useGetInstalledQuery(undefined);
   const [uninstallPlugin] = useUninstallPluginMutation();
@@ -145,7 +145,20 @@ export const MarketplacePanel: React.FC = () => {
   const marketplaces = marketplacesData?.marketplaces ?? [];
   const installed = installedData?.installed ?? [];
 
-  if (!loadingMarketplaces && marketplaces.length === 0) {
+  if (!loadingMarketplaces && marketplacesError) {
+    return (
+      <div className={styles.panel}>
+        <Flex direction="column" align="center" gap="3" py="6">
+          <Text size="2" color="red">Failed to load marketplaces.</Text>
+          <Button size="1" variant="soft" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </Flex>
+      </div>
+    );
+  }
+
+  if (!loadingMarketplaces && !marketplacesError && marketplaces.length === 0) {
     return (
       <div className={styles.panel}>
         <Flex direction="column" align="center" gap="3" className={styles.onboarding}>
@@ -155,7 +168,7 @@ export const MarketplacePanel: React.FC = () => {
             A marketplace is a Git repository containing plugin definitions.
           </Text>
           <Text size="1" color="gray" align="center">
-            Example: https://github.com/smallcloudai/refact-plugins
+            Example: smallcloudai/refact-plugins
           </Text>
           <Button size="2" onClick={() => setDialogOpen(true)}>
             + Add Marketplace

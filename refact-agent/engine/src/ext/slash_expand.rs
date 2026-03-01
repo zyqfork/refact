@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock as ARwLock;
 
 use crate::ext::config_dirs::{get_ext_dirs, ExtDirs};
-use crate::ext::skills::load_skill_full;
+use crate::ext::skills::{load_skill_full, load_skill_indices};
 use crate::ext::slash_commands::load_slash_commands;
 use crate::global_context::GlobalContext;
 
@@ -72,6 +72,12 @@ fn expand_template(body: &str, args_str: &str, positional: &[String]) -> String 
 
 async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<ExpandedCommand>, String> {
     let commands = load_slash_commands(ext_dirs).await;
+    let skill_indices = load_skill_indices(ext_dirs).await;
+    let skill_names: std::collections::HashSet<&str> = skill_indices
+        .iter()
+        .filter(|s| s.user_invocable)
+        .map(|s| s.name.as_str())
+        .collect();
     let char_bytes: Vec<(usize, char)> = raw_input.char_indices().collect();
     for (char_idx, &(byte_pos, ch)) in char_bytes.iter().enumerate() {
         if ch != '/' {
@@ -102,21 +108,23 @@ async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<
                 context_fork: None,
             }));
         }
-        if let Some(skill) = load_skill_full(ext_dirs, cmd_name).await {
-            if skill.index.user_invocable {
-                let agent_name = skill.agent.clone().unwrap_or_else(|| "subagent".to_string());
-                let context_fork = if skill.context.as_deref() == Some("fork") {
-                    Some(agent_name)
-                } else {
-                    None
-                };
-                return Ok(Some(ExpandedCommand {
-                    expanded_text: format!("{}{}", prefix, expand_template(&skill.body, &args_str, &positional)),
-                    model_override: skill.model.clone(),
-                    allowed_tools: skill.allowed_tools.clone(),
-                    source_command: cmd_name.to_string(),
-                    context_fork,
-                }));
+        if skill_names.contains(cmd_name) {
+            if let Some(skill) = load_skill_full(ext_dirs, cmd_name).await {
+                if skill.index.user_invocable {
+                    let agent_name = skill.agent.clone().unwrap_or_else(|| "subagent".to_string());
+                    let context_fork = if skill.context.as_deref() == Some("fork") {
+                        Some(agent_name)
+                    } else {
+                        None
+                    };
+                    return Ok(Some(ExpandedCommand {
+                        expanded_text: format!("{}{}", prefix, expand_template(&skill.body, &args_str, &positional)),
+                        model_override: skill.model.clone(),
+                        allowed_tools: skill.allowed_tools.clone(),
+                        source_command: cmd_name.to_string(),
+                        context_fork,
+                    }));
+                }
             }
         }
     }
