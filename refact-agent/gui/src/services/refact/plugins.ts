@@ -5,7 +5,7 @@ import { extensionsApi } from "./extensions";
 export interface MarketplaceEntry {
   name: string;
   source: string;
-  cached_at: string | null;
+  added_at: string | null;
 }
 
 export interface MarketplacesResponse {
@@ -13,9 +13,10 @@ export interface MarketplacesResponse {
 }
 
 export interface PluginEntry {
-  id: string;
   name: string;
   description: string;
+  version?: string;
+  tags?: string[];
   marketplace: string;
 }
 

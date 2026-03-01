@@ -83,21 +83,6 @@ fn skill_file_path(source: &CommandSource, config_dir: &std::path::Path, name: &
     }
 }
 
-fn command_file_path(source: &CommandSource, config_dir: &std::path::Path, name: &str) -> String {
-    match source {
-        CommandSource::GlobalRefact => config_dir.join("commands").join(format!("{}.md", name)).display().to_string(),
-        CommandSource::GlobalClaude => {
-            home::home_dir()
-                .map(|h| h.join(".claude").join("commands").join(format!("{}.md", name)).display().to_string())
-                .unwrap_or_default()
-        }
-        CommandSource::ProjectRefact(root) => root.join(".refact").join("commands").join(format!("{}.md", name)).display().to_string(),
-        CommandSource::ProjectClaude(root) => root.join(".claude").join("commands").join(format!("{}.md", name)).display().to_string(),
-        CommandSource::InstalledPlugin(plugin_name) => {
-            config_dir.join("plugins").join("installed").join(plugin_name).join("commands").join(format!("{}.md", name)).display().to_string()
-        }
-    }
-}
 
 fn validate_name(name: &str) -> std::result::Result<(), String> {
     if name.is_empty() {
@@ -390,25 +375,29 @@ pub async fn handle_v1_ext_registry(
     let commands = load_slash_commands(&ext_dirs).await;
     let hooks = load_hooks(&ext_dirs).await;
 
-    let skills: Vec<RegistrySkillEntry> = skill_indices.iter().map(|s| RegistrySkillEntry {
-        name: s.name.clone(),
-        description: s.description.clone(),
-        source: source_str(&s.source),
-        source_label: source_label_str(&s.source),
-        scope: scope_str(&s.source),
-        read_only: is_read_only(&s.source),
-        file_path: skill_file_path(&s.source, &config_dir, &s.name),
-    }).collect();
+    let skills: Vec<RegistrySkillEntry> = skill_indices.iter()
+        .filter(|s| !matches!(s.source, CommandSource::GlobalClaude | CommandSource::ProjectClaude(_)))
+        .map(|s| RegistrySkillEntry {
+            name: s.name.clone(),
+            description: s.description.clone(),
+            source: source_str(&s.source),
+            source_label: source_label_str(&s.source),
+            scope: scope_str(&s.source),
+            read_only: is_read_only(&s.source),
+            file_path: skill_file_path(&s.source, &config_dir, &s.name),
+        }).collect();
 
-    let slash_commands: Vec<RegistryCommandEntry> = commands.iter().map(|c| RegistryCommandEntry {
-        name: c.name.clone(),
-        description: c.description.clone(),
-        source: source_str(&c.source),
-        source_label: source_label_str(&c.source),
-        scope: scope_str(&c.source),
-        read_only: is_read_only(&c.source),
-        file_path: command_file_path(&c.source, &config_dir, &c.name),
-    }).collect();
+    let slash_commands: Vec<RegistryCommandEntry> = commands.iter()
+        .filter(|c| !matches!(c.source, CommandSource::GlobalClaude | CommandSource::ProjectClaude(_)))
+        .map(|c| RegistryCommandEntry {
+            name: c.name.clone(),
+            description: c.description.clone(),
+            source: source_str(&c.source),
+            source_label: source_label_str(&c.source),
+            scope: scope_str(&c.source),
+            read_only: is_read_only(&c.source),
+            file_path: c.file_path.display().to_string(),
+        }).collect();
 
     let hooks_entries: Vec<RegistryHookEntry> = hooks.iter().map(|h| RegistryHookEntry {
         event: h.event.clone(),
@@ -711,7 +700,6 @@ pub async fn handle_v1_ext_command_get(
     if let Err(e) = validate_name(&name) {
         return json_error(StatusCode::BAD_REQUEST, &e);
     }
-    let config_dir = gcx.read().await.config_dir.clone();
     let ext_dirs = match query.scope.as_deref() {
         Some(s @ "global") | Some(s @ "local") => {
             match resolve_scope_dir(gcx.clone(), Some(s), true).await {
@@ -726,7 +714,7 @@ pub async fn handle_v1_ext_command_get(
     match commands.into_iter().find(|c| c.name == name) {
         None => json_error(StatusCode::NOT_FOUND, "command not found"),
         Some(cmd) => {
-            let fp = command_file_path(&cmd.source, &config_dir, &cmd.name);
+            let fp = cmd.file_path.clone();
             let raw_content = tokio::fs::read_to_string(&fp).await.unwrap_or_default();
             json_response(StatusCode::OK, &CommandDetailResponse {
                 name: cmd.name.clone(),
@@ -737,7 +725,7 @@ pub async fn handle_v1_ext_command_get(
                 body: cmd.body.clone(),
                 raw_content,
                 source: source_str(&cmd.source),
-                file_path: fp,
+                file_path: fp.display().to_string(),
             })
         }
     }

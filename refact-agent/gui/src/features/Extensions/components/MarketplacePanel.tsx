@@ -105,9 +105,9 @@ const MarketplaceSection: React.FC<MarketplaceSectionProps> = ({
         <div className={styles.pluginsGrid}>
           {filteredPlugins.map((plugin) => (
             <MarketplacePluginCard
-              key={plugin.id}
+              key={plugin.name}
               plugin={plugin}
-              isInstalled={installedIds.has(plugin.id)}
+              isInstalled={installedIds.has(plugin.name)}
             />
           ))}
         </div>

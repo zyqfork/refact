@@ -23,12 +23,12 @@ export const MarketplacePluginCard: React.FC<MarketplacePluginCardProps> = ({
     useUninstallPluginMutation();
 
   const handleInstall = useCallback(() => {
-    void installPlugin({ plugin: plugin.id, marketplace: plugin.marketplace });
-  }, [installPlugin, plugin.id, plugin.marketplace]);
+    void installPlugin({ plugin: plugin.name, marketplace: plugin.marketplace });
+  }, [installPlugin, plugin.name, plugin.marketplace]);
 
   const handleUninstall = useCallback(() => {
-    void uninstallPlugin(plugin.id);
-  }, [uninstallPlugin, plugin.id]);
+    void uninstallPlugin(plugin.name);
+  }, [uninstallPlugin, plugin.name]);
 
   const errorMessage =
     installError != null
@@ -98,10 +98,20 @@ export const MarketplacePluginCard: React.FC<MarketplacePluginCardProps> = ({
           </Text>
         )}
 
-        <Flex className={styles.tags}>
+        <Flex className={styles.tags} gap="1" wrap="wrap">
           <Badge size="1" color="gray" variant="soft">
             {plugin.marketplace}
           </Badge>
+          {plugin.version && (
+            <Badge size="1" color="blue" variant="soft">
+              {plugin.version}
+            </Badge>
+          )}
+          {plugin.tags?.map((tag) => (
+            <Badge key={tag} size="1" color="green" variant="soft">
+              {tag}
+            </Badge>
+          ))}
         </Flex>
       </Flex>
     </Card>

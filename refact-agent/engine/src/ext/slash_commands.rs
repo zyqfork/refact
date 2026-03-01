@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ext::config_dirs::{collect_md_files_recursive, source_for_dir, CommandSource, ExtDirs};
@@ -15,6 +15,8 @@ pub struct SlashCommand {
     pub model: Option<String>,
     pub body: String,
     pub source: CommandSource,
+    #[serde(skip)]
+    pub file_path: PathBuf,
 }
 
 pub fn parse_frontmatter_and_body(content: &str) -> (serde_yaml::Value, String) {
@@ -113,7 +115,7 @@ async fn load_command_from_file(path: &Path, source: CommandSource) -> Option<Sl
     let argument_hint = yaml_str(&fm, "argument-hint");
     let allowed_tools = yaml_str_list(&fm, "allowed-tools");
     let model = fm.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
-    Some(SlashCommand { name, description, argument_hint, allowed_tools, model, body, source })
+    Some(SlashCommand { name, description, argument_hint, allowed_tools, model, body, source, file_path: path.to_path_buf() })
 }
 
 pub async fn load_slash_commands(ext_dirs: &ExtDirs) -> Vec<SlashCommand> {

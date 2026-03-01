@@ -4,7 +4,6 @@ import { MarketplacePluginCard } from "../features/Extensions/components/Marketp
 import type { PluginEntry } from "../services/refact/plugins";
 
 const mockPlugin: PluginEntry = {
-  id: "test-plugin",
   name: "Test Plugin",
   description: "A plugin for testing",
   marketplace: "test-marketplace",

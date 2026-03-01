@@ -773,6 +773,7 @@ mod tests {
             model: None,
             body: String::new(),
             source: CommandSource::GlobalRefact,
+            file_path: std::path::PathBuf::new(),
         }
     }
 

@@ -331,8 +331,19 @@ pub async fn install_plugin(
     if install_dir.exists() {
         return Err(format!("plugin '{}' is already installed", plugin_name));
     }
+    let temp_dir = install_dir.with_extension("installing");
+    if temp_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
     let mut size_acc = 0u64;
-    copy_dir_recursive(&plugin_source_dir, &install_dir, &mut size_acc).await?;
+    if let Err(e) = copy_dir_recursive(&plugin_source_dir, &temp_dir, &mut size_acc).await {
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        return Err(e);
+    }
+    if let Err(e) = tokio::fs::rename(&temp_dir, &install_dir).await {
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        return Err(format!("rename install dir: {}", e));
+    }
     let version = plugin_entry.version.clone();
     let entry = InstalledPluginEntry {
         name: plugin_name.to_string(),

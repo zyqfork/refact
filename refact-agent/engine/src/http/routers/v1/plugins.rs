@@ -95,7 +95,14 @@ pub async fn handle_list_marketplace_plugins(
                 (StatusCode::INTERNAL_SERVER_ERROR, e)
             }
         })?;
-    Ok(Json(json!({ "plugins": plugins })))
+    let plugins_json: Vec<Value> = plugins.iter().map(|p| json!({
+        "name": p.name,
+        "description": p.description,
+        "version": p.version,
+        "tags": p.tags,
+        "marketplace": name,
+    })).collect();
+    Ok(Json(json!({ "plugins": plugins_json })))
 }
 
 pub async fn handle_install_plugin(

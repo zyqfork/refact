@@ -1,10 +1,12 @@
-import { render, screen } from "../utils/test-utils";
+import { render, screen, fireEvent } from "../utils/test-utils";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { server } from "../utils/mockServer";
 import { ExtItemList } from "../features/Extensions/components/ExtItemList";
 import { SkillEditor } from "../features/Extensions/components/SkillEditor";
+import { MarketplacePluginCard } from "../features/Extensions/components/MarketplacePluginCard";
 import type { SkillRegistryItem } from "../services/refact/extensions";
+import type { PluginEntry } from "../services/refact/plugins";
 
 const MOCK_ITEMS: SkillRegistryItem[] = [
   {
@@ -99,6 +101,78 @@ describe("ExtItemList", () => {
       />,
     );
     expect(screen.getByText("No items found")).toBeDefined();
+  });
+
+  it("calls onDelete with name and scope when delete button clicked", () => {
+    const onDelete = vi.fn();
+    render(
+      <ExtItemList
+        items={MOCK_ITEMS}
+        selectedId={null}
+        onSelect={() => undefined}
+        onCreate={() => undefined}
+        onDelete={onDelete}
+      />,
+    );
+    const deleteBtn = screen.getByLabelText("Delete local_skill");
+    fireEvent.click(deleteBtn);
+    expect(onDelete).toHaveBeenCalledWith("local_skill", "local");
+  });
+});
+
+describe("MarketplacePluginCard", () => {
+  const ENGINE_PLUGIN: PluginEntry = {
+    name: "my-plugin",
+    description: "A useful plugin",
+    version: "1.2.3",
+    tags: ["search", "code"],
+    marketplace: "test-market",
+  };
+
+  it("renders plugin name, description, version and tags from engine payload", () => {
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/plugins/install", () => {
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    render(<MarketplacePluginCard plugin={ENGINE_PLUGIN} isInstalled={false} />, {
+      preloadedState: {
+        config: {
+          apiKey: "test",
+          lspPort: 8001,
+          themeProps: {},
+          host: "vscode",
+          addressURL: "Refact",
+        },
+      },
+    });
+    expect(screen.getByText("my-plugin")).toBeDefined();
+    expect(screen.getByText("A useful plugin")).toBeDefined();
+    expect(screen.getByText("1.2.3")).toBeDefined();
+    expect(screen.getByText("search")).toBeDefined();
+    expect(screen.getByText("code")).toBeDefined();
+    expect(screen.getByText("test-market")).toBeDefined();
+  });
+
+  it("shows Installed and Uninstall button when isInstalled", () => {
+    server.use(
+      http.delete("http://127.0.0.1:8001/v1/plugins/installed/my-plugin", () => {
+        return HttpResponse.json({ deleted: true });
+      }),
+    );
+    render(<MarketplacePluginCard plugin={ENGINE_PLUGIN} isInstalled={true} />, {
+      preloadedState: {
+        config: {
+          apiKey: "test",
+          lspPort: 8001,
+          themeProps: {},
+          host: "vscode",
+          addressURL: "Refact",
+        },
+      },
+    });
+    expect(screen.getByText("Installed ✓")).toBeDefined();
+    expect(screen.getByText("Uninstall")).toBeDefined();
   });
 });
 

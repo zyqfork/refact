@@ -40,8 +40,12 @@ export const Extensions: React.FC<ExtensionsProps> = ({
   initialItemId,
 }) => {
   const [activeTab, setActiveTab] = useState<ExtensionsTab>(initialTab);
-  const [selectedSkill, setSelectedSkill] = useState<string | null>(initialItemId ?? null);
-  const [selectedCommand, setSelectedCommand] = useState<string | null>(null);
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(
+    initialTab === "skills" ? initialItemId ?? null : null,
+  );
+  const [selectedCommand, setSelectedCommand] = useState<string | null>(
+    initialTab === "commands" ? initialItemId ?? null : null,
+  );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogType, setCreateDialogType] = useState<"skill" | "command">("skill");
 
@@ -56,9 +60,9 @@ export const Extensions: React.FC<ExtensionsProps> = ({
   }, []);
 
   const handleDeleteSkill = useCallback(
-    async (name: string) => {
+    async (name: string, scope: "global" | "local" | "plugin") => {
       if (!confirm(`Delete skill "${name}"?`)) return;
-      await deleteSkill({ name });
+      await deleteSkill({ name, scope });
       if (selectedSkill === name) setSelectedSkill(null);
       await refetch();
     },
@@ -66,9 +70,9 @@ export const Extensions: React.FC<ExtensionsProps> = ({
   );
 
   const handleDeleteCommand = useCallback(
-    async (name: string) => {
+    async (name: string, scope: "global" | "local" | "plugin") => {
       if (!confirm(`Delete command "${name}"?`)) return;
-      await deleteCommand({ name });
+      await deleteCommand({ name, scope });
       if (selectedCommand === name) setSelectedCommand(null);
       await refetch();
     },
@@ -135,7 +139,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                   selectedId={selectedSkill}
                   onSelect={setSelectedSkill}
                   onCreate={() => openCreateDialog("skill")}
-                  onDelete={(name) => void handleDeleteSkill(name)}
+                  onDelete={(name, scope) => void handleDeleteSkill(name, scope)}
                 />
               </ScrollArea>
             )}
@@ -156,7 +160,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                   selectedId={selectedCommand}
                   onSelect={setSelectedCommand}
                   onCreate={() => openCreateDialog("command")}
-                  onDelete={(name) => void handleDeleteCommand(name)}
+                  onDelete={(name, scope) => void handleDeleteCommand(name, scope)}
                 />
               </ScrollArea>
             )}
