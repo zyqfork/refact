@@ -177,23 +177,20 @@ export type ToolSource = {
   config_path: string;
 };
 
-export type ToolParam = {
-  name: string;
-  type: string;
-  description: string;
-};
-
 export type ToolSpec = {
   name: string;
   display_name: string;
   description: string;
-
-  // TODO: investigate on parameters
-  parameters: ToolParam[];
-  // parameters: Record<string, unknown>;
+  input_schema: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
   source: ToolSource;
-
-  parameters_required?: string[];
   agentic: boolean;
   experimental?: boolean;
   allow_parallel?: boolean;

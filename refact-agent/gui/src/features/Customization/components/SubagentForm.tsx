@@ -10,6 +10,7 @@ import {
 } from "@radix-ui/themes";
 import { StringListEditor } from "./StringListEditor";
 import { ToolParametersEditor, ToolParameter } from "./ToolParametersEditor";
+import { toInputSchema, fromInputSchema } from "../../../utils/toolSchema";
 import { MessageListEditor } from "./MessageListEditor";
 import {
   ConfigPatch,
@@ -245,12 +246,22 @@ const ToolTab: React.FC<{
   const agentic = typeof tool?.agentic === "boolean" ? tool.agentic : false;
   const allowParallel =
     typeof tool?.allow_parallel === "boolean" ? tool.allow_parallel : false;
-  const parameters = Array.isArray(tool?.parameters)
-    ? (tool.parameters as ToolParameter[])
-    : [];
-  const required = Array.isArray(tool?.required)
-    ? (tool.required as string[])
-    : [];
+
+  const inputSchema =
+    tool?.input_schema &&
+    typeof tool.input_schema === "object" &&
+    !Array.isArray(tool.input_schema)
+      ? (tool.input_schema as Record<string, unknown>)
+      : {};
+  const { params: parameters, required } = fromInputSchema(inputSchema);
+
+  const handleParametersChange = (newParams: ToolParameter[]) => {
+    patch(["tool", "input_schema"], toInputSchema(newParams, required));
+  };
+
+  const handleRequiredChange = (newRequired: string[]) => {
+    patch(["tool", "input_schema"], toInputSchema(parameters, newRequired));
+  };
 
   return (
     <>
@@ -263,8 +274,7 @@ const ToolTab: React.FC<{
                 description: "",
                 agentic: false,
                 allow_parallel: false,
-                parameters: [],
-                required: [],
+                input_schema: { type: "object", properties: {}, required: [] },
               });
             } else {
               patch(["tool"], undefined);
@@ -313,8 +323,8 @@ const ToolTab: React.FC<{
           <ToolParametersEditor
             parameters={parameters}
             required={required}
-            onParametersChange={(p) => patch(["tool", "parameters"], p)}
-            onRequiredChange={(r) => patch(["tool", "required"], r)}
+            onParametersChange={handleParametersChange}
+            onRequiredChange={handleRequiredChange}
           />
         </>
       )}
