@@ -16,7 +16,7 @@ use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::global_context::GlobalContext;
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tasks::storage::find_task_dir;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use tokio::sync::RwLock as ARwLock;
 
 const MEMORIES_DIR: &str = "memories";
@@ -77,24 +77,9 @@ impl Tool for ToolTaskMemorySave {
             experimental: false,
             allow_parallel: false,
             description: "Saves a memory/note for the current task. Use this to record decisions, assumptions, API quirks, investigation results, or any useful information that should be shared with other agents and future planner iterations. Memories are automatically injected into all task chats.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "content".to_string(),
-                    param_type: "string".to_string(),
-                    description: "The content to save. Can be markdown formatted.".to_string(),
-                },
-                ToolParam {
-                    name: "title".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Optional title for the memory (used in filename).".to_string(),
-                },
-                ToolParam {
-                    name: "tags".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Optional comma-separated tags for categorization.".to_string(),
-                },
-            ],
-            parameters_required: vec!["content".to_string()],
+            input_schema: json_schema_from_params(&[("content", "string", "The content to save. Can be markdown formatted."), ("title", "string", "Optional title for the memory (used in filename)."), ("tags", "string", "Optional comma-separated tags for categorization.")], &["content"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 
@@ -234,14 +219,9 @@ impl Tool for ToolTaskMemoriesGet {
             experimental: false,
             allow_parallel: true,
             description: "Retrieves all saved memories for the current task. Returns the content of all memory files from the task's memories folder.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "format".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Output format: 'full' (default) returns all content, 'titles' returns only titles/filenames, 'paths' returns only file paths.".to_string(),
-                },
-            ],
-            parameters_required: vec![],
+            input_schema: json_schema_from_params(&[("format", "string", "Output format: 'full' (default) returns all content, 'titles' returns only titles/filenames, 'paths' returns only file paths.")], &[]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

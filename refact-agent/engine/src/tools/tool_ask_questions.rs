@@ -8,7 +8,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::http::routers::v1::sidebar::{NotificationEvent, NotificationQuestion};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,14 +38,9 @@ impl Tool for ToolAskQuestions {
             experimental: false,
             allow_parallel: false,
             description: "Present questions to the user and wait for answers. Stops generation until user responds. Question types: yes_no, single_select, multi_select, free_text.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "questions".to_string(),
-                    param_type: "string".to_string(),
-                    description: "JSON array of question objects with fields: id (unique identifier), type (yes_no|single_select|multi_select|free_text), text (the question), options (array of choices for select types). Example: [{\"id\":\"q1\",\"type\":\"yes_no\",\"text\":\"Continue?\"}]".to_string(),
-                },
-            ],
-            parameters_required: vec!["questions".to_string()],
+            input_schema: json_schema_from_params(&[], &["questions"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

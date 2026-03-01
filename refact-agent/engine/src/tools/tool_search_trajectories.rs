@@ -6,7 +6,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::memories::memories_search;
 
 pub struct ToolSearchTrajectories {
@@ -26,19 +26,9 @@ impl Tool for ToolSearchTrajectories {
             experimental: false,
             allow_parallel: true,
             description: "Search past chat trajectories for relevant patterns, solutions, and context. Returns matching trajectory IDs with message ranges that can be expanded using get_trajectory_context.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "query".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Search query to find relevant past conversations.".to_string(),
-                },
-                ToolParam {
-                    name: "top_n".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Maximum number of trajectories to return (default: 5).".to_string(),
-                },
-            ],
-            parameters_required: vec!["query".to_string()],
+            input_schema: json_schema_from_params(&[("query", "string", "Search query to find relevant past conversations."), ("top_n", "string", "Maximum number of trajectories to return (default: 5).")], &["query"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

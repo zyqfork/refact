@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use std::collections::HashMap;
 
 use crate::subchat::{run_subchat_once_with_parent, resolve_subchat_params, resolve_subchat_model};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::tools::tool_helpers::{load_code_subagent_config, CodeSubagentConfig};
 use crate::tools::subagent_phases::{
     gather_files_phase, GatherFilesParams,
@@ -226,8 +226,9 @@ impl Tool for ToolCodeReview {
             experimental: false,
             allow_parallel: true,
             description: "Perform a thorough code review. Automatically identifies relevant files and checks for bugs, integration issues, missing tests, code style, and consistency.".to_string(),
-            parameters: vec![],
-            parameters_required: vec![],
+            input_schema: json_schema_from_params(&[], &[]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

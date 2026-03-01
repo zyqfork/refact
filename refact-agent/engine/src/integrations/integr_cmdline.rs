@@ -16,7 +16,8 @@ use crate::files_correction::CommandSimplifiedDirExt;
 use crate::global_context::GlobalContext;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::integrations::process_io_utils::{execute_command, AnsiStrippable};
-use crate::tools::tools_description::{ToolParam, Tool, ToolDesc, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
+use serde_json::json;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::postprocessing::pp_command_output::{OutputFilter, output_mini_postprocessing};
 use crate::integrations::integr_abstract::{
@@ -29,12 +30,25 @@ use crate::integrations::utils::{
 use crate::custom_error::YamlError;
 
 #[derive(Deserialize, Serialize, Clone, Default)]
+pub struct CmdlineParam {
+    pub name: String,
+    #[serde(rename = "type", default = "CmdlineParam::default_type")]
+    pub param_type: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+impl CmdlineParam {
+    fn default_type() -> String { "string".to_string() }
+}
+
+#[derive(Deserialize, Serialize, Clone, Default)]
 pub struct CmdlineToolConfig {
     pub command: String,
     pub command_workdir: String,
 
     pub description: String,
-    pub parameters: Vec<ToolParam>,
+    pub parameters: Vec<CmdlineParam>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters_required: Option<Vec<String>>,
@@ -340,12 +354,20 @@ impl Tool for ToolCmdline {
     }
 
     fn tool_description(&self) -> ToolDesc {
-        let parameters_required = self.cfg.parameters_required.clone().unwrap_or_else(|| {
-            self.cfg
-                .parameters
-                .iter()
-                .map(|param| param.name.clone())
-                .collect()
+        let required: Vec<String> = self.cfg.parameters_required.clone().unwrap_or_else(|| {
+            self.cfg.parameters.iter().map(|p| p.name.clone()).collect()
+        });
+        let mut properties = serde_json::Map::new();
+        for p in &self.cfg.parameters {
+            properties.insert(p.name.clone(), json!({
+                "type": p.param_type,
+                "description": p.description
+            }));
+        }
+        let input_schema = json!({
+            "type": "object",
+            "properties": properties,
+            "required": required
         });
         ToolDesc {
             name: self.name.clone(),
@@ -357,8 +379,9 @@ impl Tool for ToolCmdline {
             experimental: false,
             allow_parallel: false,
             description: self.cfg.description.clone(),
-            parameters: self.cfg.parameters.clone(),
-            parameters_required,
+            input_schema,
+            output_schema: None,
+            annotations: None,
         }
     }
 

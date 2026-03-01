@@ -7,7 +7,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::memories::{memories_add_enriched, EnrichmentParams};
 use crate::knowledge_index::format_related_memories_section;
 
@@ -28,24 +28,9 @@ impl Tool for ToolCreateKnowledge {
             experimental: false,
             allow_parallel: false,
             description: "Creates a new knowledge entry. Uses AI to enrich metadata and check for outdated documents. Use it if you need to remember something.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "content".to_string(),
-                    param_type: "string".to_string(),
-                    description: "The knowledge content to store.".to_string(),
-                },
-                ToolParam {
-                    name: "tags".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Comma-separated tags (optional, will be auto-enriched).".to_string(),
-                },
-                ToolParam {
-                    name: "filenames".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Comma-separated related file paths (optional, will be auto-enriched).".to_string(),
-                },
-            ],
-            parameters_required: vec!["content".to_string()],
+            input_schema: json_schema_from_params(&[("content", "string", "The knowledge content to store."), ("tags", "string", "Comma-separated tags (optional, will be auto-enriched)."), ("filenames", "string", "Comma-separated related file paths (optional, will be auto-enriched).")], &["content"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

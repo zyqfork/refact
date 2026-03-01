@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
@@ -141,19 +141,9 @@ impl Tool for ToolTaskAgentFinish {
             experimental: false,
             allow_parallel: false,
             description: "Mark the current card as completed or failed. Task agents MUST call this exactly once when finished. This updates the task board and notifies the planner.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "success".to_string(),
-                    param_type: "boolean".to_string(),
-                    description: "true if the card was completed successfully, false if it failed".to_string(),
-                },
-                ToolParam {
-                    name: "report".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Summary of what was done (if success) or why it failed (if failure)".to_string(),
-                },
-            ],
-            parameters_required: vec!["success".to_string(), "report".to_string()],
+            input_schema: json_schema_from_params(&[("success", "boolean", "true if the card was completed successfully, false if it failed"), ("report", "string", "Summary of what was done (if success) or why it failed (if failure)")], &["success", "report"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

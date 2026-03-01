@@ -18,10 +18,7 @@ use crate::integrations::integr_cmdline::{create_command_from_string, format_out
 use crate::integrations::process_io_utils::{blocking_read_until_token_or_timeout, is_someone_listening_on_that_tcp_port};
 use crate::integrations::sessions::IntegrationSession;
 use crate::postprocessing::pp_command_output::{OutputFilter, output_mini_postprocessing};
-use crate::tools::tools_description::{
-    Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
-    command_should_be_denied, command_should_be_confirmed_by_user,
-};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult, command_should_be_denied, command_should_be_confirmed_by_user, json_schema_from_params};
 
 const ASK_USER_DEFAULT: &[&str] = &[
     "*rm*",
@@ -562,54 +559,9 @@ impl Tool for ToolShellService {
             experimental: false,
             allow_parallel: false,
             description: "Manage background services (start/stop/status/logs/restart). Use this for long-running processes like web servers, databases, or any command that runs until Ctrl+C. For one-time commands, use the shell tool instead.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "service_name".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Unique service identifier (e.g., 'api', 'postgres', 'worker')".to_string(),
-                },
-                ToolParam {
-                    name: "action".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Action to perform: 'start', 'stop', 'status', 'logs', or 'restart'".to_string(),
-                },
-                ToolParam {
-                    name: "command".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Shell command to run (required for start/restart, e.g., 'uvicorn app:app --port 8000')".to_string(),
-                },
-                ToolParam {
-                    name: "workdir".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Working directory (optional, can be relative or absolute)".to_string(),
-                },
-                ToolParam {
-                    name: "startup_wait".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Max seconds to wait for service to start (default: 10)".to_string(),
-                },
-                ToolParam {
-                    name: "startup_wait_port".to_string(),
-                    param_type: "string".to_string(),
-                    description: "TCP port number to wait for (e.g., '8000')".to_string(),
-                },
-                ToolParam {
-                    name: "startup_wait_keyword".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Text to wait for in stdout/stderr (e.g., 'Ready')".to_string(),
-                },
-                ToolParam {
-                    name: "output_filter".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Optional regex pattern to filter logs".to_string(),
-                },
-                ToolParam {
-                    name: "output_limit".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Max lines to show (default: 40, use 'all' for unlimited)".to_string(),
-                },
-            ],
-            parameters_required: vec!["service_name".to_string(), "action".to_string()],
+            input_schema: json_schema_from_params(&[("service_name", "string", "Unique service identifier (e.g., 'api', 'postgres', 'worker')"), ("action", "string", "Action to perform: 'start', 'stop', 'status', 'logs', or 'restart'"), ("command", "string", "Shell command to run (required for start/restart, e.g., 'uvicorn app:app --port 8000')"), ("workdir", "string", "Working directory (optional, can be relative or absolute)"), ("startup_wait", "string", "Max seconds to wait for service to start (default: 10)"), ("startup_wait_port", "string", "TCP port number to wait for (e.g., '8000')"), ("startup_wait_keyword", "string", "Text to wait for in stdout/stderr (e.g., 'Ready')"), ("output_filter", "string", "Optional regex pattern to filter logs"), ("output_limit", "string", "Max lines to show (default: 40, use 'all' for unlimited)")], &["service_name", "action"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

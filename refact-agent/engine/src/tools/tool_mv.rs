@@ -14,9 +14,7 @@ use crate::files_correction::{
     get_project_dirs, preprocess_path_for_normalization,
 };
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::privacy::{FilePrivacyLevel, load_privacy_if_needed, check_file_privacy};
 
@@ -402,24 +400,9 @@ impl Tool for ToolMv {
             experimental: false,
             allow_parallel: false,
             description: "Moves or renames files and directories. If a simple rename fails due to a cross-device error and the source is a file, it falls back to copying and deleting. Use overwrite=true to replace an existing target.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "source".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Path of the file or directory to move.".to_string(),
-                },
-                ToolParam {
-                    name: "destination".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Target path where the file or directory should be placed.".to_string(),
-                },
-                ToolParam {
-                    name: "overwrite".to_string(),
-                    param_type: "boolean".to_string(),
-                    description: "If true and target exists, replace it. Defaults to false.".to_string(),
-                }
-            ],
-            parameters_required: vec!["source".to_string(), "destination".to_string()],
+            input_schema: json_schema_from_params(&[("source", "string", "Path of the file or directory to move."), ("destination", "string", "Target path where the file or directory should be placed."), ("overwrite", "boolean", "If true and target exists, replace it. Defaults to false.")], &["source", "destination"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

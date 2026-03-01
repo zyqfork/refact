@@ -8,7 +8,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::ast::ast_structs::AstDB;
 use crate::ast::ast_db::fetch_counters;
 use crate::custom_error::trace_and_default;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::knowledge_index::format_related_memories_section;
@@ -193,14 +193,9 @@ impl Tool for ToolAstDefinition {
             experimental: false,
             allow_parallel: true,
             description: "Find definition of a symbol in the project using AST".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "symbols".to_string(),
-                    description: "Comma-separated list of symbols to search for (functions, methods, classes, type aliases). No spaces allowed in symbol names.".to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["symbols".to_string()],
+            input_schema: json_schema_from_params(&[("symbols", "string", "Comma-separated list of symbols to search for (functions, methods, classes, type aliases). No spaces allowed in symbol names.")], &["symbols"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

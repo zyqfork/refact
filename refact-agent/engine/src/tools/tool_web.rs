@@ -6,7 +6,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_web::execute_at_web;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::postprocessing::pp_command_output::OutputFilter;
 
@@ -66,36 +66,9 @@ impl Tool for ToolWeb {
             experimental: false,
             allow_parallel: true,
             description: "Fetch a web page and convert to readable plain text. Supports regular web pages, PDFs, and JavaScript-rendered pages. Uses Jina Reader API with automatic fallback.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "url".to_string(),
-                    description: "URL of the web page to fetch.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "options".to_string(),
-                    description: r#"Optional object with additional parameters:
-- "respond_with": Response format - "markdown", "html", "text", or "screenshot"
-- "target_selector": CSS selector to extract specific element
-- "wait_for_selector": CSS selector to wait for (useful for SPAs)
-- "timeout": Timeout in seconds for slow pages
-- "no_cache": Set to true to bypass cache
-- "streaming": Set to true for JS-heavy pages that need more time to render
-- "with_generated_alt": Set to true to generate alt text for images using AI"#.to_string(),
-                    param_type: "object".to_string(),
-                },
-                ToolParam {
-                    name: "output_filter".to_string(),
-                    description: "Optional regex pattern to filter output lines. Only lines matching this pattern (and context) will be shown.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "output_limit".to_string(),
-                    description: "Optional. Max lines to show (default: 200). Use higher values like '500' or 'all' to see more output.".to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["url".to_string()],
+            input_schema: json_schema_from_params(&[("url", "string", "URL of the web page to fetch."), ("options", "object", ""), ("output_filter", "string", "Optional regex pattern to filter output lines. Only lines matching this pattern (and context) will be shown."), ("output_limit", "string", "Optional. Max lines to show (default: 200). Use higher values like '500' or 'all' to see more output.")], &["url"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

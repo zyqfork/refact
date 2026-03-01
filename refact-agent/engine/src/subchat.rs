@@ -1398,10 +1398,7 @@ async fn subchat_single_internal(
         }
     };
 
-    let tools = tools_desclist
-        .into_iter()
-        .filter(|x| x.is_supported_by(model_id))
-        .collect::<Vec<_>>();
+    let tools = tools_desclist;
 
     subchat_stream(
         ccx.clone(),

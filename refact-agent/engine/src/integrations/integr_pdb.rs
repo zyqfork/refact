@@ -22,7 +22,7 @@ use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::{
     IntegrationCommon, IntegrationConfirmation, IntegrationTrait,
 };
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::integrations::process_io_utils::{
     first_n_chars, last_n_chars, last_n_lines, write_to_stdin_and_flush,
     blocking_read_until_token_or_timeout,
@@ -231,19 +231,9 @@ impl Tool for ToolPdb {
             experimental: false,
             allow_parallel: false,
             description: "Python debugger for inspecting variables and exploring what the program really does. This tool executes only one command at a time. Start with python -m pdb ...".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "command".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Examples: 'python -m pdb script.py', 'break module_name.function_name', 'break 10', 'continue', 'print(variable_name)', 'list', 'quit'".to_string(),
-                },
-                ToolParam {
-                    name: "workdir".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Working directory for the command, needed to start a pdb session from a relative path.".to_string(),
-                },
-            ],
-            parameters_required: vec!["command".to_string()],
+            input_schema: json_schema_from_params(&[("command", "string", "Examples: 'python -m pdb script.py', 'break module_name.function_name', 'break 10', 'continue', 'print(variable_name)', 'list', 'quit'"), ("workdir", "string", "Working directory for the command, needed to start a pdb session from a relative path.")], &["command"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

@@ -10,7 +10,7 @@ use tokio::time::Duration;
 use crate::caps::resolve_chat_model;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::scratchpads::multimodality::MultimodalElement;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::integrations::integr_abstract::{IntegrationCommon, IntegrationConfirmation};
 use super::session_mcp::{add_log_entry, mcp_session_wait_startup};
@@ -187,58 +187,13 @@ impl Tool for ToolMCP {
     }
 
     fn tool_description(&self) -> ToolDesc {
-        // self.mcp_tool.input_schema = Object {
-        //     "properties": Object {
-        //         "a": Object {
-        //             "title": String("A"),
-        //             "type": String("integer")
-        //         },
-        //         "b": Object {
-        //             "title": String("B"),
-        //             "type": String("integer")
-        //         }
-        //     },
-        //     "required": Array [
-        //         String("a"),
-        //         String("b")
-        //     ],
-        //     "title": String("addArguments"),
-        //     "type": String("object")
-        // }
-        let mut parameters = vec![];
-        let mut parameters_required = vec![];
-
-        if let Some(serde_json::Value::Object(properties)) =
-            self.mcp_tool.input_schema.get("properties")
-        {
-            for (name, prop) in properties {
-                if let serde_json::Value::Object(prop_obj) = prop {
-                    let param_type = prop_obj
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("string")
-                        .to_string();
-                    let description = prop_obj
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    parameters.push(ToolParam {
-                        name: name.clone(),
-                        param_type,
-                        description,
-                    });
-                }
+        let input_schema = {
+            let mut map = self.mcp_tool.input_schema.as_ref().clone();
+            if !map.contains_key("type") {
+                map.insert("type".to_string(), serde_json::json!("object"));
             }
-        }
-        if let Some(serde_json::Value::Array(required)) = self.mcp_tool.input_schema.get("required")
-        {
-            for req in required {
-                if let Some(req_str) = req.as_str() {
-                    parameters_required.push(req_str.to_string());
-                }
-            }
-        }
+            serde_json::Value::Object(map)
+        };
 
         let tool_name = {
             let yaml_name = std::path::Path::new(&self.config_path)
@@ -252,15 +207,14 @@ impl Tool for ToolMCP {
             } else {
                 yaml_name.to_string()
             };
-            let sanitized_tool_name = format!("{}_{}", shortened_yaml_name, self.mcp_tool.name)
+            format!("{}_{}", shortened_yaml_name, self.mcp_tool.name)
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                .collect::<String>();
-            sanitized_tool_name
+                .collect::<String>()
         };
 
         ToolDesc {
-            name: tool_name.clone(),
+            name: tool_name,
             display_name: self.mcp_tool.name.to_string(),
             source: ToolSource {
                 source_type: ToolSourceType::Integration,
@@ -268,14 +222,10 @@ impl Tool for ToolMCP {
             },
             experimental: false,
             allow_parallel: false,
-            description: self
-                .mcp_tool
-                .description
-                .to_owned()
-                .unwrap_or_default()
-                .to_string(),
-            parameters,
-            parameters_required,
+            description: self.mcp_tool.description.to_owned().unwrap_or_default().to_string(),
+            input_schema,
+            output_schema: None,
+            annotations: None,
         }
     }
 
@@ -298,5 +248,80 @@ impl Tool for ToolMCP {
 
     fn has_config_path(&self) -> Option<String> {
         Some(self.config_path.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn make_tool_mcp(schema: serde_json::Value) -> ToolMCP {
+        let mcp_tool: McpTool = serde_json::from_value(json!({
+            "name": "test_tool",
+            "description": "A test tool",
+            "inputSchema": schema
+        })).expect("failed to deserialize McpTool");
+        ToolMCP {
+            common: crate::integrations::integr_abstract::IntegrationCommon::default(),
+            config_path: "mcp_stdio_server.yaml".to_string(),
+            mcp_client: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+            mcp_tool,
+            request_timeout: 30,
+        }
+    }
+
+    #[test]
+    fn test_complex_mcp_schema_preserved() {
+        let complex_schema = json!({
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of items"
+                },
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "verbose": {"type": "boolean"},
+                        "max_count": {"type": "integer"}
+                    }
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["fast", "slow", "medium"]
+                }
+            },
+            "required": ["items"]
+        });
+
+        let tool = make_tool_mcp(complex_schema.clone());
+        let desc = tool.tool_description();
+
+        assert_eq!(desc.input_schema["type"], json!("object"));
+        assert_eq!(desc.input_schema["properties"]["items"]["type"], json!("array"));
+        assert_eq!(desc.input_schema["properties"]["items"]["items"]["type"], json!("string"));
+        assert_eq!(desc.input_schema["properties"]["config"]["type"], json!("object"));
+        assert_eq!(desc.input_schema["properties"]["mode"]["enum"], json!(["fast", "slow", "medium"]));
+        assert_eq!(desc.input_schema["required"], json!(["items"]));
+        assert_eq!(desc.name, "mcp_server_test_tool");
+    }
+
+    #[test]
+    fn test_mcp_schema_without_type_gets_object_type() {
+        let schema_without_type = json!({
+            "properties": {
+                "a": {"type": "integer"},
+                "b": {"type": "integer"}
+            },
+            "required": ["a", "b"]
+        });
+
+        let tool = make_tool_mcp(schema_without_type);
+        let desc = tool.tool_description();
+
+        assert_eq!(desc.input_schema["type"], json!("object"));
+        assert_eq!(desc.input_schema["properties"]["a"]["type"], json!("integer"));
     }
 }

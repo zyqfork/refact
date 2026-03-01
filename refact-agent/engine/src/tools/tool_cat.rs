@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use resvg::{tiny_skia, usvg};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_or_a_good_error};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
 use crate::files_correction::{
     canonical_path, correct_to_nearest_dir_path, get_project_dirs,
@@ -127,14 +127,9 @@ impl Tool for ToolCat {
             experimental: false,
             allow_parallel: true,
             description: "Like cat in console, but better: it can read multiple files and images. Prefer to open full files.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "paths".to_string(),
-                    description: "Comma separated file names or directories: dir1/file1.ext,dir3/dir4.".to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["paths".to_string()],
+            input_schema: json_schema_from_params(&[("paths", "string", "Comma separated file names or directories: dir1/file1.ext,dir3/dir4.")], &["paths"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

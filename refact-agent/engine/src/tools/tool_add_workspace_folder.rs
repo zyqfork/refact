@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::files_in_workspace::enqueue_all_files_from_workspace_folders;
 
@@ -27,14 +27,9 @@ impl Tool for ToolAddWorkspaceFolder {
             experimental: false,
             allow_parallel: false,
             description: "Add a folder to the workspace so its files become available for search and editing. Use this when you need to access files in a directory that isn't currently indexed (e.g., submodules, extra_repos, or external directories).".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to the folder to add to the workspace.".to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to the folder to add to the workspace.")], &["path"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

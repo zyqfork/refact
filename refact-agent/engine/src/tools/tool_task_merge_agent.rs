@@ -5,7 +5,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
@@ -36,24 +36,9 @@ impl Tool for ToolTaskMergeAgent {
             experimental: false,
             allow_parallel: false,
             description: "Merge an agent's work back to the main branch and cleanup the worktree. The agent must have completed work on a card with an associated git branch and worktree.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID whose agent branch to merge".to_string(),
-                },
-                ToolParam {
-                    name: "strategy".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Merge strategy: 'merge' (default) or 'squash'".to_string(),
-                },
-                ToolParam {
-                    name: "delete_worktree".to_string(),
-                    param_type: "boolean".to_string(),
-                    description: "Delete worktree and branch after merge (default: true)".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID whose agent branch to merge"), ("strategy", "string", "Merge strategy: 'merge' (default) or 'squash'"), ("delete_worktree", "boolean", "Delete worktree and branch after merge (default: true)")], &["card_id"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

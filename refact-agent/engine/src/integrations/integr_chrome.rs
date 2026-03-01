@@ -15,7 +15,7 @@ use crate::global_context::GlobalContext;
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::scratchpads::multimodality::MultimodalElement;
 use crate::postprocessing::pp_command_output::{OutputFilter, output_mini_postprocessing};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::integrations::integr_abstract::{
     IntegrationTrait, IntegrationCommon, IntegrationConfirmation,
 };
@@ -310,12 +310,9 @@ impl Tool for ToolChrome {
             experimental: false,
             allow_parallel: false,
             description: "A real web browser with graphical interface.".to_string(),
-            parameters: vec![ToolParam {
-                name: "commands".to_string(),
-                param_type: "string".to_string(),
-                description,
-            }],
-            parameters_required: vec!["commands".to_string()],
+            input_schema: json_schema_from_params(&[("commands", "string", "")], &["commands"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

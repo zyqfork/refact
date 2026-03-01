@@ -7,7 +7,7 @@ use chrono::Utc;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::tasks::storage;
 use crate::tasks::types::StatusUpdate;
 use crate::tasks::events::{TaskEvent, emit_task_event};
@@ -107,19 +107,9 @@ impl Tool for ToolTaskAgentUpdate {
             experimental: false,
             allow_parallel: false,
             description: "Add a progress update to the assigned card.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID".to_string(),
-                },
-                ToolParam {
-                    name: "message".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Progress message".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "message".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID"), ("message", "string", "Progress message")], &["card_id", "message"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -193,20 +183,9 @@ impl Tool for ToolTaskAgentComplete {
             experimental: false,
             allow_parallel: false,
             description: "Mark the assigned card as complete with a final report.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID".to_string(),
-                },
-                ToolParam {
-                    name: "final_report".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Summary of what was done, decisions made, files modified"
-                        .to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "final_report".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID"), ("final_report", "string", "Summary of what was done, decisions made, files modified")], &["card_id", "final_report"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -284,19 +263,9 @@ impl Tool for ToolTaskAgentFail {
             experimental: false,
             allow_parallel: false,
             description: "Mark the assigned card as failed with an explanation.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID".to_string(),
-                },
-                ToolParam {
-                    name: "reason".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Why the task failed".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "reason".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID"), ("reason", "string", "Why the task failed")], &["card_id", "reason"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -382,28 +351,9 @@ impl Tool for ToolTaskAssignAgent {
             experimental: false,
             allow_parallel: false,
             description: "Assign an agent to a card and move it to Doing.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID to assign".to_string(),
-                },
-                ToolParam {
-                    name: "agent_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Agent UUID".to_string(),
-                },
-                ToolParam {
-                    name: "agent_chat_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Agent chat/trajectory ID".to_string(),
-                },
-            ],
-            parameters_required: vec![
-                "card_id".to_string(),
-                "agent_id".to_string(),
-                "agent_chat_id".to_string(),
-            ],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to assign"), ("agent_id", "string", "Agent UUID"), ("agent_chat_id", "string", "Agent chat/trajectory ID")], &["card_id", "agent_id", "agent_chat_id"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

@@ -8,7 +8,7 @@ use chrono::Utc;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::tasks::storage;
 use crate::tasks::types::BoardCard;
 use crate::tasks::events::{TaskEvent, emit_task_event};
@@ -138,11 +138,9 @@ impl Tool for ToolTaskBoardGet {
             experimental: false,
             allow_parallel: true,
             description: "Get task board state. Without card_id returns summary (id, title, column, priority, depends_on). With card_id returns full card details including instructions, status_updates, final_report.".to_string(),
-            parameters: vec![
-                ToolParam { name: "task_id".to_string(), param_type: "string".to_string(), description: "Task UUID (optional if in task context)".to_string() },
-                ToolParam { name: "card_id".to_string(), param_type: "string".to_string(), description: "Card ID to get full details for (optional)".to_string() },
-            ],
-            parameters_required: vec![],
+            input_schema: json_schema_from_params(&[("task_id", "string", "Task UUID (optional if in task context)"), ("card_id", "string", "Card ID to get full details for (optional)")], &[]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -257,36 +255,9 @@ impl Tool for ToolTaskBoardCreateCard {
             experimental: false,
             allow_parallel: false,
             description: "Create a new card on the task board.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID (e.g., T-1, T-2)".to_string(),
-                },
-                ToolParam {
-                    name: "title".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card title".to_string(),
-                },
-                ToolParam {
-                    name: "priority".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Priority: P0, P1, or P2".to_string(),
-                },
-                ToolParam {
-                    name: "instructions".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Detailed instructions for the agent".to_string(),
-                },
-                ToolParam {
-                    name: "depends_on".to_string(),
-                    param_type: "string".to_string(),
-                    description:
-                        "Comma-separated list of card IDs this card depends on (e.g., \"T-1, T-2\")"
-                            .to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "title".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID (e.g., T-1, T-2)"), ("title", "string", "Card title"), ("priority", "string", "Priority: P0, P1, or P2"), ("instructions", "string", "Detailed instructions for the agent"), ("depends_on", "string", "Comma-separated list of card IDs this card depends on (e.g., \"T-1, T-2\")")], &["card_id", "title"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -381,35 +352,9 @@ impl Tool for ToolTaskBoardUpdateCard {
             experimental: false,
             allow_parallel: false,
             description: "Update an existing card's fields.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID to update".to_string(),
-                },
-                ToolParam {
-                    name: "title".to_string(),
-                    param_type: "string".to_string(),
-                    description: "New title".to_string(),
-                },
-                ToolParam {
-                    name: "priority".to_string(),
-                    param_type: "string".to_string(),
-                    description: "New priority".to_string(),
-                },
-                ToolParam {
-                    name: "instructions".to_string(),
-                    param_type: "string".to_string(),
-                    description: "New instructions".to_string(),
-                },
-                ToolParam {
-                    name: "depends_on".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Comma-separated list of new dependencies (e.g., \"T-1, T-2\")"
-                        .to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to update"), ("title", "string", "New title"), ("priority", "string", "New priority"), ("instructions", "string", "New instructions"), ("depends_on", "string", "Comma-separated list of new dependencies (e.g., \"T-1, T-2\")")], &["card_id"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -514,19 +459,9 @@ impl Tool for ToolTaskBoardMoveCard {
             experimental: false,
             allow_parallel: false,
             description: "Move a card to a different column.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID to move".to_string(),
-                },
-                ToolParam {
-                    name: "column".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Target column: planned, doing, done, or failed".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "column".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to move"), ("column", "string", "Target column: planned, doing, done, or failed")], &["card_id", "column"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -612,12 +547,9 @@ impl Tool for ToolTaskBoardDeleteCard {
             experimental: false,
             allow_parallel: false,
             description: "Delete a card from the board.".to_string(),
-            parameters: vec![ToolParam {
-                name: "card_id".to_string(),
-                param_type: "string".to_string(),
-                description: "Card ID to delete".to_string(),
-            }],
-            parameters_required: vec!["card_id".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to delete")], &["card_id"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }
@@ -672,8 +604,9 @@ impl Tool for ToolTaskReadyCards {
             allow_parallel: true,
             description: "Get cards that are ready to be worked on (all dependencies satisfied)."
                 .to_string(),
-            parameters: vec![],
-            parameters_required: vec![],
+            input_schema: json_schema_from_params(&[], &[]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

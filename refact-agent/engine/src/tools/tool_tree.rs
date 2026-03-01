@@ -8,7 +8,7 @@ use tokio::sync::Mutex as AMutex;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_file::return_one_candidate_or_a_good_error;
 use crate::at_commands::at_tree::{tree_for_tools, TreeNode};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::files_correction::{
@@ -42,24 +42,9 @@ impl Tool for ToolTree {
             experimental: false,
             allow_parallel: true,
             description: "Get a files tree for the project. Shows file sizes and line counts. Folders with many files are truncated (controlled by max_files). Hidden folders, __pycache__, node_modules, and binary files are excluded.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "An absolute path to get files tree for. Do not pass it if you need a full project tree.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "use_ast".to_string(),
-                    description: "If true, for each file an array of AST symbols will appear as well as its filename".to_string(),
-                    param_type: "boolean".to_string(),
-                },
-                ToolParam {
-                    name: "max_files".to_string(),
-                    description: "Maximum files to show per folder before truncating (default: 10). Root folder is never truncated.".to_string(),
-                    param_type: "integer".to_string(),
-                },
-            ],
-            parameters_required: vec![],
+            input_schema: json_schema_from_params(&[("path", "string", "An absolute path to get files tree for. Do not pass it if you need a full project tree."), ("use_ast", "boolean", "If true, for each file an array of AST symbols will appear as well as its filename"), ("max_files", "integer", "Maximum files to show per folder before truncating (default: 10). Root folder is never truncated.")], &[]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

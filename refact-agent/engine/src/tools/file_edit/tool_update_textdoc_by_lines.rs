@@ -7,9 +7,7 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, parse_path_for_update,
     parse_string_arg, str_replace_lines, sync_documents_ast,
 };
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -177,24 +175,9 @@ impl Tool for ToolUpdateTextDocByLines {
             experimental: false,
             allow_parallel: false,
             description: "Replaces line ranges in an existing file with new content. Line numbers are 1-based and inclusive. Supports multiple non-overlapping ranges.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to the file to modify.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "content".to_string(),
-                    description: "The new text content. For multiple ranges, separate content for each range with '---RANGE_SEPARATOR---'.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "ranges".to_string(),
-                    description: "Line ranges to replace. Format: ':3' (lines 1-3), '40:50' (lines 40-50), '100:' (line 100 to end), '5' (just line 5). Combine multiple ranges with commas: ':3,40:50,100:'. Ranges must not overlap.".to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string(), "content".to_string(), "ranges".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to the file to modify."), ("content", "string", "The new text content. For multiple ranges, separate content for each range with '---RANGE_SEPARATOR---'."), ("ranges", "string", "Line ranges to replace. Format: ':3' (lines 1-3), '40:50' (lines 40-50), '100:' (line 100 to end), '5' (just line 5). Combine multiple ranges with commas: ':3,40:50,100:'. Ranges must not overlap.")], &["path", "content", "ranges"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

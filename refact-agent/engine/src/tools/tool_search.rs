@@ -10,7 +10,7 @@ use tokio::sync::Mutex as AMutex;
 use crate::at_commands::at_commands::{vec_context_file_to_context_tools, AtCommandsContext};
 use crate::at_commands::at_search::execute_at_search;
 use crate::tools::scope_utils::create_scope_filter;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
 use crate::knowledge_index::format_related_memories_section;
 
@@ -66,39 +66,9 @@ impl Tool for ToolSearch {
             experimental: false,
             allow_parallel: true,
             description: "Find semantically similar pieces of code or text using vector database (semantic search)".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "queries".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Comma-separated list of queries. Each query can be a single line, paragraph or code sample to search for semantically similar content.".to_string(),
-                },
-                ToolParam {
-                    name: "scope".to_string(),
-                    param_type: "string".to_string(),
-                    description: "'workspace' to search all files in workspace, 'dir/subdir/' to search in files within a directory, 'dir/file.ext' to search in a single file.".to_string(),
-                },
-                ToolParam {
-                    name: "context_lines".to_string(),
-                    param_type: "integer".to_string(),
-                    description: "If >0, include a small line-numbered preview around each hit in the tool text output (default: 0).".to_string(),
-                },
-                ToolParam {
-                    name: "max_files".to_string(),
-                    param_type: "integer".to_string(),
-                    description: "Max distinct files to attach as context (default: 50).".to_string(),
-                },
-                ToolParam {
-                    name: "max_recs_per_file".to_string(),
-                    param_type: "integer".to_string(),
-                    description: "Max vecdb records per file to attach as context (default: 10).".to_string(),
-                },
-                ToolParam {
-                    name: "max_total_recs".to_string(),
-                    param_type: "integer".to_string(),
-                    description: "Max total vecdb records to attach as context (default: 200).".to_string(),
-                }
-            ],
-            parameters_required: vec!["queries".to_string(), "scope".to_string()],
+            input_schema: json_schema_from_params(&[("queries", "string", "Comma-separated list of queries. Each query can be a single line, paragraph or code sample to search for semantically similar content."), ("scope", "string", "'workspace' to search all files in workspace, 'dir/subdir/' to search in files within a directory, 'dir/file.ext' to search in a single file."), ("context_lines", "integer", "If >0, include a small line-numbered preview around each hit in the tool text output (default: 0)."), ("max_files", "integer", "Max distinct files to attach as context (default: 50)."), ("max_recs_per_file", "integer", "Max vecdb records per file to attach as context (default: 10)."), ("max_total_recs", "integer", "Max total vecdb records to attach as context (default: 200).")], &["queries", "scope"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

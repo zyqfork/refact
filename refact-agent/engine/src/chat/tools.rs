@@ -299,8 +299,10 @@ mod tests {
         let yaml = r#"
 name: test_tool
 description: A test tool
-parameters: []
-parameters_required: []
+input_schema:
+  type: object
+  properties: {}
+  required: []
 display_name: Test Tool
 source:
   source_type: builtin

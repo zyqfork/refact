@@ -18,7 +18,7 @@ use crate::files_correction::shortify_paths;
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::GlobalContext;
 use crate::tools::scope_utils::{resolve_scope, validate_scope_files};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::knowledge_index::format_related_memories_section;
 
 pub struct ToolRegexSearch {
@@ -248,39 +248,9 @@ impl Tool for ToolRegexSearch {
             experimental: false,
             allow_parallel: true,
             description: "Search for files and folders whose names or paths match the given regular expression pattern, and also search for text matches inside files using the same pattern. Reports both path matches and text matches in separate sections.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "pattern".to_string(),
-                    description: "The pattern is used to search for matching file/folder names/paths, and also for matching text inside files. Use (?i) at the start for case-insensitive search.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "scope".to_string(),
-                    description: "'workspace' to search all files in workspace, 'dir/subdir/' to search in files within a directory, 'dir/file.ext' to search in a single file.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "context_lines".to_string(),
-                    description: "Lines of context before/after each match (default: 5).".to_string(),
-                    param_type: "integer".to_string(),
-                },
-                ToolParam {
-                    name: "max_files".to_string(),
-                    description: "Max files to attach as context (default: 50).".to_string(),
-                    param_type: "integer".to_string(),
-                },
-                ToolParam {
-                    name: "max_matches_per_file".to_string(),
-                    description: "Max matches per file to include (default: 25).".to_string(),
-                    param_type: "integer".to_string(),
-                },
-                ToolParam {
-                    name: "max_total_matches".to_string(),
-                    description: "Max total matches to attach as context (default: 200).".to_string(),
-                    param_type: "integer".to_string(),
-                }
-            ],
-            parameters_required: vec!["pattern".to_string(), "scope".to_string()],
+            input_schema: json_schema_from_params(&[("pattern", "string", "The pattern is used to search for matching file/folder names/paths, and also for matching text inside files. Use (?i) at the start for case-insensitive search."), ("scope", "string", "'workspace' to search all files in workspace, 'dir/subdir/' to search in files within a directory, 'dir/file.ext' to search in a single file."), ("context_lines", "integer", "Lines of context before/after each match (default: 5)."), ("max_files", "integer", "Max files to attach as context (default: 50)."), ("max_matches_per_file", "integer", "Max matches per file to include (default: 25)."), ("max_total_matches", "integer", "Max total matches to attach as context (default: 200).")], &["pattern", "scope"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

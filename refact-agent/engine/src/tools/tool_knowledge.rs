@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::memories::memories_search;
 use crate::knowledge_graph::build_knowledge_graph;
@@ -31,14 +31,9 @@ impl Tool for ToolGetKnowledge {
             experimental: false,
             allow_parallel: true,
             description: "Searches project knowledge base for relevant information. Uses semantic search and knowledge graph expansion.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "search_key".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Search query for the knowledge database.".to_string(),
-                }
-            ],
-            parameters_required: vec!["search_key".to_string()],
+            input_schema: json_schema_from_params(&[("search_key", "string", "Search query for the knowledge database.")], &["search_key"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

@@ -7,9 +7,7 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, parse_bool_arg,
     parse_path_for_update, parse_string_arg, str_replace, sync_documents_ast,
 };
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -180,29 +178,9 @@ impl Tool for ToolUpdateTextDoc {
             experimental: false,
             allow_parallel: false,
             description: "Updates an existing document by replacing specific text, use this if file already exists. Optimized for large files or small changes where simple string replacement is sufficient. Avoid trailing spaces and tabs.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to the file to change.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "old_str".to_string(),
-                    description: "The exact text that needs to be updated. Use update_textdoc_regex if you need pattern matching (is not preferred for common editing).".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "replacement".to_string(),
-                    description: "The new text that will replace the old text.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "multiple".to_string(),
-                    description: "If true, applies the replacement to all occurrences; if false, only the first occurrence is replaced.".to_string(),
-                    param_type: "boolean".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string(), "old_str".to_string(), "replacement".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to the file to change."), ("old_str", "string", "The exact text that needs to be updated. Use update_textdoc_regex if you need pattern matching (is not preferred for common editing)."), ("replacement", "string", "The new text that will replace the old text."), ("multiple", "boolean", "If true, applies the replacement to all occurrences; if false, only the first occurrence is replaced.")], &["path", "old_str", "replacement"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

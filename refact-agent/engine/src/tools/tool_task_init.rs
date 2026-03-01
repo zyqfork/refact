@@ -6,7 +6,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::tasks::storage;
 
 pub struct ToolTaskInit;
@@ -66,13 +66,9 @@ impl Tool for ToolTaskInit {
             allow_parallel: false,
             description: "Create a new task workspace for planning and orchestrating work."
                 .to_string(),
-            parameters: vec![ToolParam {
-                name: "name".to_string(),
-                param_type: "string".to_string(),
-                description: "Name of the task (e.g., 'Auth Refactor', 'Database Migration')"
-                    .to_string(),
-            }],
-            parameters_required: vec!["name".to_string()],
+            input_schema: json_schema_from_params(&[("name", "string", "Name of the task (e.g., 'Auth Refactor', 'Database Migration')")], &["name"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

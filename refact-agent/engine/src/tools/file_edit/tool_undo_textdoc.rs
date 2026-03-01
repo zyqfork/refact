@@ -7,9 +7,7 @@ use crate::tools::file_edit::auxiliary::{
     convert_edit_to_diffchunks, parse_path_for_update, sync_documents_ast,
 };
 use crate::tools::file_edit::undo_history::{get_undo_history, UndoEntry};
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -229,19 +227,9 @@ impl Tool for ToolUndoTextDoc {
             allow_parallel: false,
             description: "Undo recent file edits from this session. Reverts to previous version."
                 .to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to the file to undo.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "steps".to_string(),
-                    description: "Number of edits to undo (default: 1).".to_string(),
-                    param_type: "integer".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to the file to undo."), ("steps", "integer", "Number of edits to undo (default: 1).")], &["path"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

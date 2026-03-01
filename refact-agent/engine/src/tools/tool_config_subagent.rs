@@ -4,7 +4,8 @@ use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
+use serde_json::json;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::subchat::run_subchat;
@@ -20,31 +21,25 @@ impl ToolConfigSubagent {
         Self { config }
     }
 
-    fn build_tool_params(&self) -> Vec<ToolParam> {
+    fn build_input_schema(&self) -> serde_json::Value {
         if let Some(ref tool_schema) = self.config.tool {
-            tool_schema.parameters.iter().map(|p| {
-                ToolParam {
-                    name: p.name.clone(),
-                    param_type: p.param_type.clone(),
-                    description: p.description.clone(),
-                }
-            }).collect()
+            let mut properties = serde_json::Map::new();
+            for p in &tool_schema.parameters {
+                properties.insert(p.name.clone(), json!({
+                    "type": p.param_type,
+                    "description": p.description
+                }));
+            }
+            json!({
+                "type": "object",
+                "properties": properties,
+                "required": tool_schema.required
+            })
         } else {
-            vec![
-                ToolParam {
-                    name: "task".to_string(),
-                    param_type: "string".to_string(),
-                    description: "The task to execute".to_string(),
-                },
-            ]
-        }
-    }
-
-    fn build_required_params(&self) -> Vec<String> {
-        if let Some(ref tool_schema) = self.config.tool {
-            tool_schema.required.clone()
-        } else {
-            vec!["task".to_string()]
+            json_schema_from_params(
+                &[("task", "string", "The task to execute")],
+                &["task"],
+            )
         }
     }
 
@@ -85,8 +80,9 @@ impl Tool for ToolConfigSubagent {
             experimental: false,
             allow_parallel,
             description,
-            parameters: self.build_tool_params(),
-            parameters_required: self.build_required_params(),
+            input_schema: self.build_input_schema(),
+            output_schema: None,
+            annotations: None,
         }
     }
 

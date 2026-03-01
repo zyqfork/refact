@@ -15,9 +15,7 @@ use crate::files_correction::{
 };
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::privacy::{check_file_privacy, load_privacy_if_needed, FilePrivacyLevel};
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 
 pub struct ToolRm {
@@ -346,29 +344,9 @@ impl Tool for ToolRm {
             experimental: false,
             allow_parallel: false,
             description: "Deletes a file or directory. Use recursive=true for directories. Set dry_run=true to preview without deletion.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Absolute or relative path of the file or directory to delete.".to_string(),
-                },
-                ToolParam {
-                    name: "recursive".to_string(),
-                    param_type: "boolean".to_string(),
-                    description: "If true and target is a directory, delete recursively. Defaults to false.".to_string(),
-                },
-                ToolParam {
-                    name: "dry_run".to_string(),
-                    param_type: "boolean".to_string(),
-                    description: "If true, only report what would be done without deleting.".to_string(),
-                },
-                ToolParam {
-                    name: "max_depth".to_string(),
-                    param_type: "number".to_string(),
-                    description: "(Optional) Maximum depth (currently unused).".to_string(),
-                }
-            ],
-            parameters_required: vec!["path".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute or relative path of the file or directory to delete."), ("recursive", "boolean", "If true and target is a directory, delete recursively. Defaults to false."), ("dry_run", "boolean", "If true, only report what would be done without deleting."), ("max_depth", "number", "(Optional) Maximum depth (currently unused).")], &["path"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

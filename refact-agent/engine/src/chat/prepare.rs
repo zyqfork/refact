@@ -212,11 +212,7 @@ pub async fn prepare_chat_passthrough(
 
     // 6. Build tools list
     let filtered_tools: Vec<ToolDesc> = if options.supports_tools {
-        tools
-            .iter()
-            .filter(|x| x.is_supported_by(model_id))
-            .cloned()
-            .collect()
+        tools.to_vec()
     } else {
         vec![]
     };

@@ -13,7 +13,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ContextEnum, ChatMessage, ChatContent, ChatUsage};
 use crate::files_correction::canonical_path;
 use crate::integrations::go_to_configuration_message;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::integrations::integr_abstract::{
     IntegrationCommon, IntegrationConfirmation, IntegrationTrait,
 };
@@ -84,19 +84,9 @@ impl Tool for ToolGitlab {
             experimental: false,
             allow_parallel: false,
             description: "Access to glab command line command, to fetch issues, review PRs.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "project_dir".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Look at system prompt for location of version control (.git folder) of the active file.".to_string(),
-                },
-                ToolParam {
-                    name: "command".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Examples:\nglab issue create --description \"hello world\" --title \"Testing glab integration\"\nglab issue list --author @me\n".to_string(),
-                },
-            ],
-            parameters_required: vec!["project_dir".to_string(), "command".to_string()],
+            input_schema: json_schema_from_params(&[("project_dir", "string", "Look at system prompt for location of version control (.git folder) of the active file."), ("command", "string", "Examples:\nglab issue create --description \"hello world\" --title \"Testing glab integration\"\nglab issue list --author @me\n")], &["project_dir", "command"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

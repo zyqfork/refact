@@ -2150,7 +2150,44 @@ mod tests {
         let has_orphaned_block = assistant_content.iter()
             .any(|b| b["type"] == "server_tool_use" && b["id"] == "srvtoolu_01ORPHAN");
         
-        assert!(!has_orphaned_block, 
+        assert!(!has_orphaned_block,
             "Orphaned server_tool_use without matching result should be filtered for incomplete responses");
+    }
+
+    #[test]
+    fn test_convert_tools_to_anthropic_maps_parameters_to_input_schema() {
+        let tools = vec![
+            json!({
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "description": "Search the web",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"},
+                            "limit": {"type": "integer"}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }),
+        ];
+
+        let result = convert_tools_to_anthropic(&tools);
+        let converted = result.as_array().unwrap();
+        assert_eq!(converted.len(), 1);
+
+        let tool = &converted[0];
+        assert_eq!(tool["name"], json!("search"));
+        assert_eq!(tool["description"], json!("Search the web"));
+
+        let input_schema = &tool["input_schema"];
+        assert_eq!(input_schema["type"], json!("object"));
+        assert_eq!(input_schema["properties"]["query"]["type"], json!("string"));
+        assert_eq!(input_schema["properties"]["limit"]["type"], json!("integer"));
+        assert_eq!(input_schema["required"], json!(["query"]));
+
+        assert!(tool.get("parameters").is_none(), "parameters field should not be present");
     }
 }

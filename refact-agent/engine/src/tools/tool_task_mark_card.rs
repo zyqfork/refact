@@ -5,7 +5,7 @@ use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
@@ -54,19 +54,9 @@ impl Tool for ToolTaskMarkCardDone {
             experimental: false,
             allow_parallel: false,
             description: "Manually mark a card as done. Use this if an agent completed work but forgot to call task_agent_finish(), or to finalize a card after reviewing the agent's work.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID to mark as done".to_string(),
-                },
-                ToolParam {
-                    name: "report".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Summary/report for the completed card".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "report".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to mark as done"), ("report", "string", "Summary/report for the completed card")], &["card_id", "report"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 
@@ -154,19 +144,9 @@ impl Tool for ToolTaskMarkCardFailed {
             experimental: false,
             allow_parallel: false,
             description: "Manually mark a card as failed. Use this to resolve stuck agents, mark cards that cannot be completed, or when an agent errored without calling task_agent_finish().".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID to mark as failed".to_string(),
-                },
-                ToolParam {
-                    name: "reason".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Reason for failure".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string(), "reason".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to mark as failed"), ("reason", "string", "Reason for failure")], &["card_id", "reason"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

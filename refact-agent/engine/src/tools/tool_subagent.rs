@@ -4,7 +4,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::subchat::run_subchat;
@@ -79,29 +79,9 @@ impl Tool for ToolSubagent {
             experimental: false,
             allow_parallel: true,
             description: "Delegate a specific task to a sub-agent that works independently. Use this when you need to perform a focused task that requires multiple tool calls without cluttering the main conversation. The subagent has its own context and does not see the parent conversation.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "task".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Clear description of what the subagent should do. Be specific about the goal and any constraints.".to_string(),
-                },
-                ToolParam {
-                    name: "expected_result".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Description of what the successful result should look like. This helps the subagent know when it has completed the task.".to_string(),
-                },
-                ToolParam {
-                    name: "tools".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Comma-separated list of tool names the subagent should use (e.g., 'cat,tree,search'). Leave empty to allow all available tools.".to_string(),
-                },
-                ToolParam {
-                    name: "max_steps".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Maximum number of steps (tool calls) the subagent can make. Default is 10. Use lower values for simple tasks, higher for complex ones.".to_string(),
-                },
-            ],
-            parameters_required: vec!["task".to_string(), "expected_result".to_string(), "tools".to_string(), "max_steps".to_string()],
+            input_schema: json_schema_from_params(&[("task", "string", "Clear description of what the subagent should do. Be specific about the goal and any constraints."), ("expected_result", "string", "Description of what the successful result should look like. This helps the subagent know when it has completed the task."), ("tools", "string", "Comma-separated list of tool names the subagent should use (e.g., 'cat,tree,search'). Leave empty to allow all available tools."), ("max_steps", "string", "Maximum number of steps (tool calls) the subagent can make. Default is 10. Use lower values for simple tasks, higher for complex ones.")], &["task", "expected_result", "tools", "max_steps"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

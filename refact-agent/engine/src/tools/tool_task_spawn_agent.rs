@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
@@ -195,19 +195,9 @@ impl Tool for ToolTaskSpawnAgent {
             experimental: false,
             allow_parallel: false,
             description: "Spawn an agent to work on a specific task card. The agent runs in the background as a real chat session. Returns immediately with a hyperlink to view the agent's progress. The agent will call task_agent_finish() when done.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "card_id".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Card ID to work on".to_string(),
-                },
-                ToolParam {
-                    name: "suggested_steps".to_string(),
-                    param_type: "integer".to_string(),
-                    description: "Suggested step budget for the agent (default: 30). This is a hint, not enforced.".to_string(),
-                },
-            ],
-            parameters_required: vec!["card_id".to_string()],
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID to work on"), ("suggested_steps", "integer", "Suggested step budget for the agent (default: 30). This is a hint, not enforced.")], &["card_id"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

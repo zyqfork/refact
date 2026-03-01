@@ -15,10 +15,7 @@ use crate::tools::file_edit::openai_apply_patch::{
     apply_update_chunks, parse_patch, validate_relative_path, FileOperation, ParsedPatch,
 };
 use crate::tools::file_edit::undo_history;
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam,
-    ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -417,14 +414,9 @@ impl Tool for ToolApplyPatch {
             experimental: false,
             allow_parallel: false,
             description: APPLY_PATCH_DESCRIPTION.to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "patch".to_string(),
-                    description: APPLY_PATCH_PARAM_DESCRIPTION.to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["patch".to_string()],
+            input_schema: json_schema_from_params(&[("patch", "string", "")], &["patch"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

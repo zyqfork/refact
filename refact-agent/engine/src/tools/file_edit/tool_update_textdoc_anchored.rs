@@ -7,9 +7,7 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, parse_bool_arg,
     parse_path_for_update, parse_string_arg, str_replace_anchored, sync_documents_ast, AnchorMode,
 };
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -226,44 +224,9 @@ impl Tool for ToolUpdateTextDocAnchored {
             experimental: false,
             allow_parallel: false,
             description: "Edit file by finding anchor text. More reliable than exact string match. Use 'replace_between' to replace content between two anchors, or 'insert_after'/'insert_before' to insert at anchor.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to the file.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "mode".to_string(),
-                    description: "'replace_between' (needs anchor_before + anchor_after), 'insert_after', or 'insert_before' (need anchor).".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "anchor_before".to_string(),
-                    description: "For replace_between: text marking start of region to replace.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "anchor_after".to_string(),
-                    description: "For replace_between: text marking end of region to replace.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "anchor".to_string(),
-                    description: "For insert_after/insert_before: text to locate insert position.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "content".to_string(),
-                    description: "The new content to insert or replace with.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "multiple".to_string(),
-                    description: "If true, apply to all matching anchors. Default false.".to_string(),
-                    param_type: "boolean".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string(), "mode".to_string(), "content".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to the file."), ("mode", "string", "'replace_between' (needs anchor_before + anchor_after), 'insert_after', or 'insert_before' (need anchor)."), ("anchor_before", "string", "For replace_between: text marking start of region to replace."), ("anchor_after", "string", "For replace_between: text marking end of region to replace."), ("anchor", "string", "For insert_after/insert_before: text to locate insert position."), ("content", "string", "The new content to insert or replace with."), ("multiple", "boolean", "If true, apply to all matching anchors. Default false.")], &["path", "mode", "content"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

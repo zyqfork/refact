@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use process_wrap::tokio::*;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::tools::tools_description::{Tool, ToolParam, ToolDesc, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
+use serde_json::json;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::global_context::GlobalContext;
 use crate::postprocessing::pp_command_output::output_mini_postprocessing;
@@ -419,21 +420,25 @@ impl Tool for ToolService {
     }
 
     fn tool_description(&self) -> ToolDesc {
-        let mut parameters = self.cfg.parameters.clone();
-        parameters.push(ToolParam {
-            name: "action".to_string(),
-            param_type: "string".to_string(),
-            description: "Action to perform: start, restart, stop, status".to_string(),
+        let required: Vec<String> = self.cfg.parameters_required.clone().unwrap_or_else(|| {
+            self.cfg.parameters.iter().map(|p| p.name.clone()).collect()
         });
-
-        let parameters_required = self.cfg.parameters_required.clone().unwrap_or_else(|| {
-            self.cfg
-                .parameters
-                .iter()
-                .map(|param| param.name.clone())
-                .collect()
+        let mut properties = serde_json::Map::new();
+        for p in &self.cfg.parameters {
+            properties.insert(p.name.clone(), json!({
+                "type": p.param_type,
+                "description": p.description
+            }));
+        }
+        properties.insert("action".to_string(), json!({
+            "type": "string",
+            "description": "Action to perform: start, restart, stop, status"
+        }));
+        let input_schema = json!({
+            "type": "object",
+            "properties": properties,
+            "required": required
         });
-
         ToolDesc {
             name: self.name.clone(),
             display_name: self.name.clone(),
@@ -444,8 +449,9 @@ impl Tool for ToolService {
             experimental: false,
             allow_parallel: false,
             description: self.cfg.description.clone(),
-            parameters,
-            parameters_required,
+            input_schema,
+            output_schema: None,
+            annotations: None,
         }
     }
 

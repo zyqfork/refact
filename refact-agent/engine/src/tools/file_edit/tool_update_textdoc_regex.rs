@@ -7,9 +7,7 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, parse_bool_arg,
     parse_path_for_update, parse_string_arg, str_replace_regex, sync_documents_ast,
 };
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
@@ -202,39 +200,9 @@ impl Tool for ToolUpdateTextDocRegex {
             experimental: false,
             allow_parallel: false,
             description: "Updates an existing document using pattern matching. By default treats pattern as literal text (literal:true). Set literal:false for regex.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to the file to change.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "pattern".to_string(),
-                    description: "Pattern to match. Treated as literal text by default, or regex if literal:false.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "replacement".to_string(),
-                    description: "The new text that will replace the matched pattern.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "literal".to_string(),
-                    description: "If true (default), pattern is treated as literal text. If false, pattern is a regex.".to_string(),
-                    param_type: "boolean".to_string(),
-                },
-                ToolParam {
-                    name: "multiple".to_string(),
-                    description: "If true, replaces all occurrences; if false (default), only the first.".to_string(),
-                    param_type: "boolean".to_string(),
-                },
-                ToolParam {
-                    name: "expected_matches".to_string(),
-                    description: "If provided, fails if actual match count differs (safety check).".to_string(),
-                    param_type: "integer".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string(), "pattern".to_string(), "replacement".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to the file to change."), ("pattern", "string", "Pattern to match. Treated as literal text by default, or regex if literal:false."), ("replacement", "string", "The new text that will replace the matched pattern."), ("literal", "boolean", "If true (default), pattern is treated as literal text. If false, pattern is a regex."), ("multiple", "boolean", "If true, replaces all occurrences; if false (default), only the first."), ("expected_matches", "integer", "If provided, fails if actual match count differs (safety check).")], &["path", "pattern", "replacement"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

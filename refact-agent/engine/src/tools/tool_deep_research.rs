@@ -5,9 +5,7 @@ use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
 use crate::subchat::run_subchat_once_with_parent;
-use crate::tools::tools_description::{
-    Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
-};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::global_context::GlobalContext;
@@ -83,14 +81,9 @@ impl Tool for ToolDeepResearch {
             experimental: false,
             allow_parallel: true,
             description: "Conduct comprehensive web research on a topic. Use this tool when you need up-to-date information from the internet, market analysis, technical documentation research, or synthesis of information from multiple web sources. The research takes several minutes and produces a detailed, citation-rich report. Do NOT use for questions about the current codebase - use code exploration tools instead.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "research_query".to_string(),
-                    param_type: "string".to_string(),
-                    description: "A detailed research question or topic. Be specific: include the scope, what comparisons or metrics you need, any preferred sources, and the desired output format. Example: 'Research the current best practices for Rust async error handling in 2024, comparing tokio vs async-std approaches, with code examples and performance considerations.'".to_string(),
-                }
-            ],
-            parameters_required: vec!["research_query".to_string()],
+            input_schema: json_schema_from_params(&[("research_query", "string", "A detailed research question or topic. Be specific: include the scope, what comparisons or metrics you need, any preferred sources, and the desired output format. Example: 'Research the current best practices for Rust async error handling in 2024, comparing tokio vs async-std approaches, with code examples and performance considerations.'")], &["research_query"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

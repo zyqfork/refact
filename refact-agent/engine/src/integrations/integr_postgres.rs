@@ -15,7 +15,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::ContextEnum;
 use crate::call_validation::{ChatContent, ChatMessage, ChatUsage};
 use crate::integrations::go_to_configuration_message;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::postprocessing::pp_row_limiter::RowLimiter;
 use crate::postprocessing::pp_command_output::OutputFilter;
 
@@ -153,14 +153,9 @@ impl Tool for ToolPostgres {
             experimental: false,
             allow_parallel: false,
             description: "PostgreSQL integration, can run a single query per call.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "query".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Don't forget semicolon at the end, examples:\nSELECT * FROM table_name;\nCREATE INDEX my_index_users_email ON my_users (email);".to_string(),
-                },
-            ],
-            parameters_required: vec!["query".to_string()],
+            input_schema: json_schema_from_params(&[("query", "string", "Don't forget semicolon at the end, examples:\nSELECT * FROM table_name;\nCREATE INDEX my_index_users_email ON my_users (email);")], &["query"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

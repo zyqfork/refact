@@ -8,9 +8,7 @@ use crate::tools::file_edit::auxiliary::{
     await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary, normalize_line_endings,
     parse_path_for_create, parse_string_arg, restore_line_endings, sync_documents_ast, write_file,
 };
-use crate::tools::tools_description::{
-    MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -184,19 +182,9 @@ impl Tool for ToolCreateTextDoc {
             experimental: false,
             allow_parallel: false,
             description: "Creates a new text document or code or completely replaces the content of an existing document. Avoid trailing spaces and tabs.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "path".to_string(),
-                    description: "Absolute path to new file.".to_string(),
-                    param_type: "string".to_string(),
-                },
-                ToolParam {
-                    name: "content".to_string(),
-                    description: "The initial text or code.".to_string(),
-                    param_type: "string".to_string(),
-                },
-            ],
-            parameters_required: vec!["path".to_string(), "content".to_string()],
+            input_schema: json_schema_from_params(&[("path", "string", "Absolute path to new file."), ("content", "string", "The initial text or code.")], &["path", "content"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 }

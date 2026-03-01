@@ -8,7 +8,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::tools::tools_description::{Tool, ToolDesc, ToolParam, ToolSource, ToolSourceType};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskItem {
@@ -45,15 +45,9 @@ impl Tool for ToolTasksSet {
             description: "Set the task progress list shown to the user. Use to track multi-step work. \
                 Pass complete task list each time (replaces previous). \
                 Each task needs: id (unique string), content (description), status (pending/in_progress/completed/failed).".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "tasks".to_string(),
-                    param_type: "array".to_string(),
-                    description: "Array of task objects. Each object: {\"id\": \"1\", \"content\": \"Task description\", \"status\": \"pending\"}. \
-                        Status values: pending, in_progress, completed, failed.".to_string(),
-                },
-            ],
-            parameters_required: vec!["tasks".to_string()],
+            input_schema: json_schema_from_params(&[], &["tasks"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 

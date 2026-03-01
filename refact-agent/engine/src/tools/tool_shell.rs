@@ -22,9 +22,7 @@ use crate::files_correction::get_project_dirs;
 use crate::files_correction::preprocess_path_for_normalization;
 use crate::files_correction::CommandSimplifiedDirExt;
 use crate::global_context::GlobalContext;
-use crate::tools::tools_description::{
-    ToolParam, Tool, ToolDesc, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::postprocessing::pp_command_output::{
     OutputFilter, parse_output_filter_args, output_mini_postprocessing,
@@ -225,37 +223,9 @@ impl Tool for ToolShell {
             experimental: false,
             allow_parallel: false,
             description: "Execute a single command, using the \"sh\" on unix-like systems and \"powershell.exe\" on windows. Use it for one-time tasks like dependencies installation. Don't call this unless you have to. Not suitable for regular work because it requires a confirmation at each step. Output is compressed by default - use output_filter and output_limit parameters to see specific parts if needed. Note: sudo commands cannot be run - if you need elevated privileges, ask the user to run them directly.".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "command".to_string(),
-                    param_type: "string".to_string(),
-                    description: "shell command to execute".to_string(),
-                },
-                ToolParam {
-                    name: "workdir".to_string(),
-                    param_type: "string".to_string(),
-                    description: "workdir for the command".to_string(),
-                },
-                ToolParam {
-                    name: "output_filter".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Optional regex pattern to filter output lines. Only lines matching this pattern (and context) will be shown. Use to find specific errors or content in large outputs.".to_string(),
-                },
-                ToolParam {
-                    name: "output_limit".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Optional. Max lines to show (default: 40). Use higher values like '200' or 'all' to see more output.".to_string(),
-                },
-                ToolParam {
-                    name: "timeout".to_string(),
-                    param_type: "string".to_string(),
-                    description: "Optional. Timeout in seconds for the command (default: 10). Use higher values for long-running commands.".to_string(),
-                },
-            ],
-            parameters_required: vec![
-                "command".to_string(),
-                "workdir".to_string(),
-            ],
+            input_schema: json_schema_from_params(&[("command", "string", "shell command to execute"), ("workdir", "string", "workdir for the command"), ("output_filter", "string", "Optional regex pattern to filter output lines. Only lines matching this pattern (and context) will be shown. Use to find specific errors or content in large outputs."), ("output_limit", "string", "Optional. Max lines to show (default: 40). Use higher values like '200' or 'all' to see more output."), ("timeout", "string", "Optional. Timeout in seconds for the command (default: 10). Use higher values for long-running commands.")], &["command", "workdir"]),
+            output_schema: None,
+            annotations: None,
         }
     }
 
