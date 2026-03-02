@@ -472,7 +472,7 @@ pub async fn process_tool_calls_once(
     mode_id: &str,
     model_id: Option<&str>,
 ) -> ToolStepOutcome {
-    let (tool_calls, server_tool_calls, messages, thread, tool_message_index, slash_allowed_tools, slash_source_command) = {
+    let (tool_calls, server_tool_calls, messages, thread, tool_message_index, allowed_tools, source_command) = {
         let session = session_arc.lock().await;
         let msg_count = session.messages.len();
         let last_msg = session.messages.last();
@@ -488,8 +488,8 @@ pub async fn process_tool_calls_once(
                     session.messages.clone(),
                     session.thread.clone(),
                     msg_count.saturating_sub(1),
-                    session.slash_allowed_tools.clone(),
-                    session.slash_source_command.clone(),
+                    session.active_command.allowed_tools.clone(),
+                    session.active_command.name.clone(),
                 )
             }
             _ => return ToolStepOutcome::NoToolCalls,
@@ -544,7 +544,7 @@ pub async fn process_tool_calls_once(
     );
 
     let (confirmations, denials) =
-        check_tools_confirmation(gcx.clone(), &tool_calls, &messages, mode_id, model_id, &slash_allowed_tools, &slash_source_command).await;
+        check_tools_confirmation(gcx.clone(), &tool_calls, &messages, mode_id, model_id, &allowed_tools, &source_command).await;
 
     let denied_ids: std::collections::HashSet<String> = denials.iter().map(|d| d.tool_call_id.clone()).collect();
     if !denials.is_empty() {

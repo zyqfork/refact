@@ -304,7 +304,7 @@ pub fn start_generation(
             };
             {
                 let session = session_arc.lock().await;
-                if let Some(ref m) = session.slash_model_override {
+                if let Some(ref m) = session.active_command.model_override {
                     if !m.is_empty() {
                         thread.model = m.clone();
                     }
@@ -313,7 +313,7 @@ pub fn start_generation(
 
             let fork_agent_name = {
                 let session = session_arc.lock().await;
-                session.slash_context_fork.clone()
+                session.active_command.context_fork.clone()
             };
 
             if let Some(agent_name) = fork_agent_name {
@@ -326,7 +326,7 @@ pub fn start_generation(
                 };
                 {
                     let mut session = session_arc.lock().await;
-                    session.slash_context_fork = None;
+                    session.active_command.context_fork = None;
                 }
 
                 let fork_result = run_fork_subchat(

@@ -660,12 +660,18 @@ pub struct ChatSession {
     pub cache_guard_force_next: bool,
     pub task_agent_error: Option<String>,
     pub pending_browser_message: Option<PendingBrowserMessage>,
-    pub slash_allowed_tools: Vec<String>,
-    pub slash_model_override: Option<String>,
-    pub slash_source_command: String,
-    pub slash_context_fork: Option<String>,
+    pub active_command: ActiveCommandContext,
     pub skills_available_count: usize,
     pub skills_included: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ActiveCommandContext {
+    pub source_kind: String,
+    pub name: String,
+    pub allowed_tools: Vec<String>,
+    pub model_override: Option<String>,
+    pub context_fork: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -32,7 +32,7 @@ pub async fn atomic_write_file(tmp_path: &Path, dest_path: &Path) -> Result<(), 
         .map_err(|e| format!("Failed to rename: {}", e))
 }
 
-use super::types::{ThreadParams, SessionState, ChatSession};
+use super::types::{ActiveCommandContext, ThreadParams, SessionState, ChatSession};
 use super::config::timeouts;
 use super::SessionsMap;
 
@@ -3009,10 +3009,7 @@ mod tests {
             task_agent_error: None,
             trajectory_events_tx: None,
             pending_browser_message: None,
-            slash_allowed_tools: Vec::new(),
-            slash_model_override: None,
-            slash_source_command: String::new(),
-            slash_context_fork: None,
+            active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
         };

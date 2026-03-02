@@ -56,10 +56,7 @@ impl ChatSession {
             cache_guard_force_next: false,
             task_agent_error: None,
             pending_browser_message: None,
-            slash_allowed_tools: Vec::new(),
-            slash_model_override: None,
-            slash_source_command: String::new(),
-            slash_context_fork: None,
+            active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
         }
@@ -99,10 +96,7 @@ impl ChatSession {
             cache_guard_force_next: false,
             task_agent_error: None,
             pending_browser_message: None,
-            slash_allowed_tools: Vec::new(),
-            slash_model_override: None,
-            slash_source_command: String::new(),
-            slash_context_fork: None,
+            active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
         }
@@ -1714,22 +1708,34 @@ mod tests {
     }
 
     #[test]
-    fn test_slash_context_fork_initial_none() {
+    fn test_active_command_initial_default() {
         let session = make_session();
-        assert!(session.slash_context_fork.is_none());
+        assert!(session.active_command.context_fork.is_none());
+        assert!(session.active_command.model_override.is_none());
+        assert!(session.active_command.allowed_tools.is_empty());
+        assert!(session.active_command.name.is_empty());
+        assert!(session.active_command.source_kind.is_empty());
     }
 
     #[test]
-    fn test_slash_context_fork_stored_and_cleared() {
+    fn test_active_command_stored_and_cleared() {
         let mut session = make_session();
-        session.slash_context_fork = Some("my-agent".to_string());
-        assert_eq!(session.slash_context_fork, Some("my-agent".to_string()));
-        session.slash_context_fork = None;
-        assert!(session.slash_context_fork.is_none());
+        session.active_command = ActiveCommandContext {
+            source_kind: "skill".to_string(),
+            name: "my-agent".to_string(),
+            allowed_tools: vec!["cat".to_string()],
+            model_override: Some("gpt-4".to_string()),
+            context_fork: Some("subagent".to_string()),
+        };
+        assert_eq!(session.active_command.context_fork, Some("subagent".to_string()));
+        assert_eq!(session.active_command.name, "my-agent");
+        session.active_command = ActiveCommandContext::default();
+        assert!(session.active_command.context_fork.is_none());
+        assert!(session.active_command.name.is_empty());
     }
 
     #[test]
-    fn test_new_with_trajectory_context_fork_none() {
+    fn test_new_with_trajectory_active_command_default() {
         use crate::call_validation::{ChatContent};
         let msg = ChatMessage {
             role: "user".into(),
@@ -1746,6 +1752,7 @@ mod tests {
             thread,
             "2024-01-01T00:00:00Z".into(),
         );
-        assert!(session.slash_context_fork.is_none());
+        assert!(session.active_command.context_fork.is_none());
+        assert!(session.active_command.model_override.is_none());
     }
 }
