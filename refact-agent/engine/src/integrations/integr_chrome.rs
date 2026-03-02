@@ -296,7 +296,7 @@ impl Tool for ToolChrome {
             supported_commands.extend(vec!["click_at_point <tab_id> <x> <y>"]);
         }
         let description = format!(
-            "One or several commands separated by newline. \
+            "A real web browser with graphical interface. One or several commands separated by newline. \
              The <tab_id> is an integer, for example 10, for you to identify the tab later. \
              Most of web pages are dynamic. If you see that it's still loading try again with wait_for command. \
              Supported commands:\n{}", supported_commands.join("\n"));
@@ -309,7 +309,7 @@ impl Tool for ToolChrome {
             },
             experimental: false,
             allow_parallel: false,
-            description: "A real web browser with graphical interface.".to_string(),
+            description,
             input_schema: json_schema_from_params(&[("commands", "string", "")], &["commands"]),
             output_schema: None,
             annotations: None,
