@@ -822,13 +822,21 @@ pub async fn check_tools_confirmation(
         .map(|m| m.tool_confirm.rules.as_slice())
         .unwrap_or(&[]);
 
+    let needed_names: std::collections::HashSet<&str> = tool_calls.iter()
+        .map(|tc| tc.function.name.as_str())
+        .collect();
+
     let all_tools =
         crate::tools::tools_list::get_tools_for_mode(gcx.clone(), mode_id, model_id)
             .await
             .into_iter()
-            .map(|tool| {
+            .filter_map(|tool| {
                 let spec = tool.tool_description();
-                (spec.name, tool)
+                if needed_names.contains(spec.name.as_str()) {
+                    Some((spec.name, tool))
+                } else {
+                    None
+                }
             })
             .collect::<indexmap::IndexMap<_, _>>();
 
