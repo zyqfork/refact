@@ -15,13 +15,18 @@ use crate::global_context::GlobalContext;
 const REMOTE_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/smallcloudai/refact/refs/heads/main/refact-agent/engine/src/yaml_configs/mcp_marketplace_index.json";
 const CACHE_TTL_SECS: u64 = 3600;
-static INDEX_CACHE: Mutex<Option<(Instant, MarketplaceIndex)>> = Mutex::new(None);
+static INDEX_CACHE: Mutex<Option<(Instant, MarketplaceIndex, &'static str)>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallRecipe {
-    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,9 +91,9 @@ fn merge_indices(remote: MarketplaceIndex, local: MarketplaceIndex) -> (Marketpl
 async fn load_index(gcx: Arc<ARwLock<GlobalContext>>) -> (MarketplaceIndex, &'static str) {
     {
         let guard = INDEX_CACHE.lock().unwrap();
-        if let Some((ts, ref idx)) = *guard {
+        if let Some((ts, ref idx, source)) = *guard {
             if ts.elapsed().as_secs() < CACHE_TTL_SECS {
-                return (idx.clone(), "remote");
+                return (idx.clone(), source);
             }
         }
     }
@@ -100,12 +105,12 @@ async fn load_index(gcx: Arc<ARwLock<GlobalContext>>) -> (MarketplaceIndex, &'st
         Some(remote) => {
             let (merged, source) = merge_indices(remote, local);
             let mut guard = INDEX_CACHE.lock().unwrap();
-            *guard = Some((Instant::now(), merged.clone()));
+            *guard = Some((Instant::now(), merged.clone(), source));
             (merged, source)
         }
         None => {
             let mut guard = INDEX_CACHE.lock().unwrap();
-            *guard = Some((Instant::now(), local.clone()));
+            *guard = Some((Instant::now(), local.clone(), "local"));
             (local, "local")
         }
     }
@@ -132,6 +137,8 @@ pub struct InstallRequest {
 pub struct ConfigOverrides {
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 pub async fn handle_v1_mcp_marketplace_install(
@@ -156,6 +163,19 @@ pub async fn handle_v1_mcp_marketplace_install(
         .find(|s| s.id == req.server_id)
         .ok_or_else(|| ScratchError::new(StatusCode::NOT_FOUND, format!("server '{}' not found in marketplace", req.server_id)))?;
 
+    match server.transport.as_str() {
+        "http" | "streamable-http" | "sse" => {
+            if server.install_recipe.url.is_none() {
+                return Err(ScratchError::new(StatusCode::BAD_REQUEST, format!("server '{}' has transport '{}' but no url in recipe", server.id, server.transport)));
+            }
+        }
+        _ => {
+            if server.install_recipe.command.is_none() {
+                return Err(ScratchError::new(StatusCode::BAD_REQUEST, format!("server '{}' has transport 'stdio' but no command in recipe", server.id)));
+            }
+        }
+    }
+
     let config_dir = gcx.read().await.config_dir.clone();
     let integrations_dir = config_dir.join("integrations.d");
     tokio::fs::create_dir_all(&integrations_dir).await
@@ -171,13 +191,17 @@ pub async fn handle_v1_mcp_marketplace_install(
     let config_path = integrations_dir.join(&filename);
 
     let mut env = server.install_recipe.env.clone();
+    let mut headers = server.install_recipe.headers.clone();
     if let Some(overrides) = &req.config_overrides {
         for (k, v) in &overrides.env {
             env.insert(k.clone(), v.clone());
         }
+        for (k, v) in &overrides.headers {
+            headers.insert(k.clone(), v.clone());
+        }
     }
 
-    let yaml_content = build_integration_yaml(server, &env);
+    let yaml_content = build_integration_yaml(server, &env, &headers);
     match tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -198,21 +222,54 @@ pub async fn handle_v1_mcp_marketplace_install(
     }
 
     Ok(Json(json!({
-        "success": true,
+        "installed": true,
         "config_path": config_path.display().to_string(),
     })))
 }
 
-fn build_integration_yaml(server: &MarketplaceServer, env: &HashMap<String, String>) -> String {
-    let mut lines = vec![
-        format!("command: {:?}", server.install_recipe.command),
-        "env:".to_string(),
-    ];
-    if env.is_empty() {
-        lines.push("  {}".to_string());
-    } else {
-        for (k, v) in env {
-            lines.push(format!("  {}: {:?}", k, v));
+fn build_integration_yaml(server: &MarketplaceServer, env: &HashMap<String, String>, headers: &HashMap<String, String>) -> String {
+    let mut lines = Vec::new();
+    match server.transport.as_str() {
+        "http" | "streamable-http" => {
+            if let Some(ref url) = server.install_recipe.url {
+                lines.push(format!("url: {:?}", url));
+            }
+            lines.push("headers:".to_string());
+            if headers.is_empty() {
+                lines.push("  {}".to_string());
+            } else {
+                for (k, v) in headers {
+                    lines.push(format!("  {}: {:?}", k, v));
+                }
+            }
+            lines.push("auth_type: \"none\"".to_string());
+        }
+        "sse" => {
+            if let Some(ref url) = server.install_recipe.url {
+                lines.push(format!("url: {:?}", url));
+            }
+            lines.push("headers:".to_string());
+            if headers.is_empty() {
+                lines.push("  {}".to_string());
+            } else {
+                for (k, v) in headers {
+                    lines.push(format!("  {}: {:?}", k, v));
+                }
+            }
+            lines.push("auth_type: \"none\"".to_string());
+        }
+        _ => {
+            if let Some(ref cmd) = server.install_recipe.command {
+                lines.push(format!("command: {:?}", cmd));
+            }
+            lines.push("env:".to_string());
+            if env.is_empty() {
+                lines.push("  {}".to_string());
+            } else {
+                for (k, v) in env {
+                    lines.push(format!("  {}: {:?}", k, v));
+                }
+            }
         }
     }
     lines.push("init_timeout: \"60\"".to_string());
@@ -292,7 +349,6 @@ mod tests {
             assert!(!server.name.is_empty(), "server name must not be empty for id={}", server.id);
             assert!(!server.description.is_empty(), "server description must not be empty for id={}", server.id);
             assert!(!server.transport.is_empty(), "server transport must not be empty for id={}", server.id);
-            assert!(!server.install_recipe.command.is_empty(), "install command must not be empty for id={}", server.id);
         }
     }
 
@@ -317,14 +373,16 @@ mod tests {
             homepage: None,
             transport: "stdio".to_string(),
             install_recipe: InstallRecipe {
-                command: "npx -y @modelcontextprotocol/server-github".to_string(),
+                command: Some("npx -y @modelcontextprotocol/server-github".to_string()),
+                url: None,
                 env: HashMap::new(),
+                headers: HashMap::new(),
             },
             confirmation_default: vec!["*".to_string()],
         };
         let mut env = HashMap::new();
         env.insert("GITHUB_PERSONAL_ACCESS_TOKEN".to_string(), "ghp_test".to_string());
-        let yaml = build_integration_yaml(&server, &env);
+        let yaml = build_integration_yaml(&server, &env, &HashMap::new());
         assert!(yaml.contains("npx -y @modelcontextprotocol/server-github"), "yaml must contain command");
         assert!(yaml.contains("GITHUB_PERSONAL_ACCESS_TOKEN"), "yaml must contain env key");
         assert!(yaml.contains("ghp_test"), "yaml must contain env value");
@@ -345,14 +403,79 @@ mod tests {
             homepage: None,
             transport: "stdio".to_string(),
             install_recipe: InstallRecipe {
-                command: "uvx mcp-server-fetch".to_string(),
+                command: Some("uvx mcp-server-fetch".to_string()),
+                url: None,
                 env: HashMap::new(),
+                headers: HashMap::new(),
             },
             confirmation_default: vec!["*".to_string()],
         };
-        let yaml = build_integration_yaml(&server, &HashMap::new());
+        let yaml = build_integration_yaml(&server, &HashMap::new(), &HashMap::new());
         assert!(yaml.contains("env:"), "yaml must contain env section");
-        assert!(yaml.contains("{}"), "yaml must show empty env as {{}}"); 
+        assert!(yaml.contains("{}"), "yaml must show empty env as {{}}");
+    }
+
+    #[test]
+    fn test_build_integration_yaml_http_with_url() {
+        let server = MarketplaceServer {
+            id: "test-http".to_string(),
+            name: "Test HTTP".to_string(),
+            description: "HTTP MCP server".to_string(),
+            publisher: "test".to_string(),
+            tags: vec![],
+            icon_url: None,
+            homepage: None,
+            transport: "http".to_string(),
+            install_recipe: InstallRecipe {
+                command: None,
+                url: Some("http://localhost:3000/mcp".to_string()),
+                env: HashMap::new(),
+                headers: HashMap::new(),
+            },
+            confirmation_default: vec![],
+        };
+        let yaml = build_integration_yaml(&server, &HashMap::new(), &HashMap::new());
+        assert!(yaml.contains("url:"), "yaml must contain url");
+        assert!(yaml.contains("auth_type:"), "yaml must contain auth_type");
+        assert!(yaml.contains("headers:"), "yaml must contain headers");
+        assert!(!yaml.contains("command:"), "yaml must not contain command for http");
+        assert!(!yaml.contains("env:"), "yaml must not contain env for http");
+    }
+
+    #[test]
+    fn test_build_integration_yaml_sse_with_headers() {
+        let server = MarketplaceServer {
+            id: "test-sse".to_string(),
+            name: "Test SSE".to_string(),
+            description: "SSE MCP server".to_string(),
+            publisher: "test".to_string(),
+            tags: vec![],
+            icon_url: None,
+            homepage: None,
+            transport: "sse".to_string(),
+            install_recipe: InstallRecipe {
+                command: None,
+                url: Some("https://api.example.com/sse".to_string()),
+                env: HashMap::new(),
+                headers: HashMap::new(),
+            },
+            confirmation_default: vec![],
+        };
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+        let yaml = build_integration_yaml(&server, &HashMap::new(), &headers);
+        assert!(yaml.contains("url:"), "yaml must contain url");
+        assert!(yaml.contains("Authorization"), "yaml must contain Authorization header");
+        assert!(yaml.contains("token123"), "yaml must contain token value");
+        assert!(yaml.contains("auth_type:"), "yaml must contain auth_type");
+    }
+
+    #[test]
+    fn test_install_response_contract() {
+        let response = json!({ "installed": true, "config_path": "/some/path.yaml" });
+        assert_eq!(response["installed"], true);
+        assert!(response["config_path"].as_str().is_some());
+        assert!(response.get("success").is_none());
     }
 
     #[test]
@@ -366,7 +489,7 @@ mod tests {
             icon_url: None,
             homepage: None,
             transport: "stdio".to_string(),
-            install_recipe: InstallRecipe { command: "old-command".to_string(), env: HashMap::new() },
+            install_recipe: InstallRecipe { command: Some("old-command".to_string()), url: None, env: HashMap::new(), headers: HashMap::new() },
             confirmation_default: vec![],
         };
         let remote_server = MarketplaceServer {
@@ -378,7 +501,7 @@ mod tests {
             icon_url: None,
             homepage: None,
             transport: "stdio".to_string(),
-            install_recipe: InstallRecipe { command: "new-command".to_string(), env: HashMap::new() },
+            install_recipe: InstallRecipe { command: Some("new-command".to_string()), url: None, env: HashMap::new(), headers: HashMap::new() },
             confirmation_default: vec!["*".to_string()],
         };
         let local_idx = MarketplaceIndex { version: 1, updated_at: "2026-01-01".to_string(), servers: vec![local_server] };
@@ -386,7 +509,7 @@ mod tests {
         let (merged, _) = merge_indices(remote_idx, local_idx);
         assert_eq!(merged.servers.len(), 1, "should merge to one server");
         assert_eq!(merged.servers[0].name, "GitHub Remote", "remote should override local");
-        assert_eq!(merged.servers[0].install_recipe.command, "new-command");
+        assert_eq!(merged.servers[0].install_recipe.command, Some("new-command".to_string()));
     }
 
     #[test]
@@ -400,7 +523,7 @@ mod tests {
             icon_url: None,
             homepage: None,
             transport: "stdio".to_string(),
-            install_recipe: InstallRecipe { command: "custom-cmd".to_string(), env: HashMap::new() },
+            install_recipe: InstallRecipe { command: Some("custom-cmd".to_string()), url: None, env: HashMap::new(), headers: HashMap::new() },
             confirmation_default: vec![],
         };
         let remote_server = MarketplaceServer {
@@ -412,7 +535,7 @@ mod tests {
             icon_url: None,
             homepage: None,
             transport: "stdio".to_string(),
-            install_recipe: InstallRecipe { command: "npx github".to_string(), env: HashMap::new() },
+            install_recipe: InstallRecipe { command: Some("npx github".to_string()), url: None, env: HashMap::new(), headers: HashMap::new() },
             confirmation_default: vec!["*".to_string()],
         };
         let local_idx = MarketplaceIndex { version: 1, updated_at: "2026-01-01".to_string(), servers: vec![local_only] };
@@ -439,8 +562,10 @@ mod tests {
             homepage: None,
             transport: "stdio".to_string(),
             install_recipe: InstallRecipe {
-                command: "npx -y @modelcontextprotocol/server-brave-search".to_string(),
+                command: Some("npx -y @modelcontextprotocol/server-brave-search".to_string()),
+                url: None,
                 env: { let mut m = HashMap::new(); m.insert("BRAVE_API_KEY".to_string(), "".to_string()); m },
+                headers: HashMap::new(),
             },
             confirmation_default: vec!["*".to_string()],
         };
@@ -448,7 +573,7 @@ mod tests {
         let mut env = server.install_recipe.env.clone();
         env.insert("BRAVE_API_KEY".to_string(), "test-key-123".to_string());
 
-        let yaml = build_integration_yaml(&server, &env);
+        let yaml = build_integration_yaml(&server, &env, &HashMap::new());
         let config_path = integrations_dir.join("mcp_stdio_brave_search.yaml");
         tokio::fs::write(&config_path, &yaml).await.unwrap();
 
