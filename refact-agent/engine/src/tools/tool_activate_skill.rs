@@ -52,7 +52,7 @@ impl Tool for ToolActivateSkill {
                 config_path: self.config_path.clone(),
             },
             experimental: false,
-            allow_parallel: true,
+            allow_parallel: false,
             description: "Load a skill's full instructions into the current context. Use when you determine a skill from the available index is relevant to the user's request.".to_string(),
             input_schema: json_schema_from_params(
                 &[("name", "string", "Name of the skill to activate")],
@@ -146,18 +146,7 @@ impl Tool for ToolDeactivateSkill {
             }
         }
 
-        let cf = ContextFile {
-            file_name: "deactivate_skill".to_string(),
-            file_content: "Active skill has been deactivated. Tool restrictions and model overrides cleared.".to_string(),
-            line1: 1,
-            line2: 1,
-            file_rev: None,
-            symbols: vec![],
-            gradient_type: 0,
-            usefulness: 0.0,
-            skip_pp: true,
-        };
-        Ok((false, vec![ContextEnum::ContextFile(cf)]))
+        Ok((false, vec![]))
     }
 }
 
@@ -330,5 +319,18 @@ mod tests {
         assert_eq!(active.name, cleared.name);
         assert_eq!(active.allowed_tools, cleared.allowed_tools);
         assert_eq!(active.model_override, cleared.model_override);
+    }
+
+    #[test]
+    fn test_activate_skill_not_parallel() {
+        let tool = ToolActivateSkill { config_path: String::new() };
+        assert!(!tool.tool_description().allow_parallel, "activate_skill must have allow_parallel = false");
+    }
+
+    #[test]
+    fn test_deactivate_skill_no_context_file() {
+        let result: Vec<ContextEnum> = vec![];
+        let has_context_file = result.iter().any(|e| matches!(e, ContextEnum::ContextFile(_)));
+        assert!(!has_context_file, "deactivate_skill must not return ContextFile");
     }
 }

@@ -81,6 +81,8 @@ fn expand_template(body: &str, args_str: &str, positional: &[String]) -> String 
 
 async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<ExpandedCommand>, String> {
     let commands = load_slash_commands(ext_dirs).await;
+    let commands_map: std::collections::HashMap<&str, &crate::ext::slash_commands::SlashCommand> =
+        commands.iter().map(|c| (c.name.as_str(), c)).collect();
     let skill_indices = load_skill_indices(ext_dirs).await;
     let skill_names: std::collections::HashSet<&str> = skill_indices
         .iter()
@@ -108,7 +110,7 @@ async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<
         let args_str = raw_input[name_byte_end..].trim().to_string();
         let positional = shell_split(&args_str);
         let prefix = &raw_input[..byte_pos];
-        if let Some(command) = commands.iter().find(|c| c.name == cmd_name) {
+        if let Some(command) = commands_map.get(cmd_name) {
             return Ok(Some(ExpandedCommand {
                 expanded_text: format!("{}{}", prefix, expand_template(&command.body, &args_str, &positional)),
                 model_override: command.model.clone(),
