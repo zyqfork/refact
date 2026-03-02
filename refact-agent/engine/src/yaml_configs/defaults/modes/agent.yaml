@@ -213,6 +213,7 @@ tools:
   - search_symbol_definition
   - search_semantic
   - activate_skill
+  - deactivate_skill
   - knowledge
   - create_knowledge
   - search_trajectories
@@ -245,6 +246,8 @@ tool_confirm:
     - match: "search_*"
       action: auto
     - match: "activate_skill"
+      action: auto
+    - match: "deactivate_skill"
       action: auto
     - match: "knowledge"
       action: auto

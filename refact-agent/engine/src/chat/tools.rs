@@ -779,15 +779,7 @@ pub async fn check_tools_confirmation(
             .collect::<indexmap::IndexMap<_, _>>();
 
     for tool_call in tool_calls {
-        if !allowed_tools.is_empty() && !allowed_tools.contains(&tool_call.function.name) {
-            denials.push(PauseReason {
-                reason_type: "denial".to_string(),
-                tool_name: tool_call.function.name.clone(),
-                command: tool_call.function.name.clone(),
-                rule: format!("Not in allowed-tools for /{}", source_command),
-                tool_call_id: tool_call.id.clone(),
-                integr_config_path: None,
-            });
+        if !allowed_tools.is_empty() && allowed_tools.contains(&tool_call.function.name) {
             continue;
         }
 

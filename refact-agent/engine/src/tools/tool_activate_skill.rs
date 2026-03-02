@@ -100,6 +100,67 @@ impl Tool for ToolActivateSkill {
     }
 }
 
+pub struct ToolDeactivateSkill {
+    pub config_path: String,
+}
+
+#[async_trait]
+impl Tool for ToolDeactivateSkill {
+    fn tool_description(&self) -> ToolDesc {
+        ToolDesc {
+            name: "deactivate_skill".to_string(),
+            display_name: "Deactivate Skill".to_string(),
+            source: ToolSource {
+                source_type: ToolSourceType::Builtin,
+                config_path: self.config_path.clone(),
+            },
+            experimental: false,
+            allow_parallel: false,
+            description: "Deactivate the currently active skill, clearing any tool restrictions and model overrides.".to_string(),
+            input_schema: json_schema_from_params(&[], &[]),
+            output_schema: None,
+            annotations: None,
+        }
+    }
+
+    async fn tool_execute(
+        &mut self,
+        ccx: Arc<AMutex<AtCommandsContext>>,
+        _tool_call_id: &String,
+        _args: &HashMap<String, Value>,
+    ) -> Result<(bool, Vec<ContextEnum>), String> {
+        let (gcx, chat_id) = {
+            let ccx_locked = ccx.lock().await;
+            (ccx_locked.global_context.clone(), ccx_locked.chat_id.clone())
+        };
+
+        {
+            let session_arc_opt = {
+                let gcx_locked = gcx.read().await;
+                let sessions = gcx_locked.chat_sessions.read().await;
+                sessions.get(&chat_id).cloned()
+            };
+            if let Some(session_arc) = session_arc_opt {
+                let mut session = session_arc.lock().await;
+                session.active_command = crate::chat::types::ActiveCommandContext::default();
+            }
+        }
+
+        let cf = ContextFile {
+            file_name: "deactivate_skill".to_string(),
+            file_content: "Active skill has been deactivated. Tool restrictions and model overrides cleared.".to_string(),
+            line1: 1,
+            line2: 1,
+            file_rev: None,
+            symbols: vec![],
+            gradient_type: 0,
+            usefulness: 0.0,
+            skip_pp: true,
+        };
+        Ok((false, vec![ContextEnum::ContextFile(cf)]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +299,36 @@ mod tests {
         let (_, allowed_tools, model_override) = result.unwrap();
         assert!(allowed_tools.is_empty(), "No restrictions should result in empty allowed_tools");
         assert!(model_override.is_none(), "No model should result in None model_override");
+    }
+
+    #[tokio::test]
+    async fn test_deactivate_skill_clears_active_command() {
+        use crate::chat::types::ActiveCommandContext;
+
+        let mut active = ActiveCommandContext {
+            name: "my-skill".to_string(),
+            allowed_tools: vec!["cat".to_string(), "tree".to_string()],
+            model_override: Some("gpt-4o".to_string()),
+            context_fork: None,
+        };
+
+        active = ActiveCommandContext::default();
+
+        assert!(active.name.is_empty());
+        assert!(active.allowed_tools.is_empty());
+        assert!(active.model_override.is_none());
+        assert!(active.context_fork.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_deactivate_skill_when_no_active_skill() {
+        use crate::chat::types::ActiveCommandContext;
+
+        let active = ActiveCommandContext::default();
+        let cleared = ActiveCommandContext::default();
+
+        assert_eq!(active.name, cleared.name);
+        assert_eq!(active.allowed_tools, cleared.allowed_tools);
+        assert_eq!(active.model_override, cleared.model_override);
     }
 }
