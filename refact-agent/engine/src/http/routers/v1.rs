@@ -131,6 +131,7 @@ mod workspace;
 mod project_configs;
 mod chat_modes;
 mod customization_editor;
+mod mcp_marketplace;
 pub mod project_information;
 mod v1_browser;
 mod stats;
@@ -164,6 +165,9 @@ use crate::http::routers::v1::plugins::{
 };
 use crate::http::routers::v1::skills_status::handle_v1_skills_status;
 use crate::http::routers::v1::mcp_server_info::{handle_v1_mcp_server_info, handle_v1_mcp_server_reconnect};
+use crate::http::routers::v1::mcp_marketplace::{
+    handle_v1_mcp_marketplace_get, handle_v1_mcp_marketplace_install, handle_v1_mcp_marketplace_installed,
+};
 use crate::http::routers::v1::v1_browser::{
     handle_browser_start, handle_browser_stop, handle_browser_screenshot,
     handle_browser_context, handle_browser_context_commit,
@@ -430,7 +434,10 @@ pub fn make_v1_router() -> Router {
         .route("/plugins/installed", get(handle_list_installed))
         .route("/plugins/installed/:name", delete(handle_uninstall_plugin))
         .route("/mcp-server-info", get(handle_v1_mcp_server_info))
-        .route("/mcp-server-reconnect", post(handle_v1_mcp_server_reconnect));
+        .route("/mcp-server-reconnect", post(handle_v1_mcp_server_reconnect))
+        .route("/mcp/marketplace", get(handle_v1_mcp_marketplace_get))
+        .route("/mcp/marketplace/install", post(handle_v1_mcp_marketplace_install))
+        .route("/mcp/marketplace/installed", get(handle_v1_mcp_marketplace_installed));
 
     builder.layer(axum::middleware::from_fn(telemetry_middleware))
 }
