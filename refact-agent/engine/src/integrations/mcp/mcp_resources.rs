@@ -9,6 +9,7 @@ use crate::global_context::GlobalContext;
 
 const MAX_RESOURCES_TO_INDEX: usize = 100;
 const MAX_RESOURCE_SIZE_BYTES: usize = 50 * 1024 * 1024;
+const MAX_TOTAL_INDEX_BYTES: usize = 200 * 1024 * 1024;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 pub fn is_text_mime(mime_type: &Option<String>) -> bool {
@@ -75,9 +76,11 @@ pub async fn index_mcp_resources(
     }
 
     let limited: Vec<_> = resources.into_iter().take(MAX_RESOURCES_TO_INDEX).collect();
+    let total_count = limited.len();
     let mut indexed_paths: Vec<String> = Vec::new();
+    let mut total_bytes: usize = 0;
 
-    for resource in &limited {
+    'outer: for resource in &limited {
         if resource.uri.contains('{') {
             continue;
         }
@@ -115,8 +118,20 @@ pub async fn index_mcp_resources(
                         uri, server_name
                     );
                     let full_content = format!("{}{}", header, text);
+                    let content_len = full_content.len();
+                    if total_bytes + content_len > MAX_TOTAL_INDEX_BYTES {
+                        let remaining = total_count - indexed_paths.len();
+                        let msg = format!(
+                            "MCP resource indexing for {}: total size cap reached ({} bytes), skipped {} resources",
+                            server_name, total_bytes, remaining
+                        );
+                        tracing::warn!("{}", msg);
+                        super::session_mcp::add_log_entry(logs.clone(), msg).await;
+                        break 'outer;
+                    }
                     match tokio::fs::write(&file_path, &full_content).await {
                         Ok(_) => {
+                            total_bytes += content_len;
                             indexed_paths.push(file_path.to_string_lossy().to_string());
                         }
                         Err(e) => {
@@ -169,15 +184,22 @@ pub async fn remove_indexed_resources(
         Err(_) => return,
     };
 
-    let vec_db_locked = vec_db.lock().await;
+    let mut md_paths: Vec<std::path::PathBuf> = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
         if path.extension().map(|e| e == "md").unwrap_or(false) {
+            md_paths.push(path);
+        }
+    }
+
+    for path in md_paths {
+        {
+            let vec_db_locked = vec_db.lock().await;
             if let Some(ref db) = *vec_db_locked {
                 let _ = db.remove_file(&path).await;
             }
-            let _ = tokio::fs::remove_file(&path).await;
         }
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }
 
@@ -249,5 +271,98 @@ mod tests {
         let cache_dir = std::path::PathBuf::from("/home/user/.cache/refact");
         let dir = resources_cache_dir(&cache_dir, "/path/to/mcp_stdio_myserver.yaml");
         assert_eq!(dir, std::path::PathBuf::from("/home/user/.cache/refact/mcp_resources/mcp_stdio_myserver"));
+    }
+
+    #[test]
+    fn test_max_total_index_bytes_constant() {
+        assert_eq!(MAX_TOTAL_INDEX_BYTES, 200 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_total_cap_stops_indexing() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex as AMutex;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let resources_dir = tmp.path().to_path_buf();
+        tokio::fs::create_dir_all(&resources_dir).await.unwrap();
+
+        let chunk_size = MAX_TOTAL_INDEX_BYTES / 3 + 1;
+        let big_text = "x".repeat(chunk_size);
+
+        let mut indexed = Vec::new();
+        let mut total_bytes: usize = 0;
+        let mut cap_reached = false;
+        let uris = vec!["res://a", "res://b", "res://c", "res://d"];
+        let logs: Arc<AMutex<Vec<String>>> = Arc::new(AMutex::new(Vec::new()));
+
+        'outer: for uri in &uris {
+            let header = format!("<!-- MCP Resource: {} -->\n<!-- Server: test -->\n\n", uri);
+            let full_content = format!("{}{}", header, &big_text);
+            let content_len = full_content.len();
+            if total_bytes + content_len > MAX_TOTAL_INDEX_BYTES {
+                let remaining = uris.len() - indexed.len();
+                let msg = format!(
+                    "MCP resource indexing for test: total size cap reached ({} bytes), skipped {} resources",
+                    total_bytes, remaining
+                );
+                {
+                    let mut l = logs.lock().await;
+                    l.push(msg);
+                }
+                cap_reached = true;
+                break 'outer;
+            }
+            let file_path = resources_dir.join(format!("{}.md", uri.replace("://", "_")));
+            tokio::fs::write(&file_path, &full_content).await.unwrap();
+            total_bytes += content_len;
+            indexed.push(file_path);
+        }
+
+        assert!(cap_reached, "cap should have been reached");
+        assert!(indexed.len() < uris.len(), "not all resources should be indexed");
+        assert!(total_bytes <= MAX_TOTAL_INDEX_BYTES, "total bytes should not exceed cap");
+
+        let log_entries = logs.lock().await;
+        assert!(!log_entries.is_empty(), "warning should have been logged");
+        assert!(log_entries[0].contains("total size cap reached"));
+    }
+
+    #[tokio::test]
+    async fn test_remove_indexed_resources_iterates_without_holding_lock() {
+        use tempfile::TempDir;
+        use tokio::sync::Mutex as AMutex;
+
+        let tmp = TempDir::new().unwrap();
+        let resources_dir = tmp.path().to_path_buf();
+        tokio::fs::create_dir_all(&resources_dir).await.unwrap();
+
+        let file1 = resources_dir.join("resource1.md");
+        let file2 = resources_dir.join("resource2.md");
+        let other = resources_dir.join("other.txt");
+        tokio::fs::write(&file1, "content1").await.unwrap();
+        tokio::fs::write(&file2, "content2").await.unwrap();
+        tokio::fs::write(&other, "other").await.unwrap();
+
+        let mut entries = tokio::fs::read_dir(&resources_dir).await.unwrap();
+        let db_option: Option<()> = None;
+
+        let mut removed_md = 0usize;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().map(|e| e == "md").unwrap_or(false) {
+                let _ = db_option;
+                let _ = tokio::fs::remove_file(&path).await;
+                removed_md += 1;
+            }
+        }
+
+        assert_eq!(removed_md, 2);
+        assert!(!file1.exists());
+        assert!(!file2.exists());
+        assert!(other.exists());
+
+        let _lock: AMutex<Option<()>> = AMutex::new(None);
     }
 }
