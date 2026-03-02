@@ -18,6 +18,7 @@ use super::session_mcp::{McpClientHandler, McpRunningService, add_log_entry};
 use super::integr_mcp_common::{
     CommonMCPSettings, MCPTransportInitializer, mcp_integr_tools, mcp_session_setup,
 };
+use super::mcp_auth::{MCPAuthSettings, MCPTokenManager};
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Default, Debug)]
 pub struct SettingsMCPHttp {
@@ -25,6 +26,8 @@ pub struct SettingsMCPHttp {
     pub mcp_url: String,
     #[serde(default = "default_http_headers", rename = "headers")]
     pub mcp_headers: HashMap<String, String>,
+    #[serde(flatten)]
+    pub auth: MCPAuthSettings,
     #[serde(flatten)]
     pub common: CommonMCPSettings,
 }
@@ -78,8 +81,17 @@ impl MCPTransportInitializer for IntegrationMCPHttp {
             return None;
         }
 
+        let mut effective_headers = self.cfg.mcp_headers.clone();
+        let token_manager = MCPTokenManager::new(self.cfg.auth.clone());
+        if let Err(e) = token_manager.apply_auth(&mut effective_headers).await {
+            if self.cfg.auth.auth_type != "none" {
+                log(tracing::Level::ERROR, format!("Auth failed: {}", e)).await;
+                return None;
+            }
+        }
+
         let mut header_map = reqwest::header::HeaderMap::new();
-        for (k, v) in &self.cfg.mcp_headers {
+        for (k, v) in &effective_headers {
             match (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
                 reqwest::header::HeaderValue::from_str(v),
