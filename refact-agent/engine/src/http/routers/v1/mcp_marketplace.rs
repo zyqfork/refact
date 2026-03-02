@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use axum::Extension;
 use axum::extract::Query;
@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 use crate::http::routers::v1::mcp_marketplace_sources::{
-    load_sources, get_all_sources, smithery_api_key,
+    load_sources, get_all_sources, smithery_api_key, source_to_api_json,
     BUNDLED_SOURCE_ID, SourceType, MarketplaceSource,
 };
 #[cfg(test)]
@@ -344,6 +344,8 @@ pub struct MarketplaceQuery {
     pub page_size: Option<u32>,
 }
 
+const MERGED_MODE_PAGE_SIZE_CAP: u32 = 500;
+
 pub async fn handle_v1_mcp_marketplace_get(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Query(params): Query<MarketplaceQuery>,
@@ -355,12 +357,15 @@ pub async fn handle_v1_mcp_marketplace_get(
     let config_dir = gcx.read().await.config_dir.clone();
     let (bundled, user_sources) = get_all_sources(&config_dir).await;
 
-    let mut all_sources: Vec<MarketplaceSource> = vec![bundled];
-    all_sources.extend(user_sources);
+    let bundled_removable = false;
+    let mut all_sources: Vec<(MarketplaceSource, bool)> = vec![(bundled, bundled_removable)];
+    for s in user_sources {
+        all_sources.push((s, true));
+    }
 
     let filter_source = params.source.as_deref();
     if let Some(fsrc) = filter_source {
-        if !all_sources.iter().any(|s| s.id == fsrc) {
+        if !all_sources.iter().any(|(s, _)| s.id == fsrc) {
             return Err((StatusCode::NOT_FOUND, format!("source '{}' not found", fsrc)));
         }
     }
@@ -369,45 +374,78 @@ pub async fn handle_v1_mcp_marketplace_get(
     let mut all_servers: Vec<MarketplaceServerWithSource> = vec![];
     let mut sources_meta: Vec<Value> = vec![];
 
-    for source in &all_sources {
+    for (source, removable) in &all_sources {
         if !source.enabled {
+            let mut meta = source_to_api_json(source, *removable);
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert("server_count".to_string(), json!(0));
+                obj.insert("status".to_string(), json!("disabled"));
+            }
+            sources_meta.push(meta);
             continue;
         }
         if let Some(fsrc) = filter_source {
             if source.id != fsrc {
+                let mut meta = source_to_api_json(source, *removable);
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert("server_count".to_string(), json!(0));
+                    obj.insert("status".to_string(), json!("ok"));
+                }
+                sources_meta.push(meta);
                 continue;
             }
         }
+
+        let is_merged_mode = filter_source.is_none();
+        if is_merged_mode && source.source_type == SourceType::Smithery {
+            let mut meta = source_to_api_json(source, *removable);
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert("server_count".to_string(), json!(0));
+                obj.insert("status".to_string(), json!("ok"));
+            }
+            sources_meta.push(meta);
+            continue;
+        }
+
+        let fetch_page_size = if is_merged_mode { MERGED_MODE_PAGE_SIZE_CAP } else { page_size };
+        let fetch_page = if is_merged_mode { 1 } else { page };
 
         let (page_items, total, status) = load_source_servers(
             gcx.clone(),
             source,
             query,
-            if filter_source.is_some() { page } else { 1 },
-            if filter_source.is_some() { page_size } else { u32::MAX },
+            fetch_page,
+            fetch_page_size,
             &mut cache,
         ).await;
 
-        sources_meta.push(json!({
-            "id": source.id,
-            "label": source.label,
-            "server_count": total,
-            "status": status,
-        }));
+        let mut meta = source_to_api_json(source, *removable);
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("server_count".to_string(), json!(total));
+            obj.insert("status".to_string(), json!(status));
+        }
+        sources_meta.push(meta);
 
         all_servers.extend(page_items);
     }
 
     set_cache(cache);
 
-    let total_count = all_servers.len() as u32;
     let (final_servers, final_total) = if filter_source.is_some() {
-        let t = sources_meta.first().and_then(|m| m["server_count"].as_u64()).unwrap_or(0) as u32;
+        let t = sources_meta.iter()
+            .find(|m| m["id"].as_str() == filter_source)
+            .and_then(|m| m["server_count"].as_u64())
+            .unwrap_or(0) as u32;
         (all_servers, t)
     } else {
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let deduped: Vec<MarketplaceServerWithSource> = all_servers.into_iter().filter(|s| {
+            seen_ids.insert(s.server.id.clone())
+        }).collect();
+        let total_count = deduped.len() as u32;
         let start = ((page - 1) * page_size) as usize;
-        let end = (start + page_size as usize).min(all_servers.len());
-        let sliced = if start < all_servers.len() { all_servers[start..end].to_vec() } else { vec![] };
+        let end = (start + page_size as usize).min(deduped.len());
+        let sliced = if start < deduped.len() { deduped[start..end].to_vec() } else { vec![] };
         (sliced, total_count)
     };
 
@@ -1232,5 +1270,118 @@ mod tests {
         assert!(installed_ids.contains(&"github".to_string()), "must detect github as installed");
         assert!(installed_ids.contains(&"brave-search".to_string()), "must detect brave-search as installed");
         assert!(!installed_ids.contains(&"other".to_string()), "must not detect non-mcp integrations");
+    }
+
+    #[test]
+    fn test_sources_response_has_required_fields() {
+        use crate::http::routers::v1::mcp_marketplace_sources::{bundled_source, source_to_api_json};
+        let bundled = bundled_source();
+        let json = source_to_api_json(&bundled, false);
+        assert!(json.get("id").is_some(), "must have id");
+        assert!(json.get("label").is_some(), "must have label");
+        assert!(json.get("type").is_some(), "must have type");
+        assert!(json.get("enabled").is_some(), "must have enabled");
+        assert!(json.get("removable").is_some(), "must have removable");
+        assert_eq!(json["removable"], false);
+        assert_eq!(json["type"], "refact_index");
+    }
+
+    #[test]
+    fn test_smithery_source_has_api_key_fields() {
+        use crate::http::routers::v1::mcp_marketplace_sources::{source_to_api_json, SMITHERY_SOURCE_ID};
+        let mut smithery = MarketplaceSource {
+            id: SMITHERY_SOURCE_ID.to_string(),
+            label: "Smithery.ai".to_string(),
+            source_type: SourceType::Smithery,
+            enabled: false,
+            url: None,
+            api_key: None,
+        };
+        let json_no_key = source_to_api_json(&smithery, true);
+        assert_eq!(json_no_key["needs_api_key"], true, "smithery must need api key");
+        assert_eq!(json_no_key["has_api_key"], false, "no api key configured initially");
+        assert!(json_no_key.get("api_key_configured").is_none(), "must not use old field name");
+
+        smithery.api_key = Some("sk-test".to_string());
+        let json_with_key = source_to_api_json(&smithery, true);
+        assert_eq!(json_with_key["has_api_key"], true, "has_api_key must be true when key is set");
+    }
+
+    #[test]
+    fn test_merged_mode_deduplicates_servers() {
+        let make_server = |id: &str, source: &str| MarketplaceServerWithSource {
+            server: MarketplaceServer {
+                id: id.to_string(),
+                name: id.to_string(),
+                description: "desc".to_string(),
+                publisher: "pub".to_string(),
+                tags: vec![],
+                icon_url: None,
+                homepage: None,
+                transport: "stdio".to_string(),
+                install_recipe: InstallRecipe { command: Some("cmd".to_string()), url: None, env: HashMap::new(), headers: HashMap::new() },
+                confirmation_default: vec![],
+            },
+            source_id: source.to_string(),
+        };
+
+        let all_servers = vec![
+            make_server("github", "refact-bundled"),
+            make_server("github", "refact"),
+            make_server("brave-search", "refact-bundled"),
+        ];
+
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let deduped: Vec<MarketplaceServerWithSource> = all_servers.into_iter().filter(|s| {
+            seen_ids.insert(s.server.id.clone())
+        }).collect();
+
+        assert_eq!(deduped.len(), 2, "duplicate github must be removed");
+        assert!(deduped.iter().any(|s| s.server.id == "github"), "github must be present");
+        assert!(deduped.iter().any(|s| s.server.id == "brave-search"), "brave-search must be present");
+        let github = deduped.iter().find(|s| s.server.id == "github").unwrap();
+        assert_eq!(github.source_id, "refact-bundled", "first occurrence wins");
+    }
+
+    #[test]
+    fn test_merged_mode_excludes_smithery() {
+        let smithery_source = MarketplaceSource {
+            id: SMITHERY_SOURCE_ID.to_string(),
+            label: "Smithery.ai".to_string(),
+            source_type: SourceType::Smithery,
+            enabled: true,
+            url: None,
+            api_key: Some("sk-test".to_string()),
+        };
+        let is_merged_mode = true;
+        let should_skip = is_merged_mode && smithery_source.source_type == SourceType::Smithery;
+        assert!(should_skip, "Smithery must be excluded in merged mode");
+
+        let refact_source = MarketplaceSource {
+            id: "refact-bundled".to_string(),
+            label: "Refact Built-in".to_string(),
+            source_type: SourceType::RefactIndex,
+            enabled: true,
+            url: None,
+            api_key: None,
+        };
+        let should_skip_refact = is_merged_mode && refact_source.source_type == SourceType::Smithery;
+        assert!(!should_skip_refact, "RefactIndex must not be excluded in merged mode");
+    }
+
+    #[test]
+    fn test_has_api_key_field_name_not_api_key_configured() {
+        use crate::http::routers::v1::mcp_marketplace_sources::{source_to_api_json, SMITHERY_SOURCE_ID};
+        let smithery = MarketplaceSource {
+            id: SMITHERY_SOURCE_ID.to_string(),
+            label: "Smithery.ai".to_string(),
+            source_type: SourceType::Smithery,
+            enabled: true,
+            url: None,
+            api_key: Some("sk-test".to_string()),
+        };
+        let json = source_to_api_json(&smithery, true);
+        assert!(json.get("has_api_key").is_some(), "field must be named has_api_key");
+        assert!(json.get("api_key_configured").is_none(), "old field name api_key_configured must not exist");
     }
 }

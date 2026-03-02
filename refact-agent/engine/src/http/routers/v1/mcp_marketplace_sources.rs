@@ -112,7 +112,7 @@ async fn save_sources(config_dir: &PathBuf, config: &SourcesConfig) -> Result<()
     Ok(())
 }
 
-fn source_to_api_json(source: &MarketplaceSource, removable: bool) -> Value {
+pub fn source_to_api_json(source: &MarketplaceSource, removable: bool) -> Value {
     let mut obj = serde_json::Map::new();
     obj.insert("id".to_string(), json!(source.id));
     obj.insert("label".to_string(), json!(source.label));
@@ -128,7 +128,7 @@ fn source_to_api_json(source: &MarketplaceSource, removable: bool) -> Value {
     if source.source_type == SourceType::Smithery {
         let has_key = source.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false);
         obj.insert("needs_api_key".to_string(), json!(true));
-        obj.insert("api_key_configured".to_string(), json!(has_key));
+        obj.insert("has_api_key".to_string(), json!(has_key));
     }
     Value::Object(obj)
 }
@@ -328,7 +328,7 @@ mod tests {
         let smithery = default_smithery_source();
         let json = source_to_api_json(&smithery, true);
         assert_eq!(json["needs_api_key"], true);
-        assert_eq!(json["api_key_configured"], false);
+        assert_eq!(json["has_api_key"], false);
     }
 
     #[test]
