@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Flex, Button, Tabs } from "@radix-ui/themes";
+import { AlertDialog, Flex, Button, Text, Tabs } from "@radix-ui/themes";
 import { ArrowLeftIcon } from "@radix-ui/react-icons";
 
 import { PageWrapper } from "../../components/PageWrapper";
@@ -31,6 +31,12 @@ export type ExtensionsProps = {
   initialItemId?: string;
 };
 
+type DeleteTarget = {
+  type: "skill" | "command";
+  name: string;
+  scope: "global" | "local" | "plugin";
+};
+
 export const Extensions: React.FC<ExtensionsProps> = ({
   backFromExtensions,
   host,
@@ -47,8 +53,9 @@ export const Extensions: React.FC<ExtensionsProps> = ({
   );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogType, setCreateDialogType] = useState<"skill" | "command">("skill");
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
 
-  const { data: registry, isLoading, refetch } = useGetExtRegistryQuery(undefined);
+  const { data: registry, isLoading, isError, refetch } = useGetExtRegistryQuery(undefined);
   const [deleteSkill] = useDeleteSkillMutation();
   const [deleteCommand] = useDeleteCommandMutation();
 
@@ -59,24 +66,34 @@ export const Extensions: React.FC<ExtensionsProps> = ({
   }, []);
 
   const handleDeleteSkill = useCallback(
-    async (name: string, scope: "global" | "local" | "plugin") => {
-      if (!confirm(`Delete skill "${name}"?`)) return;
-      await deleteSkill({ name, scope });
-      if (selectedSkill === name) setSelectedSkill(null);
-      await refetch();
+    (name: string, scope: "global" | "local" | "plugin") => {
+      setDeleteTarget({ type: "skill", name, scope });
     },
-    [selectedSkill, deleteSkill, refetch],
+    [],
   );
 
   const handleDeleteCommand = useCallback(
-    async (name: string, scope: "global" | "local" | "plugin") => {
-      if (!confirm(`Delete command "${name}"?`)) return;
-      await deleteCommand({ name, scope });
-      if (selectedCommand === name) setSelectedCommand(null);
-      await refetch();
+    (name: string, scope: "global" | "local" | "plugin") => {
+      setDeleteTarget({ type: "command", name, scope });
     },
-    [selectedCommand, deleteCommand, refetch],
+    [],
   );
+
+  const confirmDelete = useCallback(() => {
+    if (!deleteTarget) return;
+    const { type, name, scope } = deleteTarget;
+    if (type === "skill") {
+      void deleteSkill({ name, scope }).then(async () => {
+        if (selectedSkill === name) setSelectedSkill(null);
+        await refetch();
+      });
+    } else {
+      void deleteCommand({ name, scope }).then(async () => {
+        if (selectedCommand === name) setSelectedCommand(null);
+        await refetch();
+      });
+    }
+  }, [deleteTarget, deleteSkill, deleteCommand, selectedSkill, selectedCommand, refetch]);
 
   const openCreateDialog = useCallback((type: "skill" | "command") => {
     setCreateDialogType(type);
@@ -89,6 +106,17 @@ export const Extensions: React.FC<ExtensionsProps> = ({
       registry.slash_commands.some((c) => c.scope === "local"));
 
   if (isLoading) return <Spinner spinning />;
+
+  if (isError) {
+    return (
+      <PageWrapper host={host} noPadding>
+        <Flex direction="column" align="center" gap="3" p="4">
+          <Text color="red">Failed to load extensions registry</Text>
+          <Button onClick={() => void refetch()}>Retry</Button>
+        </Flex>
+      </PageWrapper>
+    );
+  }
 
   return (
     <PageWrapper host={host} noPadding>
@@ -137,7 +165,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                 selectedId={selectedSkill}
                 onSelect={setSelectedSkill}
                 onCreate={() => openCreateDialog("skill")}
-                onDelete={(name, scope) => void handleDeleteSkill(name, scope)}
+                onDelete={handleDeleteSkill}
               />
             )
           )}
@@ -154,7 +182,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                 selectedId={selectedCommand}
                 onSelect={setSelectedCommand}
                 onCreate={() => openCreateDialog("command")}
-                onDelete={(name, scope) => void handleDeleteCommand(name, scope)}
+                onDelete={handleDeleteCommand}
               />
             )
           )}
@@ -175,6 +203,32 @@ export const Extensions: React.FC<ExtensionsProps> = ({
           }}
           hasProjectRoot={hasProjectRoot}
         />
+
+        <AlertDialog.Root
+          open={deleteTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null);
+          }}
+        >
+          <AlertDialog.Content maxWidth="400px">
+            <AlertDialog.Title>Confirm Delete</AlertDialog.Title>
+            <AlertDialog.Description>
+              {`Delete ${deleteTarget?.type ?? ""} "${deleteTarget?.name ?? ""}"?`}
+            </AlertDialog.Description>
+            <Flex gap="3" mt="4" justify="end">
+              <AlertDialog.Cancel>
+                <Button variant="soft" color="gray">
+                  Cancel
+                </Button>
+              </AlertDialog.Cancel>
+              <AlertDialog.Action>
+                <Button color="red" onClick={confirmDelete}>
+                  Delete
+                </Button>
+              </AlertDialog.Action>
+            </Flex>
+          </AlertDialog.Content>
+        </AlertDialog.Root>
       </div>
     </PageWrapper>
   );

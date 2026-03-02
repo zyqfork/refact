@@ -1,10 +1,11 @@
-import { render, screen, fireEvent } from "../utils/test-utils";
+import { render, screen, fireEvent, waitFor } from "../utils/test-utils";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { server } from "../utils/mockServer";
 import { ExtItemList } from "../features/Extensions/components/ExtItemList";
 import { SkillEditor } from "../features/Extensions/components/SkillEditor";
 import { MarketplacePluginCard } from "../features/Extensions/components/MarketplacePluginCard";
+import { Extensions } from "../features/Extensions/Extensions";
 import type { SkillRegistryItem } from "../services/refact/extensions";
 import type { PluginEntry } from "../services/refact/plugins";
 
@@ -221,5 +222,83 @@ describe("SkillEditor", () => {
 
     const description = await screen.findByDisplayValue("A test skill");
     expect(description).toBeDefined();
+  });
+});
+
+const CONFIG_STATE = {
+  config: {
+    apiKey: "test",
+    lspPort: 8001,
+    themeProps: {},
+    host: "vscode" as const,
+    addressURL: "Refact",
+  },
+};
+
+describe("Extensions", () => {
+  it("shows error state when registry fails to load", async () => {
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/ext/registry", () => {
+        return new HttpResponse(null, { status: 500 });
+      }),
+    );
+
+    render(
+      <Extensions
+        host="vscode"
+        tabbed={false}
+        backFromExtensions={() => undefined}
+      />,
+      { preloadedState: CONFIG_STATE },
+    );
+
+    const errorMsg = await screen.findByText("Failed to load extensions registry");
+    expect(errorMsg).toBeDefined();
+    expect(screen.getByText("Retry")).toBeDefined();
+  });
+
+  it("shows delete confirmation dialog and can be cancelled", async () => {
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/ext/registry", () => {
+        return HttpResponse.json({
+          skills: [
+            {
+              name: "my_skill",
+              description: "A global skill",
+              source: "global",
+              source_label: "Global",
+              scope: "global",
+              read_only: false,
+              file_path: "/home/.config/refact/skills/my_skill/SKILL.md",
+            },
+          ],
+          slash_commands: [],
+          hooks: [],
+        });
+      }),
+    );
+
+    render(
+      <Extensions
+        host="vscode"
+        tabbed={false}
+        backFromExtensions={() => undefined}
+      />,
+      { preloadedState: CONFIG_STATE },
+    );
+
+    const deleteBtn = await screen.findByLabelText("Delete my_skill");
+    fireEvent.click(deleteBtn);
+
+    const confirmTitle = await screen.findByText("Confirm Delete");
+    expect(confirmTitle).toBeDefined();
+    const cancelBtn = screen.getByText("Cancel");
+    expect(cancelBtn).toBeDefined();
+
+    fireEvent.click(cancelBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Confirm Delete")).toBeNull();
+    });
   });
 });
