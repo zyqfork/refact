@@ -1,5 +1,6 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import type { RootState } from "../../app/store";
+import { lspQueryFn } from "./queryHelpers";
 
 export interface SkillRegistryItem {
   name: string;
@@ -93,49 +94,17 @@ export const extensionsApi = createApi({
   }),
   endpoints: (builder) => ({
     getExtRegistry: builder.query<ExtRegistryResponse, undefined>({
-      queryFn: async (_arg, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/registry`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as ExtRegistryResponse };
-      },
+      queryFn: lspQueryFn<undefined, ExtRegistryResponse>(
+        (_arg, port) => `http://127.0.0.1:${port}/v1/ext/registry`,
+      ),
       providesTags: ["ExtRegistry"],
     }),
 
     getSkill: builder.query<SkillDetail, { name: string; scope?: string }>({
-      queryFn: async ({ name, scope }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/skills/${name}${scopeParam}`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as SkillDetail };
-      },
+      queryFn: lspQueryFn<{ name: string; scope?: string }, SkillDetail>(
+        ({ name, scope }, port) =>
+          `http://127.0.0.1:${port}/v1/ext/skills/${name}${scope ? `?scope=${scope}` : ""}`,
+      ),
       providesTags: (_result, _error, { name }) => [{ type: "Skill", id: name }],
     }),
 
@@ -143,31 +112,17 @@ export const extensionsApi = createApi({
       undefined,
       { name: string; scope?: string; body: Record<string, unknown> }
     >({
-      queryFn: async ({ name, scope, body }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/skills/${name}${scopeParam}`,
-          method: "PUT",
-          body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+      queryFn: lspQueryFn<
+        { name: string; scope?: string; body: Record<string, unknown> },
+        undefined
+      >(({ name, scope, body }, port) => ({
+        url: `http://127.0.0.1:${port}/v1/ext/skills/${name}${scope ? `?scope=${scope}` : ""}`,
+        method: "PUT",
+        body,
+      })),
       invalidatesTags: (_result, _error, { name }) => [
         "ExtRegistry",
-        { type: "Skill", id: name },
+        { type: "Skill" as const, id: name },
       ],
     }),
 
@@ -175,76 +130,32 @@ export const extensionsApi = createApi({
       undefined,
       { name: string; scope: string; description: string; body: string }
     >({
-      queryFn: async (body, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/skills`,
-          method: "POST",
-          body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+      queryFn: lspQueryFn<
+        { name: string; scope: string; description: string; body: string },
+        undefined
+      >((body, port) => ({
+        url: `http://127.0.0.1:${port}/v1/ext/skills`,
+        method: "POST",
+        body,
+      })),
       invalidatesTags: ["ExtRegistry"],
     }),
 
     deleteSkill: builder.mutation<undefined, { name: string; scope?: string }>({
-      queryFn: async ({ name, scope }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/skills/${name}${scopeParam}`,
+      queryFn: lspQueryFn<{ name: string; scope?: string }, undefined>(
+        ({ name, scope }, port) => ({
+          url: `http://127.0.0.1:${port}/v1/ext/skills/${name}${scope ? `?scope=${scope}` : ""}`,
           method: "DELETE",
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["ExtRegistry"],
     }),
 
     getCommand: builder.query<CommandDetail, { name: string; scope?: string }>({
-      queryFn: async ({ name, scope }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/commands/${name}${scopeParam}`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as CommandDetail };
-      },
+      queryFn: lspQueryFn<{ name: string; scope?: string }, CommandDetail>(
+        ({ name, scope }, port) =>
+          `http://127.0.0.1:${port}/v1/ext/commands/${name}${scope ? `?scope=${scope}` : ""}`,
+      ),
       providesTags: (_result, _error, { name }) => [
         { type: "Command", id: name },
       ],
@@ -254,105 +165,46 @@ export const extensionsApi = createApi({
       undefined,
       { name: string; scope?: string; body: Record<string, unknown> }
     >({
-      queryFn: async ({ name, scope, body }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/commands/${name}${scopeParam}`,
-          method: "PUT",
-          body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+      queryFn: lspQueryFn<
+        { name: string; scope?: string; body: Record<string, unknown> },
+        undefined
+      >(({ name, scope, body }, port) => ({
+        url: `http://127.0.0.1:${port}/v1/ext/commands/${name}${scope ? `?scope=${scope}` : ""}`,
+        method: "PUT",
+        body,
+      })),
       invalidatesTags: (_result, _error, { name }) => [
         "ExtRegistry",
-        { type: "Command", id: name },
+        { type: "Command" as const, id: name },
       ],
     }),
 
     createCommand: builder.mutation<undefined, Record<string, unknown>>({
-      queryFn: async (body, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
+      queryFn: lspQueryFn<Record<string, unknown>, undefined>(
+        (body, port) => ({
           url: `http://127.0.0.1:${port}/v1/ext/commands`,
           method: "POST",
           body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["ExtRegistry"],
     }),
 
     deleteCommand: builder.mutation<undefined, { name: string; scope?: string }>({
-      queryFn: async ({ name, scope }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/commands/${name}${scopeParam}`,
+      queryFn: lspQueryFn<{ name: string; scope?: string }, undefined>(
+        ({ name, scope }, port) => ({
+          url: `http://127.0.0.1:${port}/v1/ext/commands/${name}${scope ? `?scope=${scope}` : ""}`,
           method: "DELETE",
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["ExtRegistry"],
     }),
 
     getHooks: builder.query<HooksDetail, { scope?: string }>({
-      queryFn: async ({ scope }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/hooks${scopeParam}`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as HooksDetail };
-      },
+      queryFn: lspQueryFn<{ scope?: string }, HooksDetail>(
+        ({ scope }, port) =>
+          `http://127.0.0.1:${port}/v1/ext/hooks${scope ? `?scope=${scope}` : ""}`,
+      ),
       providesTags: ["Hooks"],
     }),
 
@@ -360,28 +212,14 @@ export const extensionsApi = createApi({
       undefined,
       { scope?: string; body: Record<string, unknown> }
     >({
-      queryFn: async ({ scope, body }, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const scopeParam = scope ? `?scope=${scope}` : "";
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/ext/hooks${scopeParam}`,
-          method: "PUT",
-          body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+      queryFn: lspQueryFn<
+        { scope?: string; body: Record<string, unknown> },
+        undefined
+      >(({ scope, body }, port) => ({
+        url: `http://127.0.0.1:${port}/v1/ext/hooks${scope ? `?scope=${scope}` : ""}`,
+        method: "PUT",
+        body,
+      })),
       invalidatesTags: ["Hooks", "ExtRegistry"],
     }),
   }),

@@ -1,6 +1,7 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import type { RootState } from "../../app/store";
 import { extensionsApi } from "./extensions";
+import { lspQueryFn } from "./queryHelpers";
 
 export interface MarketplaceEntry {
   name: string;
@@ -50,124 +51,51 @@ export const pluginsApi = createApi({
   }),
   endpoints: (builder) => ({
     getMarketplaces: builder.query<MarketplacesResponse, undefined>({
-      queryFn: async (_arg, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/plugins/marketplaces`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as MarketplacesResponse };
-      },
+      queryFn: lspQueryFn<undefined, MarketplacesResponse>(
+        (_arg, port) => `http://127.0.0.1:${port}/v1/plugins/marketplaces`,
+      ),
       providesTags: ["Marketplaces"],
     }),
 
     addMarketplace: builder.mutation<undefined, { source: string }>({
-      queryFn: async (body, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
+      queryFn: lspQueryFn<{ source: string }, undefined>(
+        (body, port) => ({
           url: `http://127.0.0.1:${port}/v1/plugins/marketplaces`,
           method: "POST",
           body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["Marketplaces"],
     }),
 
     deleteMarketplace: builder.mutation<undefined, string>({
-      queryFn: async (name, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
+      queryFn: lspQueryFn<string, undefined>(
+        (name, port) => ({
           url: `http://127.0.0.1:${port}/v1/plugins/marketplaces/${name}`,
           method: "DELETE",
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["Marketplaces"],
     }),
 
     getMarketplacePlugins: builder.query<PluginListResponse, string>({
-      queryFn: async (name, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/plugins/marketplace/${name}/plugins`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as PluginListResponse };
-      },
+      queryFn: lspQueryFn<string, PluginListResponse>(
+        (name, port) =>
+          `http://127.0.0.1:${port}/v1/plugins/marketplace/${name}/plugins`,
+      ),
     }),
 
     installPlugin: builder.mutation<
       undefined,
       { plugin: string; marketplace: string }
     >({
-      queryFn: async (body, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
+      queryFn: lspQueryFn<{ plugin: string; marketplace: string }, undefined>(
+        (body, port) => ({
           url: `http://127.0.0.1:${port}/v1/plugins/install`,
           method: "POST",
           body,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["InstalledPlugins", "Marketplaces"],
       onQueryStarted: async (_arg, { dispatch, queryFulfilled }) => {
         await queryFulfilled;
@@ -176,49 +104,19 @@ export const pluginsApi = createApi({
     }),
 
     getInstalled: builder.query<InstalledPluginsResponse, undefined>({
-      queryFn: async (_arg, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/plugins/installed`,
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: result.data as InstalledPluginsResponse };
-      },
+      queryFn: lspQueryFn<undefined, InstalledPluginsResponse>(
+        (_arg, port) => `http://127.0.0.1:${port}/v1/plugins/installed`,
+      ),
       providesTags: ["InstalledPlugins"],
     }),
 
     uninstallPlugin: builder.mutation<undefined, string>({
-      queryFn: async (name, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        if (!port) {
-          return { error: { status: 500, data: "Missing lspPort in config" } };
-        }
-        const result = await baseQuery({
+      queryFn: lspQueryFn<string, undefined>(
+        (name, port) => ({
           url: `http://127.0.0.1:${port}/v1/plugins/installed/${name}`,
           method: "DELETE",
-        });
-        if (result.error) {
-          return {
-            error: {
-              status: result.error.status as number,
-              data: String(result.error.data),
-            },
-          };
-        }
-        return { data: undefined };
-      },
+        }),
+      ),
       invalidatesTags: ["InstalledPlugins"],
       onQueryStarted: async (_arg, { dispatch, queryFulfilled }) => {
         await queryFulfilled;

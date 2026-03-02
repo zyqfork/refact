@@ -54,6 +54,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogType, setCreateDialogType] = useState<"skill" | "command">("skill");
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: registry, isLoading, isError, refetch } = useGetExtRegistryQuery(undefined);
   const [deleteSkill] = useDeleteSkillMutation();
@@ -67,6 +68,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
 
   const handleDeleteSkill = useCallback(
     (name: string, scope: "global" | "local" | "plugin") => {
+      setDeleteError(null);
       setDeleteTarget({ type: "skill", name, scope });
     },
     [],
@@ -74,25 +76,32 @@ export const Extensions: React.FC<ExtensionsProps> = ({
 
   const handleDeleteCommand = useCallback(
     (name: string, scope: "global" | "local" | "plugin") => {
+      setDeleteError(null);
       setDeleteTarget({ type: "command", name, scope });
     },
     [],
   );
 
-  const confirmDelete = useCallback(() => {
+  const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
     const { type, name, scope } = deleteTarget;
-    if (type === "skill") {
-      void deleteSkill({ name, scope }).then(async () => {
+    try {
+      if (type === "skill") {
+        await deleteSkill({ name, scope }).unwrap();
         if (selectedSkill === name) setSelectedSkill(null);
-        await refetch();
-      });
-    } else {
-      void deleteCommand({ name, scope }).then(async () => {
+      } else {
+        await deleteCommand({ name, scope }).unwrap();
         if (selectedCommand === name) setSelectedCommand(null);
-        await refetch();
-      });
+      }
+      await refetch();
+    } catch (err: unknown) {
+      const message =
+        err && typeof err === "object" && "data" in err
+          ? String((err as { data: unknown }).data)
+          : "Delete failed";
+      setDeleteError(message);
     }
+    setDeleteTarget(null);
   }, [deleteTarget, deleteSkill, deleteCommand, selectedSkill, selectedCommand, refetch]);
 
   const openCreateDialog = useCallback((type: "skill" | "command") => {
@@ -152,6 +161,12 @@ export const Extensions: React.FC<ExtensionsProps> = ({
 
           </Tabs.List>
         </Tabs.Root>
+
+        {deleteError && (
+          <Text color="red" size="2" mt="2">
+            {deleteError}
+          </Text>
+        )}
 
         <div className={styles.panelContainer}>
           {activeTab === "skills" && (
@@ -225,7 +240,7 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                 </Button>
               </AlertDialog.Cancel>
               <AlertDialog.Action>
-                <Button color="red" onClick={confirmDelete}>
+                <Button color="red" onClick={() => void confirmDelete()}>
                   Delete
                 </Button>
               </AlertDialog.Action>
