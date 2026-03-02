@@ -60,13 +60,7 @@ struct HookMatcherEntry {
 }
 
 #[derive(Deserialize)]
-struct HooksFileRefact {
-    #[serde(default)]
-    hooks: HashMap<String, Vec<HookMatcherEntry>>,
-}
-
-#[derive(Deserialize)]
-struct HooksFileClaudeSettings {
+struct HooksFile {
     #[serde(default)]
     hooks: HashMap<String, Vec<HookMatcherEntry>>,
 }
@@ -112,7 +106,7 @@ async fn load_hooks_from_refact_yaml(path: &Path, source: CommandSource) -> Vec<
         Ok(c) => c,
         Err(_) => return vec![],
     };
-    match serde_yaml::from_str::<HooksFileRefact>(&content) {
+    match serde_yaml::from_str::<HooksFile>(&content) {
         Ok(file) => hooks_from_map(file.hooks, source),
         Err(e) => {
             tracing::warn!("Failed to parse hooks.yaml {:?}: {}", path, e);
@@ -126,7 +120,7 @@ async fn load_hooks_from_claude_settings(path: &Path, source: CommandSource) -> 
         Ok(c) => c,
         Err(_) => return vec![],
     };
-    match serde_json::from_str::<HooksFileClaudeSettings>(&content) {
+    match serde_json::from_str::<HooksFile>(&content) {
         Ok(file) => hooks_from_map(file.hooks, source),
         Err(e) => {
             tracing::warn!("Failed to parse settings.json {:?}: {}", path, e);

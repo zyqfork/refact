@@ -35,7 +35,6 @@ pub struct HookPayload {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum HookResult {
     Success(String),
     Block(String),
@@ -52,6 +51,7 @@ struct CompiledHook {
 struct HooksCacheEntry {
     hooks: Vec<CompiledHook>,
     loaded_at: Instant,
+    project_key: String,
 }
 
 static HOOKS_CACHE: OnceLock<tokio::sync::RwLock<Option<HooksCacheEntry>>> = OnceLock::new();
@@ -86,11 +86,14 @@ fn compiled_matcher_matches(compiled: Option<&regex::Regex>, tool_name: Option<&
 }
 
 async fn get_compiled_hooks_from_ext_dirs(ext_dirs: &ExtDirs) -> Vec<CompiledHook> {
+    let project_key = ext_dirs.project_dirs.first()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let lock = HOOKS_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
     {
         let read = lock.read().await;
         if let Some(entry) = &*read {
-            if entry.loaded_at.elapsed() < HOOKS_CACHE_TTL {
+            if entry.loaded_at.elapsed() < HOOKS_CACHE_TTL && entry.project_key == project_key {
                 return entry.hooks.clone();
             }
         }
@@ -101,6 +104,7 @@ async fn get_compiled_hooks_from_ext_dirs(ext_dirs: &ExtDirs) -> Vec<CompiledHoo
     *write = Some(HooksCacheEntry {
         hooks: compiled.clone(),
         loaded_at: Instant::now(),
+        project_key,
     });
     compiled
 }
@@ -117,21 +121,6 @@ pub fn is_global_source(source: &CommandSource) -> bool {
     matches!(source, CommandSource::GlobalClaude | CommandSource::GlobalRefact)
 }
 
-#[cfg(test)]
-fn filter_trusted_hooks(hooks: Vec<HookConfig>) -> Vec<HookConfig> {
-    hooks.into_iter().filter(|h| {
-        if is_global_source(&h.source) {
-            true
-        } else {
-            tracing::warn!(
-                "Skipping untrusted project hook: {} from {:?}. Enable via global config.",
-                h.command,
-                h.source
-            );
-            false
-        }
-    }).collect()
-}
 
 pub async fn get_hooks_for_event(
     gcx: Arc<ARwLock<GlobalContext>>,
@@ -225,13 +214,16 @@ async fn run_single_hook(config: &HookConfig, payload: &HookPayload) -> HookResu
         tokio::spawn(read_bounded(err, HOOK_MAX_OUTPUT_BYTES))
     });
 
-    match tokio::time::timeout(timeout_dur, async {
-        let status = child.wait().await?;
-        let stdout_bytes = if let Some(t) = stdout_task { t.await.unwrap_or_default() } else { Vec::new() };
-        let stderr_bytes = if let Some(t) = stderr_task { t.await.unwrap_or_default() } else { Vec::new() };
-        Ok::<_, std::io::Error>((status, stdout_bytes, stderr_bytes))
-    }).await {
-        Ok(Ok((status, stdout_bytes, stderr_bytes))) => {
+    match tokio::time::timeout(timeout_dur, child.wait()).await {
+        Ok(Ok(status)) => {
+            let stdout_bytes = match stdout_task {
+                Some(t) => t.await.unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let stderr_bytes = match stderr_task {
+                Some(t) => t.await.unwrap_or_default(),
+                None => Vec::new(),
+            };
             let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
             let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
             match status.code().unwrap_or(-1) {
@@ -254,6 +246,8 @@ async fn run_single_hook(config: &HookConfig, payload: &HookPayload) -> HookResu
         }
         Ok(Err(e)) => {
             tracing::warn!("hooks_runner: failed to wait for '{}': {}", config.command, e);
+            if let Some(t) = stdout_task { t.abort(); }
+            if let Some(t) = stderr_task { t.abort(); }
             HookResult::Warning(format!("Failed to wait: {}", e))
         }
         Err(_) => {
@@ -264,6 +258,8 @@ async fn run_single_hook(config: &HookConfig, payload: &HookPayload) -> HookResu
             );
             let _ = child.kill().await;
             let _ = child.wait().await;
+            if let Some(t) = stdout_task { t.abort(); }
+            if let Some(t) = stderr_task { t.abort(); }
             HookResult::Timeout
         }
     }
@@ -562,33 +558,50 @@ mod tests {
     #[test]
     fn test_project_hooks_skipped_by_default() {
         use std::path::PathBuf;
-        let hooks = vec![
-            crate::ext::hooks::HookConfig {
-                event: HookEvent::PreToolUse,
-                matcher: None,
-                command: "project_cmd".to_string(),
-                timeout: None,
-                source: crate::ext::config_dirs::CommandSource::ProjectRefact(PathBuf::from("/project")),
-            },
-        ];
-        let trusted = filter_trusted_hooks(hooks);
-        assert!(trusted.is_empty());
+        let source = crate::ext::config_dirs::CommandSource::ProjectRefact(PathBuf::from("/project"));
+        assert!(!is_global_source(&source));
     }
 
     #[test]
     fn test_global_hooks_still_run() {
-        let hooks = vec![
-            crate::ext::hooks::HookConfig {
-                event: HookEvent::PreToolUse,
-                matcher: None,
-                command: "global_cmd".to_string(),
-                timeout: None,
-                source: crate::ext::config_dirs::CommandSource::GlobalRefact,
-            },
-        ];
-        let trusted = filter_trusted_hooks(hooks);
-        assert_eq!(trusted.len(), 1);
-        assert_eq!(trusted[0].command, "global_cmd");
+        let source = crate::ext::config_dirs::CommandSource::GlobalRefact;
+        assert!(is_global_source(&source));
+    }
+
+    #[tokio::test]
+    async fn test_hooks_cache_project_separation() {
+        use std::path::PathBuf;
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+
+        tokio::fs::write(
+            tmp1.path().join("hooks.yaml"),
+            "hooks:\n  SessionStart:\n    - hooks:\n        - type: command\n          command: cmd_project_a",
+        ).await.unwrap();
+
+        tokio::fs::write(
+            tmp2.path().join("hooks.yaml"),
+            "hooks:\n  SessionEnd:\n    - hooks:\n        - type: command\n          command: cmd_project_b",
+        ).await.unwrap();
+
+        let ext_dirs1 = ExtDirs {
+            global_dirs: vec![tmp1.path().to_path_buf()],
+            installed_dirs: vec![],
+            project_dirs: vec![PathBuf::from("/project/a")],
+        };
+        let ext_dirs2 = ExtDirs {
+            global_dirs: vec![tmp2.path().to_path_buf()],
+            installed_dirs: vec![],
+            project_dirs: vec![PathBuf::from("/project/b")],
+        };
+
+        let hooks1 = get_compiled_hooks_from_ext_dirs(&ext_dirs1).await;
+        let hooks2 = get_compiled_hooks_from_ext_dirs(&ext_dirs2).await;
+
+        assert!(hooks1.iter().any(|h| h.config.command == "cmd_project_a"));
+        assert!(!hooks1.iter().any(|h| h.config.command == "cmd_project_b"));
+        assert!(hooks2.iter().any(|h| h.config.command == "cmd_project_b"));
+        assert!(!hooks2.iter().any(|h| h.config.command == "cmd_project_a"));
     }
 
     #[cfg(unix)]
