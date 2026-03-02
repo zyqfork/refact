@@ -6,9 +6,15 @@ type MCPResourcesListProps = {
   resources: MCPResourceInfo[];
 };
 
-export const MCPResourcesList: React.FC<MCPResourcesListProps> = ({ resources }) => {
+export const MCPResourcesList: React.FC<MCPResourcesListProps> = ({
+  resources,
+}) => {
   if (resources.length === 0) {
-    return <Text size="2" color="gray">No resources available</Text>;
+    return (
+      <Text size="2" color="gray">
+        No resources available
+      </Text>
+    );
   }
 
   return (
@@ -16,15 +22,23 @@ export const MCPResourcesList: React.FC<MCPResourcesListProps> = ({ resources })
       {resources.map((resource) => (
         <Flex key={resource.uri} direction="column" gap="1">
           <Flex gap="2" align="center">
-            <Text size="2" weight="medium" style={{ fontFamily: "var(--font-mono)" }}>
+            <Text
+              size="2"
+              weight="medium"
+              style={{ fontFamily: "var(--font-mono)" }}
+            >
               {resource.uri}
             </Text>
             {resource.mime_type && (
-              <Text size="1" color="gray">{resource.mime_type}</Text>
+              <Text size="1" color="gray">
+                {resource.mime_type}
+              </Text>
             )}
           </Flex>
           {resource.description && (
-            <Text size="1" color="gray">{resource.description}</Text>
+            <Text size="1" color="gray">
+              {resource.description}
+            </Text>
           )}
         </Flex>
       ))}

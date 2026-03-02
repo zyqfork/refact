@@ -64,18 +64,26 @@ export const mcpServerInfoApi = createApi({
     },
   }),
   endpoints: (builder) => ({
-    getMCPServerInfo: builder.query<MCPServerInfo, { configPath: string; port: number }>({
+    getMCPServerInfo: builder.query<
+      MCPServerInfo,
+      { configPath: string; port: number }
+    >({
       providesTags: (_result, _error, arg) => [
         { type: "MCPServerInfo", id: arg.configPath },
       ],
       async queryFn({ configPath, port }, _api, _extraOptions, baseQuery) {
-        const url = `http://127.0.0.1:${port}/v1/mcp-server-info?config_path=${encodeURIComponent(configPath)}`;
+        const url = `http://127.0.0.1:${port}/v1/mcp-server-info?config_path=${encodeURIComponent(
+          configPath,
+        )}`;
         const result = await baseQuery(url);
         if (result.error) return { error: result.error };
         return { data: result.data as MCPServerInfo };
       },
     }),
-    reconnectMCPServer: builder.mutation<{ reconnect_triggered: boolean }, { configPath: string; port: number }>({
+    reconnectMCPServer: builder.mutation<
+      { reconnect_triggered: boolean },
+      { configPath: string; port: number }
+    >({
       invalidatesTags: (_result, _error, arg) => [
         { type: "MCPServerInfo", id: arg.configPath },
       ],
@@ -93,7 +101,5 @@ export const mcpServerInfoApi = createApi({
   }),
 });
 
-export const {
-  useGetMCPServerInfoQuery,
-  useReconnectMCPServerMutation,
-} = mcpServerInfoApi;
+export const { useGetMCPServerInfoQuery, useReconnectMCPServerMutation } =
+  mcpServerInfoApi;

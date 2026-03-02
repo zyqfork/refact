@@ -149,7 +149,9 @@ export const QueuedMessage: React.FC<QueuedMessageProps> = ({
               })}
               role={isEditable ? "button" : undefined}
               tabIndex={isEditable ? 0 : undefined}
-              aria-label={isEditable ? "Click to edit queued message" : undefined}
+              aria-label={
+                isEditable ? "Click to edit queued message" : undefined
+              }
               aria-disabled={isWorking || undefined}
               onClick={isEditable ? () => void handleEdit() : undefined}
               onKeyDown={isEditable ? handleEditKeyDown : undefined}

@@ -351,7 +351,12 @@ export function useAllChatsSubscription() {
         dispatch(removeSseConnection({ chatId }));
       }
     },
-    [dispatch, clearPendingTimeout, clearStreamDeltaFlushForChat, clearChatStreamState],
+    [
+      dispatch,
+      clearPendingTimeout,
+      clearStreamDeltaFlushForChat,
+      clearChatStreamState,
+    ],
   );
 
   unsubscribeRef.current = unsubscribe;

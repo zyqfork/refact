@@ -32,9 +32,9 @@ export const ServerDetail: React.FC<ServerDetailProps> = ({
   onBack,
 }) => {
   const defaultEnv = server.install_recipe.env ?? {};
-  const [envValues, setEnvValues] = useState<Record<string, string | undefined>>(
-    Object.fromEntries(Object.entries(defaultEnv).map(([k, v]) => [k, v])),
-  );
+  const [envValues, setEnvValues] = useState<
+    Record<string, string | undefined>
+  >(Object.fromEntries(Object.entries(defaultEnv).map(([k, v]) => [k, v])));
 
   const [installServer, { isLoading, isSuccess, error }] =
     useInstallServerMutation();
@@ -45,11 +45,17 @@ export const ServerDetail: React.FC<ServerDetailProps> = ({
 
   const handleInstall = async () => {
     const definedEnv = Object.fromEntries(
-      Object.entries(envValues).filter((e): e is [string, string] => e[1] !== undefined),
+      Object.entries(envValues).filter(
+        (e): e is [string, string] => e[1] !== undefined,
+      ),
     );
     const configOverrides =
       Object.keys(definedEnv).length > 0 ? { env: definedEnv } : undefined;
-    await installServer({ server_id: server.id, source_id: server.source_id, config_overrides: configOverrides });
+    await installServer({
+      server_id: server.id,
+      source_id: server.source_id,
+      config_overrides: configOverrides,
+    });
   };
 
   const errorMessage =
@@ -84,12 +90,12 @@ export const ServerDetail: React.FC<ServerDetailProps> = ({
               {server.transport}
             </Badge>
             {server.homepage && (
-              <Button
-                size="1"
-                variant="ghost"
-                asChild
-              >
-                <a href={server.homepage} target="_blank" rel="noopener noreferrer">
+              <Button size="1" variant="ghost" asChild>
+                <a
+                  href={server.homepage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   <ExternalLinkIcon />
                   Homepage
                 </a>

@@ -24,7 +24,10 @@ export function toInputSchema(
 ): Record<string, unknown> {
   const properties: Record<string, { type: string; description: string }> = {};
   for (const param of params) {
-    properties[param.name] = { type: param.type, description: param.description };
+    properties[param.name] = {
+      type: param.type,
+      description: param.description,
+    };
   }
   return {
     type: "object",

@@ -65,7 +65,10 @@ export const MCPOAuth: React.FC<MCPOAuthProps> = ({ configPath }) => {
     setError(null);
     setIsWorking(true);
     try {
-      await oauthExchange({ session_id: sessionId, code: code.trim() }).unwrap();
+      await oauthExchange({
+        session_id: sessionId,
+        code: code.trim(),
+      }).unwrap();
       setSessionId(null);
       setAuthorizeUrl(null);
       setCode("");
@@ -113,7 +116,9 @@ export const MCPOAuth: React.FC<MCPOAuthProps> = ({ configPath }) => {
         <Flex direction="column" gap="2">
           <Flex align="center" justify="between">
             <Flex align="center" gap="2">
-              <Badge color="green" aria-label="Authenticated">Authenticated</Badge>
+              <Badge color="green" aria-label="Authenticated">
+                Authenticated
+              </Badge>
               {expiryDate && (
                 <Text size="1" color="gray">
                   Expires: {expiryDate.toLocaleString()}
@@ -131,7 +136,9 @@ export const MCPOAuth: React.FC<MCPOAuthProps> = ({ configPath }) => {
             </Button>
           </Flex>
           {error && (
-            <Text size="1" color="red">{error}</Text>
+            <Text size="1" color="red">
+              {error}
+            </Text>
           )}
         </Flex>
       </div>
@@ -144,12 +151,16 @@ export const MCPOAuth: React.FC<MCPOAuthProps> = ({ configPath }) => {
         <Flex direction="column" gap="2">
           <Flex align="center" gap="2">
             <Spinner size="1" />
-            <Text size="2" weight="medium">Waiting for authorization...</Text>
+            <Text size="2" weight="medium">
+              Waiting for authorization...
+            </Text>
           </Flex>
           <Text size="1" color="gray">
             Complete the login in the browser window that opened.
           </Text>
-          <Text size="2" weight="medium">Or enter the authorization code manually:</Text>
+          <Text size="2" weight="medium">
+            Or enter the authorization code manually:
+          </Text>
           <TextArea
             placeholder="Paste authorization code here..."
             value={code}
@@ -191,7 +202,9 @@ export const MCPOAuth: React.FC<MCPOAuthProps> = ({ configPath }) => {
             </Text>
           </Flex>
           {error && (
-            <Text size="1" color="red">{error}</Text>
+            <Text size="1" color="red">
+              {error}
+            </Text>
           )}
         </Flex>
       </div>
@@ -227,7 +240,9 @@ export const MCPOAuth: React.FC<MCPOAuthProps> = ({ configPath }) => {
           </Text>
         )}
         {error && (
-          <Text size="1" color="red">{error}</Text>
+          <Text size="1" color="red">
+            {error}
+          </Text>
         )}
       </Flex>
     </div>

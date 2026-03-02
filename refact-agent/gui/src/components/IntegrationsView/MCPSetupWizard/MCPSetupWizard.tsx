@@ -17,7 +17,11 @@ import styles from "./MCPSetupWizard.module.css";
 
 type MCPSetupWizardProps = {
   integration: NotConfiguredIntegrationWithIconRecord;
-  onSubmit: (configPath: string, integrName: string, initialInput?: { input: string; transport: string }) => void;
+  onSubmit: (
+    configPath: string,
+    integrName: string,
+    initialInput?: { input: string; transport: string },
+  ) => void;
 };
 
 function detectTransport(input: string): "stdio" | "http" | "sse" {
@@ -133,10 +137,16 @@ export const MCPSetupWizard: FC<MCPSetupWizardProps> = ({
     if (!suggestedName || nameError) return;
     const basePath = selectedConfigPath;
     const configPath = basePath
-      .replace(/mcp_(?:stdio|sse|http)_TEMPLATE/, `${configPrefix}${suggestedName}`)
+      .replace(
+        /mcp_(?:stdio|sse|http)_TEMPLATE/,
+        `${configPrefix}${suggestedName}`,
+      )
       .replace(/mcp_TEMPLATE/, `${configPrefix}${suggestedName}`);
     const integrName = `${configPrefix}${suggestedName}`;
-    onSubmit(configPath, integrName, { input: input.trim(), transport: effectiveTransport });
+    onSubmit(configPath, integrName, {
+      input: input.trim(),
+      transport: effectiveTransport,
+    });
   };
 
   const canSubmit = !!input.trim() && !!suggestedName && !nameError;

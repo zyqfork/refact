@@ -20,8 +20,10 @@ export const IntermediateIntegration: FC<IntegrationCmdlineProps> = ({
   handleSubmit,
   handleMCPWizardSubmit,
 }) => {
-  const isMCP = integration.integr_name === "mcp_TEMPLATE" ||
-    (integration.integr_name.startsWith("mcp") && integration.integr_name.endsWith("TEMPLATE"));
+  const isMCP =
+    integration.integr_name === "mcp_TEMPLATE" ||
+    (integration.integr_name.startsWith("mcp") &&
+      integration.integr_name.endsWith("TEMPLATE"));
 
   const [integrationType, integrationTemplate] =
     integration.integr_name.split("_");

@@ -52,11 +52,18 @@ export const Extensions: React.FC<ExtensionsProps> = ({
     initialTab === "commands" ? initialItemId ?? null : null,
   );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createDialogType, setCreateDialogType] = useState<"skill" | "command">("skill");
+  const [createDialogType, setCreateDialogType] = useState<"skill" | "command">(
+    "skill",
+  );
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const { data: registry, isLoading, isError, refetch } = useGetExtRegistryQuery(undefined);
+  const {
+    data: registry,
+    isLoading,
+    isError,
+    refetch,
+  } = useGetExtRegistryQuery(undefined);
   const [deleteSkill] = useDeleteSkillMutation();
   const [deleteCommand] = useDeleteCommandMutation();
 
@@ -102,7 +109,14 @@ export const Extensions: React.FC<ExtensionsProps> = ({
       setDeleteError(message);
     }
     setDeleteTarget(null);
-  }, [deleteTarget, deleteSkill, deleteCommand, selectedSkill, selectedCommand, refetch]);
+  }, [
+    deleteTarget,
+    deleteSkill,
+    deleteCommand,
+    selectedSkill,
+    selectedCommand,
+    refetch,
+  ]);
 
   const openCreateDialog = useCallback((type: "skill" | "command") => {
     setCreateDialogType(type);
@@ -158,7 +172,6 @@ export const Extensions: React.FC<ExtensionsProps> = ({
             </Tabs.Trigger>
             <Tabs.Trigger value="hooks">Hooks</Tabs.Trigger>
             <Tabs.Trigger value="marketplace">Marketplace</Tabs.Trigger>
-
           </Tabs.List>
         </Tabs.Root>
 
@@ -169,8 +182,8 @@ export const Extensions: React.FC<ExtensionsProps> = ({
         )}
 
         <div className={styles.panelContainer}>
-          {activeTab === "skills" && (
-            selectedSkill ? (
+          {activeTab === "skills" &&
+            (selectedSkill ? (
               <SkillEditor
                 name={selectedSkill}
                 onBack={() => setSelectedSkill(null)}
@@ -183,11 +196,10 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                 onCreate={() => openCreateDialog("skill")}
                 onDelete={handleDeleteSkill}
               />
-            )
-          )}
+            ))}
 
-          {activeTab === "commands" && (
-            selectedCommand ? (
+          {activeTab === "commands" &&
+            (selectedCommand ? (
               <CommandEditor
                 name={selectedCommand}
                 onBack={() => setSelectedCommand(null)}
@@ -200,14 +212,11 @@ export const Extensions: React.FC<ExtensionsProps> = ({
                 onCreate={() => openCreateDialog("command")}
                 onDelete={handleDeleteCommand}
               />
-            )
-          )}
+            ))}
 
           {activeTab === "hooks" && <HooksEditor />}
 
           {activeTab === "marketplace" && <MarketplacePanel />}
-
-
         </div>
 
         <CreateItemDialog
@@ -231,7 +240,9 @@ export const Extensions: React.FC<ExtensionsProps> = ({
           <AlertDialog.Content maxWidth="400px">
             <AlertDialog.Title>Confirm Delete</AlertDialog.Title>
             <AlertDialog.Description>
-              {`Delete ${deleteTarget?.type ?? ""} "${deleteTarget?.name ?? ""}"?`}
+              {`Delete ${deleteTarget?.type ?? ""} "${
+                deleteTarget?.name ?? ""
+              }"?`}
             </AlertDialog.Description>
             <Flex gap="3" mt="4" justify="end">
               <AlertDialog.Cancel>

@@ -58,23 +58,19 @@ export const pluginsApi = createApi({
     }),
 
     addMarketplace: builder.mutation<undefined, { source: string }>({
-      queryFn: lspQueryFn<{ source: string }, undefined>(
-        (body, port) => ({
-          url: `http://127.0.0.1:${port}/v1/plugins/marketplaces`,
-          method: "POST",
-          body,
-        }),
-      ),
+      queryFn: lspQueryFn<{ source: string }, undefined>((body, port) => ({
+        url: `http://127.0.0.1:${port}/v1/plugins/marketplaces`,
+        method: "POST",
+        body,
+      })),
       invalidatesTags: ["Marketplaces"],
     }),
 
     deleteMarketplace: builder.mutation<undefined, string>({
-      queryFn: lspQueryFn<string, undefined>(
-        (name, port) => ({
-          url: `http://127.0.0.1:${port}/v1/plugins/marketplaces/${name}`,
-          method: "DELETE",
-        }),
-      ),
+      queryFn: lspQueryFn<string, undefined>((name, port) => ({
+        url: `http://127.0.0.1:${port}/v1/plugins/marketplaces/${name}`,
+        method: "DELETE",
+      })),
       invalidatesTags: ["Marketplaces"],
     }),
 
@@ -111,12 +107,10 @@ export const pluginsApi = createApi({
     }),
 
     uninstallPlugin: builder.mutation<undefined, string>({
-      queryFn: lspQueryFn<string, undefined>(
-        (name, port) => ({
-          url: `http://127.0.0.1:${port}/v1/plugins/installed/${name}`,
-          method: "DELETE",
-        }),
-      ),
+      queryFn: lspQueryFn<string, undefined>((name, port) => ({
+        url: `http://127.0.0.1:${port}/v1/plugins/installed/${name}`,
+        method: "DELETE",
+      })),
       invalidatesTags: ["InstalledPlugins"],
       onQueryStarted: async (_arg, { dispatch, queryFulfilled }) => {
         await queryFulfilled;

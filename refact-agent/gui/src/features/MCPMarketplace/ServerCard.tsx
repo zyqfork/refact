@@ -1,6 +1,10 @@
 import React, { useState } from "react";
 import { Badge, Box, Button, Flex, Text } from "@radix-ui/themes";
-import { CheckIcon, ExternalLinkIcon, StarFilledIcon } from "@radix-ui/react-icons";
+import {
+  CheckIcon,
+  ExternalLinkIcon,
+  StarFilledIcon,
+} from "@radix-ui/react-icons";
 import type { MCPServer } from "../../services/refact/mcpMarketplace";
 import styles from "./MCPMarketplace.module.css";
 
@@ -76,10 +80,17 @@ export const ServerCard: React.FC<ServerCardProps> = ({
             </Flex>
           )}
           {server.use_count !== undefined && server.use_count > 0 && (
-            <Text size="1" color="gray">{server.use_count} installs</Text>
+            <Text size="1" color="gray">
+              {server.use_count} installs
+            </Text>
           )}
           {sourceLabel && (
-            <Badge color="gray" variant="soft" size="1" className={styles.sourceBadgeInCard}>
+            <Badge
+              color="gray"
+              variant="soft"
+              size="1"
+              className={styles.sourceBadgeInCard}
+            >
               {sourceLabel}
             </Badge>
           )}
@@ -102,11 +113,7 @@ export const ServerCard: React.FC<ServerCardProps> = ({
               {isInstalling ? "Installing…" : "Install"}
             </Button>
           )}
-          <Button
-            size="1"
-            variant="ghost"
-            onClick={() => onViewDetail(server)}
-          >
+          <Button size="1" variant="ghost" onClick={() => onViewDetail(server)}>
             {server.homepage ? (
               <ExternalLinkIcon />
             ) : (

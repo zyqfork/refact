@@ -9,7 +9,7 @@ use tokio::sync::RwLock as ARwLock;
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 use crate::integrations::mcp::mcp_naming;
-use crate::integrations::mcp::session_mcp::{SessionMCP, MCPConnectionStatus, MCPAuthStatus};
+use crate::integrations::mcp::session_mcp::{SessionMCP, MCPConnectionStatus};
 use crate::integrations::mcp::mcp_metrics::MCPServerMetrics;
 use crate::integrations::running_integrations::load_integrations;
 

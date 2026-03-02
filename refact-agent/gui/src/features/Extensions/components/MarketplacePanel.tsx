@@ -1,11 +1,5 @@
 import React, { useState, useMemo, useCallback } from "react";
-import {
-  Button,
-  Flex,
-  Spinner,
-  Text,
-  TextField,
-} from "@radix-ui/themes";
+import { Button, Flex, Spinner, Text, TextField } from "@radix-ui/themes";
 import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
 import { useDebounceCallback } from "usehooks-ts";
 import {
@@ -15,7 +9,10 @@ import {
   useDeleteMarketplaceMutation,
   useUninstallPluginMutation,
 } from "../../../services/refact/plugins";
-import type { MarketplaceEntry, PluginEntry } from "../../../services/refact/plugins";
+import type {
+  MarketplaceEntry,
+  PluginEntry,
+} from "../../../services/refact/plugins";
 import { AddMarketplaceDialog } from "./AddMarketplaceDialog";
 import { MarketplacePluginCard } from "./MarketplacePluginCard";
 
@@ -132,8 +129,12 @@ export const MarketplacePanel: React.FC = () => {
     [debouncedSetSearch],
   );
 
-  const { data: marketplacesData, isLoading: loadingMarketplaces, isError: marketplacesError, refetch } =
-    useGetMarketplacesQuery(undefined);
+  const {
+    data: marketplacesData,
+    isLoading: loadingMarketplaces,
+    isError: marketplacesError,
+    refetch,
+  } = useGetMarketplacesQuery(undefined);
   const { data: installedData } = useGetInstalledQuery(undefined);
   const [uninstallPlugin] = useUninstallPluginMutation();
 
@@ -149,7 +150,9 @@ export const MarketplacePanel: React.FC = () => {
     return (
       <div className={styles.panel}>
         <Flex direction="column" align="center" gap="3" py="6">
-          <Text size="2" color="red">Failed to load marketplaces.</Text>
+          <Text size="2" color="red">
+            Failed to load marketplaces.
+          </Text>
           <Button size="1" variant="soft" onClick={() => void refetch()}>
             Retry
           </Button>
@@ -161,11 +164,18 @@ export const MarketplacePanel: React.FC = () => {
   if (!loadingMarketplaces && marketplaces.length === 0) {
     return (
       <div className={styles.panel}>
-        <Flex direction="column" align="center" gap="3" className={styles.onboarding}>
-          <Text size="3" weight="bold">Plugin Marketplace</Text>
+        <Flex
+          direction="column"
+          align="center"
+          gap="3"
+          className={styles.onboarding}
+        >
+          <Text size="3" weight="bold">
+            Plugin Marketplace
+          </Text>
           <Text size="2" color="gray" align="center">
-            Add a marketplace source to discover and install plugins.
-            A marketplace is a Git repository containing plugin definitions.
+            Add a marketplace source to discover and install plugins. A
+            marketplace is a Git repository containing plugin definitions.
           </Text>
           <Text size="1" color="gray" align="center">
             Example: smallcloudai/refact-plugins
@@ -226,7 +236,8 @@ export const MarketplacePanel: React.FC = () => {
                       {plugin.name}
                     </Text>
                     <Text size="1" color="gray">
-                      Installed {new Date(plugin.installed_at).toLocaleDateString()}
+                      Installed{" "}
+                      {new Date(plugin.installed_at).toLocaleDateString()}
                     </Text>
                   </Flex>
                   <Button

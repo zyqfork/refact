@@ -4,7 +4,8 @@ import { http, HttpResponse } from "msw";
 import { server } from "../utils/mockServer";
 import { MCPOAuth } from "../components/IntegrationsView/MCPServerView/MCPOAuth";
 
-const CONFIG_PATH = "/home/user/.config/refact/integrations.d/mcp_http_myserver.yaml";
+const CONFIG_PATH =
+  "/home/user/.config/refact/integrations.d/mcp_http_myserver.yaml";
 
 const PRELOADED_STATE = {
   config: {
@@ -37,7 +38,9 @@ describe("MCPOAuth", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(screen.queryByRole("button", { name: /Login with OAuth/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Login with OAuth/i }),
+    ).toBeNull();
     expect(screen.queryByText("Authenticated")).toBeNull();
     expect(screen.queryByText("Not authenticated")).toBeNull();
   });
@@ -74,7 +77,8 @@ describe("MCPOAuth", () => {
       http.post("http://127.0.0.1:8001/v1/mcp/oauth/start", () => {
         return HttpResponse.json({
           session_id: "test-session-123",
-          authorize_url: "https://auth.example.com/authorize?code_challenge=abc",
+          authorize_url:
+            "https://auth.example.com/authorize?code_challenge=abc",
         });
       }),
     );
@@ -274,11 +278,14 @@ describe("MCPOAuth", () => {
           authorize_url: "https://auth.example.com/authorize",
         });
       }),
-      http.post("http://127.0.0.1:8001/v1/mcp/oauth/cancel", async ({ request }) => {
-        const body = await request.json() as { session_id: string };
-        cancelledSessionId = body.session_id;
-        return HttpResponse.json({ cancelled: true });
-      }),
+      http.post(
+        "http://127.0.0.1:8001/v1/mcp/oauth/cancel",
+        async ({ request }) => {
+          const body = (await request.json()) as { session_id: string };
+          cancelledSessionId = body.session_id;
+          return HttpResponse.json({ cancelled: true });
+        },
+      ),
     );
 
     const { user } = render(<MCPOAuth configPath={CONFIG_PATH} />, {
@@ -294,7 +301,9 @@ describe("MCPOAuth", () => {
     await user.click(screen.getByRole("button", { name: /Login with OAuth/i }));
 
     await waitFor(() => {
-      expect(screen.getByText("Waiting for authorization...")).toBeInTheDocument();
+      expect(
+        screen.getByText("Waiting for authorization..."),
+      ).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole("button", { name: /Cancel/i }));

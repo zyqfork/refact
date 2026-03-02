@@ -33,19 +33,27 @@ const SmitheryKeyForm: React.FC<SmitheryKeyFormProps> = ({ source }) => {
 
   const handleSave = async () => {
     if (!apiKey.trim()) return;
-    await configureSource({ id: source.id, api_key: apiKey.trim(), enabled: true });
+    await configureSource({
+      id: source.id,
+      api_key: apiKey.trim(),
+      enabled: true,
+    });
     setApiKey("");
   };
 
   if (source.has_api_key) {
     return (
       <Flex direction="column" gap="1" className={styles.apiKeySection}>
-        <Text size="1" color="gray">API Key: configured</Text>
+        <Text size="1" color="gray">
+          API Key: configured
+        </Text>
         <Button
           size="1"
           variant="ghost"
           color="red"
-          onClick={() => void configureSource({ id: source.id, api_key: "", enabled: false })}
+          onClick={() =>
+            void configureSource({ id: source.id, api_key: "", enabled: false })
+          }
         >
           Remove API Key
         </Button>
@@ -55,7 +63,9 @@ const SmitheryKeyForm: React.FC<SmitheryKeyFormProps> = ({ source }) => {
 
   return (
     <Flex direction="column" gap="1" className={styles.apiKeySection}>
-      <Text size="1" color="gray">API Key required — get one at smithery.ai/account/api-keys</Text>
+      <Text size="1" color="gray">
+        API Key required — get one at smithery.ai/account/api-keys
+      </Text>
       <Flex gap="2">
         <TextField.Root
           size="1"
@@ -65,7 +75,11 @@ const SmitheryKeyForm: React.FC<SmitheryKeyFormProps> = ({ source }) => {
           onChange={(e) => setApiKey(e.target.value)}
           style={{ flex: 1 }}
         />
-        <Button size="1" onClick={() => void handleSave()} disabled={!apiKey.trim()}>
+        <Button
+          size="1"
+          onClick={() => void handleSave()}
+          disabled={!apiKey.trim()}
+        >
           Save
         </Button>
       </Flex>
@@ -77,7 +91,9 @@ type AddCustomSourceFormProps = {
   onAdded: () => void;
 };
 
-const AddCustomSourceForm: React.FC<AddCustomSourceFormProps> = ({ onAdded }) => {
+const AddCustomSourceForm: React.FC<AddCustomSourceFormProps> = ({
+  onAdded,
+}) => {
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
   const [saveSource] = useSaveMarketplaceSourceMutation();
@@ -85,8 +101,17 @@ const AddCustomSourceForm: React.FC<AddCustomSourceFormProps> = ({ onAdded }) =>
 
   const handleAdd = async () => {
     if (!label.trim() || !url.trim()) return;
-    const id = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const result = await saveSource({ id, label: label.trim(), type: "refact_index", url: url.trim(), enabled: true });
+    const id = label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-");
+    const result = await saveSource({
+      id,
+      label: label.trim(),
+      type: "refact_index",
+      url: url.trim(),
+      enabled: true,
+    });
     if ("error" in result) {
       setError("Failed to add source");
     } else {
@@ -99,15 +124,21 @@ const AddCustomSourceForm: React.FC<AddCustomSourceFormProps> = ({ onAdded }) =>
 
   return (
     <Flex direction="column" gap="2" className={styles.addSourceSection}>
-      <Text size="2" weight="bold">Add Custom Source</Text>
+      <Text size="2" weight="bold">
+        Add Custom Source
+      </Text>
       {error && (
         <Callout.Root color="red" size="1">
-          <Callout.Icon><InfoCircledIcon /></Callout.Icon>
+          <Callout.Icon>
+            <InfoCircledIcon />
+          </Callout.Icon>
           <Callout.Text>{error}</Callout.Text>
         </Callout.Root>
       )}
       <Flex direction="column" gap="1">
-        <Text size="1" color="gray">Label</Text>
+        <Text size="1" color="gray">
+          Label
+        </Text>
         <TextField.Root
           size="1"
           placeholder="My Registry"
@@ -116,7 +147,9 @@ const AddCustomSourceForm: React.FC<AddCustomSourceFormProps> = ({ onAdded }) =>
         />
       </Flex>
       <Flex direction="column" gap="1">
-        <Text size="1" color="gray">URL</Text>
+        <Text size="1" color="gray">
+          URL
+        </Text>
         <TextField.Root
           size="1"
           placeholder="https://example.com/mcp-index.json"
@@ -124,7 +157,11 @@ const AddCustomSourceForm: React.FC<AddCustomSourceFormProps> = ({ onAdded }) =>
           onChange={(e) => setUrl(e.target.value)}
         />
       </Flex>
-      <Button size="1" onClick={() => void handleAdd()} disabled={!label.trim() || !url.trim()}>
+      <Button
+        size="1"
+        onClick={() => void handleAdd()}
+        disabled={!label.trim() || !url.trim()}
+      >
         Add Source
       </Button>
     </Flex>
@@ -151,15 +188,21 @@ export const SourceSettings: React.FC<SourceSettingsProps> = ({
                   size="1"
                   checked={source.enabled}
                   disabled={!source.removable}
-                  onCheckedChange={(checked) => void configureSource({ id: source.id, enabled: checked })}
+                  onCheckedChange={(checked) =>
+                    void configureSource({ id: source.id, enabled: checked })
+                  }
                 />
                 <Flex direction="column" gap="0" className={styles.sourceLabel}>
                   <Text size="2">{source.label}</Text>
                   {source.status === "error" && source.error && (
-                    <Text size="1" color="red">{source.error}</Text>
+                    <Text size="1" color="red">
+                      {source.error}
+                    </Text>
                   )}
                   {!source.removable && (
-                    <Text size="1" color="gray">Built-in</Text>
+                    <Text size="1" color="gray">
+                      Built-in
+                    </Text>
                   )}
                 </Flex>
                 {source.removable && (

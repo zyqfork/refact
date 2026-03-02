@@ -594,9 +594,7 @@ describe("ComboBox slash commands", () => {
     const { user, ...app } = render(<SlashApp />);
     const textarea = app.getByRole("combobox") as HTMLTextAreaElement;
     await user.type(textarea, "/");
-    expect(
-      app.queryByText("Optimize code for performance"),
-    ).not.toBeNull();
+    expect(app.queryByText("Optimize code for performance")).not.toBeNull();
   });
 
   test("slash command suggestions do not show argument hint", async () => {

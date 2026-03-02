@@ -98,7 +98,10 @@ export const IntegrationForm: FC<IntegrationFormProps> = ({
           </Text>
         )}
 
-        <form onSubmit={handleSubmit} id={`form-${integration.data.integr_name}`}>
+        <form
+          onSubmit={handleSubmit}
+          id={`form-${integration.data.integr_name}`}
+        >
           <Flex direction="column" gap="2">
             <Grid mb="0">
               <FormAvailabilityAndDelete
@@ -300,8 +303,6 @@ export const IntegrationForm: FC<IntegrationFormProps> = ({
           </Flex>
         </Flex>
       </form>
-
-
     </Flex>
   );
 };

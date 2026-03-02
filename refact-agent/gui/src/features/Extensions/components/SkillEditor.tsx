@@ -10,7 +10,12 @@ import {
   SegmentedControl,
   Callout,
 } from "@radix-ui/themes";
-import { ArrowLeftIcon, MixerHorizontalIcon, CodeIcon, InfoCircledIcon } from "@radix-ui/react-icons";
+import {
+  ArrowLeftIcon,
+  MixerHorizontalIcon,
+  CodeIcon,
+  InfoCircledIcon,
+} from "@radix-ui/react-icons";
 import {
   useGetSkillQuery,
   useSaveSkillMutation,
@@ -32,16 +37,16 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
   return (
     <Flex direction="column" gap="3" className={styles.formContent}>
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Name</Text>
-        <TextField.Root
-          size="1"
-          value={data.name}
-          disabled
-        />
+        <Text size="1" weight="medium">
+          Name
+        </Text>
+        <TextField.Root size="1" value={data.name} disabled />
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Description</Text>
+        <Text size="1" weight="medium">
+          Description
+        </Text>
         <TextArea
           size="1"
           value={data.description}
@@ -65,7 +70,9 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
           <Switch
             size="1"
             checked={data.disable_model_invocation}
-            onCheckedChange={(checked) => onChange({ disable_model_invocation: checked })}
+            onCheckedChange={(checked) =>
+              onChange({ disable_model_invocation: checked })
+            }
             disabled={disabled}
           />
           <Text size="1">Disable Model Invocation</Text>
@@ -73,7 +80,9 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Argument Hint</Text>
+        <Text size="1" weight="medium">
+          Argument Hint
+        </Text>
         <TextField.Root
           size="1"
           value={data.argument_hint}
@@ -91,7 +100,9 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
       />
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Model (optional)</Text>
+        <Text size="1" weight="medium">
+          Model (optional)
+        </Text>
         <TextField.Root
           size="1"
           value={data.model ?? ""}
@@ -102,7 +113,9 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Context</Text>
+        <Text size="1" weight="medium">
+          Context
+        </Text>
         <Select.Root
           value={data.context ?? "none"}
           onValueChange={(v) => onChange({ context: v === "none" ? null : v })}
@@ -119,7 +132,9 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
 
       {data.context === "fork" && (
         <Flex direction="column" gap="1">
-          <Text size="1" weight="medium">Agent (optional)</Text>
+          <Text size="1" weight="medium">
+            Agent (optional)
+          </Text>
           <TextField.Root
             size="1"
             value={data.agent ?? ""}
@@ -131,7 +146,9 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
       )}
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Body</Text>
+        <Text size="1" weight="medium">
+          Body
+        </Text>
         <textarea
           className={styles.bodyTextarea}
           value={data.body}
@@ -166,7 +183,7 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
   }, [data]);
 
   const handleFormChange = useCallback((patch: Partial<SkillDetail>) => {
-    setLocalData((prev) => prev ? { ...prev, ...patch } : prev);
+    setLocalData((prev) => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -200,8 +217,12 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
   if (!localData) {
     return (
       <Callout.Root color="red">
-        <Callout.Icon><InfoCircledIcon /></Callout.Icon>
-        <Callout.Text>{error !== undefined ? "Failed to load skill" : "Loading..."}</Callout.Text>
+        <Callout.Icon>
+          <InfoCircledIcon />
+        </Callout.Icon>
+        <Callout.Text>
+          {error !== undefined ? "Failed to load skill" : "Loading..."}
+        </Callout.Text>
       </Callout.Root>
     );
   }
@@ -221,7 +242,9 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
 
       {isReadOnly && (
         <Callout.Root color="blue">
-          <Callout.Icon><InfoCircledIcon /></Callout.Icon>
+          <Callout.Icon>
+            <InfoCircledIcon />
+          </Callout.Icon>
           <Callout.Text>
             This item is from an installed plugin and cannot be edited.
           </Callout.Text>
@@ -229,7 +252,9 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
       )}
 
       <Flex justify="between" align="center" gap="2" wrap="wrap">
-        <Text size="2" weight="bold">{name}</Text>
+        <Text size="2" weight="bold">
+          {name}
+        </Text>
         <Flex gap="1" align="center">
           <SegmentedControl.Root
             size="1"
@@ -244,7 +269,11 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
             </SegmentedControl.Item>
           </SegmentedControl.Root>
           {!isReadOnly && (
-            <Button size="1" onClick={() => void handleSave()} disabled={isSaving}>
+            <Button
+              size="1"
+              onClick={() => void handleSave()}
+              disabled={isSaving}
+            >
               {isSaving ? "..." : "Save"}
             </Button>
           )}
@@ -252,11 +281,17 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
       </Flex>
 
       {saveError && (
-        <Text size="1" color="red">{saveError}</Text>
+        <Text size="1" color="red">
+          {saveError}
+        </Text>
       )}
 
       {view === "form" ? (
-        <SkillForm data={localData} onChange={handleFormChange} disabled={isReadOnly} />
+        <SkillForm
+          data={localData}
+          onChange={handleFormChange}
+          disabled={isReadOnly}
+        />
       ) : (
         <textarea
           className={styles.rawTextarea}

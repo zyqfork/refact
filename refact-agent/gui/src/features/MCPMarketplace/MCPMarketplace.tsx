@@ -9,7 +9,11 @@ import {
   Text,
   TextField,
 } from "@radix-ui/themes";
-import { ArrowLeftIcon, InfoCircledIcon, MagnifyingGlassIcon } from "@radix-ui/react-icons";
+import {
+  ArrowLeftIcon,
+  InfoCircledIcon,
+  MagnifyingGlassIcon,
+} from "@radix-ui/react-icons";
 import { ScrollArea } from "../../components/ScrollArea";
 import { PageWrapper } from "../../components/PageWrapper";
 import {
@@ -17,7 +21,10 @@ import {
   useGetInstalledServersQuery,
   useInstallServerMutation,
 } from "../../services/refact/mcpMarketplace";
-import type { MCPServer, MarketplaceSource } from "../../services/refact/mcpMarketplace";
+import type {
+  MCPServer,
+  MarketplaceSource,
+} from "../../services/refact/mcpMarketplace";
 import { ServerCard } from "./ServerCard";
 import { ServerDetail } from "./ServerDetail";
 import { SourceSelector } from "./SourceSelector";
@@ -46,7 +53,11 @@ export const MCPMarketplace: React.FC<MCPMarketplaceProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [page, setPage] = useState(1);
 
-  const { data: marketplaceData, isLoading, error } = useGetMarketplaceQuery({
+  const {
+    data: marketplaceData,
+    isLoading,
+    error,
+  } = useGetMarketplaceQuery({
     source: selectedSource ?? undefined,
     page,
     page_size: PAGE_SIZE,
@@ -93,12 +104,17 @@ export const MCPMarketplace: React.FC<MCPMarketplaceProps> = ({
   }, [marketplaceData, search, selectedTag]);
 
   const pagination = marketplaceData?.pagination;
-  const totalPages = pagination ? Math.ceil(pagination.total / pagination.page_size) : 1;
+  const totalPages = pagination
+    ? Math.ceil(pagination.total / pagination.page_size)
+    : 1;
 
   const handleInstall = async (server: MCPServer) => {
     setInstallingId(server.id);
     try {
-      await installServer({ server_id: server.id, source_id: server.source_id });
+      await installServer({
+        server_id: server.id,
+        source_id: server.source_id,
+      });
     } finally {
       setInstallingId(null);
     }
@@ -202,7 +218,11 @@ export const MCPMarketplace: React.FC<MCPMarketplaceProps> = ({
               </Callout.Icon>
               <Callout.Text>
                 Smithery source requires an API key.{" "}
-                <Button variant="ghost" size="1" onClick={() => setSettingsOpen(true)}>
+                <Button
+                  variant="ghost"
+                  size="1"
+                  onClick={() => setSettingsOpen(true)}
+                >
                   Configure
                 </Button>
               </Callout.Text>

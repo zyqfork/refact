@@ -37,7 +37,9 @@ describe("MCPSetupWizard", () => {
     );
 
     const input = screen.getByTestId("mcp-wizard-input");
-    fireEvent.change(input, { target: { value: "npx -y @notionhq/notion-mcp-server" } });
+    fireEvent.change(input, {
+      target: { value: "npx -y @notionhq/notion-mcp-server" },
+    });
 
     expect(screen.getByText(/Local server \(stdio\)/)).toBeDefined();
   });
@@ -52,7 +54,9 @@ describe("MCPSetupWizard", () => {
     );
 
     const input = screen.getByTestId("mcp-wizard-input");
-    fireEvent.change(input, { target: { value: "https://api.example.com/mcp" } });
+    fireEvent.change(input, {
+      target: { value: "https://api.example.com/mcp" },
+    });
 
     expect(screen.getByText(/Remote server \(HTTP\)/)).toBeDefined();
   });
@@ -77,7 +81,9 @@ describe("MCPSetupWizard", () => {
     );
 
     const input = screen.getByTestId("mcp-wizard-input");
-    fireEvent.change(input, { target: { value: "npx -y @notionhq/notion-mcp-server" } });
+    fireEvent.change(input, {
+      target: { value: "npx -y @notionhq/notion-mcp-server" },
+    });
 
     await waitFor(
       () => {
@@ -117,7 +123,11 @@ describe("MCPSetupWizard", () => {
   });
 
   it("Continue with setup creates correct config path for stdio command", async () => {
-    const calls: { configPath: string; integrName: string; initialInput?: { input: string; transport: string } }[] = [];
+    const calls: {
+      configPath: string;
+      integrName: string;
+      initialInput?: { input: string; transport: string };
+    }[] = [];
 
     server.use(
       http.post("http://127.0.0.1:8001/v1/mcp/auto-name", () => {
@@ -156,7 +166,11 @@ describe("MCPSetupWizard", () => {
   });
 
   it("Continue with setup passes initialInput with http transport for URL inputs", async () => {
-    const calls: { configPath: string; integrName: string; initialInput?: { input: string; transport: string } }[] = [];
+    const calls: {
+      configPath: string;
+      integrName: string;
+      initialInput?: { input: string; transport: string };
+    }[] = [];
 
     server.use(
       http.post("http://127.0.0.1:8001/v1/mcp/auto-name", () => {
@@ -179,7 +193,9 @@ describe("MCPSetupWizard", () => {
     );
 
     const input = screen.getByTestId("mcp-wizard-input");
-    fireEvent.change(input, { target: { value: "https://api.example.com/mcp" } });
+    fireEvent.change(input, {
+      target: { value: "https://api.example.com/mcp" },
+    });
 
     const nameField = await screen.findByTestId("mcp-wizard-name");
     fireEvent.change(nameField, { target: { value: "example_mcp" } });
@@ -223,10 +239,7 @@ describe("MCPSetupWizard", () => {
 describe("MCPSetupWizard - SSE advanced toggle", () => {
   it("shows SSE checkbox under Advanced for stdio commands", () => {
     render(
-      <MCPSetupWizard
-        integration={MOCK_INTEGRATION}
-        onSubmit={vi.fn()}
-      />,
+      <MCPSetupWizard integration={MOCK_INTEGRATION} onSubmit={vi.fn()} />,
       { preloadedState: PRELOADED_STATE },
     );
 
@@ -241,15 +254,14 @@ describe("MCPSetupWizard - SSE advanced toggle", () => {
 
   it("does not show SSE checkbox for URL inputs", () => {
     render(
-      <MCPSetupWizard
-        integration={MOCK_INTEGRATION}
-        onSubmit={vi.fn()}
-      />,
+      <MCPSetupWizard integration={MOCK_INTEGRATION} onSubmit={vi.fn()} />,
       { preloadedState: PRELOADED_STATE },
     );
 
     const input = screen.getByTestId("mcp-wizard-input");
-    fireEvent.change(input, { target: { value: "https://api.example.com/mcp" } });
+    fireEvent.change(input, {
+      target: { value: "https://api.example.com/mcp" },
+    });
 
     expect(screen.queryByText(/Advanced: Use SSE transport/i)).toBeNull();
   });

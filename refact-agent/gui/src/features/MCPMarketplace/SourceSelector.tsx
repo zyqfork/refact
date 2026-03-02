@@ -43,7 +43,10 @@ export const SourceSelector: React.FC<SourceSelectorProps> = ({
           }
           variant={selectedSource === source.id ? "solid" : "soft"}
           className={styles.sourceTab}
-          onClick={() => source.enabled && onSelectSource(selectedSource === source.id ? null : source.id)}
+          onClick={() =>
+            source.enabled &&
+            onSelectSource(selectedSource === source.id ? null : source.id)
+          }
           style={{ opacity: source.enabled ? 1 : 0.5 }}
         >
           {source.label}

@@ -110,18 +110,25 @@ export const mcpMarketplaceApi = createApi({
     },
   }),
   endpoints: (builder) => ({
-    getMarketplace: builder.query<MarketplaceResponse, MarketplaceQueryParams | undefined>({
+    getMarketplace: builder.query<
+      MarketplaceResponse,
+      MarketplaceQueryParams | undefined
+    >({
       queryFn: async (params, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
         const searchParams = new URLSearchParams();
         if (params?.source) searchParams.set("source", params.source);
         if (params?.q) searchParams.set("q", params.q);
-        if (params?.page !== undefined) searchParams.set("page", String(params.page));
-        if (params?.page_size !== undefined) searchParams.set("page_size", String(params.page_size));
+        if (params?.page !== undefined)
+          searchParams.set("page", String(params.page));
+        if (params?.page_size !== undefined)
+          searchParams.set("page_size", String(params.page_size));
         const qs = searchParams.toString();
         const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/mcp/marketplace${qs ? `?${qs}` : ""}`,
+          url: `http://127.0.0.1:${port}/v1/mcp/marketplace${
+            qs ? `?${qs}` : ""
+          }`,
         });
         if (result.error) return { error: result.error };
         return { data: result.data as MarketplaceResponse };
@@ -171,7 +178,10 @@ export const mcpMarketplaceApi = createApi({
       },
     }),
 
-    getMarketplaceSources: builder.query<{ sources: MarketplaceSource[] }, undefined>({
+    getMarketplaceSources: builder.query<
+      { sources: MarketplaceSource[] },
+      undefined
+    >({
       queryFn: async (_arg, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
@@ -184,27 +194,34 @@ export const mcpMarketplaceApi = createApi({
       providesTags: ["MarketplaceSources"],
     }),
 
-    saveMarketplaceSource: builder.mutation<{ ok: boolean }, SaveSourceRequest>({
-      queryFn: async (body, api, _opts, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort;
-        const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/mcp/marketplace/sources`,
-          method: "POST",
-          body,
-        });
-        if (result.error) return { error: result.error };
-        return { data: result.data as { ok: boolean } };
+    saveMarketplaceSource: builder.mutation<{ ok: boolean }, SaveSourceRequest>(
+      {
+        queryFn: async (body, api, _opts, baseQuery) => {
+          const state = api.getState() as RootState;
+          const port = state.config.lspPort;
+          const result = await baseQuery({
+            url: `http://127.0.0.1:${port}/v1/mcp/marketplace/sources`,
+            method: "POST",
+            body,
+          });
+          if (result.error) return { error: result.error };
+          return { data: result.data as { ok: boolean } };
+        },
+        invalidatesTags: ["MarketplaceSources", "MarketplaceServers"],
       },
-      invalidatesTags: ["MarketplaceSources", "MarketplaceServers"],
-    }),
+    ),
 
-    deleteMarketplaceSource: builder.mutation<{ ok: boolean }, DeleteSourceRequest>({
+    deleteMarketplaceSource: builder.mutation<
+      { ok: boolean },
+      DeleteSourceRequest
+    >({
       queryFn: async ({ id }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
         const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/mcp/marketplace/sources/${encodeURIComponent(id)}`,
+          url: `http://127.0.0.1:${port}/v1/mcp/marketplace/sources/${encodeURIComponent(
+            id,
+          )}`,
           method: "DELETE",
         });
         if (result.error) return { error: result.error };
@@ -213,12 +230,17 @@ export const mcpMarketplaceApi = createApi({
       invalidatesTags: ["MarketplaceSources", "MarketplaceServers"],
     }),
 
-    configureMarketplaceSource: builder.mutation<{ ok: boolean }, ConfigureSourceRequest>({
+    configureMarketplaceSource: builder.mutation<
+      { ok: boolean },
+      ConfigureSourceRequest
+    >({
       queryFn: async ({ id, ...body }, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
         const result = await baseQuery({
-          url: `http://127.0.0.1:${port}/v1/mcp/marketplace/sources/${encodeURIComponent(id)}/configure`,
+          url: `http://127.0.0.1:${port}/v1/mcp/marketplace/sources/${encodeURIComponent(
+            id,
+          )}/configure`,
           method: "POST",
           body,
         });

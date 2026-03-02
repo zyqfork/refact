@@ -3,7 +3,10 @@ import type { RootState } from "../../app/store";
 
 type InnerBaseQuery = (
   arg: string | FetchArgs,
-) => Promise<{ data: unknown; error?: undefined } | { error: FetchBaseQueryError; data?: undefined }>;
+) => Promise<
+  | { data: unknown; error?: undefined }
+  | { error: FetchBaseQueryError; data?: undefined }
+>;
 
 export function lspQueryFn<TArg, TResult>(
   buildRequest: (arg: TArg, port: number) => string | FetchArgs,

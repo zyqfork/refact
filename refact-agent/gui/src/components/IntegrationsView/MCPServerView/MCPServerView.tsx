@@ -1,5 +1,13 @@
 import React, { useState } from "react";
-import { Box, Button, Flex, Heading, Separator, Spinner, Text } from "@radix-ui/themes";
+import {
+  Box,
+  Button,
+  Flex,
+  Heading,
+  Separator,
+  Spinner,
+  Text,
+} from "@radix-ui/themes";
 import { useAppSelector } from "../../../hooks";
 import { selectLspPort } from "../../../features/Config/configSlice";
 import {
@@ -39,18 +47,20 @@ const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         aria-expanded={expanded}
       >
         <Flex align="center" gap="2">
-          <Text size="2" weight="medium">{title}</Text>
+          <Text size="2" weight="medium">
+            {title}
+          </Text>
           {count !== undefined && (
-            <Text size="1" color="gray">({count})</Text>
+            <Text size="1" color="gray">
+              ({count})
+            </Text>
           )}
         </Flex>
-        <Text size="1" color="gray">{expanded ? "▲" : "▼"}</Text>
+        <Text size="1" color="gray">
+          {expanded ? "▲" : "▼"}
+        </Text>
       </button>
-      {expanded && (
-        <Box className={styles.sectionContent}>
-          {children}
-        </Box>
-      )}
+      {expanded && <Box className={styles.sectionContent}>{children}</Box>}
     </Box>
   );
 };
@@ -69,7 +79,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     { configPath, port },
     { pollingInterval: 3000 },
   );
-  const [reconnect, { isLoading: isReconnecting }] = useReconnectMCPServerMutation();
+  const [reconnect, { isLoading: isReconnecting }] =
+    useReconnectMCPServerMutation();
 
   const handleReconnect = () => {
     void reconnect({ configPath, port });
@@ -79,7 +90,9 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     return (
       <Flex p="4" align="center" justify="center" gap="2">
         <Spinner size="2" />
-        <Text size="2" color="gray">Loading MCP server info...</Text>
+        <Text size="2" color="gray">
+          Loading MCP server info...
+        </Text>
       </Flex>
     );
   }
@@ -91,7 +104,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           MCP server info not available. The server may not be connected yet.
         </Text>
         <Flex align="center" gap="2">
-          <Button size="2" variant="soft" onClick={handleReconnect} disabled={isReconnecting}>
+          <Button
+            size="2"
+            variant="soft"
+            onClick={handleReconnect}
+            disabled={isReconnecting}
+          >
             {isReconnecting ? "Reconnecting..." : "Reconnect"}
           </Button>
           {isReconnecting && <Spinner size="2" />}
@@ -111,13 +129,17 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         <Heading size="3">
           {data.server_name ?? toPascalCase(integrName)}
           {data.server_version && (
-            <Text size="2" color="gray" ml="2">v{data.server_version}</Text>
+            <Text size="2" color="gray" ml="2">
+              v{data.server_version}
+            </Text>
           )}
         </Heading>
       </Flex>
 
       {data.protocol_version && (
-        <Text size="1" color="gray">Protocol: {data.protocol_version}</Text>
+        <Text size="1" color="gray">
+          Protocol: {data.protocol_version}
+        </Text>
       )}
 
       <Separator size="4" />
@@ -134,14 +156,21 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
       <Separator size="4" />
 
-      <CollapsibleSection title="🔧 Tools" count={data.tools.length} defaultExpanded>
+      <CollapsibleSection
+        title="🔧 Tools"
+        count={data.tools.length}
+        defaultExpanded
+      >
         <MCPToolsList tools={data.tools} />
       </CollapsibleSection>
 
       {data.resources.length > 0 && (
         <>
           <Separator size="4" />
-          <CollapsibleSection title="📁 Resources" count={data.resources.length}>
+          <CollapsibleSection
+            title="📁 Resources"
+            count={data.resources.length}
+          >
             <MCPResourcesList resources={data.resources} />
           </CollapsibleSection>
         </>

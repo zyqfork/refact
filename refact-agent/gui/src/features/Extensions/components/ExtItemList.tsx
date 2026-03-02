@@ -1,7 +1,10 @@
 import React from "react";
 import { Flex, Button, Text, Badge, IconButton } from "@radix-ui/themes";
 import { PlusIcon, TrashIcon } from "@radix-ui/react-icons";
-import type { SkillRegistryItem, CommandRegistryItem } from "../../../services/refact/extensions";
+import type {
+  SkillRegistryItem,
+  CommandRegistryItem,
+} from "../../../services/refact/extensions";
 import styles from "./ExtItemList.module.css";
 
 export type RegistryItem = SkillRegistryItem | CommandRegistryItem;
@@ -44,7 +47,9 @@ export const ExtItemList: React.FC<ExtItemListProps> = ({
           role="button"
           tabIndex={0}
           aria-label={`Select ${item.name}`}
-          className={`${styles.item} ${selectedId === item.name ? styles.selected : ""}`}
+          className={`${styles.item} ${
+            selectedId === item.name ? styles.selected : ""
+          }`}
           onClick={() => onSelect(item.name)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -78,11 +83,7 @@ export const ExtItemList: React.FC<ExtItemListProps> = ({
             </Text>
           </Flex>
           <Flex gap="1" align="center" style={{ flexShrink: 0 }}>
-            <Badge
-              size="1"
-              color={SCOPE_COLORS[item.scope]}
-              variant="soft"
-            >
+            <Badge size="1" color={SCOPE_COLORS[item.scope]} variant="soft">
               {SCOPE_LABELS[item.scope]}
             </Badge>
             {!item.read_only && (

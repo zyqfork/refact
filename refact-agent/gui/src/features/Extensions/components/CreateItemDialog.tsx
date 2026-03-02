@@ -26,7 +26,8 @@ type CreateItemDialogProps = {
 
 function validateName(name: string): string | null {
   if (!name.trim()) return "Name is required";
-  if (/[\s/.]/.test(name)) return "Name must not contain spaces, slashes, or dots";
+  if (/[\s/.]/.test(name))
+    return "Name must not contain spaces, slashes, or dots";
   return null;
 }
 
@@ -44,8 +45,10 @@ export const CreateItemDialog: React.FC<CreateItemDialogProps> = ({
   );
   const [error, setError] = useState<string | null>(null);
 
-  const [createSkill, { isLoading: isCreatingSkill }] = useCreateSkillMutation();
-  const [createCommand, { isLoading: isCreatingCommand }] = useCreateCommandMutation();
+  const [createSkill, { isLoading: isCreatingSkill }] =
+    useCreateSkillMutation();
+  const [createCommand, { isLoading: isCreatingCommand }] =
+    useCreateCommandMutation();
   const isLoading = isCreatingSkill || isCreatingCommand;
 
   React.useEffect(() => {
@@ -78,7 +81,16 @@ export const CreateItemDialog: React.FC<CreateItemDialogProps> = ({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [type, name, scope, description, createSkill, createCommand, onOpenChange, onCreated]);
+  }, [
+    type,
+    name,
+    scope,
+    description,
+    createSkill,
+    createCommand,
+    onOpenChange,
+    onCreated,
+  ]);
 
   const title = type === "skill" ? "Create Skill" : "Create Command";
 

@@ -258,7 +258,10 @@ export const integrationsApi = createApi({
       },
     }),
 
-    mcpOauthCancel: builder.mutation<{ cancelled: boolean }, { session_id: string }>({
+    mcpOauthCancel: builder.mutation<
+      { cancelled: boolean },
+      { session_id: string }
+    >({
       invalidatesTags: ["MCP_OAUTH"],
       async queryFn(arg, api, extraOptions, baseQuery) {
         const state = api.getState() as RootState;
@@ -282,7 +285,9 @@ export const integrationsApi = createApi({
       async queryFn(configPath, api, extraOptions, baseQuery) {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
-        const url = `http://127.0.0.1:${port}/v1/mcp/oauth/status?config_path=${encodeURIComponent(configPath)}`;
+        const url = `http://127.0.0.1:${port}/v1/mcp/oauth/status?config_path=${encodeURIComponent(
+          configPath,
+        )}`;
         const response = await baseQuery({ ...extraOptions, url });
         if (response.error) return { error: response.error };
         return { data: response.data as MCPOAuthStatusResponse };
@@ -515,7 +520,11 @@ function isIntegrationField<T extends IntegrationPrimitive>(
     return false;
   }
 
-  if ("f_extra" in json && typeof json.f_extra !== "boolean" && typeof json.f_extra !== "object") {
+  if (
+    "f_extra" in json &&
+    typeof json.f_extra !== "boolean" &&
+    typeof json.f_extra !== "object"
+  ) {
     return false;
   }
   if ("f_placeholder" in json && !isPrimitive(json.f_placeholder)) {

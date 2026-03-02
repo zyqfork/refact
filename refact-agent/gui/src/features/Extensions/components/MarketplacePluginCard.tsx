@@ -23,7 +23,10 @@ export const MarketplacePluginCard: React.FC<MarketplacePluginCardProps> = ({
     useUninstallPluginMutation();
 
   const handleInstall = useCallback(() => {
-    void installPlugin({ plugin: plugin.name, marketplace: plugin.marketplace });
+    void installPlugin({
+      plugin: plugin.name,
+      marketplace: plugin.marketplace,
+    });
   }, [installPlugin, plugin.name, plugin.marketplace]);
 
   const handleUninstall = useCallback(() => {

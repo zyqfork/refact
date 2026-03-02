@@ -4,7 +4,11 @@ import { MCPConnectionStatus } from "../components/IntegrationsView/MCPServerVie
 import { MCPToolsList } from "../components/IntegrationsView/MCPServerView/MCPToolsList";
 import { MCPResourcesList } from "../components/IntegrationsView/MCPServerView/MCPResourcesList";
 import { MCPPromptsList } from "../components/IntegrationsView/MCPServerView/MCPPromptsList";
-import type { MCPToolInfo, MCPResourceInfo, MCPPromptInfo } from "../services/refact/mcpServerInfo";
+import type {
+  MCPToolInfo,
+  MCPResourceInfo,
+  MCPPromptInfo,
+} from "../services/refact/mcpServerInfo";
 
 describe("MCPConnectionStatus", () => {
   test("renders connected status as green badge", () => {
@@ -16,7 +20,9 @@ describe("MCPConnectionStatus", () => {
       />,
     );
     expect(screen.getByText("connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /reconnect/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /reconnect/i }),
+    ).toBeInTheDocument();
   });
 
   test("renders string status", () => {
@@ -144,7 +150,10 @@ describe("MCPToolsList", () => {
     {
       name: "create_issue",
       description: "Create a GitHub issue",
-      input_schema: { type: "object", properties: { title: { type: "string" } } },
+      input_schema: {
+        type: "object",
+        properties: { title: { type: "string" } },
+      },
       internal_name: "mcp_github_create_issue",
     },
     {

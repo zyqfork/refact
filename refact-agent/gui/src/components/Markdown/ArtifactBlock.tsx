@@ -193,7 +193,9 @@ const _ArtifactBlock: React.FC<ArtifactBlockProps> = ({
 <style>*{margin:0;padding:0}html,body{height:100%}iframe{width:100%;height:100vh;border:0}</style>
 </head><body>
 <iframe id="f" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
-<script>document.getElementById('f').srcdoc=${JSON.stringify(wrappedHtml)};</script>
+<script>document.getElementById('f').srcdoc=${JSON.stringify(
+      wrappedHtml,
+    )};</script>
 </body></html>`;
     const blob = new Blob([wrapperHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
@@ -312,9 +314,7 @@ const _ArtifactBlock: React.FC<ArtifactBlockProps> = ({
           />
         )}
 
-        {error && (
-          <Box className={styles.error_bar}>JS Error: {error}</Box>
-        )}
+        {error && <Box className={styles.error_bar}>JS Error: {error}</Box>}
       </Box>
     </ToolCard>
   );

@@ -46,7 +46,12 @@ type HookRowProps = {
   onDelete: (index: number) => void;
 };
 
-const HookRow: React.FC<HookRowProps> = ({ hook, index, onUpdate, onDelete }) => {
+const HookRow: React.FC<HookRowProps> = ({
+  hook,
+  index,
+  onUpdate,
+  onDelete,
+}) => {
   const showMatcher = EVENTS_WITH_MATCHER.includes(hook.event as HookEvent);
 
   return (
@@ -73,7 +78,9 @@ const HookRow: React.FC<HookRowProps> = ({ hook, index, onUpdate, onDelete }) =>
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Event</Text>
+        <Text size="1" weight="medium">
+          Event
+        </Text>
         <Select.Root
           size="1"
           value={hook.event}
@@ -82,7 +89,9 @@ const HookRow: React.FC<HookRowProps> = ({ hook, index, onUpdate, onDelete }) =>
           <Select.Trigger style={{ width: "100%" }} />
           <Select.Content>
             {HOOK_EVENTS.map((e) => (
-              <Select.Item key={e} value={e}>{e}</Select.Item>
+              <Select.Item key={e} value={e}>
+                {e}
+              </Select.Item>
             ))}
           </Select.Content>
         </Select.Root>
@@ -90,7 +99,9 @@ const HookRow: React.FC<HookRowProps> = ({ hook, index, onUpdate, onDelete }) =>
 
       {showMatcher && (
         <Flex direction="column" gap="1">
-          <Text size="1" weight="medium">Matcher (optional regex)</Text>
+          <Text size="1" weight="medium">
+            Matcher (optional regex)
+          </Text>
           <TextField.Root
             size="1"
             value={hook.matcher ?? ""}
@@ -106,18 +117,24 @@ const HookRow: React.FC<HookRowProps> = ({ hook, index, onUpdate, onDelete }) =>
       )}
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Command</Text>
+        <Text size="1" weight="medium">
+          Command
+        </Text>
         <textarea
           className={styles.commandTextarea}
           value={hook.command}
-          onChange={(e) => onUpdate(index, { ...hook, command: e.target.value })}
+          onChange={(e) =>
+            onUpdate(index, { ...hook, command: e.target.value })
+          }
           placeholder="Shell command to run..."
           spellCheck={false}
         />
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Timeout (seconds, optional)</Text>
+        <Text size="1" weight="medium">
+          Timeout (seconds, optional)
+        </Text>
         <TextField.Root
           size="1"
           type="number"
@@ -125,7 +142,9 @@ const HookRow: React.FC<HookRowProps> = ({ hook, index, onUpdate, onDelete }) =>
           onChange={(e) =>
             onUpdate(index, {
               ...hook,
-              timeout: e.target.value ? parseInt(e.target.value, 10) : undefined,
+              timeout: e.target.value
+                ? parseInt(e.target.value, 10)
+                : undefined,
             })
           }
           placeholder="30"
@@ -148,7 +167,9 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
   const [hooks, setHooks] = useState<HookEntry[]>([]);
   const [rawYaml, setRawYaml] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [hooksScope, setHooksScope] = useState<"global" | "local">(scope ?? "global");
+  const [hooksScope, setHooksScope] = useState<"global" | "local">(
+    scope ?? "global",
+  );
 
   useEffect(() => {
     if (data) {
@@ -168,7 +189,12 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
   const handleAdd = useCallback(() => {
     setHooks((prev) => [
       ...prev,
-      { event: "PreToolUse", command: "", matcher: undefined, timeout: undefined },
+      {
+        event: "PreToolUse",
+        command: "",
+        matcher: undefined,
+        timeout: undefined,
+      },
     ]);
   }, []);
 
@@ -176,7 +202,10 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
     setSaveError(null);
     try {
       if (view === "raw") {
-        await saveHooks({ scope: hooksScope, body: { raw_yaml: rawYaml } }).unwrap();
+        await saveHooks({
+          scope: hooksScope,
+          body: { raw_yaml: rawYaml },
+        }).unwrap();
       } else {
         await saveHooks({ scope: hooksScope, body: { hooks } }).unwrap();
       }
@@ -189,7 +218,9 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
   if (error) {
     return (
       <Callout.Root color="red">
-        <Callout.Icon><InfoCircledIcon /></Callout.Icon>
+        <Callout.Icon>
+          <InfoCircledIcon />
+        </Callout.Icon>
         <Callout.Text>Failed to load hooks</Callout.Text>
       </Callout.Root>
     );
@@ -199,7 +230,9 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
     <Flex direction="column" gap="2" className={styles.editor}>
       <Flex justify="between" align="center" gap="2" wrap="wrap">
         <Flex gap="2" align="center">
-          <Text size="2" weight="bold">Hooks</Text>
+          <Text size="2" weight="bold">
+            Hooks
+          </Text>
           <SegmentedControl.Root
             size="1"
             value={hooksScope}
@@ -222,14 +255,20 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
               <CodeIcon width={12} height={12} />
             </SegmentedControl.Item>
           </SegmentedControl.Root>
-          <Button size="1" onClick={() => void handleSave()} disabled={isSaving}>
+          <Button
+            size="1"
+            onClick={() => void handleSave()}
+            disabled={isSaving}
+          >
             {isSaving ? "..." : "Save"}
           </Button>
         </Flex>
       </Flex>
 
       {saveError && (
-        <Text size="1" color="red">{saveError}</Text>
+        <Text size="1" color="red">
+          {saveError}
+        </Text>
       )}
 
       {view === "form" ? (
@@ -244,7 +283,9 @@ export const HooksEditor: React.FC<HooksEditorProps> = ({ scope }) => {
             />
           ))}
           {hooks.length === 0 && (
-            <Text size="1" color="gray">No hooks configured.</Text>
+            <Text size="1" color="gray">
+              No hooks configured.
+            </Text>
           )}
           <Button variant="soft" size="1" onClick={handleAdd}>
             <PlusIcon /> Add Hook

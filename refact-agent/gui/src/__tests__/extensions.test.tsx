@@ -35,7 +35,8 @@ const MOCK_ITEMS: SkillRegistryItem[] = [
     source_label: "my-plugin",
     scope: "plugin",
     read_only: true,
-    file_path: "/home/.config/refact/plugins/installed/my-plugin/skills/plugin_skill/SKILL.md",
+    file_path:
+      "/home/.config/refact/plugins/installed/my-plugin/skills/plugin_skill/SKILL.md",
   },
 ];
 
@@ -87,7 +88,9 @@ describe("ExtItemList", () => {
       />,
     );
 
-    const selectedEl = container.querySelector('[aria-label="Select my_skill"]');
+    const selectedEl = container.querySelector(
+      '[aria-label="Select my_skill"]',
+    );
     expect(selectedEl?.className).toContain("selected");
   });
 
@@ -136,17 +139,20 @@ describe("MarketplacePluginCard", () => {
         return HttpResponse.json({ ok: true });
       }),
     );
-    render(<MarketplacePluginCard plugin={ENGINE_PLUGIN} isInstalled={false} />, {
-      preloadedState: {
-        config: {
-          apiKey: "test",
-          lspPort: 8001,
-          themeProps: {},
-          host: "vscode",
-          addressURL: "Refact",
+    render(
+      <MarketplacePluginCard plugin={ENGINE_PLUGIN} isInstalled={false} />,
+      {
+        preloadedState: {
+          config: {
+            apiKey: "test",
+            lspPort: 8001,
+            themeProps: {},
+            host: "vscode",
+            addressURL: "Refact",
+          },
         },
       },
-    });
+    );
     expect(screen.getByText("my-plugin")).toBeDefined();
     expect(screen.getByText("A useful plugin")).toBeDefined();
     expect(screen.getByText("1.2.3")).toBeDefined();
@@ -157,21 +163,27 @@ describe("MarketplacePluginCard", () => {
 
   it("shows Installed and Uninstall button when isInstalled", () => {
     server.use(
-      http.delete("http://127.0.0.1:8001/v1/plugins/installed/my-plugin", () => {
-        return HttpResponse.json({ deleted: true });
-      }),
+      http.delete(
+        "http://127.0.0.1:8001/v1/plugins/installed/my-plugin",
+        () => {
+          return HttpResponse.json({ deleted: true });
+        },
+      ),
     );
-    render(<MarketplacePluginCard plugin={ENGINE_PLUGIN} isInstalled={true} />, {
-      preloadedState: {
-        config: {
-          apiKey: "test",
-          lspPort: 8001,
-          themeProps: {},
-          host: "vscode",
-          addressURL: "Refact",
+    render(
+      <MarketplacePluginCard plugin={ENGINE_PLUGIN} isInstalled={true} />,
+      {
+        preloadedState: {
+          config: {
+            apiKey: "test",
+            lspPort: 8001,
+            themeProps: {},
+            host: "vscode",
+            addressURL: "Refact",
+          },
         },
       },
-    });
+    );
     expect(screen.getByText("Installed ✓")).toBeDefined();
     expect(screen.getByText("Uninstall")).toBeDefined();
   });
@@ -192,30 +204,25 @@ describe("SkillEditor", () => {
           agent: null,
           argument_hint: "[arg]",
           body: "# My Skill\nDo something.",
-          raw_content: "---\ndescription: A test skill\n---\n# My Skill\nDo something.",
+          raw_content:
+            "---\ndescription: A test skill\n---\n# My Skill\nDo something.",
           source: "global",
           file_path: "/home/.config/refact/skills/my_skill/SKILL.md",
         });
       }),
     );
 
-    render(
-      <SkillEditor
-        name="my_skill"
-        onBack={() => undefined}
-      />,
-      {
-        preloadedState: {
-          config: {
-            apiKey: "test",
-            lspPort: 8001,
-            themeProps: {},
-            host: "vscode",
-            addressURL: "Refact",
-          },
+    render(<SkillEditor name="my_skill" onBack={() => undefined} />, {
+      preloadedState: {
+        config: {
+          apiKey: "test",
+          lspPort: 8001,
+          themeProps: {},
+          host: "vscode",
+          addressURL: "Refact",
         },
       },
-    );
+    });
 
     const nameInput = await screen.findByDisplayValue("my_skill");
     expect(nameInput).toBeDefined();
@@ -252,7 +259,9 @@ describe("Extensions", () => {
       { preloadedState: CONFIG_STATE },
     );
 
-    const errorMsg = await screen.findByText("Failed to load extensions registry");
+    const errorMsg = await screen.findByText(
+      "Failed to load extensions registry",
+    );
     expect(errorMsg).toBeDefined();
     expect(screen.getByText("Retry")).toBeDefined();
   });

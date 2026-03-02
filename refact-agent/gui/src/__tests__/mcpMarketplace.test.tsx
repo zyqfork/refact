@@ -5,7 +5,11 @@ import { server } from "../utils/mockServer";
 import { MCPMarketplace } from "../features/MCPMarketplace";
 import { ServerCard } from "../features/MCPMarketplace/ServerCard";
 import { SourceSelector } from "../features/MCPMarketplace/SourceSelector";
-import type { MCPServer, MarketplaceResponse, MarketplaceSource } from "../services/refact/mcpMarketplace";
+import type {
+  MCPServer,
+  MarketplaceResponse,
+  MarketplaceSource,
+} from "../services/refact/mcpMarketplace";
 
 const MOCK_SERVER: MCPServer = {
   id: "test-server",
@@ -133,7 +137,9 @@ describe("ServerCard", () => {
         server={MOCK_SERVER}
         isInstalled={false}
         isInstalling={false}
-        onInstall={(s) => { calledWith.push(s); }}
+        onInstall={(s) => {
+          calledWith.push(s);
+        }}
         onViewDetail={() => undefined}
       />,
     );
@@ -291,7 +297,10 @@ describe("MCPMarketplace", () => {
     };
     server.use(
       http.get("http://127.0.0.1:8001/v1/mcp/marketplace", () => {
-        return HttpResponse.json({ servers: [MOCK_SERVER, secondServer], sources: MOCK_SOURCES });
+        return HttpResponse.json({
+          servers: [MOCK_SERVER, secondServer],
+          sources: MOCK_SOURCES,
+        });
       }),
       http.get("http://127.0.0.1:8001/v1/mcp/marketplace/installed", () => {
         return HttpResponse.json({ installed: [] });
@@ -324,7 +333,13 @@ describe("MCPMarketplace", () => {
       }),
       http.get("http://127.0.0.1:8001/v1/mcp/marketplace/installed", () => {
         return HttpResponse.json({
-          installed: [{ id: "test-server", name: "Test Server", config_path: "/tmp/test.yaml" }],
+          installed: [
+            {
+              id: "test-server",
+              name: "Test Server",
+              config_path: "/tmp/test.yaml",
+            },
+          ],
         });
       }),
     );
@@ -368,7 +383,9 @@ describe("MCPMarketplace", () => {
     );
 
     await screen.findByText("Test Server");
-    expect(screen.getByText(/Smithery source requires an API key/)).toBeDefined();
+    expect(
+      screen.getByText(/Smithery source requires an API key/),
+    ).toBeDefined();
   });
 
   it("source settings dialog opens and closes", async () => {

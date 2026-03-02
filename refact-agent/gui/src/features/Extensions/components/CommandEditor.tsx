@@ -8,7 +8,12 @@ import {
   SegmentedControl,
   Callout,
 } from "@radix-ui/themes";
-import { ArrowLeftIcon, MixerHorizontalIcon, CodeIcon, InfoCircledIcon } from "@radix-ui/react-icons";
+import {
+  ArrowLeftIcon,
+  MixerHorizontalIcon,
+  CodeIcon,
+  InfoCircledIcon,
+} from "@radix-ui/react-icons";
 import {
   useGetCommandQuery,
   useSaveCommandMutation,
@@ -26,20 +31,24 @@ type CommandFormProps = {
   disabled: boolean;
 };
 
-const CommandForm: React.FC<CommandFormProps> = ({ data, onChange, disabled }) => {
+const CommandForm: React.FC<CommandFormProps> = ({
+  data,
+  onChange,
+  disabled,
+}) => {
   return (
     <Flex direction="column" gap="3" className={styles.formContent}>
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Name</Text>
-        <TextField.Root
-          size="1"
-          value={data.name}
-          disabled
-        />
+        <Text size="1" weight="medium">
+          Name
+        </Text>
+        <TextField.Root size="1" value={data.name} disabled />
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Description</Text>
+        <Text size="1" weight="medium">
+          Description
+        </Text>
         <TextArea
           size="1"
           value={data.description}
@@ -50,7 +59,9 @@ const CommandForm: React.FC<CommandFormProps> = ({ data, onChange, disabled }) =
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Argument Hint</Text>
+        <Text size="1" weight="medium">
+          Argument Hint
+        </Text>
         <TextField.Root
           size="1"
           value={data.argument_hint}
@@ -68,7 +79,9 @@ const CommandForm: React.FC<CommandFormProps> = ({ data, onChange, disabled }) =
       />
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Model (optional)</Text>
+        <Text size="1" weight="medium">
+          Model (optional)
+        </Text>
         <TextField.Root
           size="1"
           value={data.model ?? ""}
@@ -79,8 +92,12 @@ const CommandForm: React.FC<CommandFormProps> = ({ data, onChange, disabled }) =
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="medium">Body</Text>
-        <Text size="1" color="gray">Placeholders: $ARGUMENTS, $1, $2, $3</Text>
+        <Text size="1" weight="medium">
+          Body
+        </Text>
+        <Text size="1" color="gray">
+          Placeholders: $ARGUMENTS, $1, $2, $3
+        </Text>
         <textarea
           className={styles.bodyTextarea}
           value={data.body}
@@ -99,7 +116,10 @@ type CommandEditorProps = {
   onBack: () => void;
 };
 
-export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) => {
+export const CommandEditor: React.FC<CommandEditorProps> = ({
+  name,
+  onBack,
+}) => {
   const { data, isLoading, error } = useGetCommandQuery({ name });
   const [saveCommand, { isLoading: isSaving }] = useSaveCommandMutation();
   const [view, setView] = useState<EditorView>("form");
@@ -115,7 +135,7 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) =>
   }, [data]);
 
   const handleFormChange = useCallback((patch: Partial<CommandDetail>) => {
-    setLocalData((prev) => prev ? { ...prev, ...patch } : prev);
+    setLocalData((prev) => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -145,8 +165,12 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) =>
   if (!localData) {
     return (
       <Callout.Root color="red">
-        <Callout.Icon><InfoCircledIcon /></Callout.Icon>
-        <Callout.Text>{error !== undefined ? "Failed to load command" : "Loading..."}</Callout.Text>
+        <Callout.Icon>
+          <InfoCircledIcon />
+        </Callout.Icon>
+        <Callout.Text>
+          {error !== undefined ? "Failed to load command" : "Loading..."}
+        </Callout.Text>
       </Callout.Root>
     );
   }
@@ -166,7 +190,9 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) =>
 
       {isReadOnly && (
         <Callout.Root color="blue">
-          <Callout.Icon><InfoCircledIcon /></Callout.Icon>
+          <Callout.Icon>
+            <InfoCircledIcon />
+          </Callout.Icon>
           <Callout.Text>
             This item is from an installed plugin and cannot be edited.
           </Callout.Text>
@@ -174,7 +200,9 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) =>
       )}
 
       <Flex justify="between" align="center" gap="2" wrap="wrap">
-        <Text size="2" weight="bold">{name}</Text>
+        <Text size="2" weight="bold">
+          {name}
+        </Text>
         <Flex gap="1" align="center">
           <SegmentedControl.Root
             size="1"
@@ -189,7 +217,11 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) =>
             </SegmentedControl.Item>
           </SegmentedControl.Root>
           {!isReadOnly && (
-            <Button size="1" onClick={() => void handleSave()} disabled={isSaving}>
+            <Button
+              size="1"
+              onClick={() => void handleSave()}
+              disabled={isSaving}
+            >
               {isSaving ? "..." : "Save"}
             </Button>
           )}
@@ -197,11 +229,17 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({ name, onBack }) =>
       </Flex>
 
       {saveError && (
-        <Text size="1" color="red">{saveError}</Text>
+        <Text size="1" color="red">
+          {saveError}
+        </Text>
       )}
 
       {view === "form" ? (
-        <CommandForm data={localData} onChange={handleFormChange} disabled={isReadOnly} />
+        <CommandForm
+          data={localData}
+          onChange={handleFormChange}
+          disabled={isReadOnly}
+        />
       ) : (
         <textarea
           className={styles.rawTextarea}

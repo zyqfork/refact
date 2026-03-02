@@ -122,7 +122,6 @@ const rootReducer = combineSlices(
     [extensionsApi.reducerPath]: extensionsApi.reducer,
     [pluginsApi.reducerPath]: pluginsApi.reducer,
     [mcpMarketplaceApi.reducerPath]: mcpMarketplaceApi.reducer,
-
   },
   historySlice,
   errorSlice,
@@ -219,7 +218,6 @@ export function setUpStore(preloadedState?: Partial<RootState>) {
           pluginsApi.middleware,
           mcpServerInfoApi.middleware,
           mcpMarketplaceApi.middleware,
-
         )
         .prepend(historyMiddleware.middleware)
         .prepend(listenerMiddleware.middleware);

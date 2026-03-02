@@ -373,7 +373,9 @@ const _ContextFiles: React.FC<{
     async (file: { file_path: string; line?: number }) => {
       if (file.file_path.startsWith("skill://")) {
         const skillName = file.file_path.slice("skill://".length);
-        dispatch(push({ name: "extensions", tab: "skills", itemId: skillName }));
+        dispatch(
+          push({ name: "extensions", tab: "skills", itemId: skillName }),
+        );
         return;
       }
       if (file.file_path.startsWith("skills://")) {

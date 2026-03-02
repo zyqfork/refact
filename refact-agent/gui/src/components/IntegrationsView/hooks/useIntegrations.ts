@@ -600,7 +600,11 @@ export const useIntegrations = ({
   }, [dispatch, goBack]);
 
   const handleMCPWizardSubmit = useCallback(
-    (configPath: string, integrName: string, initialInput?: { input: string; transport: string }) => {
+    (
+      configPath: string,
+      integrName: string,
+      initialInput?: { input: string; transport: string },
+    ) => {
       if (!currentNotConfiguredIntegration) return;
       const newIntegration: IntegrationWithIconRecord = {
         when_isolated: false,
@@ -612,8 +616,13 @@ export const useIntegrations = ({
         integr_config_exists: false,
       };
       if (initialInput) {
-        const fieldKey = initialInput.transport === "http" || initialInput.transport === "sse" ? "url" : "command";
-        void saveIntegrationMutationTrigger(configPath, { [fieldKey]: initialInput.input });
+        const fieldKey =
+          initialInput.transport === "http" || initialInput.transport === "sse"
+            ? "url"
+            : "command";
+        void saveIntegrationMutationTrigger(configPath, {
+          [fieldKey]: initialInput.input,
+        });
       }
       setCurrentIntegration(newIntegration);
       setCurrentNotConfiguredIntegration(null);

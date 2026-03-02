@@ -8,16 +8,24 @@ type MCPPromptsListProps = {
 
 export const MCPPromptsList: React.FC<MCPPromptsListProps> = ({ prompts }) => {
   if (prompts.length === 0) {
-    return <Text size="2" color="gray">No prompts available</Text>;
+    return (
+      <Text size="2" color="gray">
+        No prompts available
+      </Text>
+    );
   }
 
   return (
     <Flex direction="column" gap="2">
       {prompts.map((prompt) => (
         <Flex key={prompt.name} direction="column" gap="1">
-          <Text size="2" weight="medium">{prompt.name}</Text>
+          <Text size="2" weight="medium">
+            {prompt.name}
+          </Text>
           {prompt.description && (
-            <Text size="1" color="gray">{prompt.description}</Text>
+            <Text size="1" color="gray">
+              {prompt.description}
+            </Text>
           )}
         </Flex>
       ))}

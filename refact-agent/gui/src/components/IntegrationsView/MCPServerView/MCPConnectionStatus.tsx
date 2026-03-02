@@ -12,7 +12,8 @@ type MCPConnectionStatusProps = {
 
 function getStatusLabel(status: ConnectionStatusValue): string {
   if (typeof status === "string") return status;
-  if ("status" in status && typeof status.status === "string") return status.status;
+  if ("status" in status && typeof status.status === "string")
+    return status.status;
   return "unknown";
 }
 
@@ -32,15 +33,25 @@ function isSpinnerVisible(label: string, isReconnecting: boolean): boolean {
 
 function getAttemptInfo(status: ConnectionStatusValue): string | null {
   if (typeof status !== "object") return null;
-  const attempt = "attempt" in status && typeof status.attempt === "number" ? status.attempt : null;
-  const maxAttempts = "max_attempts" in status && typeof status.max_attempts === "number" ? status.max_attempts : null;
-  if (attempt !== null && maxAttempts !== null) return `Attempt ${attempt}/${maxAttempts}`;
+  const attempt =
+    "attempt" in status && typeof status.attempt === "number"
+      ? status.attempt
+      : null;
+  const maxAttempts =
+    "max_attempts" in status && typeof status.max_attempts === "number"
+      ? status.max_attempts
+      : null;
+  if (attempt !== null && maxAttempts !== null)
+    return `Attempt ${attempt}/${maxAttempts}`;
   return null;
 }
 
 function getNextRetryInfo(status: ConnectionStatusValue): string | null {
   if (typeof status !== "object") return null;
-  if ("next_retry_seconds" in status && typeof status.next_retry_seconds === "number") {
+  if (
+    "next_retry_seconds" in status &&
+    typeof status.next_retry_seconds === "number"
+  ) {
     return `Next retry in ${status.next_retry_seconds}s`;
   }
   return null;
@@ -66,10 +77,14 @@ export const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
         {showSpinner && <Spinner spinning />}
       </Flex>
       {attemptInfo && (
-        <Text size="1" color="gray">{attemptInfo}</Text>
+        <Text size="1" color="gray">
+          {attemptInfo}
+        </Text>
       )}
       {nextRetryInfo && (
-        <Text size="1" color="gray">{nextRetryInfo}</Text>
+        <Text size="1" color="gray">
+          {nextRetryInfo}
+        </Text>
       )}
       <Button
         size="1"
@@ -79,11 +94,13 @@ export const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
       >
         {isReconnecting ? "Reconnecting..." : "Reconnect"}
       </Button>
-      {typeof status === "object" && "error" in status && typeof status.error === "string" && (
-        <Text size="1" color="red">
-          {status.error}
-        </Text>
-      )}
+      {typeof status === "object" &&
+        "error" in status &&
+        typeof status.error === "string" && (
+          <Text size="1" color="red">
+            {status.error}
+          </Text>
+        )}
     </Flex>
   );
 };
