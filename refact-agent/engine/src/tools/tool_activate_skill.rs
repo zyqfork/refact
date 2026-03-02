@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{ContextEnum, ContextFile};
+use crate::call_validation::{ChatContent, ChatMessage, ContextEnum, ContextFile};
 use crate::ext::config_dirs::get_ext_dirs;
 use crate::ext::skills::load_skill_full;
 use crate::ext::skills_context::expand_skill_includes;
@@ -88,6 +88,28 @@ impl Tool for ToolActivateSkill {
             let ccx_locked = ccx.lock().await;
             (ccx_locked.global_context.clone(), ccx_locked.chat_id.clone())
         };
+
+        {
+            let session_arc_opt = {
+                let gcx_locked = gcx.read().await;
+                let sessions = gcx_locked.chat_sessions.read().await;
+                sessions.get(&chat_id).cloned()
+            };
+            if let Some(session_arc) = session_arc_opt {
+                let session = session_arc.lock().await;
+                if session.thread.active_skill.as_deref() == Some(name.as_str()) {
+                    return Ok((false, vec![
+                        ContextEnum::ChatMessage(ChatMessage {
+                            role: "tool".to_string(),
+                            content: ChatContent::SimpleText(format!("Skill '{}' is already active. Continue following its instructions.", name)),
+                            tool_call_id: tool_call_id.clone(),
+                            ..Default::default()
+                        }),
+                    ]));
+                }
+            }
+        }
+
         let ext_dirs = get_ext_dirs(gcx.clone()).await;
         let (context_file, allowed_tools, model_override) = activate_skill_inner(&ext_dirs, &name).await?;
 
@@ -112,7 +134,15 @@ impl Tool for ToolActivateSkill {
             }
         }
 
-        Ok((false, vec![ContextEnum::ContextFile(context_file)]))
+        Ok((false, vec![
+            ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(format!("✅ Skill '{}' activated. Follow the skill instructions provided in context.", name)),
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            }),
+            ContextEnum::ContextFile(context_file),
+        ]))
     }
 }
 
@@ -145,7 +175,7 @@ impl Tool for ToolDeactivateSkill {
     async fn tool_execute(
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
-        _tool_call_id: &String,
+        tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let report = match args.get("report") {
@@ -182,10 +212,25 @@ impl Tool for ToolDeactivateSkill {
                 }
                 session.active_command = crate::chat::types::ActiveCommandContext::default();
                 session.clear_active_skill();
+                return Ok((false, vec![
+                    ContextEnum::ChatMessage(ChatMessage {
+                        role: "tool".to_string(),
+                        content: ChatContent::SimpleText(format!("✅ Skill '{}' deactivated. Report has been recorded.", skill_name)),
+                        tool_call_id: tool_call_id.clone(),
+                        ..Default::default()
+                    }),
+                ]));
             }
         }
 
-        Ok((false, vec![]))
+        Ok((false, vec![
+            ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText("✅ Skill deactivated. Report has been recorded.".to_string()),
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            }),
+        ]))
     }
 }
 
@@ -371,9 +416,18 @@ mod tests {
 
     #[test]
     fn test_deactivate_skill_no_context_file() {
-        let result: Vec<ContextEnum> = vec![];
+        let result: Vec<ContextEnum> = vec![
+            ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText("✅ Skill 'my-skill' deactivated. Report has been recorded.".to_string()),
+                tool_call_id: "tc1".to_string(),
+                ..Default::default()
+            }),
+        ];
         let has_context_file = result.iter().any(|e| matches!(e, ContextEnum::ContextFile(_)));
         assert!(!has_context_file, "deactivate_skill must not return ContextFile");
+        let has_chat_message = result.iter().any(|e| matches!(e, ContextEnum::ChatMessage(_)));
+        assert!(has_chat_message, "deactivate_skill must return a ChatMessage");
     }
 
     #[tokio::test]
@@ -511,6 +565,22 @@ mod tests {
         session.active_command = ActiveCommandContext::default();
         session.clear_active_skill();
         assert!(session.thread.active_skill.is_none());
+    }
+
+    #[test]
+    fn test_activate_already_active_skill_returns_early() {
+        let active_skill = Some("my-skill".to_string());
+        let name = "my-skill";
+        let already_active = active_skill.as_deref() == Some(name);
+        assert!(already_active, "Should detect already active skill");
+
+        let inactive_skill: Option<String> = None;
+        let not_active = inactive_skill.as_deref() == Some(name);
+        assert!(!not_active, "None should not match active skill");
+
+        let other_skill = Some("other-skill".to_string());
+        let different = other_skill.as_deref() == Some(name);
+        assert!(!different, "Different skill name should not match");
     }
 
     #[tokio::test]

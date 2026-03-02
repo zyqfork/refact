@@ -150,7 +150,7 @@ async fn expand_with_data(
                         None
                     };
                     let expanded_text = if args_str.is_empty() {
-                        format!("{}Run the {} skill", prefix, cmd_name)
+                        format!("{}Follow the instructions from the {} skill.", prefix, cmd_name)
                     } else {
                         format!("{}{}", prefix, args_str)
                     };
@@ -466,7 +466,7 @@ mod tests {
 
         let ext_dirs = make_ext_dirs(tmp.path().to_path_buf());
         let result = expand_with_dirs(&ext_dirs, "/my-skill").await.unwrap().unwrap();
-        assert_eq!(result.expanded_text, "Run the my-skill skill");
+        assert_eq!(result.expanded_text, "Follow the instructions from the my-skill skill.");
         assert!(result.skill_to_activate.is_some());
     }
 

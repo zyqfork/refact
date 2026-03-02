@@ -473,6 +473,7 @@ pub async fn process_command_queue(
                     }
                 }
 
+                let skill_activation_name: Option<String> = skill_activation_info.as_ref().map(|i| i.name.clone());
                 let skill_context_msg = if let Some(info) = skill_activation_info {
                     let body = expand_skill_includes(&info.body, &info.skill_dir).await;
                     let line_count = body.lines().count().max(1);
@@ -642,6 +643,10 @@ pub async fn process_command_queue(
                     // Track skill activation start for deactivation compaction
                     if !session.active_command.name.is_empty() && session.active_command.started_at_message_id.is_none() {
                         session.active_command.started_at_message_id = skill_start_message_id.or(Some(user_message_id));
+                    }
+
+                    if let Some(ref skill_name) = skill_activation_name {
+                        session.set_active_skill(skill_name.clone());
                     }
 
                     for additional in additional_messages {
