@@ -663,6 +663,7 @@ pub struct ChatSession {
     pub active_command: ActiveCommandContext,
     pub skills_available_count: usize,
     pub skills_included: Vec<String>,
+    pub pending_skill_deactivation: Option<PendingSkillDeactivation>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -671,6 +672,14 @@ pub struct ActiveCommandContext {
     pub allowed_tools: Vec<String>,
     pub model_override: Option<String>,
     pub context_fork: Option<String>,
+    pub started_at_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingSkillDeactivation {
+    pub start_message_id: String,
+    pub report: String,
+    pub skill_name: String,
 }
 
 #[derive(Debug, Clone)]

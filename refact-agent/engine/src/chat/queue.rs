@@ -458,6 +458,7 @@ pub async fn process_command_queue(
                                 allowed_tools: expanded.allowed_tools,
                                 model_override: expanded.model_override,
                                 context_fork: expanded.context_fork,
+                                started_at_message_id: None,
                             };
                         }
                         Ok(None) => {
@@ -619,19 +620,29 @@ pub async fn process_command_queue(
                         session.add_message(ctx_msg);
                     }
 
-                    if let Some(skill_msg) = skill_context_msg {
+                    let skill_start_message_id = if let Some(skill_msg) = skill_context_msg {
+                        let id = skill_msg.message_id.clone();
                         session.add_message(skill_msg);
-                    }
+                        Some(id)
+                    } else {
+                        None
+                    };
 
                     let parsed_content = parse_content_with_attachments(&content, &attachments);
+                    let user_message_id = Uuid::new_v4().to_string();
                     let user_message = ChatMessage {
-                        message_id: Uuid::new_v4().to_string(),
+                        message_id: user_message_id.clone(),
                         role: "user".to_string(),
                         content: parsed_content,
                         checkpoints,
                         ..Default::default()
                     };
                     session.add_message(user_message);
+
+                    // Track skill activation start for deactivation compaction
+                    if !session.active_command.name.is_empty() && session.active_command.started_at_message_id.is_none() {
+                        session.active_command.started_at_message_id = skill_start_message_id.or(Some(user_message_id));
+                    }
 
                     for additional in additional_messages {
                         if let ChatCommand::UserMessage {

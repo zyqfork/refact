@@ -59,6 +59,7 @@ impl ChatSession {
             active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
+            pending_skill_deactivation: None,
         }
     }
 
@@ -99,6 +100,7 @@ impl ChatSession {
             active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
+            pending_skill_deactivation: None,
         }
     }
 
@@ -256,6 +258,29 @@ impl ChatSession {
             self.increment_version();
             self.touch();
         }
+    }
+
+    pub fn perform_skill_deactivation_cleanup(&mut self) {
+        let Some(pending) = self.pending_skill_deactivation.take() else { return };
+
+        let start_idx = match self.messages.iter().position(|m| m.message_id == pending.start_message_id) {
+            Some(idx) => idx,
+            None => {
+                warn!("Skill deactivation cleanup: start message {} not found, skipping compaction", pending.start_message_id);
+                return;
+            }
+        };
+
+        info!("Skill deactivation cleanup: compacting messages from index {} for skill '{}'", start_idx, pending.skill_name);
+        self.truncate_messages(start_idx);
+
+        let report_content = format!("## Skill Report: {}\n\n{}", pending.skill_name, pending.report);
+        let report_message = ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText(report_content),
+            ..Default::default()
+        };
+        self.add_message(report_message);
     }
 
     pub fn set_runtime_state(&mut self, state: SessionState, error: Option<String>) {
@@ -1724,6 +1749,7 @@ mod tests {
             allowed_tools: vec!["cat".to_string()],
             model_override: Some("gpt-4".to_string()),
             context_fork: Some("subagent".to_string()),
+            started_at_message_id: None,
         };
         assert_eq!(session.active_command.context_fork, Some("subagent".to_string()));
         assert_eq!(session.active_command.name, "my-agent");

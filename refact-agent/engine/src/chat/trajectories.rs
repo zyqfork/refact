@@ -3013,6 +3013,7 @@ mod tests {
             active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
+            pending_skill_deactivation: None,
         };
 
         let snapshot = TrajectorySnapshot::from_session(&session);

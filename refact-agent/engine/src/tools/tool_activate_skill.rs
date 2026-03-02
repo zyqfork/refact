@@ -96,9 +96,16 @@ impl Tool for ToolActivateSkill {
             };
             if let Some(session_arc) = session_arc_opt {
                 let mut session = session_arc.lock().await;
+                // Find the assistant message that contains this activate_skill tool call
+                let started_at = session.messages.iter().rev()
+                    .find(|m| m.role == "assistant" && m.tool_calls.as_ref().map_or(false, |tcs|
+                        tcs.iter().any(|tc| tc.function.name == "activate_skill")
+                    ))
+                    .map(|m| m.message_id.clone());
                 session.active_command.name = name.clone();
                 session.active_command.allowed_tools = allowed_tools;
                 session.active_command.model_override = model_override;
+                session.active_command.started_at_message_id = started_at;
             }
         }
 
@@ -122,8 +129,11 @@ impl Tool for ToolDeactivateSkill {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Deactivate the currently active skill, clearing any tool restrictions and model overrides.".to_string(),
-            input_schema: json_schema_from_params(&[], &[]),
+            description: "Deactivate the currently active skill with a completion report. The report should be a thorough overview of what was done, what happened, and what was changed. After deactivation, the skill execution messages are compacted into the report, keeping chat history clean.".to_string(),
+            input_schema: json_schema_from_params(
+                &[("report", "string", "A thorough overview of what was done, what happened, what was changed during the skill execution. Use clear markdown formatting.")],
+                &["report"],
+            ),
             output_schema: None,
             annotations: None,
         }
@@ -133,8 +143,14 @@ impl Tool for ToolDeactivateSkill {
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
         _tool_call_id: &String,
-        _args: &HashMap<String, Value>,
+        args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
+        let report = match args.get("report") {
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => return Err(format!("argument `report` is not a string: {:?}", v)),
+            None => return Err("argument `report` is missing. Provide a thorough overview of what was done.".to_string()),
+        };
+
         let (gcx, chat_id) = {
             let ccx_locked = ccx.lock().await;
             (ccx_locked.global_context.clone(), ccx_locked.chat_id.clone())
@@ -148,6 +164,19 @@ impl Tool for ToolDeactivateSkill {
             };
             if let Some(session_arc) = session_arc_opt {
                 let mut session = session_arc.lock().await;
+                if session.active_command.name.is_empty() {
+                    return Err("No active skill to deactivate".to_string());
+                }
+                let skill_name = session.active_command.name.clone();
+                if let Some(start_msg_id) = session.active_command.started_at_message_id.clone() {
+                    session.pending_skill_deactivation = Some(crate::chat::types::PendingSkillDeactivation {
+                        start_message_id: start_msg_id,
+                        report: report.clone(),
+                        skill_name: skill_name.clone(),
+                    });
+                } else {
+                    tracing::warn!("deactivate_skill: no started_at_message_id for skill '{}', skipping compaction", skill_name);
+                }
                 session.active_command = crate::chat::types::ActiveCommandContext::default();
             }
         }
@@ -305,6 +334,7 @@ mod tests {
             allowed_tools: vec!["cat".to_string(), "tree".to_string()],
             model_override: Some("gpt-4o".to_string()),
             context_fork: None,
+            started_at_message_id: Some("msg-123".to_string()),
         };
 
         active = ActiveCommandContext::default();
@@ -313,6 +343,7 @@ mod tests {
         assert!(active.allowed_tools.is_empty());
         assert!(active.model_override.is_none());
         assert!(active.context_fork.is_none());
+        assert!(active.started_at_message_id.is_none());
     }
 
     #[tokio::test]
@@ -325,6 +356,7 @@ mod tests {
         assert_eq!(active.name, cleared.name);
         assert_eq!(active.allowed_tools, cleared.allowed_tools);
         assert_eq!(active.model_override, cleared.model_override);
+        assert_eq!(active.started_at_message_id, cleared.started_at_message_id);
     }
 
     #[test]
