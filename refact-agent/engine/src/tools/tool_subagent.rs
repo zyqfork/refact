@@ -153,6 +153,8 @@ impl Tool for ToolSubagent {
             ));
         }
 
+        let session_id_hook = parent_chat_id.clone();
+
         let has_editing_tools = tools_contain_file_editing(&tools);
         let config_name = if has_editing_tools {
             "subagent_with_editing"
@@ -226,7 +228,37 @@ impl Tool for ToolSubagent {
             config.model
         );
 
-        let result = match run_subchat(gcx, messages, config).await {
+        let gcx_hook = gcx.clone();
+        let project_dir = crate::ext::hooks_runner::get_project_dir_string(gcx_hook.clone()).await;
+        let task_hook = task.clone();
+
+        let subchat_result = run_subchat(gcx, messages, config).await;
+
+        let final_status = match &subchat_result {
+            Ok(_) => "completed",
+            Err(e) if e == "Aborted" || e.starts_with("Aborted") => "aborted",
+            Err(_) => "error",
+        };
+        {
+            let mut extra = std::collections::HashMap::new();
+            extra.insert("agent_name".to_string(), serde_json::json!(task_hook));
+            extra.insert("final_status".to_string(), serde_json::json!(final_status));
+            tokio::spawn(async move {
+                let payload = crate::ext::hooks_runner::HookPayload {
+                    hook_event_name: "SubagentStop".to_string(),
+                    session_id: session_id_hook,
+                    project_dir,
+                    tool_name: None,
+                    tool_input: None,
+                    tool_output: None,
+                    user_prompt: None,
+                    extra,
+                };
+                crate::ext::hooks_runner::run_hooks(gcx_hook, crate::ext::hooks::HookEvent::SubagentStop, payload).await;
+            });
+        }
+
+        let result = match subchat_result {
             Ok(r) => r,
             Err(e) if e == "Aborted" || e.starts_with("Aborted") => {
                 return Ok((
