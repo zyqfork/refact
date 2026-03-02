@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
 use tokio::time::{timeout, Duration};
@@ -146,7 +145,7 @@ pub async fn index_mcp_resources(
 
 pub async fn remove_indexed_resources(
     gcx_weak: Weak<ARwLock<GlobalContext>>,
-    config_path: &str,
+    config_path: String,
 ) {
     let gcx = match gcx_weak.upgrade() {
         Some(g) => g,
@@ -158,7 +157,7 @@ pub async fn remove_indexed_resources(
         (gcx_locked.cache_dir.clone(), gcx_locked.vec_db.clone())
     };
 
-    let server_name = server_name_for_path(config_path);
+    let server_name = server_name_for_path(&config_path);
     let resources_dir = cache_dir.join("mcp_resources").join(&server_name);
 
     if !resources_dir.exists() {
@@ -182,7 +181,8 @@ pub async fn remove_indexed_resources(
     }
 }
 
-pub fn resources_cache_dir(cache_dir: &PathBuf, config_path: &str) -> PathBuf {
+#[cfg(test)]
+pub fn resources_cache_dir(cache_dir: &std::path::PathBuf, config_path: &str) -> std::path::PathBuf {
     let server_name = server_name_for_path(config_path);
     cache_dir.join("mcp_resources").join(server_name)
 }
@@ -246,8 +246,8 @@ mod tests {
 
     #[test]
     fn test_resources_cache_dir() {
-        let cache_dir = PathBuf::from("/home/user/.cache/refact");
+        let cache_dir = std::path::PathBuf::from("/home/user/.cache/refact");
         let dir = resources_cache_dir(&cache_dir, "/path/to/mcp_stdio_myserver.yaml");
-        assert_eq!(dir, PathBuf::from("/home/user/.cache/refact/mcp_resources/mcp_stdio_myserver"));
+        assert_eq!(dir, std::path::PathBuf::from("/home/user/.cache/refact/mcp_resources/mcp_stdio_myserver"));
     }
 }

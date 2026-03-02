@@ -112,7 +112,7 @@ impl Tool for ToolMCP {
             }
         };
 
-        let call_start = std::time::Instant::now();
+        let call_start = session_metrics.lock().await.record_call_start();
         let result_probably = match timeout(
             Duration::from_secs(self.request_timeout),
             peer.call_tool(CallToolRequestParam {

@@ -25,7 +25,6 @@ pub struct InstallPluginRequest {
     pub marketplace: String,
 }
 
-
 pub async fn handle_list_marketplaces(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {

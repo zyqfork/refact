@@ -256,6 +256,7 @@ pub async fn mcp_session_setup<T: MCPTransportInitializer + Clone + Send + Sync 
 
             if let Some(mcp_client) = mcp_client {
                 cancel_mcp_client(&debug_name, mcp_client, logs.clone()).await;
+                tokio::spawn(super::mcp_resources::remove_indexed_resources(gcx_weak.clone(), config_path.clone()));
             }
             if let Some(stderr_file) = &stderr_file {
                 if let Err(e) = tokio::fs::remove_file(stderr_file).await {

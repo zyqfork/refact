@@ -13,7 +13,8 @@ use tempfile::NamedTempFile;
 
 use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::{IntegrationTrait, IntegrationCommon};
-use super::session_mcp::{McpClientHandler, McpRunningService, add_log_entry};
+use super::session_mcp::{McpClientHandler, McpRunningService, SessionMCP, add_log_entry};
+use super::mcp_metrics::SharedMetrics;
 use super::integr_mcp_common::{
     CommonMCPSettings, MCPTransportInitializer, mcp_integr_tools, mcp_session_setup,
 };
@@ -90,6 +91,15 @@ impl MCPTransportInitializer for IntegrationMCPStdio {
             command.env(key, value);
         }
 
+        #[cfg(target_os = "linux")]
+        let session_metrics: Option<SharedMetrics> = {
+            let mut session_locked = session_arc_clone.lock().await;
+            session_locked
+                .as_any_mut()
+                .downcast_mut::<SessionMCP>()
+                .map(|s| s.metrics.clone())
+        };
+
         match NamedTempFile::new().map(|f| f.keep()) {
             Ok(Ok((file, path))) => {
                 {
@@ -120,6 +130,13 @@ impl MCPTransportInitializer for IntegrationMCPStdio {
             }
         };
 
+        #[cfg(target_os = "linux")]
+        if let Some(ref metrics) = session_metrics {
+            if let Some(pid) = read_last_child_pid() {
+                metrics.lock().await.set_pid(pid);
+            }
+        }
+
         match timeout(
             Duration::from_secs(init_timeout),
             serve_client(handler, transport),
@@ -145,6 +162,16 @@ impl MCPTransportInitializer for IntegrationMCPStdio {
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn read_last_child_pid() -> Option<u32> {
+    let self_pid = std::process::id();
+    let path = format!("/proc/{}/task/{}/children", self_pid, self_pid);
+    let content = std::fs::read_to_string(&path).ok()?;
+    content.split_whitespace()
+        .filter_map(|s| s.parse::<u32>().ok())
+        .last()
 }
 
 #[async_trait]

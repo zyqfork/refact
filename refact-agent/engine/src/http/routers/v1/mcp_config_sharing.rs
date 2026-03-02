@@ -18,6 +18,7 @@ fn is_secret_field(key: &str) -> bool {
         || key_lower.contains("password")
 }
 
+#[cfg(test)]
 fn redact_env(env: &HashMap<String, String>) -> HashMap<String, String> {
     env.iter()
         .map(|(k, v)| {
@@ -299,17 +300,6 @@ pub async fn handle_v1_mcp_import(
         "skipped": skipped,
         "errors": errors,
     })))
-}
-
-#[derive(Serialize)]
-pub struct ProjectMcpServer {
-    pub config_name: String,
-    pub transport: String,
-    pub config: HashMap<String, Value>,
-    #[serde(default)]
-    pub tools_config: HashMap<String, Value>,
-    #[serde(default)]
-    pub confirmation: HashMap<String, Value>,
 }
 
 pub async fn handle_v1_mcp_project_config(

@@ -414,7 +414,7 @@ impl Tool for ToolApplyPatch {
             experimental: false,
             allow_parallel: false,
             description: APPLY_PATCH_DESCRIPTION.to_string(),
-            input_schema: json_schema_from_params(&[("patch", "string", "")], &["patch"]),
+            input_schema: json_schema_from_params(&[("patch", "string", APPLY_PATCH_PARAM_DESCRIPTION)], &["patch"]),
             output_schema: None,
             annotations: None,
         }
