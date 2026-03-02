@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
@@ -6,6 +6,22 @@ use crate::ext::config_dirs::{source_for_dir, CommandSource, ExtDirs};
 use crate::ext::slash_commands::{parse_frontmatter_and_body};
 
 const MAX_FILE_SIZE: u64 = 100 * 1024;
+
+pub fn validate_skill_id(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("skill name cannot be empty".to_string());
+    }
+    if name.starts_with('.') {
+        return Err("skill name cannot start with '.'".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("skill name contains invalid path characters".to_string());
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+        return Err("skill name must match [a-zA-Z0-9._-]+".to_string());
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillIndex {
@@ -76,6 +92,11 @@ async fn load_skill_from_dir(
         tracing::warn!("SKILL.md missing required 'name' field: {:?}", skill_md);
         return None;
     }
+    let dir_name = skill_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name != dir_name {
+        tracing::warn!("SKILL.md name '{}' doesn't match directory name '{}', skipping: {:?}", name, dir_name, skill_md);
+        return None;
+    }
     let description = yaml_str(&fm, "description");
     if description.is_empty() {
         tracing::warn!("SKILL.md missing required 'description' field: {:?}", skill_md);
@@ -129,6 +150,11 @@ async fn load_skill_index_only(skill_dir: &Path, source: CommandSource) -> Optio
     if name.is_empty() {
         return None;
     }
+    let dir_name = skill_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name != dir_name {
+        tracing::warn!("SKILL.md name '{}' doesn't match directory name '{}', skipping: {:?}", name, dir_name, skill_md);
+        return None;
+    }
     let description = yaml_str(&fm, "description");
     if description.is_empty() {
         return None;
@@ -176,12 +202,38 @@ pub async fn load_skill_indices(ext_dirs: &ExtDirs) -> Vec<SkillIndex> {
 }
 
 pub async fn load_skill_full(ext_dirs: &ExtDirs, name: &str) -> Option<SkillFull> {
+    if let Err(e) = validate_skill_id(name) {
+        tracing::warn!("Invalid skill name '{}': {}", name, e);
+        return None;
+    }
     let mut found: Option<SkillFull> = None;
     for dir in ext_dirs.all_dirs_in_order() {
         let skills_dir = dir.join("skills");
         let source = source_for_dir(dir, &ext_dirs.global_dirs, &ext_dirs.installed_dirs);
         let candidate = skills_dir.join(name);
-        if let Some(full) = load_skill_from_dir(&candidate, source).await {
+        let candidate_canon = match tokio::fs::canonicalize(&candidate).await {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let skills_dir_canon = match tokio::fs::canonicalize(&skills_dir).await {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !candidate_canon.starts_with(&skills_dir_canon) {
+            tracing::warn!("Skill path escapes skills directory: {:?}", candidate_canon);
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            match tokio::fs::symlink_metadata(&candidate).await {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    tracing::warn!("Rejecting symlink skill directory: {:?}", candidate);
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if let Some(full) = load_skill_from_dir(&candidate_canon, source).await {
             if full.index.name == name {
                 found = Some(full);
             }
@@ -192,13 +244,14 @@ pub async fn load_skill_full(ext_dirs: &ExtDirs, name: &str) -> Option<SkillFull
 
 pub async fn load_skill_linked_file(skill_dir: &Path, relative_path: &str) -> Option<String> {
     let relative_path = relative_path.trim();
-    if Path::new(relative_path).is_absolute() {
-        tracing::warn!("Rejecting absolute @include path: {}", relative_path);
-        return None;
-    }
-    if relative_path.contains("..") {
-        tracing::warn!("Rejecting @include with path traversal: {}", relative_path);
-        return None;
+    for component in Path::new(relative_path).components() {
+        match component {
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                tracing::warn!("Rejecting @include with unsafe path component: {}", relative_path);
+                return None;
+            }
+            _ => {}
+        }
     }
     let full_path = skill_dir.join(relative_path);
     let canonical = match tokio::fs::canonicalize(&full_path).await {
@@ -548,5 +601,77 @@ mod tests {
             indices.is_empty(),
             "SKILL.md must be uppercase, skill.md should not be recognized"
         );
+    }
+
+    #[test]
+    fn test_validate_skill_id_valid() {
+        assert!(validate_skill_id("my-skill").is_ok());
+        assert!(validate_skill_id("code_review").is_ok());
+        assert!(validate_skill_id("test.v2").is_ok());
+        assert!(validate_skill_id("Plugin-123").is_ok());
+        assert!(validate_skill_id("abc").is_ok());
+    }
+
+    #[test]
+    fn test_validate_skill_id_rejects_traversal() {
+        assert!(validate_skill_id("../x").is_err());
+        assert!(validate_skill_id("../../etc").is_err());
+        assert!(validate_skill_id("/abs").is_err());
+        assert!(validate_skill_id("x/y").is_err());
+        assert!(validate_skill_id("x\\y").is_err());
+        assert!(validate_skill_id(".hidden").is_err());
+        assert!(validate_skill_id("").is_err());
+        assert!(validate_skill_id("..").is_err());
+        assert!(validate_skill_id("name with spaces").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_load_skill_full_rejects_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ext_dirs = ExtDirs {
+            global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
+            project_dirs: vec![],
+        };
+        let result = load_skill_full(&ext_dirs, "../evil").await;
+        assert!(result.is_none(), "traversal name should be rejected");
+
+        let result2 = load_skill_full(&ext_dirs, "../../etc").await;
+        assert!(result2.is_none(), "traversal name should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_load_skill_name_dir_mismatch_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("skills").join("foo");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+        tokio::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: bar\ndescription: Mismatched name\n---\nBody",
+        )
+        .await
+        .unwrap();
+
+        let source = CommandSource::GlobalRefact;
+        let result = load_skill_from_dir(&skill_dir, source).await;
+        assert!(result.is_none(), "name/dir mismatch should be rejected");
+
+        let ext_dirs = ExtDirs {
+            global_dirs: vec![tmp.path().to_path_buf()],
+            installed_dirs: vec![],
+            project_dirs: vec![],
+        };
+        let indices = load_skill_indices(&ext_dirs).await;
+        assert!(indices.is_empty(), "mismatched skill should not appear in indices");
+    }
+
+    #[tokio::test]
+    async fn test_include_component_check_allows_valid() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("notes..md"), "content with double dots in name").await.unwrap();
+
+        let result = load_skill_linked_file(tmp.path(), "notes..md").await;
+        assert_eq!(result, Some("content with double dots in name".to_string()),
+            "notes..md should be allowed by component-based check (not a path component)");
     }
 }

@@ -20,6 +20,9 @@ async fn activate_skill_inner(
     ext_dirs: &crate::ext::config_dirs::ExtDirs,
     name: &str,
 ) -> Result<(ContextFile, Vec<String>, Option<String>), String> {
+    if let Err(e) = crate::ext::skills::validate_skill_id(name) {
+        return Err(format!("Invalid skill name '{}': {}", name, e));
+    }
     let skill = load_skill_full(ext_dirs, name).await
         .ok_or_else(|| format!("Skill '{}' not found", name))?;
     if !skill.index.user_invocable {
@@ -74,6 +77,9 @@ impl Tool for ToolActivateSkill {
             Some(v) => return Err(format!("argument `name` is not a string: {:?}", v)),
             None => return Err("argument `name` is missing".to_string()),
         };
+        if let Err(e) = crate::ext::skills::validate_skill_id(&name) {
+            return Err(format!("Invalid skill name '{}': {}", name, e));
+        }
 
         let (gcx, chat_id) = {
             let ccx_locked = ccx.lock().await;
@@ -332,5 +338,23 @@ mod tests {
         let result: Vec<ContextEnum> = vec![];
         let has_context_file = result.iter().any(|e| matches!(e, ContextEnum::ContextFile(_)));
         assert!(!has_context_file, "deactivate_skill must not return ContextFile");
+    }
+
+    #[tokio::test]
+    async fn test_activate_rejects_traversal_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ext_dirs = make_ext_dirs(tmp.path());
+
+        let result = activate_skill_inner(&ext_dirs, "../../etc").await;
+        assert!(result.is_err(), "traversal name should be rejected");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("Invalid skill name") || msg.contains("not found"),
+            "Expected rejection message, got: {}",
+            msg
+        );
+
+        let result2 = activate_skill_inner(&ext_dirs, "../passwd").await;
+        assert!(result2.is_err(), "traversal name should be rejected");
     }
 }
