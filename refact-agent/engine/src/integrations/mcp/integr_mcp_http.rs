@@ -71,6 +71,7 @@ impl MCPTransportInitializer for IntegrationMCPHttp {
         if self.cfg.auth.auth_type == "oauth2_pkce" {
             let auth_client = build_auth_client_for_mcp(
                 self.cfg.mcp_url.trim(),
+                &self.cfg.mcp_headers,
                 &self.config_path,
                 "Streamable HTTP",
                 logs.clone(),

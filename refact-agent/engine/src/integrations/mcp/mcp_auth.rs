@@ -15,6 +15,30 @@ fn default_auth_type() -> String {
     "none".to_string()
 }
 
+fn deserialize_scopes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    use serde::de::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ScopesValue {
+        List(Vec<String>),
+        Str(String),
+    }
+    let value = ScopesValue::deserialize(d)?;
+    match value {
+        ScopesValue::List(v) => Ok(v),
+        ScopesValue::Str(s) => {
+            if s.is_empty() {
+                Ok(vec![])
+            } else {
+                Ok(s.split(|c: char| c == ',' || c == ' ')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect())
+            }
+        }
+    }
+}
+
 fn deserialize_auth_type<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let s = String::deserialize(d)?;
     if s.as_str() == "oauth2" {
@@ -36,7 +60,7 @@ pub struct MCPAuthSettings {
     pub oauth2_client_secret: String,
     #[serde(default)]
     pub oauth2_token_url: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scopes")]
     pub oauth2_scopes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_tokens: Option<MCPOAuthTokens>,
@@ -60,8 +84,10 @@ pub struct MCPOAuthTokens {
 
 pub async fn save_tokens_to_config(config_path: &str, tokens: &MCPOAuthTokens) -> Result<(), String> {
     let path = PathBuf::from(config_path);
-    let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    let mut mapping: serde_yaml::Mapping = serde_yaml::from_str(&existing).unwrap_or_default();
+    let existing = tokio::fs::read_to_string(&path).await
+        .map_err(|e| format!("Failed to read config {}: {}", config_path, e))?;
+    let mut mapping: serde_yaml::Mapping = serde_yaml::from_str(&existing)
+        .map_err(|e| format!("Failed to parse config YAML {}: {}", config_path, e))?;
     let tokens_value = serde_yaml::to_value(tokens)
         .map_err(|e| format!("serialize tokens: {}", e))?;
     mapping.insert(serde_yaml::Value::String("oauth_tokens".to_string()), tokens_value);
@@ -70,6 +96,11 @@ pub async fn save_tokens_to_config(config_path: &str, tokens: &MCPOAuthTokens) -
     let tmp = path.with_extension("tmp");
     tokio::fs::write(&tmp, &yaml_str).await
         .map_err(|e| format!("write {:?}: {}", tmp, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).await;
+    }
     #[cfg(target_os = "windows")]
     if path.exists() {
         tokio::fs::remove_file(&path).await
@@ -89,8 +120,10 @@ pub async fn load_tokens_from_config(config_path: &str) -> Option<MCPOAuthTokens
 
 pub async fn clear_tokens_from_config(config_path: &str) -> Result<(), String> {
     let path = PathBuf::from(config_path);
-    let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    let mut mapping: serde_yaml::Mapping = serde_yaml::from_str(&existing).unwrap_or_default();
+    let existing = tokio::fs::read_to_string(&path).await
+        .map_err(|e| format!("Failed to read config {}: {}", config_path, e))?;
+    let mut mapping: serde_yaml::Mapping = serde_yaml::from_str(&existing)
+        .map_err(|e| format!("Failed to parse config YAML {}: {}", config_path, e))?;
     mapping.remove(serde_yaml::Value::String("oauth_tokens".to_string()));
     let yaml_str = serde_yaml::to_string(&serde_yaml::Value::Mapping(mapping))
         .map_err(|e| format!("serialize yaml: {}", e))?;
@@ -1006,5 +1039,50 @@ mod tests {
             "stale session should be removed by cleanup");
         assert!(!state_index().lock().await.contains_key(&stale_state),
             "stale state should be removed from state_index by cleanup");
+    }
+
+    #[tokio::test]
+    async fn test_save_tokens_fails_on_invalid_yaml() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(b"{{{{invalid yaml").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let original_content = std::fs::read_to_string(&path).unwrap();
+
+        let tokens = MCPOAuthTokens {
+            access_token: "tok".to_string(),
+            ..Default::default()
+        };
+        let result = save_tokens_to_config(&path, &tokens).await;
+        assert!(result.is_err(), "Should fail on invalid YAML");
+
+        let after_content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(original_content, after_content, "File should be unchanged on error");
+    }
+
+    #[tokio::test]
+    async fn test_clear_tokens_fails_on_nonexistent_file() {
+        let result = clear_tokens_from_config("/tmp/nonexistent_mcp_test_file_xyz_12345.yaml").await;
+        assert!(result.is_err(), "Should fail on nonexistent file");
+    }
+
+    #[test]
+    fn test_scopes_deserialize_from_string() {
+        let json = serde_json::json!({"auth_type": "bearer", "oauth2_scopes": "read write"});
+        let settings: MCPAuthSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.oauth2_scopes, vec!["read", "write"]);
+    }
+
+    #[test]
+    fn test_scopes_deserialize_from_array() {
+        let json = serde_json::json!({"auth_type": "bearer", "oauth2_scopes": ["read", "write"]});
+        let settings: MCPAuthSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.oauth2_scopes, vec!["read", "write"]);
+    }
+
+    #[test]
+    fn test_scopes_deserialize_empty_string() {
+        let json = serde_json::json!({"auth_type": "bearer", "oauth2_scopes": ""});
+        let settings: MCPAuthSettings = serde_json::from_value(json).unwrap();
+        assert!(settings.oauth2_scopes.is_empty());
     }
 }

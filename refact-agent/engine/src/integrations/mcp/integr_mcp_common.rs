@@ -212,6 +212,7 @@ pub(crate) async fn build_reqwest_client_for_mcp(
 
 pub(crate) async fn build_auth_client_for_mcp(
     url: &str,
+    headers: &HashMap<String, String>,
     config_path: &str,
     transport_name: &str,
     logs: Arc<AMutex<Vec<String>>>,
@@ -245,7 +246,24 @@ pub(crate) async fn build_auth_client_for_mcp(
         }
     };
 
-    let base_client = match reqwest::Client::builder().build() {
+    let mut header_map = reqwest::header::HeaderMap::new();
+    for (k, v) in headers {
+        match (
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+            reqwest::header::HeaderValue::from_str(v),
+        ) {
+            (Ok(name), Ok(value)) => {
+                header_map.insert(name, value);
+            }
+            _ => {
+                let msg = format!("Invalid header: {}: {}", k, redact_sensitive_value(k, v));
+                tracing::warn!("{msg} for {debug_name}");
+                add_log_entry(logs.clone(), msg).await;
+            }
+        }
+    }
+
+    let base_client = match reqwest::Client::builder().default_headers(header_map).build() {
         Ok(c) => c,
         Err(e) => {
             let msg = format!("Failed to build reqwest client: {}", e);
@@ -1041,6 +1059,7 @@ mod tests {
 
         let result = super::build_auth_client_for_mcp(
             "http://localhost:8080",
+            &HashMap::new(),
             &config_path,
             "Streamable HTTP",
             logs,
