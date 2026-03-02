@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock as ARwLock;
+use serde::{Deserialize, Serialize};
 
 use crate::call_validation::{ChatContent, ChatMessage, ContextFile};
 use crate::ext::config_dirs::{get_ext_dirs, ExtDirs};
@@ -14,6 +15,33 @@ pub const SKILLS_CONTEXT_MARKER: &str = "skills_context";
 pub struct SkillsTrackingInfo {
     pub available_count: usize,
     pub included_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsAutoTrigger {
+    #[default]
+    InjectFull,
+    IndexOnly,
+    Off,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillsConfig {
+    #[serde(default)]
+    pub auto_trigger: SkillsAutoTrigger,
+}
+
+pub async fn load_skills_config(gcx: Arc<ARwLock<GlobalContext>>) -> SkillsConfig {
+    let project_dirs = crate::files_correction::get_project_dirs(gcx).await;
+    let Some(project_dir) = project_dirs.first() else {
+        return SkillsConfig::default();
+    };
+    let path = project_dir.join(".refact").join("skills.yaml");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => serde_yaml::from_str(&content).unwrap_or_default(),
+        Err(_) => SkillsConfig::default(),
+    }
 }
 
 const MAX_INCLUDE_FILE_SIZE: usize = 50 * 1024;
@@ -79,23 +107,15 @@ async fn build_context_messages_from_dirs(
     ext_dirs: &ExtDirs,
     user_message: &str,
     explicit_skill: Option<&str>,
+    mode: SkillsAutoTrigger,
 ) -> (Vec<ChatMessage>, SkillsTrackingInfo) {
+    if matches!(mode, SkillsAutoTrigger::Off) {
+        return (Vec::new(), SkillsTrackingInfo::default());
+    }
+
     let indices = load_skill_indices(ext_dirs).await;
     let available_count = indices.len();
-    let index_str = if indices.iter().any(|s| s.user_invocable) {
-        let displayable: Vec<_> = indices.iter().filter(|s| s.user_invocable).collect();
-        let mut lines = vec![
-            "## Available Skills".to_string(),
-            "The following skills are available. They may be auto-loaded when relevant, or invoked explicitly with /skill-name.".to_string(),
-            String::new(),
-        ];
-        for skill in &displayable {
-            lines.push(format!("- **{}**: {}", skill.name, skill.description));
-        }
-        lines.join("\n")
-    } else {
-        String::new()
-    };
+    let index_str = build_skills_index_from_dirs(ext_dirs).await;
 
     let mut context_files: Vec<ContextFile> = Vec::new();
 
@@ -114,7 +134,9 @@ async fn build_context_messages_from_dirs(
         });
     }
 
-    let skills_to_load: Vec<SkillFull> = if let Some(name) = explicit_skill {
+    let skills_to_load: Vec<SkillFull> = if matches!(mode, SkillsAutoTrigger::IndexOnly) {
+        vec![]
+    } else if let Some(name) = explicit_skill {
         match load_skill_full(ext_dirs, name).await {
             Some(full) => vec![full],
             None => vec![],
@@ -180,8 +202,9 @@ pub async fn build_skills_context_messages(
     user_message: &str,
     explicit_skill: Option<&str>,
 ) -> Vec<ChatMessage> {
+    let config = load_skills_config(gcx.clone()).await;
     let ext_dirs = get_ext_dirs(gcx).await;
-    let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, user_message, explicit_skill).await;
+    let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, user_message, explicit_skill, config.auto_trigger).await;
     msgs
 }
 
@@ -190,8 +213,9 @@ pub async fn build_skills_context_messages_tracked(
     user_message: &str,
     explicit_skill: Option<&str>,
 ) -> (Vec<ChatMessage>, SkillsTrackingInfo) {
+    let config = load_skills_config(gcx.clone()).await;
     let ext_dirs = get_ext_dirs(gcx).await;
-    build_context_messages_from_dirs(&ext_dirs, user_message, explicit_skill).await
+    build_context_messages_from_dirs(&ext_dirs, user_message, explicit_skill, config.auto_trigger).await
 }
 
 #[cfg(test)]
@@ -365,7 +389,7 @@ mod tests {
         .await;
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("my-skill")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("my-skill"), SkillsAutoTrigger::InjectFull).await;
         assert!(!msgs.is_empty(), "Should return messages for explicit skill invocation");
 
         let files = match &msgs[0].content {
@@ -391,7 +415,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("with-include")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("with-include"), SkillsAutoTrigger::InjectFull).await;
         assert!(!msgs.is_empty());
 
         let files = match &msgs[0].content {
@@ -422,7 +446,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("big-include")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("big-include"), SkillsAutoTrigger::InjectFull).await;
         assert!(!msgs.is_empty());
 
         let files = match &msgs[0].content {
@@ -458,7 +482,7 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("many-includes")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("many-includes"), SkillsAutoTrigger::InjectFull).await;
         assert!(!msgs.is_empty());
 
         let files = match &msgs[0].content {
@@ -484,7 +508,7 @@ mod tests {
             installed_dirs: vec![],
             project_dirs: vec![],
         };
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "any message", None).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "any message", None, SkillsAutoTrigger::InjectFull).await;
         assert!(msgs.is_empty(), "No skills = no messages");
     }
 
@@ -500,7 +524,7 @@ mod tests {
         .await;
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "unrelated message", None).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "unrelated message", None, SkillsAutoTrigger::InjectFull).await;
         assert!(!msgs.is_empty(), "Skills index should always be included when skills exist");
         assert_eq!(msgs[0].tool_call_id, SKILLS_CONTEXT_MARKER);
 
@@ -526,7 +550,140 @@ mod tests {
         .unwrap();
 
         let ext_dirs = make_ext_dirs(tmp.path());
-        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("empty-body")).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", Some("empty-body"), SkillsAutoTrigger::InjectFull).await;
         assert!(!msgs.is_empty(), "Should still return index even with empty skill body");
+    }
+
+    #[tokio::test]
+    async fn test_skills_context_mode_off_injects_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "test-skill",
+            "name: test-skill\ndescription: Test skill\nuser-invocable: true",
+            "Body",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let (msgs, tracking) = build_context_messages_from_dirs(&ext_dirs, "test-skill anything", None, SkillsAutoTrigger::Off).await;
+        assert!(msgs.is_empty(), "Off mode must inject nothing");
+        assert_eq!(tracking.available_count, 0);
+        assert!(tracking.included_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_skills_context_mode_index_only_injects_index_not_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "security-review",
+            "name: security-review\ndescription: reviews code for security vulnerabilities auditing",
+            "Full security review body content",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let (msgs, tracking) = build_context_messages_from_dirs(
+            &ext_dirs,
+            "security review vulnerabilities",
+            None,
+            SkillsAutoTrigger::IndexOnly,
+        )
+        .await;
+
+        assert!(!msgs.is_empty(), "IndexOnly must still inject the skills index");
+        let files = match &msgs[0].content {
+            crate::call_validation::ChatContent::ContextFiles(f) => f,
+            _ => panic!("Expected ContextFiles"),
+        };
+        let index_file = files.iter().find(|f| f.file_name == "skills://index");
+        assert!(index_file.is_some(), "Index file must be present in index_only mode");
+        let skill_body_file = files.iter().find(|f| f.file_name == "skill://security-review");
+        assert!(skill_body_file.is_none(), "Skill body must not be injected in index_only mode");
+        assert!(tracking.included_names.is_empty(), "No skills included in index_only mode");
+    }
+
+    #[tokio::test]
+    async fn test_skills_context_mode_inject_full_is_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "security-review",
+            "name: security-review\ndescription: reviews code for security vulnerabilities auditing",
+            "Full security review body content",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let (msgs_default, _) = build_context_messages_from_dirs(
+            &ext_dirs,
+            "security review vulnerabilities auditing",
+            None,
+            SkillsAutoTrigger::default(),
+        )
+        .await;
+        let (msgs_explicit, _) = build_context_messages_from_dirs(
+            &ext_dirs,
+            "security review vulnerabilities auditing",
+            None,
+            SkillsAutoTrigger::InjectFull,
+        )
+        .await;
+
+        assert_eq!(msgs_default.len(), msgs_explicit.len(), "Default mode must equal InjectFull");
+    }
+
+    #[tokio::test]
+    async fn test_skills_context_index_building_deduplicated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "dedup-skill",
+            "name: dedup-skill\ndescription: Deduplication test skill\nuser-invocable: true",
+            "Skill body",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let index_direct = build_skills_index_from_dirs(&ext_dirs).await;
+        let (msgs, _) = build_context_messages_from_dirs(&ext_dirs, "anything", None, SkillsAutoTrigger::InjectFull).await;
+
+        let files = match &msgs[0].content {
+            crate::call_validation::ChatContent::ContextFiles(f) => f,
+            _ => panic!("Expected ContextFiles"),
+        };
+        let index_via_msgs = files.iter().find(|f| f.file_name == "skills://index").unwrap();
+        assert_eq!(
+            index_direct, index_via_msgs.file_content,
+            "Index from build_skills_index_from_dirs must match index in context messages"
+        );
+    }
+
+    #[test]
+    fn test_skills_config_default_is_inject_full() {
+        let config = SkillsConfig::default();
+        assert_eq!(config.auto_trigger, SkillsAutoTrigger::InjectFull);
+    }
+
+    #[test]
+    fn test_skills_config_serde_roundtrip() {
+        let yaml = "auto_trigger: index_only\n";
+        let config: SkillsConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.auto_trigger, SkillsAutoTrigger::IndexOnly);
+
+        let yaml_off = "auto_trigger: off\n";
+        let config_off: SkillsConfig = serde_yaml::from_str(yaml_off).unwrap();
+        assert_eq!(config_off.auto_trigger, SkillsAutoTrigger::Off);
+
+        let yaml_full = "auto_trigger: inject_full\n";
+        let config_full: SkillsConfig = serde_yaml::from_str(yaml_full).unwrap();
+        assert_eq!(config_full.auto_trigger, SkillsAutoTrigger::InjectFull);
+    }
+
+    #[test]
+    fn test_skills_config_empty_yaml_defaults_to_inject_full() {
+        let config: SkillsConfig = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(config.auto_trigger, SkillsAutoTrigger::InjectFull);
     }
 }
