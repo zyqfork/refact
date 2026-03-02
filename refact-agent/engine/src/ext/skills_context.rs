@@ -74,6 +74,7 @@ pub async fn expand_skill_includes(body: &str, skill_dir: &Path) -> String {
     new_lines.join("\n")
 }
 
+#[cfg(test)]
 pub async fn build_skills_index_from_dirs(ext_dirs: &ExtDirs) -> String {
     let indices = load_skill_indices(ext_dirs).await;
     let displayable: Vec<_> = indices.iter().filter(|s| s.user_invocable && !s.disable_model_invocation).collect();
@@ -91,7 +92,49 @@ pub async fn build_skills_index_from_dirs(ext_dirs: &ExtDirs) -> String {
     lines.join("\n")
 }
 
-pub async fn build_skills_prompt_text(gcx: Arc<ARwLock<GlobalContext>>) -> String {
+fn build_skills_prompt_markdown(
+    displayable: &[&crate::ext::skills::SkillIndex],
+    has_activate_skill: bool,
+    has_deactivate_skill: bool,
+) -> String {
+    if displayable.is_empty() {
+        return String::new();
+    }
+    let available_skills_intro = if has_activate_skill {
+        "The following skills are available. You can activate any skill using the `activate_skill(name)` tool when it's relevant to the user's request. Users can also invoke skills directly with `/skill-name`.".to_string()
+    } else {
+        "The following skills are available. Users can invoke skills with `/skill-name`.".to_string()
+    };
+    let mut lines = vec![
+        "## Skills".to_string(),
+        String::new(),
+        "You have access to skills — specialized instruction sets that guide you through specific workflows.".to_string(),
+        String::new(),
+        "### Available Skills".to_string(),
+        available_skills_intro,
+        String::new(),
+    ];
+    for skill in displayable {
+        lines.push(format!("- **{}**: {}", skill.name, skill.description));
+    }
+    lines.push(String::new());
+    lines.push("### How Skills Work".to_string());
+    if has_activate_skill {
+        lines.push("- Call `activate_skill(name=\"skill-name\")` to load a skill's full instructions into context".to_string());
+    }
+    lines.push("- Once activated, the skill's instructions guide your approach and its allowed-tools are auto-approved".to_string());
+    if has_deactivate_skill {
+        lines.push("- Use `deactivate_skill()` to clear active skill state when done".to_string());
+    }
+    lines.push("- Skills with `disable-model-invocation` are user-only (not listed above)".to_string());
+    lines.join("\n")
+}
+
+pub async fn build_skills_prompt_text(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    has_activate_skill: bool,
+    has_deactivate_skill: bool,
+) -> String {
     let config = load_skills_config(gcx.clone()).await;
     if matches!(config.auto_trigger, SkillsAutoTrigger::Off) {
         return String::new();
@@ -101,30 +144,7 @@ pub async fn build_skills_prompt_text(gcx: Arc<ARwLock<GlobalContext>>) -> Strin
     let displayable: Vec<_> = indices.iter()
         .filter(|s| s.user_invocable && !s.disable_model_invocation)
         .collect();
-    if displayable.is_empty() {
-        return String::new();
-    }
-    let mut lines = vec![
-        "## Skills".to_string(),
-        String::new(),
-        "You have access to skills — specialized instruction sets that guide you through specific workflows.".to_string(),
-        String::new(),
-        "### Available Skills".to_string(),
-        "The following skills are available. You can activate any skill using the `activate_skill(name)` tool when it's relevant to the user's request. Users can also invoke skills directly with `/skill-name`.".to_string(),
-        String::new(),
-    ];
-    for skill in &displayable {
-        lines.push(format!("- **{}**: {}", skill.name, skill.description));
-    }
-    lines.extend([
-        String::new(),
-        "### How Skills Work".to_string(),
-        "- Call `activate_skill(name=\"skill-name\")` to load a skill's full instructions into context".to_string(),
-        "- Once activated, the skill's instructions guide your approach and its allowed-tools are auto-approved".to_string(),
-        "- Use `deactivate_skill()` to clear active skill state when done".to_string(),
-        "- Skills with `disable-model-invocation` are user-only (not listed above)".to_string(),
-    ]);
-    lines.join("\n")
+    build_skills_prompt_markdown(&displayable, has_activate_skill, has_deactivate_skill)
 }
 
 #[cfg(test)]
@@ -775,5 +795,45 @@ mod tests {
     fn test_skills_config_empty_yaml_defaults_to_inject_full() {
         let config: SkillsConfig = serde_yaml::from_str("{}").unwrap();
         assert_eq!(config.auto_trigger, SkillsAutoTrigger::InjectFull);
+    }
+
+    fn make_skill_index(name: &str, description: &str) -> crate::ext::skills::SkillIndex {
+        crate::ext::skills::SkillIndex {
+            name: name.to_string(),
+            description: description.to_string(),
+            user_invocable: true,
+            disable_model_invocation: false,
+            source: crate::ext::config_dirs::CommandSource::GlobalRefact,
+        }
+    }
+
+    #[test]
+    fn test_skills_prompt_with_activate_tool() {
+        let skill = make_skill_index("my-skill", "Does something useful");
+        let displayable = vec![&skill];
+        let text = build_skills_prompt_markdown(&displayable, true, false);
+        assert!(text.contains("activate_skill"), "activate_skill must be mentioned when has_activate_skill=true");
+        assert!(text.contains("activate_skill(name="), "activate_skill call syntax must be present");
+        assert!(text.contains("**my-skill**"));
+    }
+
+    #[test]
+    fn test_skills_prompt_without_activate_tool() {
+        let skill = make_skill_index("my-skill", "Does something useful");
+        let displayable = vec![&skill];
+        let text = build_skills_prompt_markdown(&displayable, false, false);
+        assert!(!text.contains("activate_skill"), "activate_skill must not be mentioned when has_activate_skill=false");
+        assert!(text.contains("/skill-name"), "slash syntax must still be mentioned");
+        assert!(text.contains("**my-skill**"));
+    }
+
+    #[test]
+    fn test_skills_prompt_deactivate_tool_conditional() {
+        let skill = make_skill_index("my-skill", "Does something useful");
+        let displayable = vec![&skill];
+        let text_with = build_skills_prompt_markdown(&displayable, true, true);
+        let text_without = build_skills_prompt_markdown(&displayable, true, false);
+        assert!(text_with.contains("deactivate_skill()"), "deactivate_skill must appear when has_deactivate_skill=true");
+        assert!(!text_without.contains("deactivate_skill()"), "deactivate_skill must not appear when has_deactivate_skill=false");
     }
 }

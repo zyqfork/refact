@@ -17,7 +17,7 @@ use super::generation::{start_generation, prepare_session_preamble_and_knowledge
 use super::tools::execute_tools_with_session;
 use super::trajectories::maybe_save_trajectory;
 use crate::ext::slash_expand::expand_slash_command;
-use crate::ext::skills_context::expand_skill_includes;
+use crate::ext::skills_context::{expand_skill_includes, SKILLS_CONTEXT_MARKER};
 
 fn command_triggers_generation(cmd: &ChatCommand) -> bool {
     matches!(
@@ -489,7 +489,7 @@ pub async fn process_command_queue(
                             usefulness: 95.0,
                             skip_pp: true,
                         }]),
-                        tool_call_id: format!("skill_activation_{}", info.name),
+                        tool_call_id: SKILLS_CONTEXT_MARKER.to_string(),
                         ..Default::default()
                     })
                 } else {
@@ -1778,5 +1778,11 @@ mod tests {
         assert!(!changed);
         assert_eq!(thread.previous_response_id, Some("resp_abc123".to_string()),
             "previous_response_id should be preserved when model doesn't change");
+    }
+
+    #[test]
+    fn test_skill_activation_sets_context_marker() {
+        assert_eq!(SKILLS_CONTEXT_MARKER, "skills_context",
+            "SKILLS_CONTEXT_MARKER must equal 'skills_context' so prompts.rs detects existing skills context");
     }
 }
