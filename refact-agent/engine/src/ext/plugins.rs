@@ -205,6 +205,15 @@ async fn fetch_marketplace_to_cache(
         remote.fetch(&["HEAD:refs/heads/main", "HEAD:refs/heads/master"], None, None)
             .or_else(|_| remote.fetch(&["HEAD"], None, None))
             .map_err(|e| format!("fetch: {}", e))?;
+        drop(remote);
+        let fetch_head = repo.find_reference("FETCH_HEAD")
+            .or_else(|_| repo.find_reference("refs/heads/main"))
+            .or_else(|_| repo.find_reference("refs/heads/master"))
+            .map_err(|e| format!("resolve ref: {}", e))?;
+        let target_obj = fetch_head.peel_to_commit()
+            .map_err(|e| format!("peel: {}", e))?;
+        repo.reset(target_obj.as_object(), git2::ResetType::Hard, None)
+            .map_err(|e| format!("reset: {}", e))?;
     } else {
         git2::Repository::clone(&url, &target_dir)
             .map_err(|e| format!("clone {}: {}", url, e))?;
@@ -253,6 +262,10 @@ async fn add_marketplace_impl(
         if final_dir != marketplace_dir {
             let tmp_dir = marketplace_cache_dir(cache_dir, &tmp_name);
             if tmp_dir.exists() {
+                if final_dir.exists() {
+                    tokio::fs::remove_dir_all(&final_dir).await
+                        .map_err(|e| format!("remove old cache: {}", e))?;
+                }
                 tokio::fs::rename(&tmp_dir, &final_dir).await
                     .map_err(|e| format!("rename marketplace dir: {}", e))?;
             }
@@ -814,5 +827,108 @@ mod tests {
 
         let db = load_plugins_db(&config_dir).await;
         assert!(db.marketplaces.is_empty(), "failed seeding should not add anything");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_marketplace_updates_working_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin_dir = tmp.path().join("origin");
+        tokio::fs::create_dir_all(&origin_dir).await.unwrap();
+
+        let origin_repo = git2::Repository::init(&origin_dir).unwrap();
+        std::fs::write(origin_dir.join("initial.txt"), "initial content").unwrap();
+        let sig = git2::Signature::now("test", "test@test.com").unwrap();
+        {
+            let mut index = origin_repo.index().unwrap();
+            index.add_path(std::path::Path::new("initial.txt")).unwrap();
+            let oid = index.write_tree().unwrap();
+            let tree = origin_repo.find_tree(oid).unwrap();
+            origin_repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[]).unwrap();
+        }
+
+        let cache_dir = tmp.path().join("cache");
+        let cache_repo = git2::Repository::clone(origin_dir.to_str().unwrap(), &cache_dir).unwrap();
+
+        std::fs::write(origin_dir.join("new_file.txt"), "new content").unwrap();
+        {
+            let mut index = origin_repo.index().unwrap();
+            index.add_path(std::path::Path::new("new_file.txt")).unwrap();
+            let oid = index.write_tree().unwrap();
+            let tree = origin_repo.find_tree(oid).unwrap();
+            let head_commit = origin_repo.head().unwrap().peel_to_commit().unwrap();
+            origin_repo.commit(Some("HEAD"), &sig, &sig, "add new file", &tree, &[&head_commit]).unwrap();
+        }
+
+        assert!(!cache_dir.join("new_file.txt").exists(), "new file should not yet be in cache");
+
+        let mut remote = cache_repo.find_remote("origin").unwrap();
+        remote.fetch(&["HEAD:refs/heads/main", "HEAD:refs/heads/master"], None, None)
+            .or_else(|_| remote.fetch(&["HEAD"], None, None))
+            .unwrap();
+        drop(remote);
+        let fetch_head = cache_repo.find_reference("FETCH_HEAD")
+            .or_else(|_| cache_repo.find_reference("refs/heads/main"))
+            .or_else(|_| cache_repo.find_reference("refs/heads/master"))
+            .unwrap();
+        let target_obj = fetch_head.peel_to_commit().unwrap();
+        cache_repo.reset(target_obj.as_object(), git2::ResetType::Hard, None).unwrap();
+
+        assert!(cache_dir.join("new_file.txt").exists(), "new file should be visible after fetch+reset");
+        let content = std::fs::read_to_string(cache_dir.join("new_file.txt")).unwrap();
+        assert_eq!(content, "new content");
+    }
+
+    #[tokio::test]
+    async fn test_add_marketplace_twice_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("config");
+        let cache_dir = tmp.path().join("cache");
+        tokio::fs::create_dir_all(&config_dir).await.unwrap();
+
+        let marketplace_dir = tmp.path().join("marketplace");
+        tokio::fs::create_dir_all(&marketplace_dir).await.unwrap();
+        tokio::fs::write(
+            marketplace_dir.join("marketplace.json"),
+            r#"{"name": "test-market", "plugins": []}"#,
+        ).await.unwrap();
+
+        let source = marketplace_dir.to_string_lossy().to_string();
+
+        let result1 = add_marketplace_impl(&config_dir, &cache_dir, &source).await;
+        assert!(result1.is_ok(), "first add failed: {:?}", result1);
+
+        let result2 = add_marketplace_impl(&config_dir, &cache_dir, &source).await;
+        assert!(result2.is_ok(), "second add failed: {:?}", result2);
+
+        let db = load_plugins_db(&config_dir).await;
+        assert_eq!(db.marketplaces.len(), 1, "should have exactly one entry after two adds");
+        assert_eq!(db.marketplaces[0].name, "test-market");
+        assert_eq!(db.marketplaces[0].source, source);
+    }
+
+    #[tokio::test]
+    async fn test_rename_collision_fix_removes_existing_before_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("cache");
+        tokio::fs::create_dir_all(&cache_dir.join("marketplaces")).await.unwrap();
+
+        let final_dir = marketplace_cache_dir(&cache_dir, "test-market");
+        tokio::fs::create_dir_all(&final_dir).await.unwrap();
+        tokio::fs::write(final_dir.join("marketplace.json"), r#"{"name": "test-market", "plugins": []}"#).await.unwrap();
+
+        let tmp_name = "tmp_marketplace_test";
+        let tmp_dir = marketplace_cache_dir(&cache_dir, tmp_name);
+        tokio::fs::create_dir_all(&tmp_dir).await.unwrap();
+        tokio::fs::write(tmp_dir.join("marketplace.json"), r#"{"name": "test-market", "plugins": [{"name": "new-plugin", "source": "./x"}]}"#).await.unwrap();
+
+        if final_dir.exists() {
+            tokio::fs::remove_dir_all(&final_dir).await.unwrap();
+        }
+        tokio::fs::rename(&tmp_dir, &final_dir).await.unwrap();
+
+        assert!(final_dir.exists());
+        assert!(!tmp_dir.exists());
+        let content = tokio::fs::read_to_string(final_dir.join("marketplace.json")).await.unwrap();
+        assert!(content.contains("new-plugin"));
     }
 }
