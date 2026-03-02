@@ -7,3 +7,4 @@ pub mod skills_context;
 pub mod skills_matcher;
 pub mod slash_commands;
 pub mod slash_expand;
+pub mod yaml_util;

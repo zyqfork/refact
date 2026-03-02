@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ext::config_dirs::{collect_md_files_recursive, source_for_dir, CommandSource, ExtDirs};
+use crate::ext::yaml_util::{yaml_str, yaml_str_list};
 
 const MAX_FILE_SIZE: u64 = 100 * 1024;
 
@@ -67,27 +68,9 @@ pub fn parse_frontmatter_and_body(content: &str) -> (serde_yaml::Value, String) 
         Ok(v) => (v, body.to_string()),
         Err(e) => {
             tracing::warn!("Failed to parse frontmatter YAML: {}", e);
-            (empty_map, content.to_string())
+            (empty_map, body.to_string())
         }
     }
-}
-
-fn yaml_str(v: &serde_yaml::Value, key: &str) -> String {
-    v.get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn yaml_str_list(v: &serde_yaml::Value, key: &str) -> Vec<String> {
-    v.get(key)
-        .and_then(|v| v.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn command_name_from_path(path: &Path) -> Option<String> {
@@ -139,6 +122,7 @@ pub async fn load_slash_commands(ext_dirs: &ExtDirs) -> Vec<SlashCommand> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use crate::ext::yaml_util::{yaml_str, yaml_str_list};
 
     #[test]
     fn test_parse_frontmatter_valid() {

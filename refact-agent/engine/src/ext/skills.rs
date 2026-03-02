@@ -4,6 +4,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::ext::config_dirs::{source_for_dir, CommandSource, ExtDirs};
 use crate::ext::slash_commands::{parse_frontmatter_and_body};
+use crate::ext::yaml_util::{yaml_bool, yaml_str, yaml_str_list};
 
 const MAX_FILE_SIZE: u64 = 100 * 1024;
 
@@ -44,27 +45,6 @@ pub struct SkillFull {
     pub skill_dir: PathBuf,
 }
 
-fn yaml_str(v: &serde_yaml::Value, key: &str) -> String {
-    v.get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn yaml_str_list(v: &serde_yaml::Value, key: &str) -> Vec<String> {
-    v.get(key)
-        .and_then(|v| v.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn yaml_bool(v: &serde_yaml::Value, key: &str, default: bool) -> bool {
-    v.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
-}
 
 async fn load_skill_from_dir(
     skill_dir: &Path,

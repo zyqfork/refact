@@ -1,12 +1,31 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock as ARwLock;
 
 use crate::ext::config_dirs::{get_ext_dirs, ExtDirs};
-use crate::ext::skills::{load_skill_full, load_skill_indices};
-use crate::ext::slash_commands::load_slash_commands;
+use crate::ext::skills::{load_skill_full, load_skill_indices, SkillIndex};
+use crate::ext::slash_commands::{load_slash_commands, SlashCommand};
 use crate::global_context::GlobalContext;
 use crate::integrations::mcp::mcp_prompts::{MCP_PROMPT_PREFIX, execute_mcp_prompt};
+
+const SLASH_CACHE_TTL: Duration = Duration::from_secs(5);
+
+struct SlashCacheEntry {
+    commands: Vec<SlashCommand>,
+    skill_indices: Vec<SkillIndex>,
+    loaded_at: Instant,
+    generation: u64,
+}
+
+static SLASH_CACHE: OnceLock<tokio::sync::RwLock<Option<SlashCacheEntry>>> = OnceLock::new();
+
+static PLACEHOLDER_RE: OnceLock<regex::Regex> = OnceLock::new();
+
+fn placeholder_regex() -> &'static regex::Regex {
+    PLACEHOLDER_RE.get_or_init(|| regex::Regex::new(r"\$(\d+)").unwrap())
+}
 
 pub struct SkillActivationInfo {
     pub name: String,
@@ -65,25 +84,26 @@ fn shell_split(s: &str) -> Vec<String> {
 }
 
 fn expand_template(body: &str, args_str: &str, positional: &[String]) -> String {
-    let mut result = body.to_string();
-    result = result.replace("$ARGUMENTS", args_str);
-    for i in (0..positional.len()).rev() {
-        let placeholder = format!("${}", i + 1);
-        result = result.replace(&placeholder, &positional[i]);
-    }
-    let max_seen = positional.len() + 3;
-    for i in (positional.len()..max_seen).rev() {
-        let placeholder = format!("${}", i + 1);
-        result = result.replace(&placeholder, "");
-    }
-    result
+    let result = body.replace("$ARGUMENTS", args_str);
+    let re = placeholder_regex();
+    re.replace_all(&result, |caps: &regex::Captures| {
+        let n: usize = caps[1].parse().unwrap_or(0);
+        if n >= 1 && n <= positional.len() {
+            positional[n - 1].clone()
+        } else {
+            String::new()
+        }
+    }).into_owned()
 }
 
-async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<ExpandedCommand>, String> {
-    let commands = load_slash_commands(ext_dirs).await;
-    let commands_map: std::collections::HashMap<&str, &crate::ext::slash_commands::SlashCommand> =
+async fn expand_with_data(
+    commands: &[SlashCommand],
+    skill_indices: &[SkillIndex],
+    ext_dirs: &ExtDirs,
+    raw_input: &str,
+) -> Result<Option<ExpandedCommand>, String> {
+    let commands_map: std::collections::HashMap<&str, &SlashCommand> =
         commands.iter().map(|c| (c.name.as_str(), c)).collect();
-    let skill_indices = load_skill_indices(ext_dirs).await;
     let skill_names: std::collections::HashSet<&str> = skill_indices
         .iter()
         .filter(|s| s.user_invocable)
@@ -153,12 +173,54 @@ async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<
     Ok(None)
 }
 
+async fn expand_with_dirs(ext_dirs: &ExtDirs, raw_input: &str) -> Result<Option<ExpandedCommand>, String> {
+    if !raw_input.contains('/') {
+        return Ok(None);
+    }
+    let commands = load_slash_commands(ext_dirs).await;
+    let skill_indices = load_skill_indices(ext_dirs).await;
+    expand_with_data(&commands, &skill_indices, ext_dirs, raw_input).await
+}
+
 pub async fn expand_slash_command(
     gcx: Arc<ARwLock<GlobalContext>>,
     raw_input: &str,
 ) -> Result<Option<ExpandedCommand>, String> {
+    if !raw_input.contains('/') {
+        return Ok(None);
+    }
     let ext_dirs = get_ext_dirs(gcx.clone()).await;
-    if let Some(expanded) = expand_with_dirs(&ext_dirs, raw_input).await? {
+    let generation = {
+        let gcx_locked = gcx.read().await;
+        gcx_locked.ext_cache_generation.load(Ordering::Relaxed)
+    };
+    let lock = SLASH_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
+    let (commands, skill_indices) = {
+        let read = lock.read().await;
+        let cached = read.as_ref().and_then(|entry| {
+            if entry.generation == generation && entry.loaded_at.elapsed() < SLASH_CACHE_TTL {
+                Some((entry.commands.clone(), entry.skill_indices.clone()))
+            } else {
+                None
+            }
+        });
+        drop(read);
+        if let Some(data) = cached {
+            data
+        } else {
+            let commands = load_slash_commands(&ext_dirs).await;
+            let skill_indices = load_skill_indices(&ext_dirs).await;
+            let mut write = lock.write().await;
+            *write = Some(SlashCacheEntry {
+                commands: commands.clone(),
+                skill_indices: skill_indices.clone(),
+                loaded_at: Instant::now(),
+                generation,
+            });
+            (commands, skill_indices)
+        }
+    };
+    if let Some(expanded) = expand_with_data(&commands, &skill_indices, &ext_dirs, raw_input).await? {
         return Ok(Some(expanded));
     }
     expand_mcp_prompt_command(gcx, raw_input).await
@@ -538,5 +600,18 @@ mod tests {
     async fn test_url_not_expanded() {
         let ext_dirs = make_ext_dirs(PathBuf::from("/nonexistent"));
         assert!(expand_with_dirs(&ext_dirs, "visit http://example.com/path").await.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_expand_template_high_placeholder_removed() {
+        let args = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(expand_template("$1 $99 $2", "a b", &args), "a  b");
+    }
+
+    #[tokio::test]
+    async fn test_no_slash_skips_loading() {
+        let ext_dirs = make_ext_dirs(PathBuf::from("/nonexistent_dir_wont_be_read"));
+        let result = expand_with_dirs(&ext_dirs, "plain text without any slashes here").await;
+        assert!(result.unwrap().is_none(), "Input with no '/' should return None without loading");
     }
 }
