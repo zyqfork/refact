@@ -210,7 +210,7 @@ async fn process_single_trajectory(
 }
 
 fn build_chat_messages(messages: &[Value]) -> Vec<ChatMessage> {
-    messages
+    let msgs: Vec<ChatMessage> = messages
         .iter()
         .filter_map(|msg| {
             let role = msg.get("role").and_then(|v| v.as_str())?;
@@ -231,7 +231,13 @@ fn build_chat_messages(messages: &[Value]) -> Vec<ChatMessage> {
                 ..Default::default()
             })
         })
-        .collect()
+        .collect();
+
+    // Drop leading assistant messages — validate_chat_history requires the first message
+    // to be 'user' or 'system'. This can happen when a subchat trajectory starts with a
+    // system message (filtered above) followed by an assistant message.
+    let start = msgs.iter().position(|m| m.role == "user").unwrap_or(msgs.len());
+    msgs[start..].to_vec()
 }
 
 struct ExtractedMemo {
