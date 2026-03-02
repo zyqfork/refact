@@ -75,17 +75,32 @@ fn build_skills_prompt_markdown(
     has_deactivate_skill: bool,
 ) -> String {
     if displayable.is_empty() {
-        return "## Skills\n\nYou have access to a skills system. No skills are currently installed.\nUsers can create skills in the Extensions page.".to_string();
+        let mut lines = vec![
+            "## Skills".to_string(),
+            String::new(),
+            "You have access to a skills system. Skills are specialized instruction sets that provide focused guidance for specific tasks.".to_string(),
+            String::new(),
+            "No skills are currently installed. Users can create skills in the Extensions page.".to_string(),
+        ];
+        if has_activate_skill {
+            lines.push(String::new());
+            if has_deactivate_skill {
+                lines.push("When skills are available, use `activate_skill(name)` to load them, work with them, then call `deactivate_skill(report=\"...\")` with a completion summary.".to_string());
+            } else {
+                lines.push("When skills are available, use `activate_skill(name)` to load them.".to_string());
+            }
+        }
+        return lines.join("\n");
     }
     let available_skills_intro = if has_activate_skill {
-        "The following skills are available. You can activate any skill using the `activate_skill(name)` tool when it's relevant to the user's request. Users can also invoke skills directly with `/skill-name`.".to_string()
+        "The following skills are available. Use `activate_skill(name)` to load a skill's full instructions when relevant. Users can also invoke skills with `/skill-name`.".to_string()
     } else {
         "The following skills are available. Users can invoke skills with `/skill-name`.".to_string()
     };
     let mut lines = vec![
         "## Skills".to_string(),
         String::new(),
-        "You have access to skills — specialized instruction sets that guide you through specific workflows.".to_string(),
+        "You have access to skills — specialized instruction sets that provide focused guidance for specific tasks.".to_string(),
         String::new(),
         "### Available Skills".to_string(),
         available_skills_intro,
@@ -95,15 +110,29 @@ fn build_skills_prompt_markdown(
         lines.push(format!("- **{}**: {}", skill.name, skill.description));
     }
     lines.push(String::new());
-    lines.push("### How Skills Work".to_string());
-    if has_activate_skill {
-        lines.push("- Call `activate_skill(name=\"skill-name\")` to load a skill's full instructions into context".to_string());
+    if has_activate_skill || has_deactivate_skill {
+        lines.push("### Skill Lifecycle".to_string());
+        if has_activate_skill {
+            lines.push("1. **Activate**: Call `activate_skill(name=\"skill-name\")` to load instructions into context".to_string());
+        }
+        lines.push("2. **Work**: Follow the skill's instructions to complete the task".to_string());
+        if has_deactivate_skill {
+            lines.push("3. **Deactivate**: When done, call `deactivate_skill(report=\"...\")` with a thorough markdown report:".to_string());
+            lines.push("   - What was the goal".to_string());
+            lines.push("   - What actions were taken".to_string());
+            lines.push("   - What files were changed".to_string());
+            lines.push("   - What was the outcome".to_string());
+            lines.push("   The report compacts the entire skill execution into a clean summary in chat history.".to_string());
+            lines.push(String::new());
+            lines.push("### Important".to_string());
+            lines.push("- Only one skill can be active at a time".to_string());
+            lines.push("- Always deactivate a skill when its task is complete".to_string());
+            lines.push("- The deactivation report is the only record of the skill run preserved in history".to_string());
+        }
+    } else {
+        lines.push("### How Skills Work".to_string());
+        lines.push("- Skills with `disable-model-invocation` are user-only (not listed above)".to_string());
     }
-    lines.push("- Once activated, the skill's instructions guide your approach and its allowed-tools are auto-approved".to_string());
-    if has_deactivate_skill {
-        lines.push("- Use `deactivate_skill(report=\"summary of what was done and what changed\")` to clear active skill state when done — the report replaces skill context files with a clean summary".to_string());
-    }
-    lines.push("- Skills with `disable-model-invocation` are user-only (not listed above)".to_string());
     lines.join("\n")
 }
 
@@ -691,7 +720,7 @@ mod tests {
 
         assert!(text.contains("## Skills"));
         assert!(text.contains("### Available Skills"));
-        assert!(text.contains("### How Skills Work"));
+        assert!(text.contains("### Skill Lifecycle"));
         assert!(text.contains("**my-skill**"));
         assert!(text.contains("Does something useful"));
         assert!(!text.contains("hidden-skill"), "disable-model-invocation skills must not appear");
@@ -897,5 +926,25 @@ mod tests {
         assert!(!text.is_empty());
         assert!(text.contains("## Skills"));
         assert!(text.contains("disabled by configuration"));
+    }
+
+    #[test]
+    fn test_skills_prompt_markdown_with_skills_documents_lifecycle() {
+        let skill = make_skill_index("my-skill", "Does something useful");
+        let displayable = vec![&skill];
+        let text = build_skills_prompt_markdown(&displayable, true, true);
+        assert!(text.contains("deactivate_skill"), "lifecycle must mention deactivate_skill");
+        assert!(text.contains("report"), "lifecycle must mention report parameter");
+        assert!(text.contains("compacts"), "lifecycle must mention that report compacts history");
+    }
+
+    #[test]
+    fn test_skills_prompt_markdown_empty_documents_system() {
+        let text = build_skills_prompt_markdown(&[], true, true);
+        assert!(!text.is_empty());
+        assert!(text.contains("## Skills"));
+        assert!(text.contains("No skills are currently installed"));
+        assert!(text.contains("activate_skill"), "empty state must mention activate_skill when tool available");
+        assert!(text.contains("deactivate_skill"), "empty state must mention deactivate_skill when tool available");
     }
 }

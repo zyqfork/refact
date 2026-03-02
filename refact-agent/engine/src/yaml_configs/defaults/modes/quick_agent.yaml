@@ -1,4 +1,4 @@
-schema_version: 9
+schema_version: 10
 id: quick_agent
 title: Quick Agent
 description: Fast autonomous coding with minimal overhead

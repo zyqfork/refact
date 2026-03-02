@@ -56,7 +56,7 @@ impl Tool for ToolActivateSkill {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Load a skill's full instructions into the current context. Use when you determine a skill from the available index is relevant to the user's request.".to_string(),
+            description: "Load a skill's full instructions into the current context. Use when you determine a skill from the available index is relevant to the user's request. Once activated, the skill's instructions guide your approach. When you're done with the skill's task, you MUST call deactivate_skill with a thorough report.".to_string(),
             input_schema: json_schema_from_params(
                 &[("name", "string", "Name of the skill to activate")],
                 &["name"],
@@ -129,7 +129,7 @@ impl Tool for ToolDeactivateSkill {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Deactivate the currently active skill with a completion report. The report should be a thorough overview of what was done, what happened, and what was changed. After deactivation, the skill execution messages are compacted into the report, keeping chat history clean.".to_string(),
+            description: "Deactivate the currently active skill with a completion report. The report should be a thorough overview of what was done, what happened, and what was changed. After deactivation, the skill execution messages are compacted into the report, keeping chat history clean while preserving knowledge of what occurred.".to_string(),
             input_schema: json_schema_from_params(
                 &[("report", "string", "A thorough overview of what was done, what happened, what was changed during the skill execution. Use clear markdown formatting.")],
                 &["report"],

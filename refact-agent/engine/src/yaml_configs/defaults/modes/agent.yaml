@@ -1,4 +1,4 @@
-schema_version: 9
+schema_version: 10
 id: agent
 title: Agent
 description: Full multi-step workflow with tools and editing capabilities
