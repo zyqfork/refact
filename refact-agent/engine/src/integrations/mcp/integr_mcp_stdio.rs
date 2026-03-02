@@ -228,3 +228,39 @@ impl IntegrationTrait for IntegrationMCPStdio {
         include_str!("mcp_stdio_schema.yaml")
     }
 }
+
+#[derive(Default, Clone)]
+pub struct IntegrationMCPUnified {
+    pub inner: IntegrationMCPStdio,
+}
+
+#[async_trait]
+impl IntegrationTrait for IntegrationMCPUnified {
+    async fn integr_settings_apply(
+        &mut self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        config_path: String,
+        value: &serde_json::Value,
+    ) -> Result<(), serde_json::Error> {
+        self.inner.integr_settings_apply(gcx, config_path, value).await
+    }
+
+    fn integr_settings_as_json(&self) -> serde_json::Value {
+        self.inner.integr_settings_as_json()
+    }
+
+    fn integr_common(&self) -> crate::integrations::integr_abstract::IntegrationCommon {
+        self.inner.integr_common()
+    }
+
+    async fn integr_tools(
+        &self,
+        integr_name: &str,
+    ) -> Vec<Box<dyn crate::tools::tools_description::Tool + Send>> {
+        self.inner.integr_tools(integr_name).await
+    }
+
+    fn integr_schema(&self) -> &str {
+        include_str!("mcp_unified_schema.yaml")
+    }
+}

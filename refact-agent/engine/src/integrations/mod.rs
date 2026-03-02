@@ -76,6 +76,10 @@ pub fn integration_from_name(n: &str) -> Result<Box<dyn IntegrationTrait + Send 
                 ..Default::default()
             }) as Box<dyn IntegrationTrait + Send + Sync>)
         }
+        // mcp_TEMPLATE uses the unified schema
+        "mcp_TEMPLATE" => Ok(Box::new(mcp::integr_mcp_stdio::IntegrationMCPUnified {
+            ..Default::default()
+        }) as Box<dyn IntegrationTrait + Send + Sync>),
         // We support also mcp_* as mcp_stdio_* for backwards compatibility, some users already have it configured.
         mcp_stdio if mcp_stdio.starts_with("mcp_stdio_") || mcp_stdio.starts_with("mcp_") => {
             Ok(Box::new(mcp::integr_mcp_stdio::IntegrationMCPStdio {
@@ -97,9 +101,7 @@ pub fn integrations_list(_allow_experimental: bool) -> Vec<&'static str> {
         "mysql",
         "cmdline_TEMPLATE",
         "service_TEMPLATE",
-        "mcp_stdio_TEMPLATE",
-        "mcp_sse_TEMPLATE",
-        "mcp_http_TEMPLATE",
+        "mcp_TEMPLATE",
     ];
     integrations
 }

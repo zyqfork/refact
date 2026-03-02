@@ -168,6 +168,7 @@ use crate::http::routers::v1::skills_status::handle_v1_skills_status;
 use crate::http::routers::v1::mcp_server_info::{handle_v1_mcp_server_info, handle_v1_mcp_server_reconnect};
 use crate::http::routers::v1::mcp_marketplace::{
     handle_v1_mcp_marketplace_get, handle_v1_mcp_marketplace_install, handle_v1_mcp_marketplace_installed,
+    handle_v1_mcp_auto_name,
 };
 use crate::http::routers::v1::mcp_config_sharing::{
     handle_v1_mcp_export, handle_v1_mcp_import, handle_v1_mcp_project_config,
@@ -442,6 +443,7 @@ pub fn make_v1_router() -> Router {
         .route("/mcp/marketplace", get(handle_v1_mcp_marketplace_get))
         .route("/mcp/marketplace/install", post(handle_v1_mcp_marketplace_install))
         .route("/mcp/marketplace/installed", get(handle_v1_mcp_marketplace_installed))
+        .route("/mcp/auto-name", post(handle_v1_mcp_auto_name))
         .route("/mcp/export", post(handle_v1_mcp_export))
         .route("/mcp/import", post(handle_v1_mcp_import))
         .route("/mcp/project-config", get(handle_v1_mcp_project_config));

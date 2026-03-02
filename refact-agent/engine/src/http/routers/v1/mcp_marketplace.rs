@@ -330,6 +330,143 @@ pub async fn handle_v1_mcp_marketplace_installed(
     Ok(Json(json!({ "installed": installed })))
 }
 
+#[derive(Deserialize)]
+pub struct AutoNameRequest {
+    pub input: String,
+}
+
+pub fn detect_transport(input: &str) -> &'static str {
+    let trimmed = input.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        "http"
+    } else {
+        "stdio"
+    }
+}
+
+pub fn extract_name_from_input(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("input is empty".to_string());
+    }
+
+    let raw = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        extract_name_from_url(trimmed)
+    } else {
+        extract_name_from_command(trimmed)
+    };
+
+    let sanitized = sanitize_name(&raw);
+    if sanitized.is_empty() {
+        return Err("could not extract a valid name from input".to_string());
+    }
+    Ok(sanitized)
+}
+
+fn extract_name_from_url(url: &str) -> String {
+    let without_scheme = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let host = host.split(':').next().unwrap_or(host);
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() >= 2 {
+        parts[parts.len() - 2].to_string()
+    } else {
+        parts.first().copied().unwrap_or("mcp").to_string()
+    }
+}
+
+fn extract_name_from_command(cmd: &str) -> String {
+    let args: Vec<&str> = cmd.split_whitespace().collect();
+    let mut candidate = "";
+    for (i, arg) in args.iter().enumerate() {
+        if *arg == "run" || *arg == "-y" || *arg == "-i" || *arg == "--rm" || *arg == "-it" {
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        if i > 0 && (args[i - 1] == "-e" || args[i - 1] == "--env" || args[i - 1] == "-p" || args[i - 1] == "--port") {
+            continue;
+        }
+        candidate = arg;
+        if *arg != "npx" && *arg != "uvx" && *arg != "docker" && *arg != "node" && *arg != "python" && *arg != "python3" {
+            break;
+        }
+    }
+    let name = candidate
+        .rsplit('/')
+        .next()
+        .unwrap_or(candidate);
+    let name = name.trim_end_matches(".js");
+    let name = name.trim_start_matches('@');
+    let name = if let Some(slash_pos) = name.find('/') {
+        &name[slash_pos + 1..]
+    } else {
+        name
+    };
+    strip_mcp_prefixes(name)
+}
+
+fn strip_mcp_prefixes(s: &str) -> String {
+    let stripped = s
+        .trim_start_matches("mcp-server-")
+        .trim_start_matches("server-mcp-")
+        .trim_start_matches("mcp-")
+        .trim_start_matches("server-");
+    stripped.to_string()
+}
+
+fn sanitize_name(s: &str) -> String {
+    let snake: String = s
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    let snake = snake.trim_matches('_').to_string();
+    let snake: String = {
+        let mut prev_underscore = false;
+        snake.chars().filter(|c| {
+            if *c == '_' {
+                if prev_underscore {
+                    return false;
+                }
+                prev_underscore = true;
+            } else {
+                prev_underscore = false;
+            }
+            true
+        }).collect()
+    };
+    if snake.len() > 40 {
+        snake[..40].to_string()
+    } else {
+        snake
+    }
+}
+
+pub async fn handle_v1_mcp_auto_name(
+    body_bytes: hyper::body::Bytes,
+) -> Result<Json<Value>, ScratchError> {
+    let req = serde_json::from_slice::<AutoNameRequest>(&body_bytes)
+        .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("JSON: {}", e)))?;
+
+    let suggested_name = extract_name_from_input(&req.input)
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+
+    let transport = detect_transport(&req.input);
+    let config_prefix = match transport {
+        "http" => "mcp_http_",
+        _ => "mcp_stdio_",
+    };
+
+    Ok(Json(json!({
+        "suggested_name": suggested_name,
+        "transport": transport,
+        "config_prefix": config_prefix,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,6 +738,57 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn test_auto_name_from_npx_command() {
+        let name = extract_name_from_input("npx -y @notionhq/notion-mcp-server").unwrap();
+        assert_eq!(name, "notion_mcp_server");
+    }
+
+    #[test]
+    fn test_auto_name_from_uvx_command() {
+        let name = extract_name_from_input("uvx mcp-server-fetch").unwrap();
+        assert_eq!(name, "fetch");
+    }
+
+    #[test]
+    fn test_auto_name_from_url() {
+        let name = extract_name_from_input("https://api.example.com/mcp").unwrap();
+        assert_eq!(name, "example");
+    }
+
+    #[test]
+    fn test_auto_name_from_docker_command() {
+        let name = extract_name_from_input("docker run -i --rm mcp/server-github").unwrap();
+        assert_eq!(name, "github");
+    }
+
+    #[test]
+    fn test_auto_name_sanitization() {
+        let name = extract_name_from_input("npx -y @my-org/my-cool-tool!").unwrap();
+        assert!(name.chars().all(|c| c.is_alphanumeric() || c == '_'));
+        assert!(!name.starts_with('_'));
+        assert!(!name.ends_with('_'));
+    }
+
+    #[test]
+    fn test_transport_detection_url() {
+        assert_eq!(detect_transport("https://api.example.com/mcp"), "http");
+        assert_eq!(detect_transport("http://localhost:3000/mcp"), "http");
+    }
+
+    #[test]
+    fn test_transport_detection_command() {
+        assert_eq!(detect_transport("npx -y @notionhq/notion-mcp-server"), "stdio");
+        assert_eq!(detect_transport("uvx mcp-server-fetch"), "stdio");
+        assert_eq!(detect_transport("docker run -i --rm mcp/github"), "stdio");
+    }
+
+    #[test]
+    fn test_auto_name_empty_input() {
+        let result = extract_name_from_input("");
+        assert!(result.is_err());
     }
 
     #[tokio::test]
