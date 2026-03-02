@@ -8,6 +8,7 @@ pub mod tool_helpers;
 pub mod tool_name_alias;
 pub mod subagent_phases;
 
+mod tool_activate_skill;
 mod tool_add_workspace_folder;
 mod tool_ast_definition;
 mod tool_cat;

@@ -210,6 +210,7 @@ tools:
   - search_pattern
   - search_symbol_definition
   - search_semantic
+  - activate_skill
   - knowledge
   - create_knowledge
   - search_trajectories
@@ -240,6 +241,8 @@ tool_confirm:
     - match: "cat"
       action: auto
     - match: "search_*"
+      action: auto
+    - match: "activate_skill"
       action: auto
     - match: "knowledge"
       action: auto

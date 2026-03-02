@@ -19,7 +19,7 @@ pub struct SkillsTrackingInfo {
 const MAX_INCLUDE_FILE_SIZE: usize = 50 * 1024;
 const MAX_INCLUDES: usize = 5;
 
-async fn expand_skill_includes(body: &str, skill_dir: &Path) -> String {
+pub async fn expand_skill_includes(body: &str, skill_dir: &Path) -> String {
     let mut new_lines = Vec::new();
     let mut include_count = 0;
     for line in body.lines() {
