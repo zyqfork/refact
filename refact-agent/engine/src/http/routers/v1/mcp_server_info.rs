@@ -66,6 +66,15 @@ struct McpServerInfoResponse {
     metrics: MCPServerMetrics,
 }
 
+fn shorten_mcp_yaml_name(yaml_stem: &str) -> String {
+    for prefix in &["mcp_stdio_", "mcp_sse_", "mcp_http_"] {
+        if let Some(stripped) = yaml_stem.strip_prefix(prefix) {
+            return format!("mcp_{}", stripped);
+        }
+    }
+    yaml_stem.to_string()
+}
+
 pub async fn handle_v1_mcp_server_info(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Query(params): Query<McpServerInfoQuery>,
@@ -83,19 +92,31 @@ pub async fn handle_v1_mcp_server_info(
             format!("no session for {}", session_key),
         ))?;
 
-    let mut session_locked = session.lock().await;
-    let mcp_session = session_locked
-        .as_any_mut()
-        .downcast_mut::<SessionMCP>()
-        .ok_or(ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "session is not an MCP session".to_string(),
-        ))?;
+    let (config_path_clone, connection_status, server_info, tools_raw, resources_raw, prompts_raw, logs_arc, metrics_arc) = {
+        let mut session_locked = session.lock().await;
+        let mcp_session = session_locked
+            .as_any_mut()
+            .downcast_mut::<SessionMCP>()
+            .ok_or(ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "session is not an MCP session".to_string(),
+            ))?;
+        (
+            mcp_session.config_path.clone(),
+            mcp_session.connection_status.clone(),
+            mcp_session.server_info.clone(),
+            mcp_session.mcp_tools.clone(),
+            mcp_session.mcp_resources.clone(),
+            mcp_session.mcp_prompts.clone(),
+            mcp_session.logs.clone(),
+            mcp_session.metrics.clone(),
+        )
+    };
 
-    let status = serde_json::to_value(&mcp_session.connection_status).unwrap_or(serde_json::Value::Null);
+    let status = serde_json::to_value(&connection_status).unwrap_or(serde_json::Value::Null);
 
     let (server_name, server_version, protocol_version, capabilities_json) =
-        if let Some(ref info) = mcp_session.server_info {
+        if let Some(ref info) = server_info {
             (
                 Some(info.server_info.name.clone()),
                 Some(info.server_info.version.clone()),
@@ -104,7 +125,7 @@ pub async fn handle_v1_mcp_server_info(
                     "tools": info.capabilities.tools.is_some(),
                     "resources": info.capabilities.resources.is_some(),
                     "prompts": info.capabilities.prompts.is_some(),
-                    "sampling": false,
+                    "sampling": true,
                 }),
             )
         } else {
@@ -116,12 +137,18 @@ pub async fn handle_v1_mcp_server_info(
                     "tools": false,
                     "resources": false,
                     "prompts": false,
-                    "sampling": false,
+                    "sampling": true,
                 }),
             )
         };
 
-    let tools: Vec<McpToolInfo> = mcp_session.mcp_tools.iter().map(|tool| {
+    let yaml_name = std::path::Path::new(&config_path_clone)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    let shortened_yaml_name = shorten_mcp_yaml_name(yaml_name);
+
+    let tools: Vec<McpToolInfo> = tools_raw.iter().map(|tool| {
         let input_schema = {
             let mut map = tool.input_schema.as_ref().clone();
             if !map.contains_key("type") {
@@ -130,17 +157,6 @@ pub async fn handle_v1_mcp_server_info(
             serde_json::Value::Object(map)
         };
 
-        let yaml_name = std::path::Path::new(&mcp_session.config_path)
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown");
-        let shortened_yaml_name = if let Some(stripped) = yaml_name.strip_prefix("mcp_stdio_") {
-            format!("mcp_{}", stripped)
-        } else if let Some(stripped) = yaml_name.strip_prefix("mcp_sse_") {
-            format!("mcp_{}", stripped)
-        } else {
-            yaml_name.to_string()
-        };
         let internal_name = format!("{}_{}", shortened_yaml_name, tool.name)
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -157,7 +173,7 @@ pub async fn handle_v1_mcp_server_info(
         }
     }).collect();
 
-    let resources: Vec<McpResourceInfo> = mcp_session.mcp_resources.iter().map(|resource| {
+    let resources: Vec<McpResourceInfo> = resources_raw.iter().map(|resource| {
         McpResourceInfo {
             uri: resource.uri.to_string(),
             name: resource.name.to_string(),
@@ -166,18 +182,18 @@ pub async fn handle_v1_mcp_server_info(
         }
     }).collect();
 
-    let prompts: Vec<McpPromptInfo> = mcp_session.mcp_prompts.iter().map(|prompt| {
+    let prompts: Vec<McpPromptInfo> = prompts_raw.iter().map(|prompt| {
         McpPromptInfo {
             name: prompt.name.to_string(),
             description: prompt.description.as_deref().map(|s| s.to_string()),
         }
     }).collect();
 
-    let logs_tail = mcp_session.logs.try_lock()
+    let logs_tail = logs_arc.try_lock()
         .map(|l| l.clone())
         .unwrap_or_default();
 
-    let metrics = if let Ok(mut m) = mcp_session.metrics.try_lock() {
+    let metrics = if let Ok(mut m) = metrics_arc.try_lock() {
         m.snapshot()
     } else {
         crate::integrations::mcp::mcp_metrics::MCPServerMetrics::default()
@@ -279,7 +295,6 @@ pub async fn handle_v1_mcp_server_reconnect(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "session is not an MCP session".to_string(),
             ))?;
-        mcp_session.mcp_client = None;
         mcp_session.mcp_tools = vec![];
         mcp_session.mcp_resources = vec![];
         mcp_session.mcp_prompts = vec![];
@@ -314,7 +329,7 @@ mod tests {
             }],
             resources: vec![],
             prompts: vec![],
-            capabilities: serde_json::json!({"tools": true, "resources": false, "prompts": false, "sampling": false}),
+            capabilities: serde_json::json!({"tools": true, "resources": false, "prompts": false, "sampling": true}),
             logs_tail: vec!["[12:00:00] Connected".to_string()],
             metrics: MCPServerMetrics::default(),
         };
@@ -324,6 +339,7 @@ mod tests {
         assert!(json.contains("mcp_test_my_tool"));
         assert!(json.contains("Connected"));
         assert!(json.contains("\"metrics\""));
+        assert!(json.contains("\"sampling\":true"));
     }
 
     #[test]
@@ -337,7 +353,7 @@ mod tests {
             tools: vec![],
             resources: vec![],
             prompts: vec![],
-            capabilities: serde_json::json!({"tools": false, "resources": false, "prompts": false, "sampling": false}),
+            capabilities: serde_json::json!({"tools": false, "resources": false, "prompts": false, "sampling": true}),
             logs_tail: vec![],
             metrics: MCPServerMetrics::default(),
         };
@@ -347,6 +363,7 @@ mod tests {
         assert!(json.get("server_version").is_none(), "server_version should be omitted when None");
         assert!(json.get("protocol_version").is_none(), "protocol_version should be omitted when None");
         assert!(json.get("metrics").is_some(), "metrics should always be present");
+        assert_eq!(json["capabilities"]["sampling"], serde_json::json!(true));
     }
 
     #[test]
@@ -363,5 +380,20 @@ mod tests {
         assert_eq!(metrics.failed_calls, 1);
         assert!(metrics.tool_stats.contains_key("test_tool"));
         assert!(metrics.tool_stats.contains_key("bad_tool"));
+    }
+
+    #[test]
+    fn test_shorten_mcp_yaml_name() {
+        assert_eq!(shorten_mcp_yaml_name("mcp_stdio_github"), "mcp_github");
+        assert_eq!(shorten_mcp_yaml_name("mcp_sse_myserver"), "mcp_myserver");
+        assert_eq!(shorten_mcp_yaml_name("mcp_http_myserver"), "mcp_myserver");
+        assert_eq!(shorten_mcp_yaml_name("other_integration"), "other_integration");
+    }
+
+    #[test]
+    fn test_mcp_http_prefix_stripped_in_internal_name() {
+        let yaml_name = "mcp_http_myserver";
+        let shortened = shorten_mcp_yaml_name(yaml_name);
+        assert_eq!(shortened, "mcp_myserver");
     }
 }
