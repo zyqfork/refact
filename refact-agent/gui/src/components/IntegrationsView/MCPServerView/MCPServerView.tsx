@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Box, Button, Flex, Heading, Separator, Text } from "@radix-ui/themes";
+import { Box, Button, Flex, Heading, Separator, Spinner, Text } from "@radix-ui/themes";
 import { useAppSelector } from "../../../hooks";
 import { selectLspPort } from "../../../features/Config/configSlice";
 import {
@@ -76,7 +76,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
   if (isLoading) {
     return (
-      <Flex p="4" align="center" justify="center">
+      <Flex p="4" align="center" justify="center" gap="2">
+        <Spinner size="2" />
         <Text size="2" color="gray">Loading MCP server info...</Text>
       </Flex>
     );
@@ -88,9 +89,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         <Text size="2" color="gray">
           MCP server info not available. The server may not be connected yet.
         </Text>
-        <Button size="2" variant="soft" onClick={handleReconnect} disabled={isReconnecting}>
-          {isReconnecting ? "Reconnecting..." : "Reconnect"}
-        </Button>
+        <Flex align="center" gap="2">
+          <Button size="2" variant="soft" onClick={handleReconnect} disabled={isReconnecting}>
+            {isReconnecting ? "Reconnecting..." : "Reconnect"}
+          </Button>
+          {isReconnecting && <Spinner size="2" />}
+        </Flex>
         <Separator size="4" />
         <MCPLogs
           integrationPath={configPath}

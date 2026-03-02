@@ -65,6 +65,78 @@ describe("MCPConnectionStatus", () => {
     await user.click(screen.getByRole("button", { name: /reconnect/i }));
     expect(onReconnect).toHaveBeenCalledOnce();
   });
+
+  test("string connected shows green badge and no spinner", () => {
+    render(
+      <MCPConnectionStatus
+        status="connected"
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+    expect(screen.getByText("connected")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("string reconnecting shows yellow badge and spinner", () => {
+    render(
+      <MCPConnectionStatus
+        status="reconnecting"
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+    expect(screen.getByText("reconnecting")).toBeInTheDocument();
+    const spinner = document.querySelector("pre");
+    expect(spinner).toBeTruthy();
+  });
+
+  test("string disconnected shows red badge and no spinner", () => {
+    const { container } = render(
+      <MCPConnectionStatus
+        status="disconnected"
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+    const badge = container.querySelector("[data-accent-color='red']");
+    expect(badge).toBeTruthy();
+    expect(screen.getByText("disconnected")).toBeInTheDocument();
+  });
+
+  test("object status with attempt and max_attempts shows attempt info", () => {
+    render(
+      <MCPConnectionStatus
+        status={{ status: "reconnecting", attempt: 2, max_attempts: 7 }}
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+    expect(screen.getByText("Attempt 2/7")).toBeInTheDocument();
+  });
+
+  test("object status with next_retry_seconds shows retry info", () => {
+    render(
+      <MCPConnectionStatus
+        status={{ status: "reconnecting", next_retry_seconds: 3 }}
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+    expect(screen.getByText("Next retry in 3s")).toBeInTheDocument();
+  });
+
+  test("isReconnecting=true shows spinner", () => {
+    render(
+      <MCPConnectionStatus
+        status="connected"
+        onReconnect={vi.fn()}
+        isReconnecting={true}
+      />,
+    );
+    const spinner = document.querySelector("pre");
+    expect(spinner).toBeTruthy();
+  });
 });
 
 describe("MCPToolsList", () => {
