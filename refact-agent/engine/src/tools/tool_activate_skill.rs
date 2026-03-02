@@ -19,7 +19,7 @@ pub struct ToolActivateSkill {
 async fn activate_skill_inner(
     ext_dirs: &crate::ext::config_dirs::ExtDirs,
     name: &str,
-) -> Result<ContextFile, String> {
+) -> Result<(ContextFile, Vec<String>, Option<String>), String> {
     let skill = load_skill_full(ext_dirs, name).await
         .ok_or_else(|| format!("Skill '{}' not found", name))?;
     if !skill.index.user_invocable {
@@ -27,7 +27,7 @@ async fn activate_skill_inner(
     }
     let body = expand_skill_includes(&skill.body, &skill.skill_dir).await;
     let line_count = body.lines().count().max(1);
-    Ok(ContextFile {
+    let cf = ContextFile {
         file_name: format!("skill://{}", name),
         file_content: body,
         line1: 1,
@@ -37,7 +37,8 @@ async fn activate_skill_inner(
         gradient_type: 0,
         usefulness: 90.0,
         skip_pp: true,
-    })
+    };
+    Ok((cf, skill.allowed_tools, skill.model))
 }
 
 #[async_trait]
@@ -74,9 +75,26 @@ impl Tool for ToolActivateSkill {
             None => return Err("argument `name` is missing".to_string()),
         };
 
-        let gcx = ccx.lock().await.global_context.clone();
-        let ext_dirs = get_ext_dirs(gcx).await;
-        let context_file = activate_skill_inner(&ext_dirs, &name).await?;
+        let (gcx, chat_id) = {
+            let ccx_locked = ccx.lock().await;
+            (ccx_locked.global_context.clone(), ccx_locked.chat_id.clone())
+        };
+        let ext_dirs = get_ext_dirs(gcx.clone()).await;
+        let (context_file, allowed_tools, model_override) = activate_skill_inner(&ext_dirs, &name).await?;
+
+        {
+            let session_arc_opt = {
+                let gcx_locked = gcx.read().await;
+                let sessions = gcx_locked.chat_sessions.read().await;
+                sessions.get(&chat_id).cloned()
+            };
+            if let Some(session_arc) = session_arc_opt {
+                let mut session = session_arc.lock().await;
+                session.active_command.name = name.clone();
+                session.active_command.allowed_tools = allowed_tools;
+                session.active_command.model_override = model_override;
+            }
+        }
 
         Ok((false, vec![ContextEnum::ContextFile(context_file)]))
     }
@@ -117,11 +135,13 @@ mod tests {
         let ext_dirs = make_ext_dirs(tmp.path());
         let result = activate_skill_inner(&ext_dirs, "my-skill").await;
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-        let cf = result.unwrap();
+        let (cf, allowed_tools, model_override) = result.unwrap();
         assert_eq!(cf.file_name, "skill://my-skill");
         assert!(cf.file_content.contains("Do something useful with $ARGUMENTS"));
         assert_eq!(cf.line1, 1);
         assert!(cf.skip_pp);
+        assert!(allowed_tools.is_empty());
+        assert!(model_override.is_none());
     }
 
     #[tokio::test]
@@ -172,12 +192,51 @@ mod tests {
         let ext_dirs = make_ext_dirs(tmp.path());
         let result = activate_skill_inner(&ext_dirs, "with-include").await;
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-        let cf = result.unwrap();
+        let (cf, _, _) = result.unwrap();
         assert!(
             cf.file_content.contains("Included content here"),
             "@include should be expanded, got: {}",
             cf.file_content
         );
         assert!(!cf.file_content.contains("@include"), "@include directive should be replaced");
+    }
+
+    #[tokio::test]
+    async fn test_activate_skill_returns_allowed_tools_and_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "restricted-skill",
+            "name: restricted-skill\ndescription: Skill with restrictions\nuser-invocable: true\nallowed-tools:\n  - cat\n  - tree\nmodel: gpt-4o",
+            "Do something restricted",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let result = activate_skill_inner(&ext_dirs, "restricted-skill").await;
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let (cf, allowed_tools, model_override) = result.unwrap();
+        assert_eq!(cf.file_name, "skill://restricted-skill");
+        assert_eq!(allowed_tools, vec!["cat".to_string(), "tree".to_string()]);
+        assert_eq!(model_override, Some("gpt-4o".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_activate_skill_empty_allowed_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "open-skill",
+            "name: open-skill\ndescription: Skill without restrictions\nuser-invocable: true",
+            "Do anything",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let result = activate_skill_inner(&ext_dirs, "open-skill").await;
+        assert!(result.is_ok());
+        let (_, allowed_tools, model_override) = result.unwrap();
+        assert!(allowed_tools.is_empty(), "No restrictions should result in empty allowed_tools");
+        assert!(model_override.is_none(), "No model should result in None model_override");
     }
 }
