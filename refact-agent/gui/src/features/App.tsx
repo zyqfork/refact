@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Flex } from "@radix-ui/themes";
 import { Chat, newChatAction, selectChatId, selectIsStreaming } from "./Chat";
-import { Sidebar } from "../components/Sidebar/Sidebar";
+
 import {
   useAppSelector,
   useAppDispatch,
@@ -45,6 +45,7 @@ import { Extensions } from "./Extensions";
 import { DefaultModels } from "./DefaultModels";
 import { MCPMarketplace } from "./MCPMarketplace";
 import { StatsDashboard } from "./StatsDashboard";
+import { Dashboard } from "./Dashboard";
 import { ChatLoading } from "../components/ChatContent/ChatLoading";
 
 import styles from "./App.module.css";
@@ -229,14 +230,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
         {renderedPage.name === "login page" && <LoginPage />}
         {pageSwitching && <ChatLoading />}
         {!pageSwitching && renderedPage.name === "history" && (
-          <Sidebar
-            takingNotes={false}
-            onOpenChatInTab={undefined}
-            style={{
-              alignSelf: "stretch",
-              height: "calc(100% - var(--space-5)* 2)",
-            }}
-          />
+          <Dashboard />
         )}
         {!pageSwitching && renderedPage.name === "chat" && (
           <Chat

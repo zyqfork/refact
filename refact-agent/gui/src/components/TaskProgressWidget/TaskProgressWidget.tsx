@@ -18,7 +18,7 @@ import type { TodoItem, TodoStatus } from "../../features/Chat/Thread/types";
 import { Chevron } from "../Collapsible";
 
 import { StatusDot, type StatusDotState } from "../StatusDot";
-import { CircularProgress } from "../ChatHistory/CircularProgress";
+import { CircularProgress } from "../CircularProgress/CircularProgress";
 import styles from "./TaskProgressWidget.module.css";
 
 function getStatusDotState(
