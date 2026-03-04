@@ -1,5 +1,5 @@
 import React, { useCallback } from "react";
-import { Text, Tooltip } from "@radix-ui/themes";
+import { Text } from "@radix-ui/themes";
 import {
   BarChartIcon,
   MixerHorizontalIcon,
@@ -40,16 +40,15 @@ export const NavBar: React.FC = () => {
   return (
     <nav className={styles.nav}>
       {NAV_ITEMS.map((item) => (
-        <Tooltip key={item.page.name} content={item.label}>
-          <button
-            type="button"
-            className={styles.navButton}
-            onClick={() => handleClick(item.page)}
-          >
-            <span className={styles.icon}>{item.icon}</span>
-            <Text size="1" className={styles.label}>{item.label}</Text>
-          </button>
-        </Tooltip>
+        <button
+          key={item.page.name}
+          type="button"
+          className={styles.navButton}
+          onClick={() => handleClick(item.page)}
+        >
+          <span className={styles.icon}>{item.icon}</span>
+          <Text size="1" className={styles.label}>{item.label}</Text>
+        </button>
       ))}
     </nav>
   );

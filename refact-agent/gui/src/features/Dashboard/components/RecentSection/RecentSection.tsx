@@ -1,6 +1,7 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
-import { Flex, Skeleton, Spinner, Text, TextField } from "@radix-ui/themes";
-import { MagnifyingGlassIcon, ChevronDownIcon, ChevronUpIcon } from "@radix-ui/react-icons";
+import React, { useCallback, useMemo, useState } from "react";
+import { Flex, IconButton, Skeleton, Spinner, Text, TextField, Tooltip } from "@radix-ui/themes";
+import { MagnifyingGlassIcon, ChevronDownIcon, ChevronUpIcon, PlusIcon, CheckboxIcon } from "@radix-ui/react-icons";
+import { Virtuoso } from "react-virtuoso";
 import { useAppDispatch, useAppSelector, useLoadMoreHistory } from "../../../../hooks";
 import {
   buildHistoryTree,
@@ -9,8 +10,9 @@ import {
   HistoryTreeNode,
   updateChatTitleById,
 } from "../../../History/historySlice";
-import { restoreChat } from "../../../Chat/Thread";
+import { newChatAction, restoreChat } from "../../../Chat/Thread";
 import { push } from "../../../Pages/pagesSlice";
+import { useCreateTaskMutation } from "../../../../services/refact/tasks";
 import { RecentItem, getDateGroup } from "./RecentItem";
 import type { DashboardBreakpoint } from "../../types";
 import styles from "./RecentSection.module.css";
@@ -43,6 +45,7 @@ export const RecentSection: React.FC<RecentSectionProps> = ({
   });
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [createTask] = useCreateTaskMutation();
 
   const {
     loadMore: loadMoreAsync,
@@ -94,9 +97,23 @@ export const RecentSection: React.FC<RecentSectionProps> = ({
     [dispatch],
   );
 
+  const handleNewChat = useCallback(() => {
+    dispatch(newChatAction());
+    dispatch(push({ name: "chat" }));
+  }, [dispatch]);
+
+  const handleNewTask = useCallback(() => {
+    void createTask({ name: "New Task" })
+      .unwrap()
+      .then((task) => {
+        dispatch(push({ name: "task workspace", taskId: task.id }));
+      });
+  }, [createTask, dispatch]);
+
   const GROUP_ORDER = ["Today", "Yesterday", "Last 7 days", "Older"];
 
-  const grouped = useMemo(() => {
+  // Build flat list for virtualization with group headers
+  const flatItems = useMemo(() => {
     if (!expanded) return null;
     const groups = new Map<string, HistoryTreeNode[]>();
     for (const label of GROUP_ORDER) {
@@ -108,48 +125,61 @@ export const RecentSection: React.FC<RecentSectionProps> = ({
       const arr = groups.get(group);
       if (arr) arr.push(node);
     }
-    const result = new Map<string, HistoryTreeNode[]>();
+    const items: ({ type: "header"; label: string } | { type: "item"; node: HistoryTreeNode })[] = [];
     for (const [key, nodes] of groups) {
-      if (nodes.length > 0) result.set(key, nodes);
+      if (nodes.length > 0) {
+        items.push({ type: "header", label: key });
+        for (const node of nodes) {
+          items.push({ type: "item", node });
+        }
+      }
     }
-    return result;
+    return items;
   }, [expanded, filteredTree]);
 
-  const listRef = useRef<HTMLDivElement>(null);
-
-  const handleScroll = useCallback(() => {
-    if (!hasMore || isLoadingMore) return;
-    const el = listRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    if (nearBottom) {
+  const handleEndReached = useCallback(() => {
+    if (hasMore && !isLoadingMore) {
       void loadMoreAsync();
     }
   }, [hasMore, isLoadingMore, loadMoreAsync]);
 
   return (
     <div className={styles.section}>
-      <button
-        type="button"
-        className={styles.header}
-        onClick={onToggleExpand}
-      >
-        <Text size="1" weight="bold" color="gray" className={styles.label}>
-          RECENT
-        </Text>
-        <Flex align="center" gap="1">
-          {!expanded && (
-            <Text size="1" color="gray">
-              {filteredTree.length} total
-            </Text>
-          )}
-          {expanded ? (
-            <ChevronUpIcon width={12} height={12} color="var(--gray-9)" />
-          ) : (
-            <ChevronDownIcon width={12} height={12} color="var(--gray-9)" />
-          )}
+      <div className={styles.header}>
+        <button
+          type="button"
+          className={styles.headerToggle}
+          onClick={onToggleExpand}
+        >
+          <Text size="1" weight="bold" color="gray" className={styles.label}>
+            RECENT
+          </Text>
+          <Flex align="center" gap="1">
+            {!expanded && (
+              <Text size="1" color="gray">
+                {filteredTree.length} total
+              </Text>
+            )}
+            {expanded ? (
+              <ChevronUpIcon width={12} height={12} color="var(--gray-9)" />
+            ) : (
+              <ChevronDownIcon width={12} height={12} color="var(--gray-9)" />
+            )}
+          </Flex>
+        </button>
+        <Flex gap="1" align="center" className={styles.headerActions}>
+          <Tooltip content="New Chat">
+            <IconButton size="1" variant="ghost" color="gray" onClick={handleNewChat}>
+              <PlusIcon width={14} height={14} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip content="New Task">
+            <IconButton size="1" variant="ghost" color="gray" onClick={handleNewTask}>
+              <CheckboxIcon width={14} height={14} />
+            </IconButton>
+          </Tooltip>
         </Flex>
-      </button>
+      </div>
 
       {expanded && (
         <div className={styles.controls}>
@@ -166,48 +196,8 @@ export const RecentSection: React.FC<RecentSectionProps> = ({
         </div>
       )}
 
-      <div
-        ref={listRef}
-        className={styles.list}
-        onScroll={handleScroll}
-      >
-        {expanded && grouped ? (
-          Array.from(grouped.entries()).map(([group, nodes]) => (
-            <div key={group}>
-              <Text
-                size="1"
-                color="gray"
-                className={styles.groupLabel}
-              >
-                {group}
-              </Text>
-              {nodes.map((node) => (
-                <RecentItem
-                  key={node.id}
-                  node={node}
-                  breakpoint={breakpoint}
-                  onClick={() => handleItemClick(node)}
-                  onDotClick={handleDotClick}
-                  onDelete={handleDelete}
-                  onRename={handleRename}
-                />
-              ))}
-            </div>
-          ))
-        ) : (
-          filteredTree.map((node) => (
-            <RecentItem
-              key={node.id}
-              node={node}
-              breakpoint={breakpoint}
-              onClick={() => handleItemClick(node)}
-              onDotClick={handleDotClick}
-              onDelete={handleDelete}
-              onRename={handleRename}
-            />
-          ))
-        )}
-        {isInitialLoading && filteredTree.length === 0 && (
+      <div className={styles.list}>
+        {isInitialLoading && filteredTree.length === 0 ? (
           <Flex direction="column" gap="1" p="1">
             {Array.from({ length: 8 }, (_, i) => (
               <Flex key={i} align="center" gap="2" py="1" px="2">
@@ -218,27 +208,84 @@ export const RecentSection: React.FC<RecentSectionProps> = ({
               </Flex>
             ))}
           </Flex>
-        )}
-        {isLoadingMore && (
-          <Flex justify="center" py="2">
-            <Spinner size="2" />
-          </Flex>
-        )}
-        {loadMoreError && (
-          <Flex justify="center" py="2">
-            <Text
-              size="1"
-              color="red"
-              style={{ cursor: "pointer" }}
-              onClick={retryLoadMore}
-            >
-              Load failed — click to retry
-            </Text>
-          </Flex>
+        ) : expanded && flatItems ? (
+          <Virtuoso
+            data={flatItems}
+            endReached={handleEndReached}
+            overscan={200}
+            className={styles.virtuosoList}
+            itemContent={(_index, item) => {
+              if (item.type === "header") {
+                return (
+                  <Text
+                    size="1"
+                    color="gray"
+                    className={styles.groupLabel}
+                  >
+                    {item.label}
+                  </Text>
+                );
+              }
+              return (
+                <RecentItem
+                  node={item.node}
+                  breakpoint={breakpoint}
+                  onClick={() => handleItemClick(item.node)}
+                  onDotClick={handleDotClick}
+                  onDelete={handleDelete}
+                  onRename={handleRename}
+                />
+              );
+            }}
+            components={{
+              Footer: () => (
+                <>
+                  {isLoadingMore && (
+                    <Flex justify="center" py="2">
+                      <Spinner size="2" />
+                    </Flex>
+                  )}
+                  {loadMoreError && (
+                    <Flex justify="center" py="2">
+                      <Text size="1" color="red" style={{ cursor: "pointer" }} onClick={retryLoadMore}>
+                        Load failed — click to retry
+                      </Text>
+                    </Flex>
+                  )}
+                </>
+              ),
+            }}
+          />
+        ) : (
+          <Virtuoso
+            data={filteredTree}
+            endReached={handleEndReached}
+            overscan={200}
+            className={styles.virtuosoList}
+            itemContent={(_index, node) => (
+              <RecentItem
+                node={node}
+                breakpoint={breakpoint}
+                onClick={() => handleItemClick(node)}
+                onDotClick={handleDotClick}
+                onDelete={handleDelete}
+                onRename={handleRename}
+              />
+            )}
+            components={{
+              Footer: () => (
+                <>
+                  {isLoadingMore && (
+                    <Flex justify="center" py="2"><Spinner size="2" /></Flex>
+                  )}
+                </>
+              ),
+            }}
+          />
         )}
         {!isInitialLoading && filteredTree.length === 0 && (
           <Text size="2" color="gray" style={{ padding: "var(--space-4)", textAlign: "center" }}>
-            {searchQuery ? "No matching chats" : "No chats yet"}
+            {searchQuery ? "No matching chats" : "No chats yet — start a new one!"}
           </Text>
         )}
       </div>

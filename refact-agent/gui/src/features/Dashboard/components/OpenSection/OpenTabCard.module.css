@@ -9,6 +9,8 @@
   cursor: pointer;
   text-align: left;
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease;
 }
 

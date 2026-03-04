@@ -1,34 +1,47 @@
-.strip {
+.statsGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-2);
 }
 
-.strip[data-breakpoint="wide"] {
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.stripCompact {
+.compactRow {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-1) 0;
+  flex-shrink: 0;
+}
+
+.narrowStats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-2);
+  background: var(--gray-a2);
+  flex-shrink: 0;
 }
 
 .card {
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: var(--space-1);
   padding: var(--space-2);
   border-radius: var(--radius-2);
   background: var(--gray-a2);
-  min-height: 64px;
+  overflow: hidden;
 }
 
-.cardLabel {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
+.cardTitle {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-1);
+}
+
+.modeFill {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent-8);
+  min-width: 4px;
+  flex-shrink: 0;
 }

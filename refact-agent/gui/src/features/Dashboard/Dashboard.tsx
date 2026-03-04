@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from "react";
 import { StatsStrip } from "./components/StatsStrip/StatsStrip";
 import { OpenSection } from "./components/OpenSection/OpenSection";
+import { TasksSection } from "./components/TasksSection/TasksSection";
 import { RecentSection } from "./components/RecentSection/RecentSection";
 import { NavBar } from "./components/NavBar/NavBar";
 import { useDashboardLayout } from "./hooks/useDashboardLayout";
@@ -30,18 +31,23 @@ export const Dashboard: React.FC = () => {
       <StatsStrip breakpoint={breakpoint} compact={expanded} />
 
       {/* Open tabs section — compact when RECENT is expanded */}
-      {hasOpenTabs && (
+      {hasOpenTabs && !expanded && (
         <OpenSection
           tabs={openTabs}
           breakpoint={breakpoint}
-          compact={expanded}
+          compact={false}
         />
       )}
 
       <SetupBanner />
-      {/* TODO: BackgroundSection will go here when background tasks are implemented */}
 
-      {/* Recent history — expandable */}
+      {/* Active tasks — compact when RECENT is expanded */}
+      {!expanded && <TasksSection breakpoint={breakpoint} />}
+      {expanded && hasOpenTabs && (
+        <OpenSection tabs={openTabs} breakpoint={breakpoint} compact />
+      )}
+
+      {/* Recent history — expandable, virtualized */}
       <RecentSection
         breakpoint={breakpoint}
         expanded={expanded}
