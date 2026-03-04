@@ -1,4 +1,4 @@
-schema_version: 6
+schema_version: 7
 id: configurator
 title: Configurator
 description: Integration configuration wizard
@@ -22,7 +22,6 @@ prompt: |
 
   %WORKSPACE_INFO%
 
-  %PROJECT_SUMMARY%
 
   The first couple of messages will have all the existing configs and the current config file schema.
 

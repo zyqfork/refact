@@ -1,4 +1,4 @@
-schema_version: 10
+schema_version: 11
 id: debug
 title: Debug
 description: Systematic bug diagnosis and root cause analysis
@@ -78,7 +78,6 @@ prompt: |
 
   %WORKSPACE_INFO%
 
-  %PROJECT_SUMMARY%
 
   %SKILLS_INSTRUCTIONS%
 

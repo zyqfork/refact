@@ -1,15 +1,17 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { RootState } from "../../app/store";
 
+export type SetupStatusDetail = {
+  project_root?: string | null;
+  has_agents_md: boolean;
+  has_knowledge: boolean;
+  has_trajectories: boolean;
+};
+
 export type SetupStatusResponse = {
   configured: boolean;
   reasons: string[];
-  paths: {
-    project_root?: string | null;
-    agents_md?: string | null;
-    project_summary?: string | null;
-    refact_dir?: string | null;
-  };
+  detail: SetupStatusDetail;
 };
 
 export const setupStatusApi = createApi({

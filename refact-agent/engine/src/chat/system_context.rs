@@ -54,7 +54,7 @@ const INSTRUCTION_DIR_PATTERNS: &[(&str, &[&str])] = &[
     (".github", &["copilot-instructions.md"]),
     (".github/instructions", &["*.instructions.md"]),
     (".claude", &["settings.json", "settings.local.json"]),
-    (".refact", &["project_summary.yaml", "instructions.md"]),
+    (".refact", &["instructions.md"]),
     // VSCode - all shareable configs
     (
         ".vscode",

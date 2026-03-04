@@ -13,19 +13,30 @@ use crate::global_context::GlobalContext;
 pub struct SetupStatusResponse {
     pub configured: bool,
     pub reasons: Vec<String>,
-    pub paths: SetupStatusPaths,
+    pub detail: SetupStatusDetail,
 }
 
 #[derive(Serialize)]
-pub struct SetupStatusPaths {
+pub struct SetupStatusDetail {
     pub project_root: Option<String>,
-    pub agents_md: Option<String>,
-    pub project_summary: Option<String>,
-    pub refact_dir: Option<String>,
+    pub has_agents_md: bool,
+    pub has_knowledge: bool,
+    pub has_trajectories: bool,
 }
 
 fn first_project_root(project_dirs: &[PathBuf]) -> Option<PathBuf> {
     project_dirs.first().cloned()
+}
+
+async fn dir_has_any_entries(dir: PathBuf) -> bool {
+    match tokio::fs::read_dir(&dir).await {
+        Ok(mut it) => it.next_entry().await.ok().flatten().is_some(),
+        Err(_) => false,
+    }
+}
+
+async fn path_exists(path: PathBuf) -> bool {
+    tokio::fs::try_exists(&path).await.unwrap_or(false)
 }
 
 pub async fn handle_v1_setup_status(
@@ -38,64 +49,43 @@ pub async fn handle_v1_setup_status(
         return Ok(axum::Json(SetupStatusResponse {
             configured: true,
             reasons: vec![],
-            paths: SetupStatusPaths {
+            detail: SetupStatusDetail {
                 project_root: None,
-                agents_md: None,
-                project_summary: None,
-                refact_dir: None,
+                has_agents_md: false,
+                has_knowledge: false,
+                has_trajectories: false,
             },
         }));
     }
 
-    let (agents_md, project_summary, refact_dir) = if let Some(root) = &project_root {
-        (
-            root.join("AGENTS.md"),
-            root.join(".refact").join("project_summary.yaml"),
-            root.join(".refact"),
-        )
-    } else {
-        (PathBuf::new(), PathBuf::new(), PathBuf::new())
-    };
+    let root = project_root.unwrap();
+    let refact_dir = root.join(".refact");
 
-    let agents_exists = !agents_md.as_os_str().is_empty() && agents_md.exists();
-    let summary_exists = !project_summary.as_os_str().is_empty() && project_summary.exists();
-    let refact_exists = !refact_dir.as_os_str().is_empty() && refact_dir.exists();
+    let has_agents_md = path_exists(root.join("AGENTS.md")).await;
+    let has_knowledge = dir_has_any_entries(refact_dir.join("knowledge")).await;
+    let has_trajectories = dir_has_any_entries(refact_dir.join("trajectories")).await;
 
     let mut reasons = Vec::new();
-    if !agents_exists {
+    if !has_agents_md {
         reasons.push("missing_agents_md".to_string());
     }
-    if !summary_exists {
-        reasons.push("missing_project_summary".to_string());
+    if !has_knowledge {
+        reasons.push("no_knowledge".to_string());
     }
-    if !refact_exists {
-        reasons.push("missing_refact_dir".to_string());
+    if !has_trajectories {
+        reasons.push("no_trajectories".to_string());
     }
 
-    let agents_md_path = if agents_md.as_os_str().is_empty() {
-        None
-    } else {
-        Some(agents_md.to_string_lossy().to_string())
-    };
-    let project_summary_path = if project_summary.as_os_str().is_empty() {
-        None
-    } else {
-        Some(project_summary.to_string_lossy().to_string())
-    };
-    let refact_dir_path = if refact_dir.as_os_str().is_empty() {
-        None
-    } else {
-        Some(refact_dir.to_string_lossy().to_string())
-    };
+    let configured = reasons.is_empty();
 
     Ok(axum::Json(SetupStatusResponse {
-        configured: reasons.is_empty(),
+        configured,
         reasons,
-        paths: SetupStatusPaths {
-            project_root: project_root.map(|p| p.to_string_lossy().to_string()),
-            agents_md: agents_md_path,
-            project_summary: project_summary_path,
-            refact_dir: refact_dir_path,
+        detail: SetupStatusDetail {
+            project_root: Some(root.to_string_lossy().to_string()),
+            has_agents_md,
+            has_knowledge,
+            has_trajectories,
         },
     }))
 }
