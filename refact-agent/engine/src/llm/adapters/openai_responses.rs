@@ -284,6 +284,14 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
                 }
             }
 
+            // Reasoning summary lifecycle events — content already streamed via *.delta above
+            "response.reasoning_summary_part.added" => {
+                tracing::trace!("reasoning_summary_part.added (summary part opened, text arrives via delta)");
+            }
+            "response.reasoning_summary_part.done" => {
+                tracing::trace!("reasoning_summary_part.done (redundant, text already streamed via deltas)");
+            }
+
             // ── Refusal streaming ──
             "response.refusal.delta" => {
                 if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
@@ -1539,6 +1547,26 @@ mod tests {
         if let Some(LlmStreamDelta::AppendReasoning { text, .. }) = deltas.iter().find(|d| matches!(d, LlmStreamDelta::AppendReasoning { .. })) {
             assert_eq!(text, "Thinking about");
         }
+    }
+
+    #[test]
+    fn test_reasoning_summary_part_added_ignored() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.reasoning_summary_part.added","item_id":"rs_abc","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""},"sequence_number":3}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert!(deltas.is_empty(), "reasoning_summary_part.added should produce no deltas");
+    }
+
+    #[test]
+    fn test_reasoning_summary_part_done_ignored() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.reasoning_summary_part.done","item_id":"rs_abc","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"**Sending friendly greeting**"},"sequence_number":9}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert!(deltas.is_empty(), "reasoning_summary_part.done should produce no deltas");
     }
 
     #[test]
