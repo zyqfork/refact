@@ -1,4 +1,4 @@
-schema_version: 9
+schema_version: 10
 id: explore
 title: Explore
 description: Read-only exploration for context gathering without editing
@@ -58,7 +58,6 @@ prompt: |
 
   %WORKSPACE_INFO%
 
-  %PROJECT_SUMMARY%
 
   %SKILLS_INSTRUCTIONS%
 

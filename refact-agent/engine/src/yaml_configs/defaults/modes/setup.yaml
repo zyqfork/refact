@@ -1,4 +1,4 @@
-schema_version: 11
+schema_version: 12
 id: setup
 title: Setup Project
 description: Analyze project and configure Refact (AGENTS.md, integrations, tools, knowledge)
@@ -31,7 +31,6 @@ prompt: |
   1. **Analyze** the repo (tree + key config files + README/docs) to understand stack, build/test commands, CI/CD, services, and coding style.
   2. **Propose** concrete artifacts grouped by category:
      - `AGENTS.md` with project guidelines and conventions
-     - `.refact/project_summary.yaml` with project summary + recommended integrations (still used by %PROJECT_SUMMARY%)
      - `.refact/integrations.d/*.yaml` for detected services (use variables + secrets where needed)
      - `.refact/toolbox_commands/*.yaml` for /build, /test, /lint, /deploy based on tooling
      - `.refact/subagents/*.yaml` for project-tuned reviewers or helpers

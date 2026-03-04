@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fs;
 use std::sync::Arc;
 use std::path::PathBuf;
 use tokio::sync::RwLock as ARwLock;
@@ -78,54 +77,7 @@ async fn _workspace_info(workspace_dirs: &[String], active_file_path: &Option<Pa
     info
 }
 
-pub async fn dig_for_project_summarization_file(
-    gcx: Arc<ARwLock<GlobalContext>>,
-) -> (bool, Option<String>) {
-    match crate::files_correction::get_active_project_path(gcx.clone()).await {
-        Some(active_project_path) => {
-            let summary_path = active_project_path
-                .join(".refact")
-                .join("project_summary.yaml");
-            if !summary_path.exists() {
-                (false, Some(summary_path.to_string_lossy().to_string()))
-            } else {
-                (true, Some(summary_path.to_string_lossy().to_string()))
-            }
-        }
-        None => {
-            tracing::info!("No projects found, project summarization is not relevant.");
-            (false, None)
-        }
-    }
-}
 
-async fn _read_project_summary(summary_path: String) -> Option<String> {
-    match fs::read_to_string(summary_path) {
-        Ok(content) => {
-            if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                if let Some(project_summary) = yaml.get("project_summary") {
-                    match project_summary {
-                        serde_yaml::Value::String(s) => Some(s.clone()),
-                        _ => {
-                            tracing::error!("'project_summary' is not a string in YAML file.");
-                            None
-                        }
-                    }
-                } else {
-                    tracing::error!("Key 'project_summary' not found in YAML file.");
-                    None
-                }
-            } else {
-                tracing::error!("Failed to parse project summary YAML file.");
-                None
-            }
-        }
-        Err(e) => {
-            tracing::error!("Failed to read project summary file: {}", e);
-            None
-        }
-    }
-}
 
 pub async fn system_prompt_add_extra_instructions(
     gcx: Arc<ARwLock<GlobalContext>>,
@@ -301,23 +253,7 @@ pub async fn system_prompt_add_extra_instructions(
     }
 
     if system_prompt.contains("%PROJECT_SUMMARY%") {
-        if include_project_info {
-            let (exists, summary_path_option) =
-                dig_for_project_summarization_file(gcx.clone()).await;
-            if exists {
-                if let Some(summary_path) = summary_path_option {
-                    if let Some(project_info) = _read_project_summary(summary_path).await {
-                        system_prompt = system_prompt.replace("%PROJECT_SUMMARY%", &project_info);
-                    } else {
-                        system_prompt = system_prompt.replace("%PROJECT_SUMMARY%", "");
-                    }
-                }
-            } else {
-                system_prompt = system_prompt.replace("%PROJECT_SUMMARY%", "");
-            }
-        } else {
-            system_prompt = system_prompt.replace("%PROJECT_SUMMARY%", "");
-        }
+        system_prompt = system_prompt.replace("%PROJECT_SUMMARY%", "");
     }
 
     if system_prompt.contains("%SKILLS_INSTRUCTIONS%") {
