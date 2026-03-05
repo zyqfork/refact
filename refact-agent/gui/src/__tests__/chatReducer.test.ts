@@ -9,6 +9,8 @@ import {
   addThreadImage,
   removeThreadImageByIndex,
   applyChatEvent,
+  setTemperature,
+  setMaxTokens,
 } from "../features/Chat/Thread/actions";
 import type { ChatEventEnvelope } from "../services/refact/chatSubscription";
 
@@ -285,6 +287,193 @@ describe("Chat Thread Reducer - Core Functionality", () => {
       );
 
       expect(state.threads[chatId]?.attached_images).toHaveLength(1);
+    });
+  });
+
+  describe("Snapshot params sync (stale-state regression)", () => {
+    test("snapshot_with_temperature_absent_should_not_restore_stale_ui_temperature", () => {
+      // User had temperature=0.9 set locally
+      const withTemp = chatReducer(
+        initialState,
+        setTemperature({ chatId, value: 0.9 }),
+      );
+      expect(withTemp.threads[chatId]?.thread.temperature).toBe(0.9);
+
+      // Backend sends snapshot WITHOUT temperature field (None in Rust → absent in JSON)
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4o",
+          mode: "agent",
+          tool_use: "agent",
+          boost_reasoning: false,
+          include_project_info: true,
+          checkpoints_enabled: false,
+          context_tokens_cap: 8192,
+          is_title_generated: false,
+          // temperature intentionally absent — backend has None
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [],
+      };
+
+      const afterSnapshot = chatReducer(
+        withTemp,
+        applyChatEvent(snapshotEvent),
+      );
+      // Should be undefined (backend authoritative), not the stale 0.9
+      expect(afterSnapshot.threads[chatId]?.thread.temperature).toBeUndefined();
+    });
+
+    test("snapshot_with_max_tokens_absent_should_not_restore_stale_ui_max_tokens", () => {
+      const withMaxTokens = chatReducer(
+        initialState,
+        setMaxTokens({ chatId, value: 2048 }),
+      );
+      expect(withMaxTokens.threads[chatId]?.thread.max_tokens).toBe(2048);
+
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4o",
+          mode: "agent",
+          tool_use: "agent",
+          boost_reasoning: false,
+          include_project_info: true,
+          checkpoints_enabled: false,
+          context_tokens_cap: 8192,
+          is_title_generated: false,
+          // max_tokens intentionally absent
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [],
+      };
+
+      const afterSnapshot = chatReducer(
+        withMaxTokens,
+        applyChatEvent(snapshotEvent),
+      );
+      expect(afterSnapshot.threads[chatId]?.thread.max_tokens).toBeUndefined();
+    });
+
+    test("snapshot_with_temperature_present_should_apply_backend_value", () => {
+      const snapshotEvent: ChatEventEnvelope = {
+        chat_id: chatId,
+        seq: "1",
+        type: "snapshot",
+        thread: {
+          id: chatId,
+          title: "Test",
+          model: "gpt-4o",
+          mode: "agent",
+          tool_use: "agent",
+          boost_reasoning: false,
+          include_project_info: true,
+          checkpoints_enabled: false,
+          context_tokens_cap: 8192,
+          is_title_generated: false,
+          temperature: 0.7,
+        },
+        runtime: {
+          state: "idle",
+          paused: false,
+          error: null,
+          queue_size: 0,
+          pause_reasons: [],
+          queued_items: [],
+        },
+        messages: [],
+      };
+
+      const afterSnapshot = chatReducer(
+        initialState,
+        applyChatEvent(snapshotEvent),
+      );
+      expect(afterSnapshot.threads[chatId]?.thread.temperature).toBe(0.7);
+    });
+  });
+
+  describe("Caps default model initialization", () => {
+    test("caps_fulfilled_sets_default_model_when_thread_model_is_empty", () => {
+      expect(initialState.threads[chatId]?.thread.model).toBe("");
+
+      const capsPayload = {
+        chat_default_model: "gpt-4o",
+        chat_models: {
+          "gpt-4o": { n_ctx: 128000 },
+        },
+      };
+
+      // RTK Query matchFulfilled checks: meta.requestStatus === "fulfilled"
+      // AND meta.arg.endpointName === "getCaps"
+      const action = {
+        type: "caps/executeQuery/fulfilled",
+        payload: capsPayload,
+        meta: {
+          requestId: "test",
+          requestStatus: "fulfilled" as const,
+          arg: { endpointName: "getCaps" },
+        },
+      };
+
+      const afterCaps = chatReducer(initialState, action);
+      expect(afterCaps.threads[chatId]?.thread.model).toBe("gpt-4o");
+    });
+
+    test("caps_fulfilled_does_not_override_existing_model", () => {
+      const withModel = chatReducer(
+        initialState,
+        createChatWithId({ id: "other", model: "claude-3-5-sonnet" }),
+      );
+      const otherChatId = "other";
+
+      const capsPayload = {
+        chat_default_model: "gpt-4o",
+        chat_models: {
+          "gpt-4o": { n_ctx: 128000 },
+          "claude-3-5-sonnet": { n_ctx: 200000 },
+        },
+      };
+
+      const action = {
+        type: "caps/executeQuery/fulfilled",
+        payload: capsPayload,
+        meta: {
+          requestId: "test",
+          requestStatus: "fulfilled" as const,
+          arg: { endpointName: "getCaps" },
+        },
+      };
+
+      // Switch to 'other' chat so it becomes the current thread
+      const withOtherCurrent = { ...withModel, current_thread_id: otherChatId };
+      const afterCaps = chatReducer(withOtherCurrent, action);
+      // claude-3-5-sonnet should be preserved, not overridden by gpt-4o
+      expect(afterCaps.threads[otherChatId]?.thread.model).toBe(
+        "claude-3-5-sonnet",
+      );
     });
   });
 

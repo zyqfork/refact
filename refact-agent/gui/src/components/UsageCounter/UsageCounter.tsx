@@ -340,7 +340,7 @@ const DefaultHoverTriggerContent: React.FC<{
   tokenMap,
 }) => {
   const hasUsd = totalUsd !== undefined && totalUsd > 0;
-  const showCoins = !hasUsd && totalCoins !== undefined && totalCoins > 0;
+  const showCoins = totalCoins !== undefined && totalCoins > 0;
   const showUsd = hasUsd;
 
   return (

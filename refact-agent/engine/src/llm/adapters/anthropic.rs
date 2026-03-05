@@ -19,7 +19,6 @@ const PROTECTED_FIELDS: &[&str] = &[
     "system",
     "tools",
     "tool_choice",
-    "cache_control",
 ];
 
 pub struct AnthropicAdapter;
@@ -102,7 +101,6 @@ impl LlmWireAdapter for AnthropicAdapter {
                     }
                 }
             } else if settings.supports_web_search {
-                // No user tools but web_search is enabled
                 body["tools"] = json!([{
                     "type": "web_search_20250305",
                     "name": "web_search"

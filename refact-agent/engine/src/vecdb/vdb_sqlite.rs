@@ -402,9 +402,15 @@ impl VecDBSqlite {
         //   (scope = "/abs/file")
         // but `vecdb_search()` treated its argument as a plain exact scope value.
         //
-        // To keep existing callers working AND remain safe, we only accept
-        // these two patterns and translate them into parameterized SQL.
-        fn parse_scope_filter(filter: &str) -> Option<(String, String)> {
+        // vec0 KNN queries only allow EQUALS / comparison operators on metadata columns —
+        // LIKE is rejected at the SQLite level.  For prefix ("directory") filtering we
+        // therefore skip the SQL predicate and apply it in Rust after the query.
+        enum ScopeFilter {
+            SqlExact(String),   // use `AND scope = ?` in the KNN query
+            RustPrefix(String), // strip trailing '%', filter results in Rust
+        }
+
+        fn parse_scope_filter(filter: &str) -> Option<ScopeFilter> {
             // Accept: (scope LIKE '...%')  or  scope LIKE "...%"
             let like_re = Regex::new(
                 r#"(?i)\bscope\s+like\s+['\"]([^'\"]+)['\"]\s*\)?\s*$"#,
@@ -412,7 +418,8 @@ impl VecDBSqlite {
             .ok()?;
             if let Some(caps) = like_re.captures(filter.trim()) {
                 let pattern = caps.get(1)?.as_str().to_string();
-                return Some(("AND scope LIKE ?".to_string(), pattern));
+                let prefix = pattern.trim_end_matches('%').to_string();
+                return Some(ScopeFilter::RustPrefix(prefix));
             }
 
             // Accept: (scope = '...')  or  scope = "..."
@@ -422,29 +429,35 @@ impl VecDBSqlite {
             .ok()?;
             if let Some(caps) = eq_re.captures(filter.trim()) {
                 let value = caps.get(1)?.as_str().to_string();
-                return Some(("AND scope = ?".to_string(), value));
+                return Some(ScopeFilter::SqlExact(value));
             }
             None
         }
 
-        let (scope_condition, scope_param) = match vecdb_scope_filter_mb.as_deref() {
-            Some(filter_str) => match parse_scope_filter(filter_str) {
-                Some((cond, param)) => (cond, Some(param)),
-                None => {
-                    tracing::warn!(
-                        "vecdb_search: unsupported scope filter format, ignoring: {}",
-                        filter_str
-                    );
-                    (String::new(), None)
-                }
-            },
-            None => (String::new(), None),
-        };
+        let (scope_condition, scope_param, scope_prefix) =
+            match vecdb_scope_filter_mb.as_deref() {
+                Some(filter_str) => match parse_scope_filter(filter_str) {
+                    Some(ScopeFilter::SqlExact(val)) => {
+                        ("AND scope = ?".to_string(), Some(val), None)
+                    }
+                    Some(ScopeFilter::RustPrefix(prefix)) => {
+                        (String::new(), None, Some(prefix))
+                    }
+                    None => {
+                        tracing::warn!(
+                            "vecdb_search: unsupported scope filter format, ignoring: {}",
+                            filter_str
+                        );
+                        (String::new(), None, None)
+                    }
+                },
+                None => (String::new(), None, None),
+            };
         let embedding_owned = embedding.clone();
         let emb_table_name = self.emb_table_name.clone();
 
         // Wrap the database call in retry logic
-        with_retry(
+        let mut results = with_retry(
             || {
                 let embedding_owned = embedding_owned.clone();
                 let emb_table_name = emb_table_name.clone();
@@ -503,7 +516,14 @@ impl VecDBSqlite {
             Duration::from_millis(100), // Retry delay
             "vector search",
         )
-        .await
+        .await?;
+
+        // Apply prefix filter in Rust — vec0 does not support LIKE in KNN queries
+        if let Some(prefix) = scope_prefix {
+            results.retain(|r| r.file_path.to_string_lossy().starts_with(prefix.as_str()));
+        }
+
+        Ok(results)
     }
 
     pub async fn vecdb_records_remove(

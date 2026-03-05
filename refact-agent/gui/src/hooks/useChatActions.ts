@@ -116,8 +116,8 @@ export function useChatActions() {
           : content.length === 0;
       if (isEmpty) return;
 
-      if (messages.length === 0 && thread) {
-        const patch = buildThreadParamsPatch(thread, true);
+      if (thread) {
+        const patch = buildThreadParamsPatch(thread, messages.length === 0);
         if (Object.keys(patch).length > 0) {
           await updateChatParams(chatId, patch, port, apiKey ?? undefined);
         }

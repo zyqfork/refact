@@ -52,6 +52,20 @@ export type ReasoningEffort =
   | "xhigh"
   | "max";
 
+const REASONING_EFFORTS: ReasoningEffort[] = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return typeof v === "string" && (REASONING_EFFORTS as string[]).includes(v);
+}
+
 export type ChatThread = {
   id: string;
   messages: ChatMessages;

@@ -151,6 +151,8 @@ impl ChatModelRecord {
             Some("anthropic_effort".to_string())
         } else if self.supports_thinking_budget {
             Some("anthropic_budget".to_string())
+        }  else if self.reasoning_effort_options.is_some() {
+            Some("effort".to_string())
         } else {
             None
         }
@@ -264,7 +266,7 @@ impl Default for CapsMetadata {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CodeAssistantCaps {
     #[serde(deserialize_with = "normalize_string")]
     pub cloud_name: String,
@@ -301,6 +303,26 @@ pub struct CodeAssistantCaps {
 
     #[serde(skip)]
     pub user_defaults: ProviderDefaults,
+}
+
+impl Default for CodeAssistantCaps {
+    fn default() -> Self {
+        Self {
+            cloud_name: String::new(),
+            telemetry_basic_dest: default_telemetry_basic_dest(),
+            telemetry_basic_retrieve_my_own: default_telemetry_retrieve_my_own(),
+            completion_models: IndexMap::new(),
+            chat_models: IndexMap::new(),
+            embedding_model: EmbeddingModelRecord::default(),
+            defaults: DefaultModels::default(),
+            caps_version: 0,
+            customization: String::new(),
+            hf_tokenizer_template: default_hf_tokenizer_template(),
+            metadata: CapsMetadata::default(),
+            model_caps: Arc::new(std::collections::HashMap::new()),
+            user_defaults: crate::providers::config::ProviderDefaults::default(),
+        }
+    }
 }
 
 fn default_telemetry_retrieve_my_own() -> String {
@@ -972,9 +994,6 @@ pub async fn load_caps(
                 (caps, vec![server_provider])
             }
             Err(e) => {
-                if is_refact {
-                    return Err(format!("Cloud model catalog fetch failed: {}", e));
-                }
                 warn!("Cloud caps fetch failed ({}), falling back to local providers only", e);
                 (CodeAssistantCaps::default(), vec![])
             }

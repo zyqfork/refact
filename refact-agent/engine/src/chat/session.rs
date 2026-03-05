@@ -285,25 +285,28 @@ impl ChatSession {
             return;
         }
 
-        let mut compaction_start = pending.start_index;
-        if let Some(ref activation_tool_call_id) = pending.activation_tool_call_id {
-            if self.messages.get(compaction_start).map_or(false, |msg| {
-                msg.role == "tool" && msg.tool_call_id == *activation_tool_call_id
-            }) {
-                compaction_start = compaction_start.saturating_add(1);
-            }
-        }
+        let activation_tool_message = pending.activation_tool_call_id.as_ref().and_then(|tool_id| {
+            self.messages
+                .iter()
+                .skip(pending.start_index)
+                .find(|msg| msg.role == "tool" && msg.tool_call_id == *tool_id)
+                .cloned()
+        });
 
-        if compaction_start > self.messages.len() {
+        if pending.start_index > self.messages.len() {
             warn!(
-                "Skill deactivation cleanup: compaction_start {} is beyond messages.len() {} for skill '{}', skipping compaction",
-                compaction_start, self.messages.len(), pending.skill_name
+                "Skill deactivation cleanup: start_index {} is beyond messages.len() {} for skill '{}', skipping compaction",
+                pending.start_index, self.messages.len(), pending.skill_name
             );
             return;
         }
 
-        info!("Skill deactivation cleanup: compacting messages from index {} for skill '{}'", compaction_start, pending.skill_name);
-        self.truncate_messages(compaction_start);
+        info!("Skill deactivation cleanup: compacting messages from index {} for skill '{}'", pending.start_index, pending.skill_name);
+        self.truncate_messages(pending.start_index);
+
+        if let Some(tool_message) = activation_tool_message {
+            self.add_message(tool_message);
+        }
 
         let report_content = format!(
             "## Skill Report: {}\n\n✅ Skill '{}' executed successfully.\n\nHere is the compactified result. The full skill conversation was compactified and removed from the thread.\n\n{}",

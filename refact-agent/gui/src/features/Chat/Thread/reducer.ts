@@ -8,6 +8,7 @@ import {
   ChatModeId,
   isToolUse,
   normalizeLegacyMode,
+  isReasoningEffort,
 } from "./types";
 import { v4 as uuidv4 } from "uuid";
 import { getLastThreadParams } from "../../../utils/threadStorage";
@@ -920,31 +921,29 @@ export const chatReducer = createReducer(initialState, (builder) => {
           new_chat_suggested: { wasSuggested: false },
           is_task_chat: isTaskChat,
           task_meta: snapshotTaskMeta,
-          reasoning_effort:
-            "reasoning_effort" in event.thread
-              ? (event.thread
-                  .reasoning_effort as ChatThread["reasoning_effort"])
-              : existing?.reasoning_effort,
+          reasoning_effort: isReasoningEffort(event.thread.reasoning_effort)
+            ? event.thread.reasoning_effort
+            : undefined,
           thinking_budget:
-            "thinking_budget" in event.thread
-              ? (event.thread.thinking_budget as number | undefined)
-              : existing?.thinking_budget,
+            typeof event.thread.thinking_budget === "number"
+              ? event.thread.thinking_budget
+              : undefined,
           temperature:
-            "temperature" in event.thread
-              ? (event.thread.temperature as number | undefined)
-              : existing?.temperature,
+            typeof event.thread.temperature === "number"
+              ? event.thread.temperature
+              : undefined,
           frequency_penalty:
-            "frequency_penalty" in event.thread
-              ? (event.thread.frequency_penalty as number | undefined)
-              : existing?.frequency_penalty,
+            typeof event.thread.frequency_penalty === "number"
+              ? event.thread.frequency_penalty
+              : undefined,
           max_tokens:
-            "max_tokens" in event.thread
-              ? (event.thread.max_tokens as number | undefined)
-              : existing?.max_tokens,
+            typeof event.thread.max_tokens === "number"
+              ? event.thread.max_tokens
+              : undefined,
           parallel_tool_calls:
-            "parallel_tool_calls" in event.thread
-              ? (event.thread.parallel_tool_calls as boolean | undefined)
-              : existing?.parallel_tool_calls,
+            typeof event.thread.parallel_tool_calls === "boolean"
+              ? event.thread.parallel_tool_calls
+              : undefined,
         };
 
         const snapshotState = event.runtime.state as string;
@@ -1489,6 +1488,10 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
       const model = rt.thread.model || defaultModel;
       if (!(model in action.payload.chat_models)) return;
+
+      if (!rt.thread.model) {
+        rt.thread.model = defaultModel;
+      }
 
       const currentModelMaximumContextTokens =
         action.payload.chat_models[model].n_ctx;

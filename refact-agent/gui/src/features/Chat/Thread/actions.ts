@@ -43,7 +43,7 @@ function buildThreadParamsPatch(
     if (thread.tool_use) patch.tool_use = thread.tool_use;
     if (thread.mode) patch.mode = thread.mode;
   }
-  if ("model" in thread) patch.model = thread.model;
+  if (thread.model.trim()) patch.model = thread.model;
   if ("boost_reasoning" in thread)
     patch.boost_reasoning = thread.boost_reasoning;
   if ("include_project_info" in thread)
@@ -122,14 +122,12 @@ export const sendIdeMessagesToCurrentChat = createAsyncThunk(
 
     const isNewChat = runtime.thread.messages.length === 0;
 
-    if (isNewChat) {
-      const patch = buildThreadParamsPatch(runtime.thread, isNewChat);
-      if (Object.keys(patch).length > 0) {
-        await sendChatCommand(chatId, port, apiKey, {
-          type: "set_params",
-          patch,
-        });
-      }
+    const patch = buildThreadParamsPatch(runtime.thread, isNewChat);
+    if (Object.keys(patch).length > 0) {
+      await sendChatCommand(chatId, port, apiKey, {
+        type: "set_params",
+        patch,
+      });
     }
 
     for (const m of arg.messages) {

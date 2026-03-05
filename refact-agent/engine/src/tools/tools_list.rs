@@ -368,8 +368,11 @@ async fn get_integration_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGrou
         }
     }
 
+    let mut sorted_mcp: Vec<(String, ToolGroup)> = mcp_groups.into_iter().collect();
+    sorted_mcp.sort_by(|(a, _), (b, _)| a.cmp(b));
+
     let mut tool_groups = vec![integrations_group];
-    tool_groups.extend(mcp_groups.into_values());
+    tool_groups.extend(sorted_mcp.into_iter().map(|(_, group)| group));
 
     for tool_group in tool_groups.iter_mut() {
         tool_group.retain_available_tools(gcx.clone()).await;
@@ -382,7 +385,9 @@ async fn get_config_subagent_tools(gcx: Arc<ARwLock<GlobalContext>>) -> ToolGrou
     let mut subagent_tools: Vec<Box<dyn Tool + Send>> = vec![];
 
     if let Some(registry) = get_project_registry(gcx.clone()).await {
-        for (_, subagent_config) in registry.subagents {
+        let mut subagents: Vec<(String, _)> = registry.subagents.into_iter().collect();
+        subagents.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (_, subagent_config) in subagents {
             if subagent_config.expose_as_tool && !subagent_config.has_code {
                 subagent_tools.push(Box::new(ToolConfigSubagent::new(subagent_config)));
             }
@@ -496,8 +501,10 @@ pub async fn get_tools_for_mode(
         .map(|(_, tool)| tool)
         .collect();
 
-    result.sort_by_key(|tool| {
-        tool_order.get(tool.tool_description().name.as_str()).copied().unwrap_or(usize::MAX)
+    result.sort_by(|a, b| {
+        let a_order = tool_order.get(a.tool_description().name.as_str()).copied().unwrap_or(usize::MAX);
+        let b_order = tool_order.get(b.tool_description().name.as_str()).copied().unwrap_or(usize::MAX);
+        a_order.cmp(&b_order).then_with(|| a.tool_description().name.cmp(&b.tool_description().name))
     });
 
     result

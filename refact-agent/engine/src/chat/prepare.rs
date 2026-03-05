@@ -292,25 +292,21 @@ pub async fn prepare_chat_passthrough(
     let limited_msgs = fix_and_limit_messages_history(&messages, sampling_parameters)?;
 
     // 8. Strip thinking blocks if thinking is disabled
-    let limited_adapted_msgs =
+    let mut limited_adapted_msgs =
         strip_thinking_blocks_if_disabled(limited_msgs, sampling_parameters, &model_record);
-
-    // 9. Linearize thread: merge consecutive user-like messages for cache-friendly
-    //    strict role alternation (system/user/assistant/user/assistant/...)
-    let mut linearized_msgs = super::linearize::linearize_thread_for_llm(&limited_adapted_msgs);
 
     // OpenAI Responses API stateful multi-turn: when we chain with previous_response_id,
     // we should send only the new tail items (tool outputs and/or new user message).
     if model_record.base.wire_format == WireFormat::OpenaiResponses
         && thread.previous_response_id.as_ref().is_some_and(|s| !s.is_empty())
     {
-        let tail = responses_stateful_tail(linearized_msgs.clone());
+        let tail = responses_stateful_tail(limited_adapted_msgs.clone());
         let mut stitched = Vec::new();
         if let Some(sys) = last_system_message(&limited_adapted_msgs) {
             stitched.push(sys);
         }
         stitched.extend(tail);
-        linearized_msgs = stitched;
+        limited_adapted_msgs = stitched;
     }
 
     // 10. Build LlmRequest
@@ -336,7 +332,7 @@ pub async fn prepare_chat_passthrough(
         },
     });
 
-    let mut llm_request = LlmRequest::new(model_id.to_string(), linearized_msgs.clone())
+    let mut llm_request = LlmRequest::new(model_id.to_string(), limited_adapted_msgs.clone())
         .with_params(common_params)
         .with_tools(openai_tools, tool_choice)
         .with_reasoning(reasoning)
@@ -365,7 +361,7 @@ pub async fn prepare_chat_passthrough(
 
     Ok(PreparedChat {
         llm_request,
-        limited_messages: linearized_msgs,
+        limited_messages: limited_adapted_msgs,
         rag_results: has_rag_results.in_json,
     })
 }

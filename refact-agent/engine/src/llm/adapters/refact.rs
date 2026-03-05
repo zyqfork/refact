@@ -11,7 +11,6 @@ const PROTECTED_FIELDS: &[&str] = &[
     "model", "messages", "stream", "tools", "tool_choice", "stream_options",
     "max_completion_tokens", "temperature", "frequency_penalty", "stop", "n",
     "reasoning_effort", "thinking", "meta", "parallel_tool_calls", "n_ctx",
-    "cache_control",
 ];
 
 pub struct RefactAdapter;
@@ -42,19 +41,13 @@ impl LlmWireAdapter for RefactAdapter {
         insert_extra_headers(&mut headers, &settings.extra_headers);
 
         let reasoning_type = settings.reasoning_type.as_deref();
-        let mut messages = convert_messages_to_refact(&req.messages, reasoning_type);
+        let mut messages = convert_messages_to_refact(&req.messages, &settings.model_name, reasoning_type);
 
         // LiteLLM prompt caching via `cache_control` is intended for Anthropic-native routing.
         // Some backends (notably Vertex/Gemini) treat cache controls as CachedContent and reject
         // requests that also include system instruction / tools / tool_config.
-        let is_anthropic_target = reasoning_type.is_some_and(|rt| rt.starts_with("anthropic"));
-        let use_top_level_cache_control = is_anthropic_target
-            && matches!(req.cache_control, CacheControl::Ephemeral)
-            && supports_top_level_cache_control(reasoning_type, &settings.endpoint);
-        if is_anthropic_target
-            && matches!(req.cache_control, CacheControl::Ephemeral)
-            && !supports_top_level_cache_control(reasoning_type, &settings.endpoint)
-        {
+        let is_anthropic_target = settings.model_name.to_lowercase().contains("claude");
+        if is_anthropic_target && matches!(req.cache_control, CacheControl::Ephemeral) {
             inject_cache_control(&mut messages);
         }
 
@@ -63,10 +56,6 @@ impl LlmWireAdapter for RefactAdapter {
             "messages": messages,
             "stream": req.stream,
         });
-
-        if use_top_level_cache_control && supports_top_level_cache_control(reasoning_type, &settings.endpoint) {
-            body["cache_control"] = json!({"type": "ephemeral", "ttl": "1h"});
-        }
 
         if let Some(n_ctx) = req.params.n_ctx {
             body["n_ctx"] = json!(n_ctx);
@@ -125,6 +114,11 @@ impl LlmWireAdapter for RefactAdapter {
                         }
                         _ => {
                             if let Some(effort) = req.reasoning.to_anthropic_effort() {
+                                let effort = if effort == "max" {
+                                    "high"  // litellm doesn't support "max" reasoning type yet 
+                                } else {
+                                    effort
+                                };
                                 body["reasoning_effort"] = json!(effort);
                                 body["output_config"] = json!({"effort": effort});
                             }
@@ -357,8 +351,8 @@ impl LlmWireAdapter for RefactAdapter {
     }
 }
 
-fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], reasoning_type: Option<&str>) -> Vec<Value> {
-    let is_anthropic_target = reasoning_type.map_or(false, |rt| rt.starts_with("anthropic"));
+fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], model_name: &str, reasoning_type: Option<&str>) -> Vec<Value> {
+    let is_anthropic_target = model_name.to_lowercase().contains("claude");
     let supports_reasoning_content = reasoning_type.is_some();
     messages
         .iter()
@@ -497,67 +491,28 @@ fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], 
         .collect()
 }
 
-
-fn supports_top_level_cache_control(reasoning_type: Option<&str>, endpoint: &str) -> bool {
-    let is_anthropic_reasoning =
-        matches!(reasoning_type, Some("anthropic_budget") | Some("anthropic_effort"));
-    let endpoint_lc = endpoint.to_ascii_lowercase();
-    let is_openrouter = endpoint_lc.contains("openrouter.ai");
-
-    // OpenRouter supports top-level automatic caching for Anthropic models.
-    // Keep explicit block-level markers for other Anthropic-compatible backends.
-    is_anthropic_reasoning && is_openrouter
-}
-
 /// Injects `cache_control` breakpoints into OpenAI-format messages for LiteLLM prompt caching.
 ///
 /// Strategy:
-///   - 4 message breakpoints, recomputed each request:
+///   - 2 message breakpoints, recomputed each request:
 ///     - last 2 non-system messages
-///     - middle non-system message
-///     - 1/4 point non-system message
 ///   - no system cache_control
 ///
-/// For string content, converts to array-of-blocks format so `cache_control` can be attached.
-/// LiteLLM passes these through to Anthropic's native API.
+/// Adds `cache_control` as a top-level key on the message object so the content structure
+/// is never modified. LiteLLM passes message-level cache_control through to Anthropic.
 fn inject_cache_control(messages: &mut [Value]) {
     let cc = json!({"type": "ephemeral", "ttl": "1h"});
 
     fn add_cache_to_message(msg: &mut Value, cc: &Value) {
-        let Some(content) = msg.get_mut("content") else { return };
-        if let Some(text) = content.as_str().map(|s| s.to_string()) {
-            // Convert string content to array-of-blocks format
-            *content = json!([{"type": "text", "text": text, "cache_control": cc}]);
-        } else if let Some(arr) = content.as_array_mut() {
-            if let Some(last_block) = arr.last_mut() {
-                if let Some(obj) = last_block.as_object_mut() {
-                    obj.insert("cache_control".to_string(), cc.clone());
-                }
-            }
+        if let Some(obj) = msg.as_object_mut() {
+            obj.insert("cache_control".to_string(), cc.clone());
         }
     }
 
-    // Cache selected non-system messages
-    let non_system_indices: Vec<usize> = messages.iter().enumerate()
-        .filter(|(_, m)| m.get("role").and_then(|r| r.as_str()) != Some("system"))
-        .map(|(i, _)| i)
-        .collect();
-
-    let len = non_system_indices.len();
-    let quarter_pos = len / 4;
-    let middle_pos = len / 2;
-    let last_pos = len - 1;
-    let last2_pos = len.saturating_sub(2);
-
-    let mut selected_positions = vec![quarter_pos, middle_pos, last2_pos, last_pos];
-    selected_positions.sort_unstable();
-    selected_positions.dedup();
-    selected_positions.truncate(4);
-
+    let len = messages.len();
+    let selected_positions = vec![len.saturating_sub(1)];
     for pos in selected_positions {
-        if let Some(&msg_idx) = non_system_indices.get(pos) {
-            add_cache_to_message(&mut messages[msg_idx], &cc);
-        }
+        add_cache_to_message(&mut messages[pos], &cc);
     }
 }
 
@@ -966,7 +921,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[2]["role"], "tool");
@@ -1276,7 +1231,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, Some("anthropic_budget"));
+        let converted = convert_messages_to_refact(&messages, "claude-3-5-sonnet", Some("anthropic_budget"));
 
         assert_eq!(converted.len(), 3);
         // Assistant message should have thinking_blocks when targeting Anthropic
@@ -1305,7 +1260,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert_eq!(converted.len(), 2);
         assert!(converted[1].get("thinking_blocks").is_none(),
@@ -1323,7 +1278,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert!(converted[0].get("thinking_blocks").is_none(),
             "Empty thinking_blocks should not be included");
@@ -1357,7 +1312,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, Some("openai"));
+        let converted = convert_messages_to_refact(&messages, "gpt-4", Some("openai"));
 
         assert_eq!(converted.len(), 3);
         let assistant = &converted[1];
@@ -1377,7 +1332,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert!(converted[0].get("reasoning_content").is_none());
     }
@@ -1393,7 +1348,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert!(converted[0].get("reasoning_content").is_none());
     }
@@ -1410,22 +1365,23 @@ mod tests {
 
         let http = adapter.build_http(&req, &anthropic_openrouter_settings()).unwrap();
 
-        assert_eq!(http.body["cache_control"]["type"], "ephemeral");
-        assert_eq!(http.body["cache_control"]["ttl"], "1h");
+        assert!(http.body.get("cache_control").is_none());
 
         let messages = http.body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 4);
 
-        // With automatic caching, message content remains unchanged (no block-level markers).
-        let sys = &messages[0];
-        assert!(sys["content"].is_string());
-        for msg in messages {
-            if let Some(content) = msg["content"].as_array() {
-                for block in content {
-                    assert!(block.get("cache_control").is_none());
-                }
-            }
+        // cache_control is injected at the message level on the last message.
+        assert!(messages[3].get("cache_control").is_some());
+        assert_eq!(messages[3]["cache_control"]["type"], "ephemeral");
+        assert_eq!(messages[3]["cache_control"]["ttl"], "1h");
+
+        // Other messages should not have cache_control.
+        for msg in &messages[..3] {
+            assert!(msg.get("cache_control").is_none());
         }
+
+        // System message content remains a plain string.
+        assert!(messages[0]["content"].is_string());
     }
 
     #[test]
@@ -1438,7 +1394,8 @@ mod tests {
         let http = adapter.build_http(&req, &anthropic_openrouter_settings()).unwrap();
 
         let messages = http.body["messages"].as_array().unwrap();
-        assert_eq!(http.body["cache_control"]["type"], "ephemeral");
+        assert!(http.body.get("cache_control").is_none());
+        assert_eq!(messages[0]["cache_control"]["type"], "ephemeral");
         let content = messages[0]["content"].as_str();
         assert!(content.is_some());
     }
@@ -1503,10 +1460,12 @@ mod tests {
 
         let messages = http.body["messages"].as_array().unwrap();
         let content = messages[0]["content"].as_array().unwrap();
-        // Non-OpenRouter Anthropic-compatible target keeps explicit block-level markers.
+        // cache_control is injected at the message level, not at block level.
         assert!(http.body.get("cache_control").is_none());
-        assert!(content.last().unwrap().get("cache_control").is_some());
-        assert!(content[0].get("cache_control").is_none());
+        assert_eq!(messages[0]["cache_control"]["type"], "ephemeral");
+        for block in content {
+            assert!(block.get("cache_control").is_none());
+        }
     }
 
     #[test]
@@ -1638,7 +1597,7 @@ mod tests {
             ChatMessage::new("user".to_string(), "And the sky?".to_string()),
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert_eq!(converted.len(), 3);
         // Assistant message should have citations
@@ -1662,7 +1621,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
 
         assert!(converted[0].get("citations").is_none(),
             "Empty citations should not be included");
@@ -1702,7 +1661,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, Some("anthropic_budget"));
+        let converted = convert_messages_to_refact(&messages, "claude-3-5-sonnet", Some("anthropic_budget"));
 
         let assistant = &converted[1];
         // LiteLLM may send signed thinking blocks with empty thinking text ("thinking": "")
@@ -1733,7 +1692,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, Some("anthropic_budget"));
+        let converted = convert_messages_to_refact(&messages, "claude-3-5-sonnet", Some("anthropic_budget"));
 
         let blocks = converted[0]["thinking_blocks"].as_array().unwrap();
         assert_eq!(blocks.len(), 3, "All Anthropic blocks must be preserved verbatim: {:?}", blocks);
@@ -1757,11 +1716,11 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, Some("openai"));
+        let converted = convert_messages_to_refact(&messages, "gpt-4", Some("openai"));
         assert!(converted[0].get("thinking_blocks").is_none(),
             "thinking_blocks should be stripped for non-Anthropic targets");
 
-        let converted_none = convert_messages_to_refact(&messages, None);
+        let converted_none = convert_messages_to_refact(&messages, "", None);
         assert!(converted_none[0].get("thinking_blocks").is_none(),
             "thinking_blocks should be stripped when no reasoning_type");
     }
@@ -1779,11 +1738,11 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, None);
+        let converted = convert_messages_to_refact(&messages, "", None);
         assert!(converted[0].get("reasoning_content").is_none(),
             "reasoning_content should be stripped when no reasoning support");
 
-        let converted_openai = convert_messages_to_refact(&messages, Some("openai"));
+        let converted_openai = convert_messages_to_refact(&messages, "gpt-4", Some("openai"));
         assert_eq!(converted_openai[0]["reasoning_content"], "Reasoning text",
             "reasoning_content should be included for openai reasoning");
     }
@@ -1817,7 +1776,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_messages_to_refact(&messages, Some("anthropic_budget"));
+        let converted = convert_messages_to_refact(&messages, "claude-3-5-sonnet", Some("anthropic_budget"));
         let citations = converted[0]["citations"].as_array().unwrap();
         assert_eq!(citations.len(), 1,
             "Encrypted citations should always be stripped in Refact wire");

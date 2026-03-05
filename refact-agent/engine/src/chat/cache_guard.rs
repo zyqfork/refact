@@ -67,6 +67,11 @@ fn is_append_only_prefix_inner(
         | (Value::Number(_), Value::Number(_))
         | (Value::String(_), Value::String(_)) => prev == next,
         (Value::Array(a), Value::Array(b)) => {
+            // The "tools" array is part of the prompt prefix — any change (including
+            // appending a new tool) invalidates the LLM cache. Require strict equality.
+            if parent_key == Some("tools") {
+                return a == b;
+            }
             if a.len() > b.len() {
                 return false;
             }
@@ -298,6 +303,31 @@ mod tests {
         let prev = json!({"messages": [1, 2], "meta": {"a": 1}});
         let next = json!({"messages": [1, 2, 3], "meta": {"a": 1}, "extra": true});
         assert!(!is_append_only_prefix(&prev, &next));
+    }
+
+    #[test]
+    fn test_tools_array_strict_equality() {
+        let tool_a = json!({"type": "function", "function": {"name": "tool_a", "description": "A"}});
+        let tool_b = json!({"type": "function", "function": {"name": "tool_b", "description": "B"}});
+
+        // Identical tools → OK
+        let prev = json!({"messages": [1], "tools": [tool_a.clone()]});
+        let next = json!({"messages": [1, 2], "tools": [tool_a.clone()]});
+        assert!(is_append_only_prefix(&prev, &next));
+
+        // New tool appended mid-session → violation (breaks LLM cache prefix)
+        let next_extra = json!({"messages": [1, 2], "tools": [tool_a.clone(), tool_b.clone()]});
+        assert!(!is_append_only_prefix(&prev, &next_extra));
+
+        // Tool removed mid-session → violation
+        let prev2 = json!({"messages": [1], "tools": [tool_a.clone(), tool_b.clone()]});
+        let next_removed = json!({"messages": [1, 2], "tools": [tool_a.clone()]});
+        assert!(!is_append_only_prefix(&prev2, &next_removed));
+
+        // Tool description changed mid-session → violation
+        let tool_a_changed = json!({"type": "function", "function": {"name": "tool_a", "description": "Changed"}});
+        let next_changed = json!({"messages": [1, 2], "tools": [tool_a_changed]});
+        assert!(!is_append_only_prefix(&prev, &next_changed));
     }
 
     #[test]

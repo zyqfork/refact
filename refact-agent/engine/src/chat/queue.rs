@@ -169,9 +169,16 @@ pub fn apply_setparams_patch(
             changed = true;
         }
     }
-    if let Some(boost) = patch.get("boost_reasoning").and_then(|v| v.as_bool()) {
-        if thread.boost_reasoning != Some(boost) {
-            thread.boost_reasoning = Some(boost);
+    if let Some(boost_val) = patch.get("boost_reasoning") {
+        let new_boost = if boost_val.is_null() {
+            None
+        } else if let Some(boost) = boost_val.as_bool() {
+            Some(boost)
+        } else {
+            thread.boost_reasoning
+        };
+        if thread.boost_reasoning != new_boost {
+            thread.boost_reasoning = new_boost;
             changed = true;
         }
     }
