@@ -11,6 +11,61 @@ use crate::caps::resolve_chat_model;
 use super::tools_description::{Tool, ToolGroup, ToolGroupCategory};
 use super::tool_config_subagent::ToolConfigSubagent;
 
+/// When MCP tool count exceeds this threshold, lazy loading activates.
+/// The full MCP schemas are replaced by two fixed proxy tools:
+/// - `mcp_tool_search` — discover MCP tools by regex, returns schema text
+/// - `mcp_call`        — execute any MCP tool by name + args JSON
+///
+/// The tool list is FIXED for the entire session (cache-safe).
+const MCP_LAZY_THRESHOLD: usize = 15;
+
+/// Result of applying MCP lazy-loading logic on a tool list.
+pub struct ToolsForMode {
+    /// Tool list to send to the LLM as schemas. Fixed for the session lifetime.
+    pub tools: Vec<Box<dyn Tool + Send>>,
+    /// True when lazy mode replaced MCP schemas with the two proxy tools.
+    pub mcp_lazy_mode: bool,
+    /// Total count of all MCP tools (for the hint message).
+    pub mcp_total_count: usize,
+    /// (name, description) index for ALL MCP tools — used to build the `cd_instruction` hint.
+    /// Empty when lazy mode is inactive.
+    pub mcp_tool_index: Vec<(String, String)>,
+}
+
+/// Apply MCP lazy-loading to a flat tool list returned by `get_tools_for_mode`.
+///
+/// When there are more than `MCP_LAZY_THRESHOLD` MCP tools, ALL individual MCP
+/// schemas are replaced by two fixed proxy tools (`mcp_tool_search` + `mcp_call`).
+/// The tool list produced here NEVER changes during the session — cache-safe.
+pub fn apply_mcp_lazy_filter(mut tools: Vec<Box<dyn Tool + Send>>) -> ToolsForMode {
+    // Collect the index of ALL MCP tools (by name prefix convention) before filtering.
+    let mcp_tool_index: Vec<(String, String)> = tools.iter()
+        .filter(|t| t.tool_description().name.starts_with("mcp"))
+        .map(|t| {
+            let d = t.tool_description();
+            (d.name, d.description)
+        })
+        .collect();
+
+    let mcp_total_count = mcp_tool_index.len();
+    let mcp_lazy_mode = mcp_total_count > MCP_LAZY_THRESHOLD;
+
+    if mcp_lazy_mode {
+        // Drop ALL individual MCP tool schemas.
+        tools.retain(|t| !t.tool_description().name.starts_with("mcp"));
+        // Inject two fixed proxies — tool list is now stable for the session.
+        tools.push(Box::new(crate::tools::tool_mcp_search::ToolMcpSearch {}));
+        tools.push(Box::new(crate::tools::tool_mcp_call::ToolMcpCall {}));
+    }
+
+    ToolsForMode {
+        tools,
+        mcp_lazy_mode,
+        mcp_total_count,
+        mcp_tool_index: if mcp_lazy_mode { mcp_tool_index } else { vec![] },
+    }
+}
+
 fn tool_available(
     tool: &Box<dyn Tool + Send>,
     ast_on: bool,
@@ -327,7 +382,7 @@ async fn get_builtin_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
     tool_groups
 }
 
-async fn get_integration_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
+pub async fn get_integration_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
     let mut integrations_group = ToolGroup {
         name: "Integrations".to_string(),
         description: "Integration tools".to_string(),

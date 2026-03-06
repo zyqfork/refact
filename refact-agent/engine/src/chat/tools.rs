@@ -1083,7 +1083,8 @@ async fn instantiate_tool_for_call(
     model_id: Option<&str>,
     tool_name: &str,
 ) -> Option<Box<dyn crate::tools::tools_description::Tool + Send>> {
-    let tools = crate::tools::tools_list::get_tools_for_mode(gcx, mode_id, model_id).await;
+    let raw_tools = crate::tools::tools_list::get_tools_for_mode(gcx, mode_id, model_id).await;
+    let tools = crate::tools::tools_list::apply_mcp_lazy_filter(raw_tools).tools;
     for tool in tools {
         if tool.tool_description().name == tool_name {
             return Some(tool);
@@ -1319,7 +1320,8 @@ async fn execute_tools_inner(
 ) -> (Vec<ChatMessage>, bool) {
     let max_parallel = limits().max_parallel_tools.max(1);
 
-    let available_tools = crate::tools::tools_list::get_tools_for_mode(gcx.clone(), mode_id, model_id).await;
+    let raw_available_tools = crate::tools::tools_list::get_tools_for_mode(gcx.clone(), mode_id, model_id).await;
+    let available_tools = crate::tools::tools_list::apply_mcp_lazy_filter(raw_available_tools).tools;
 
     let mut tool_allow_parallel: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     let mut serial_registry: SerialToolRegistry = std::collections::HashMap::new();

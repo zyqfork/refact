@@ -173,6 +173,7 @@ const _MermaidBlock: React.FC<MermaidBlockProps> = ({ code, onCopyClick }) => {
           fittedRef.current = false;
         }
       } catch (err) {
+        document.getElementById(`mermaid_${uniqueId}`)?.remove();
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
           setRawSvg(null);
@@ -304,9 +305,6 @@ const _MermaidBlock: React.FC<MermaidBlockProps> = ({ code, onCopyClick }) => {
             {code}
           </code>
         </PreTag>
-        <Box className={diagramStyles.error_hint}>
-          Mermaid syntax error: {error}
-        </Box>
       </Box>
     );
   }

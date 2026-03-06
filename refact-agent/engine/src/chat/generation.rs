@@ -33,6 +33,7 @@ use crate::chat::trajectory_ops::approx_token_count;
 
 const TOKEN_BUDGET_CADENCE: usize = 6;
 const TOKEN_BUDGET_MARKER: &str = "token_budget_info";
+const MCP_LAZY_INDEX_MARKER: &str = "mcp_lazy_index";
 
 fn maybe_inject_token_budget_instruction(
     session: &mut ChatSession,
@@ -105,6 +106,28 @@ fn maybe_inject_token_budget_instruction(
 
 
 
+fn build_mcp_index_message(index: &[(String, String)], total: usize) -> String {
+    let mut lines = vec![
+        format!(
+            "💿 MCP Tools — Lazy Mode Active ({} tools available). \
+             You MUST call `mcp_tool_search` before using any MCP tool. \
+             Example: mcp_tool_search({{\"query\": \"github.*pull|pr\"}})",
+            total
+        ),
+        String::new(),
+        "Available MCP tools (name: description):".to_string(),
+    ];
+    for (name, desc) in index {
+        let short = if desc.chars().count() > 100 {
+            format!("{}…", desc.chars().take(100).collect::<String>())
+        } else {
+            desc.clone()
+        };
+        lines.push(format!("- {}: {}", name, short));
+    }
+    lines.join("\n")
+}
+
 pub async fn prepare_session_preamble_and_knowledge(
     gcx: Arc<ARwLock<GlobalContext>>,
     session_arc: Arc<AMutex<ChatSession>>,
@@ -120,6 +143,9 @@ pub async fn prepare_session_preamble_and_knowledge(
     };
 
     let needs_preamble = !has_system || (!has_project_context && thread.include_project_info);
+
+    // Populated inside `needs_preamble`; used after to inject the MCP index hint message.
+    let mut mcp_for_index: Option<(Vec<(String, String)>, usize)> = None;
 
     if needs_preamble {
         let caps = match crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await {
@@ -137,14 +163,16 @@ pub async fn prepare_session_preamble_and_knowledge(
             }
         };
 
-        let tools: Vec<crate::tools::tools_description::ToolDesc> =
+        let raw_tools =
             crate::tools::tools_list::get_tools_for_mode(gcx.clone(), &thread.mode, Some(&model_rec.base.id))
-                .await
-                .into_iter()
-                .map(|tool| tool.tool_description())
-                .collect();
+                .await;
+        let tools_for_mode =
+            crate::tools::tools_list::apply_mcp_lazy_filter(raw_tools);
+        if tools_for_mode.mcp_lazy_mode {
+            mcp_for_index = Some((tools_for_mode.mcp_tool_index.clone(), tools_for_mode.mcp_total_count));
+        }
         let tool_names: std::collections::HashSet<String> =
-            tools.iter().map(|t| t.name.clone()).collect();
+            tools_for_mode.tools.iter().map(|t| t.tool_description().name.clone()).collect();
 
         let meta = ChatMeta {
             chat_id: chat_id.clone(),
@@ -235,6 +263,33 @@ pub async fn prepare_session_preamble_and_knowledge(
             if inserted > 0 {
                 info!("Saved {} preamble messages to session", inserted);
             }
+        }
+    }
+
+    // Inject MCP lazy-mode index hint (once per session, idempotent via marker)
+    if let Some((mcp_index, mcp_total)) = mcp_for_index {
+        let already_has_index = {
+            let session = session_arc.lock().await;
+            session.messages.iter().any(|m| {
+                m.role == "cd_instruction" && m.tool_call_id == MCP_LAZY_INDEX_MARKER
+            })
+        };
+        if !already_has_index {
+            let index_text = build_mcp_index_message(&mcp_index, mcp_total);
+            let mut session = session_arc.lock().await;
+            let insert_pos = session
+                .messages
+                .iter()
+                .position(|m| m.role == "system")
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            session.insert_message(insert_pos, ChatMessage {
+                role: "cd_instruction".to_string(),
+                tool_call_id: MCP_LAZY_INDEX_MARKER.to_string(),
+                content: ChatContent::SimpleText(index_text),
+                ..Default::default()
+            });
+            info!("Injected MCP lazy index hint with {} tools", mcp_total);
         }
     }
 
@@ -600,14 +655,18 @@ pub async fn run_llm_generation(
         .map_err(|e| e.message)?;
     let model_rec = crate::caps::resolve_chat_model(caps.clone(), &thread.model)?;
 
-    let tools: Vec<crate::tools::tools_description::ToolDesc> =
+    let raw_tools_for_gen =
         crate::tools::tools_list::get_tools_for_mode(gcx.clone(), &thread.mode, Some(&model_rec.base.id))
-            .await
-            .into_iter()
-            .map(|tool| tool.tool_description())
-            .collect();
+            .await;
+    let tools_for_gen =
+        crate::tools::tools_list::apply_mcp_lazy_filter(raw_tools_for_gen);
+    let mcp_lazy_active = tools_for_gen.mcp_lazy_mode;
+    let tools: Vec<crate::tools::tools_description::ToolDesc> = tools_for_gen.tools
+        .into_iter()
+        .map(|tool| tool.tool_description())
+        .collect();
 
-    info!("session generation: model={}, tools count = {}", model_rec.base.id, tools.len());
+    info!("session generation: model={}, tools count = {} (mcp_lazy={})", model_rec.base.id, tools.len(), mcp_lazy_active);
 
     let model_n_ctx = if model_rec.base.n_ctx > 0 {
         model_rec.base.n_ctx

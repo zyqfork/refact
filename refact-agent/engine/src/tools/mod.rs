@@ -31,6 +31,8 @@ mod tool_web;
 mod tool_web_search;
 mod tool_compress_chat;
 mod tool_handoff_to_mode;
+mod tool_mcp_search;
+mod tool_mcp_call;
 
 pub mod file_edit;
 mod tool_create_knowledge;
