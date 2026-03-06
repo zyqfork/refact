@@ -257,38 +257,76 @@ impl LlmWireAdapter for OpenAiChatAdapter {
 }
 
 fn convert_messages_to_openai(messages: &[crate::call_validation::ChatMessage]) -> Vec<Value> {
-    messages
-        .iter()
-        .filter_map(|msg| {
-            let role = match msg.role.as_str() {
-                "user" | "assistant" | "system" | "tool" => msg.role.clone(),
-                "diff" => "tool".to_string(),  // diff messages are tool results
-                _ => return None,
+    use super::render_extra::{append_text_to_tool_json, is_context_role, render_context_message};
+
+    let mut result: Vec<Value> = Vec::new();
+    let mut pending_user_content: Vec<Value> = Vec::new();
+
+    for msg in messages {
+        if is_context_role(&msg.role) {
+            let Some(text) = render_context_message(msg) else { continue };
+            // Fold into the matching tool result by tool_call_id when possible
+            // so the model receives file content as part of the correct tool output.
+            // Fall back to the last tool message if tool_call_id is absent.
+            let target = if !msg.tool_call_id.is_empty() {
+                result.iter_mut().rev().find(|m| {
+                    m["role"].as_str() == Some("tool")
+                        && m["tool_call_id"].as_str() == Some(msg.tool_call_id.as_str())
+                })
+            } else {
+                result.iter_mut().rev().find(|m| m["role"].as_str() == Some("tool"))
             };
-
-            // Filter out tool results for server-executed tools
-            if (role == "tool" || msg.role == "diff") && msg.tool_call_id.starts_with("srvtoolu_") {
-                return None;
+            if let Some(tool_msg) = target {
+                append_text_to_tool_json(tool_msg, &text);
+            } else {
+                pending_user_content.push(json!({"type": "text", "text": text}));
             }
+            continue;
+        }
 
-            let mut obj = json!({
-                "role": role,
-            });
+        let role = match msg.role.as_str() {
+            "user" | "assistant" | "system" | "tool" => msg.role.clone(),
+            "diff" => "tool".to_string(),
+            _ => continue,
+        };
 
-            match &msg.content {
-                crate::call_validation::ChatContent::SimpleText(text) => {
+        if (role == "tool" || msg.role == "diff") && msg.tool_call_id.starts_with("srvtoolu_") {
+            continue;
+        }
+
+        if role != "user" && !pending_user_content.is_empty() {
+            result.push(json!({
+                "role": "user",
+                "content": std::mem::take(&mut pending_user_content),
+            }));
+        }
+
+        let mut obj = json!({"role": role});
+
+        match &msg.content {
+            crate::call_validation::ChatContent::SimpleText(text) => {
+                if role == "user" && !pending_user_content.is_empty() {
+                    let mut content = std::mem::take(&mut pending_user_content);
+                    if !text.is_empty() {
+                        content.push(json!({"type": "text", "text": text}));
+                    }
+                    obj["content"] = json!(content);
+                } else {
                     obj["content"] = json!(text);
                 }
-                crate::call_validation::ChatContent::Multimodal(elements) => {
-                    // Only use array format when content actually contains images.
-                    // Text-only multimodal (e.g. from trajectory deserialization or clients
-                    // sending [{"type":"text","text":"..."}]) must be normalized to plain string —
-                    // OpenAI Chat Completions requires string content for assistant/tool messages.
-                    let has_images = elements.iter().any(|el| el.is_image());
-                    if has_images {
-                        let content: Vec<Value> = elements
-                            .iter()
-                            .map(|el| {
+            }
+            crate::call_validation::ChatContent::Multimodal(elements) => {
+                // Only use array format when content actually contains images.
+                // Text-only multimodal (e.g. from trajectory deserialization or clients
+                // sending [{"type":"text","text":"..."}]) must be normalized to plain string —
+                // OpenAI Chat Completions requires string content for assistant/tool messages.
+                let has_images = elements.iter().any(|el| el.is_image());
+                if role == "user" {
+                    if !pending_user_content.is_empty() || has_images {
+                        // Prepend pending blocks, then the message's own content blocks.
+                        let mut content = std::mem::take(&mut pending_user_content);
+                        if has_images {
+                            content.extend(elements.iter().map(|el| {
                                 if el.is_image() {
                                     json!({
                                         "type": "image_url",
@@ -297,61 +335,90 @@ fn convert_messages_to_openai(messages: &[crate::call_validation::ChatMessage]) 
                                         }
                                     })
                                 } else {
-                                    json!({
-                                        "type": "text",
-                                        "text": el.m_content
-                                    })
+                                    json!({"type": "text", "text": el.m_content})
                                 }
-                            })
-                            .collect();
+                            }));
+                        } else {
+                            let plain = msg.content.content_text_only();
+                            if !plain.is_empty() {
+                                content.push(json!({"type": "text", "text": plain}));
+                            }
+                        }
                         obj["content"] = json!(content);
                     } else {
+                        // No pending content and no images: collapse to plain string.
                         obj["content"] = json!(msg.content.content_text_only());
                     }
-                }
-                crate::call_validation::ChatContent::ContextFiles(_) => {
+                } else {
+                    // Non-user roles (tool, assistant, system) must carry string content.
+                    // Tool images are collected below and deferred to the next user turn.
                     obj["content"] = json!(msg.content.content_text_only());
                 }
             }
+            crate::call_validation::ChatContent::ContextFiles(_) => {
+                obj["content"] = json!(msg.content.content_text_only());
+            }
+        }
 
-            if let Some(tool_calls) = &msg.tool_calls {
-                let tc: Vec<Value> = tool_calls
-                    .iter()
-                    .filter(|tc| !tc.id.starts_with("srvtoolu_"))  // Filter server-executed tools
-                    .map(|tc| {
-                        let mut call = json!({
-                            "id": tc.id,
-                            "index": tc.index,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        });
-                        if let Some(extra) = &tc.extra_content {
-                            call["extra_content"] = extra.clone();
+        if let Some(tool_calls) = &msg.tool_calls {
+            let tc: Vec<Value> = tool_calls
+                .iter()
+                .filter(|tc| !tc.id.starts_with("srvtoolu_"))
+                .map(|tc| {
+                    let mut call = json!({
+                        "id": tc.id,
+                        "index": tc.index,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
                         }
-                        call
-                    })
-                    .collect();
-                if !tc.is_empty() {
-                    obj["tool_calls"] = json!(tc);
+                    });
+                    if let Some(extra) = &tc.extra_content {
+                        call["extra_content"] = extra.clone();
+                    }
+                    call
+                })
+                .collect();
+            if !tc.is_empty() {
+                obj["tool_calls"] = json!(tc);
+            }
+        }
+
+        if !msg.tool_call_id.is_empty() {
+            obj["tool_call_id"] = json!(msg.tool_call_id);
+        }
+
+        if let Some(reasoning) = &msg.reasoning_content {
+            if !reasoning.is_empty() {
+                obj["reasoning_content"] = json!(reasoning);
+            }
+        }
+
+        result.push(obj);
+
+        if role == "tool" {
+            if let crate::call_validation::ChatContent::Multimodal(elements) = &msg.content {
+                for el in elements.iter().filter(|el| el.is_image()) {
+                    pending_user_content.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", el.m_type, el.m_content)
+                        }
+                    }));
                 }
             }
+        }
+    }
 
-            if !msg.tool_call_id.is_empty() {
-                obj["tool_call_id"] = json!(msg.tool_call_id);
-            }
+    if !pending_user_content.is_empty() {
+        result.push(json!({
+            "role": "user",
+            "content": pending_user_content,
+        }));
+    }
 
-            if let Some(reasoning) = &msg.reasoning_content {
-                if !reasoning.is_empty() {
-                    obj["reasoning_content"] = json!(reasoning);
-                }
-            }
-
-            Some(obj)
-        })
-        .collect()
+    result
 }
 
 fn tool_choice_to_openai(choice: &CanonicalToolChoice) -> Value {

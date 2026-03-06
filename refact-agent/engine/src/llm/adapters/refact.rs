@@ -352,32 +352,70 @@ impl LlmWireAdapter for RefactAdapter {
 }
 
 fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], model_name: &str, reasoning_type: Option<&str>) -> Vec<Value> {
+    use super::render_extra::{append_text_to_tool_json, is_context_role, render_context_message};
+
     let is_anthropic_target = model_name.to_lowercase().contains("claude");
     let supports_reasoning_content = reasoning_type.is_some();
-    messages
-        .iter()
-        .filter_map(|msg| {
-            let role = match msg.role.as_str() {
-                "user" | "assistant" | "system" | "tool" => msg.role.clone(),
-                "diff" => "tool".to_string(),  // diff messages are tool results
-                _ => return None,
+
+    let mut result: Vec<Value> = Vec::new();
+    let mut pending_user_content: Vec<Value> = Vec::new();
+
+    for msg in messages {
+        if is_context_role(&msg.role) {
+            let Some(text) = render_context_message(msg) else { continue };
+            let target = if !msg.tool_call_id.is_empty() {
+                result.iter_mut().rev().find(|m| {
+                    m["role"].as_str() == Some("tool")
+                        && m["tool_call_id"].as_str() == Some(msg.tool_call_id.as_str())
+                })
+            } else {
+                result.iter_mut().rev().find(|m| m["role"].as_str() == Some("tool"))
             };
-
-            // Filter out tool results for server-executed tools
-            if (role == "tool" || msg.role == "diff") && msg.tool_call_id.starts_with("srvtoolu_") {
-                return None;
+            if let Some(tool_msg) = target {
+                append_text_to_tool_json(tool_msg, &text);
+            } else {
+                pending_user_content.push(json!({"type": "text", "text": text}));
             }
+            continue;
+        }
 
-            let mut obj = json!({"role": role});
+        let role = match msg.role.as_str() {
+            "user" | "assistant" | "system" | "tool" => msg.role.clone(),
+            "diff" => "tool".to_string(),
+            _ => continue,
+        };
 
-            match &msg.content {
-                crate::call_validation::ChatContent::SimpleText(text) => {
+        if (role == "tool" || msg.role == "diff") && msg.tool_call_id.starts_with("srvtoolu_") {
+            continue;
+        }
+
+        if role != "user" && !pending_user_content.is_empty() {
+            result.push(json!({
+                "role": "user",
+                "content": std::mem::take(&mut pending_user_content),
+            }));
+        }
+
+        let mut obj = json!({"role": role});
+
+        match &msg.content {
+            crate::call_validation::ChatContent::SimpleText(text) => {
+                if role == "user" && !pending_user_content.is_empty() {
+                    let mut content = std::mem::take(&mut pending_user_content);
+                    if !text.is_empty() {
+                        content.push(json!({"type": "text", "text": text}));
+                    }
+                    obj["content"] = json!(content);
+                } else {
                     obj["content"] = json!(text);
                 }
-                crate::call_validation::ChatContent::Multimodal(elements) => {
-                    let content: Vec<Value> = elements
-                        .iter()
-                        .map(|el| {
+            }
+            crate::call_validation::ChatContent::Multimodal(elements) => {
+                let has_images = elements.iter().any(|el| el.is_image());
+                if role == "user" {
+                    if !pending_user_content.is_empty() || has_images {
+                        let mut content = std::mem::take(&mut pending_user_content);
+                        content.extend(elements.iter().map(|el| {
                             if el.is_image() {
                                 json!({
                                     "type": "image_url",
@@ -388,19 +426,32 @@ fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], 
                             } else {
                                 json!({"type": "text", "text": el.m_content})
                             }
-                        })
-                        .collect();
-                    obj["content"] = json!(content);
-                }
-                crate::call_validation::ChatContent::ContextFiles(_) => {
+                        }));
+                        obj["content"] = json!(content);
+                    } else {
+                        // No pending content and no images: use array format (Refact always
+                        // sends multimodal as array, even text-only, for consistency).
+                        let content: Vec<Value> = elements
+                            .iter()
+                            .map(|el| json!({"type": "text", "text": el.m_content}))
+                            .collect();
+                        obj["content"] = json!(content);
+                    }
+                } else {
+                    // Non-user roles must carry string content.
+                    // Tool images are collected below and deferred to the next user turn.
                     obj["content"] = json!(msg.content.content_text_only());
                 }
             }
+            crate::call_validation::ChatContent::ContextFiles(_) => {
+                obj["content"] = json!(msg.content.content_text_only());
+            }
+        }
 
-            if let Some(tool_calls) = &msg.tool_calls {
+        if let Some(tool_calls) = &msg.tool_calls {
                 let tc: Vec<Value> = tool_calls
                     .iter()
-                    .filter(|tc| !tc.id.starts_with("srvtoolu_"))  // Filter server-executed tools
+                    .filter(|tc| !tc.id.starts_with("srvtoolu_"))
                     .map(|tc| {
                         json!({
                             "id": tc.id,
@@ -486,9 +537,30 @@ fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], 
                 }
             }
 
-            Some(obj)
-        })
-        .collect()
+        result.push(obj);
+
+        if role == "tool" {
+            if let crate::call_validation::ChatContent::Multimodal(elements) = &msg.content {
+                for el in elements.iter().filter(|el| el.is_image()) {
+                    pending_user_content.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", el.m_type, el.m_content)
+                        }
+                    }));
+                }
+            }
+        }
+    }
+
+    if !pending_user_content.is_empty() {
+        result.push(json!({
+            "role": "user",
+            "content": pending_user_content,
+        }));
+    }
+
+    result
 }
 
 /// Injects `cache_control` breakpoints into OpenAI-format messages for LiteLLM prompt caching.

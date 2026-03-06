@@ -640,9 +640,15 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
 fn convert_to_responses_format(
     messages: &[crate::call_validation::ChatMessage],
 ) -> (Value, Option<String>) {
+    use super::render_extra::{is_context_role, render_context_message};
+
     let mut instructions = None;
-    let mut input_messages = Vec::new();
+    let mut input_messages: Vec<Value> = Vec::new();
     let mut system_count = 0;
+    // Unified buffer of Responses API content blocks to inject into the next user turn.
+    // Text-context blocks ({"type":"input_text",...}) and images deferred from tool
+    // results ({"type":"input_image",...}) both accumulate here.
+    let mut pending_user_content: Vec<Value> = Vec::new();
 
     for msg in messages {
         match msg.role.as_str() {
@@ -656,8 +662,38 @@ fn convert_to_responses_format(
                 }
                 instructions = Some(msg.content.content_text_only());
             }
+            role if is_context_role(role) => {
+                let Some(text) = render_context_message(msg) else { continue };
+                // Fold into the matching function_call_output by call_id when possible
+                // so the model receives file content as part of the correct tool output.
+                // Fall back to the last function_call_output if tool_call_id is absent.
+                let target = if !msg.tool_call_id.is_empty() {
+                    input_messages.iter_mut().rev().find(|m| {
+                        m["type"].as_str() == Some("function_call_output")
+                            && m["call_id"].as_str() == Some(msg.tool_call_id.as_str())
+                    })
+                } else {
+                    input_messages
+                        .last_mut()
+                        .filter(|m| m["type"].as_str() == Some("function_call_output"))
+                };
+                if let Some(item) = target {
+                    let existing = item["output"].as_str().unwrap_or("").to_string();
+                    item["output"] = json!(if existing.is_empty() {
+                        text
+                    } else {
+                        format!("{}\n\n{}", existing, text)
+                    });
+                } else {
+                    pending_user_content.push(json!({"type": "input_text", "text": text}));
+                }
+            }
             "user" => {
-                let content = msg_content_to_responses(&msg.content);
+                let mut content = msg_content_to_responses(&msg.content);
+                // Prepend pending blocks (context text + deferred tool images).
+                if !pending_user_content.is_empty() {
+                    content = [std::mem::take(&mut pending_user_content), content].concat();
+                }
                 input_messages.push(json!({
                     "type": "message",
                     "role": "user",
@@ -665,6 +701,14 @@ fn convert_to_responses_format(
                 }));
             }
             "assistant" => {
+                // Flush pending user content before an assistant turn so ordering is preserved.
+                if !pending_user_content.is_empty() {
+                    input_messages.push(json!({
+                        "type": "message",
+                        "role": "user",
+                        "content": std::mem::take(&mut pending_user_content),
+                    }));
+                }
                 // Re-send reasoning items from prior turns for multi-turn tool-calling.
                 // OpenAI Responses API reasoning items are opaque JSON with type="reasoning",
                 // and must be included in input[] for the model to continue its reasoning.
@@ -685,7 +729,7 @@ fn convert_to_responses_format(
                 }
                 if let Some(tool_calls) = &msg.tool_calls {
                     for tc in tool_calls {
-                        if !tc.id.starts_with("srvtoolu_") {  // Filter server-executed tools
+                        if !tc.id.starts_with("srvtoolu_") {
                             input_messages.push(json!({
                                 "type": "function_call",
                                 "call_id": tc.id,
@@ -697,17 +741,33 @@ fn convert_to_responses_format(
                 }
             }
             "tool" | "diff" => {
-                // Both "tool" and "diff" are tool results - filter server-executed
                 if !msg.tool_call_id.starts_with("srvtoolu_") {
                     input_messages.push(json!({
                         "type": "function_call_output",
                         "call_id": msg.tool_call_id,
                         "output": msg.content.content_text_only()
                     }));
+
+                    if let crate::call_validation::ChatContent::Multimodal(elements) = &msg.content {
+                        for el in elements.iter().filter(|el| el.is_image()) {
+                            pending_user_content.push(json!({
+                                "type": "input_image",
+                                "image_url": format!("data:{};base64,{}", el.m_type, el.m_content)
+                            }));
+                        }
+                    }
                 }
             }
             _ => {}
         }
+    }
+
+    if !pending_user_content.is_empty() {
+        input_messages.push(json!({
+            "type": "message",
+            "role": "user",
+            "content": pending_user_content,
+        }));
     }
 
     let input = if input_messages.is_empty() {

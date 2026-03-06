@@ -403,21 +403,51 @@ impl LlmWireAdapter for AnthropicAdapter {
 }
 
 fn convert_to_anthropic(messages: &[crate::call_validation::ChatMessage]) -> (Option<Value>, Vec<Value>) {
+    use super::render_extra::{is_context_role, render_context_message};
+
     let mut system_text = None;
     let mut result: Vec<Value> = Vec::new();
     let mut pending_tool_results: Vec<Value> = Vec::new();
+    // Context buffered when there are no pending tool results; merged into the
+    // next user message to avoid introducing extra consecutive user turns.
+    let mut pending_context_text: Vec<String> = Vec::new();
 
     for msg in messages {
         match msg.role.as_str() {
             "system" => {
                 system_text = Some(msg.content.content_text_only());
             }
+            role if is_context_role(role) => {
+                let Some(text) = render_context_message(msg) else { continue };
+                if !pending_tool_results.is_empty() {
+                    // Inside a tool-results group: add as a plain text content block
+                    // so it is delivered in the same user turn as the tool outputs.
+                    pending_tool_results.push(json!({"type": "text", "text": text}));
+                } else {
+                    // No open tool-results group: buffer for the next user message.
+                    pending_context_text.push(text);
+                }
+            }
             "user" | "assistant" => {
                 let mut content = Vec::new();
-                // Merge pending tool_results into user message to avoid consecutive user blocks
-                if msg.role == "user" && !pending_tool_results.is_empty() {
+                // Merge pending tool_results (and any trailing context blocks) into
+                // the user message to avoid consecutive user turns.
+                if msg.role == "user" && (!pending_tool_results.is_empty() || !pending_context_text.is_empty()) {
                     content.extend(pending_tool_results.drain(..));
+                    for text in pending_context_text.drain(..) {
+                        content.push(json!({"type": "text", "text": text}));
+                    }
                 } else {
+                    // Flush any open tool-results group before an assistant turn.
+                    if !pending_context_text.is_empty() && pending_tool_results.is_empty() {
+                        // Emit buffered context as a standalone user turn so it is
+                        // not lost when an assistant message follows without a user.
+                        let ctx: Vec<Value> = pending_context_text
+                            .drain(..)
+                            .map(|t| json!({"type": "text", "text": t}))
+                            .collect();
+                        result.push(json!({"role": "user", "content": ctx}));
+                    }
                     flush_tool_results(&mut result, &mut pending_tool_results);
                 }
                 if msg.role == "assistant" {
@@ -609,13 +639,37 @@ fn convert_to_anthropic(messages: &[crate::call_validation::ChatMessage]) -> (Op
                 result.push(json!({"role": msg.role, "content": content}));
             }
             "tool" | "diff" => {
-                if !msg.tool_call_id.starts_with("srvtoolu_") {  // Filter server-executed tool results
+                if !msg.tool_call_id.starts_with("srvtoolu_") {
                     let tool_text = msg.content.content_text_only();
                     let tool_text = if tool_text.is_empty() { "(empty)".to_string() } else { tool_text };
+
+                    // Anthropic supports images directly inside tool_result.content as
+                    // an array of content blocks.  Build an array when images are present
+                    // so the model can see them as part of the tool output.
+                    let content_value = match &msg.content {
+                        crate::call_validation::ChatContent::Multimodal(elements)
+                            if elements.iter().any(|el| el.is_image()) =>
+                        {
+                            let mut blocks = vec![json!({"type": "text", "text": tool_text})];
+                            for el in elements.iter().filter(|el| el.is_image()) {
+                                blocks.push(json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": el.m_type,
+                                        "data": el.m_content
+                                    }
+                                }));
+                            }
+                            json!(blocks)
+                        }
+                        _ => json!(tool_text),
+                    };
+
                     pending_tool_results.push(json!({
                         "type": "tool_result",
                         "tool_use_id": msg.tool_call_id,
-                        "content": tool_text
+                        "content": content_value
                     }));
                 }
             }
@@ -623,6 +677,12 @@ fn convert_to_anthropic(messages: &[crate::call_validation::ChatMessage]) -> (Op
         }
     }
 
+    // Flush any remaining context and tool results.
+    if !pending_context_text.is_empty() {
+        for text in pending_context_text.drain(..) {
+            pending_tool_results.push(json!({"type": "text", "text": text}));
+        }
+    }
     flush_tool_results(&mut result, &mut pending_tool_results);
 
     // Claude prompt caching breakpoints are handled on messages (not system).
