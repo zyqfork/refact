@@ -279,10 +279,11 @@ export const ProviderUsageIndicator: React.FC = () => {
                 </Text>
                 <Text size="1" color="gray">
                   {claudeData.extra_usage.is_enabled ? "enabled" : "disabled"}
-                  {" · "}${claudeData.extra_usage.used_credits.toFixed(2)}{" "}
-                  spent
+                  {" · "}${claudeData.extra_usage.used_credits.toFixed(2)} spent
                   {typeof claudeData.extra_usage.monthly_limit === "number"
-                    ? ` / $${claudeData.extra_usage.monthly_limit.toFixed(0)} limit`
+                    ? ` / $${claudeData.extra_usage.monthly_limit.toFixed(
+                        0,
+                      )} limit`
                     : " / unlimited"}
                 </Text>
               </Flex>

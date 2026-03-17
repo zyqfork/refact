@@ -69,11 +69,7 @@ import {
   ideAskQuestions,
 } from "../hooks/useEventBusForIDE";
 import { upsertToolCallIntoHistory } from "../features/History/historySlice";
-import {
-  isToolMessage,
-  modelsApi,
-  providersApi,
-} from "../services/refact";
+import { isToolMessage, modelsApi, providersApi } from "../services/refact";
 import { sendChatCommand } from "../services/refact/chatCommands";
 
 const AUTH_ERROR_MESSAGE =
@@ -724,7 +720,9 @@ startListening({
     listenerApi.dispatch(requestSseRefresh({ chatId: new_chat_id }));
     // Optimistically mark as waiting so the UI shows a generating state
     // immediately before the first SSE event arrives
-    listenerApi.dispatch(setIsWaitingForResponse({ id: new_chat_id, value: true }));
+    listenerApi.dispatch(
+      setIsWaitingForResponse({ id: new_chat_id, value: true }),
+    );
     listenerApi.dispatch(push({ name: "chat" }));
 
     if (port) {
@@ -741,7 +739,9 @@ startListening({
       } catch {
         // Regenerate failed — revert the waiting state and leave the id
         // unprocessed so a reconnect can retry
-        listenerApi.dispatch(setIsWaitingForResponse({ id: new_chat_id, value: false }));
+        listenerApi.dispatch(
+          setIsWaitingForResponse({ id: new_chat_id, value: false }),
+        );
       }
     } else {
       // No port means we can't regenerate, but still mark processed to
