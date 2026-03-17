@@ -65,14 +65,12 @@ import { push } from "../features/Pages/pagesSlice";
 import { CONFIG_PATH_URL, FULL_PATH_URL } from "../services/refact/consts";
 import {
   ideToolCallResponse,
-  ideForceReloadProjectTreeFiles,
   ideTaskDone,
   ideAskQuestions,
 } from "../hooks/useEventBusForIDE";
 import { upsertToolCallIntoHistory } from "../features/History/historySlice";
 import {
   isToolMessage,
-  isDiffMessage,
   modelsApi,
   providersApi,
 } from "../services/refact";
@@ -532,23 +530,6 @@ startListening({
       });
     } catch {
       // Silently ignore - backend may not support this command
-    }
-  },
-});
-
-startListening({
-  actionCreator: applyChatEvent,
-  effect: (action, listenerApi) => {
-    const state = listenerApi.getState();
-    if (state.config.host !== "jetbrains") return;
-    if (!window.postIntellijMessage) return;
-
-    const event = action.payload;
-    if (event.type === "message_added") {
-      const msg = event.message;
-      if (isToolMessage(msg) || isDiffMessage(msg)) {
-        window.postIntellijMessage(ideForceReloadProjectTreeFiles());
-      }
     }
   },
 });
