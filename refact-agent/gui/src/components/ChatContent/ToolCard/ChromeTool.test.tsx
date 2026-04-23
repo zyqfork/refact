@@ -107,8 +107,16 @@ describe("ChromeTool", () => {
     expect(screen.getByText("Request")).toBeInTheDocument();
     expect(screen.getByText("Results")).toBeInTheDocument();
     expect(screen.getByText("Execution Report")).toBeInTheDocument();
-    expect(screen.getAllByText((text) => text.includes("Navigated to https://example.com")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText((text) => text.includes("Filled <input> with 5 chars")).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText((text) =>
+        text.includes("Navigated to https://example.com"),
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText((text) =>
+        text.includes("Filled <input> with 5 chars"),
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   test("falls back to legacy command summary and text log", async () => {

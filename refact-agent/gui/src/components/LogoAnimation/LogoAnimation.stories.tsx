@@ -34,6 +34,8 @@ export default meta;
 
 type Story = StoryObj<typeof LogoAnimation>;
 
-export const Streaming: Story = { args: { isStreaming: true, isWaiting: false } };
+export const Streaming: Story = {
+  args: { isStreaming: true, isWaiting: false },
+};
 export const Waiting: Story = { args: { isStreaming: false, isWaiting: true } };
 export const Idle: Story = { args: { isStreaming: false, isWaiting: false } };

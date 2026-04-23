@@ -94,7 +94,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isBrowserActionResponse(value: unknown): value is BrowserActionResponse {
+function isBrowserActionResponse(
+  value: unknown,
+): value is BrowserActionResponse {
   return (
     isRecord(value) &&
     typeof value.ok === "boolean" &&
@@ -131,7 +133,10 @@ function describeTypedStep(step: Record<string, unknown>): string {
           : "element";
     return `Fill ${by}=${value}`;
   }
-  if ((action === "click" || action === "scroll_to") && isRecord(step.locator)) {
+  if (
+    (action === "click" || action === "scroll_to") &&
+    isRecord(step.locator)
+  ) {
     const locator = step.locator;
     const by = typeof locator.by === "string" ? locator.by : "locator";
     const value =
@@ -228,7 +233,9 @@ export const ChromeTool: React.FC<ChromeToolProps> = ({ toolCall }) => {
       return (
         <>
           Browser action
-          {stepDescriptions.length > 0 ? ` · ${stepDescriptions.join(", ")}` : ""}
+          {stepDescriptions.length > 0
+            ? ` · ${stepDescriptions.join(", ")}`
+            : ""}
           {moreCount > 0 ? ` · +${moreCount} more` : ""}
         </>
       );
@@ -312,7 +319,9 @@ export const ChromeTool: React.FC<ChromeToolProps> = ({ toolCall }) => {
       {typedStepsBlock && (
         <Box className={styles.section}>
           <Box className={styles.sectionLabel}>Request</Box>
-          <ShikiCodeBlock showLineNumbers={false}>{typedStepsBlock}</ShikiCodeBlock>
+          <ShikiCodeBlock showLineNumbers={false}>
+            {typedStepsBlock}
+          </ShikiCodeBlock>
         </Box>
       )}
 
@@ -328,7 +337,9 @@ export const ChromeTool: React.FC<ChromeToolProps> = ({ toolCall }) => {
         <Box className={styles.section}>
           <Box className={styles.sectionLabel}>Results</Box>
           <Box className={styles.logContent}>
-            <ShikiCodeBlock showLineNumbers={false}>{typedResultsBlock}</ShikiCodeBlock>
+            <ShikiCodeBlock showLineNumbers={false}>
+              {typedResultsBlock}
+            </ShikiCodeBlock>
           </Box>
         </Box>
       )}

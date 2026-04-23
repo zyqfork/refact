@@ -457,7 +457,12 @@ export const ChatForm: React.FC<ChatFormProps> = ({
         </Flex>
       )}
       {!globalError && !chatError && information && (
-        <InformationCallout mt="2" mb="2" onClick={onClearInformation} timeout={2000}>
+        <InformationCallout
+          mt="2"
+          mb="2"
+          onClick={onClearInformation}
+          timeout={2000}
+        >
           {information}
         </InformationCallout>
       )}

@@ -126,48 +126,48 @@ const CodexWindowRow: React.FC<{
 }> = ({ label, w, limitReached }) => {
   const resetText = formatResetAt(w.reset_at);
   return (
-  <Flex direction="column" gap="1">
-    <Flex justify="between" align="center">
-      <Flex align="center" gap="1">
+    <Flex direction="column" gap="1">
+      <Flex justify="between" align="center">
+        <Flex align="center" gap="1">
+          <Text size="1" color="gray">
+            {label}
+          </Text>
+          {limitReached && (
+            <Badge color="red" size="1">
+              Limit reached
+            </Badge>
+          )}
+        </Flex>
         <Text size="1" color="gray">
-          {label}
+          {Math.round(Math.max(0, Math.min(w.used_percent, 100)))}% used
+          {resetText ? ` · ${resetText}` : ""}
         </Text>
-        {limitReached && (
-          <Badge color="red" size="1">
-            Limit reached
-          </Badge>
-        )}
       </Flex>
-      <Text size="1" color="gray">
-        {Math.round(Math.max(0, Math.min(w.used_percent, 100)))}% used
-        {resetText ? ` · ${resetText}` : ""}
-      </Text>
-    </Flex>
-    <div
-      style={{
-        height: "3px",
-        width: "100%",
-        borderRadius: "2px",
-        background: "var(--gray-a4)",
-        overflow: "hidden",
-      }}
-    >
       <div
         style={{
-          height: "100%",
-          width: `${Math.max(0, Math.min(w.used_percent, 100))}%`,
+          height: "3px",
+          width: "100%",
           borderRadius: "2px",
-          background:
-            w.used_percent >= 90
-              ? "var(--red-9)"
-              : w.used_percent >= 70
-                ? "var(--orange-9)"
-                : "var(--green-9)",
-          transition: "width 0.3s ease",
+          background: "var(--gray-a4)",
+          overflow: "hidden",
         }}
-      />
-    </div>
-  </Flex>
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${Math.max(0, Math.min(w.used_percent, 100))}%`,
+            borderRadius: "2px",
+            background:
+              w.used_percent >= 90
+                ? "var(--red-9)"
+                : w.used_percent >= 70
+                  ? "var(--orange-9)"
+                  : "var(--green-9)",
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+    </Flex>
   );
 };
 
@@ -243,7 +243,9 @@ export const ProviderUsageIndicator: React.FC = () => {
   }, [hasLiveCodexData, codexUsage]);
 
   // Prefer live data; fall back to module-level cache (survives unmount/remount)
-  const stickyClaudeUsage = hasLiveClaudeData ? claudeUsage : lastKnownClaudeUsage;
+  const stickyClaudeUsage = hasLiveClaudeData
+    ? claudeUsage
+    : lastKnownClaudeUsage;
   const stickyCodexUsage = hasLiveCodexData ? codexUsage : lastKnownCodexUsage;
 
   const hasClaudeData = !!(

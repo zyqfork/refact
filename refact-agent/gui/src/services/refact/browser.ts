@@ -191,9 +191,7 @@ export type BrowserLocator = {
   within?: string;
 };
 
-export type BrowserTabTarget =
-  | { type: "active" }
-  | { type: "id"; id: string };
+export type BrowserTabTarget = { type: "active" } | { type: "id"; id: string };
 
 export type BrowserStep = {
   action: string;
@@ -485,7 +483,10 @@ export const browserApi = createApi({
         return { data: response.data as BrowserContextEstimateResponse };
       },
     }),
-    browserAction: builder.mutation<BrowserActionResponse, BrowserActionRequest>({
+    browserAction: builder.mutation<
+      BrowserActionResponse,
+      BrowserActionRequest
+    >({
       async queryFn(args, api, extraOptions, baseQuery) {
         const state = api.getState() as RootState;
         const port = state.config.lspPort as unknown as number;
