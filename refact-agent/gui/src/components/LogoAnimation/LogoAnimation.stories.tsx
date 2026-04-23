@@ -1,7 +1,6 @@
 import React from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import { LogoAnimation } from "./LogoAnimation";
-import { sizeValues, defaultSize } from "./types";
 import { Theme } from "../Theme";
 import { Provider } from "react-redux";
 import { setUpStore } from "../../app/store";
@@ -22,13 +21,6 @@ const App: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 const meta: Meta<typeof LogoAnimation> = {
   title: "Logo Animation",
   component: LogoAnimation,
-  argTypes: {
-    size: {
-      defaultValue: defaultSize,
-      control: "select",
-      options: sizeValues,
-    },
-  },
   decorators: [
     (Story) => (
       <App>
@@ -42,4 +34,6 @@ export default meta;
 
 type Story = StoryObj<typeof LogoAnimation>;
 
-export const Primary: Story = {};
+export const Streaming: Story = { args: { isStreaming: true, isWaiting: false } };
+export const Waiting: Story = { args: { isStreaming: false, isWaiting: true } };
+export const Idle: Story = { args: { isStreaming: false, isWaiting: false } };

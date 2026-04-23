@@ -1,57 +1,31 @@
-import React, { useEffect, useMemo } from "react";
-import {
-  useLottie,
-  type LottieOptions,
-  type LottieComponentProps,
-} from "lottie-react";
-import logoAnimationData from "./animationData.json";
-import { defaultSize, type AnimationSize } from "./types";
+import React from "react";
+import styles from "./LogoAnimation.module.css";
 
-export type LogoAnimationProps = Omit<
-  LottieComponentProps,
-  "animationData" | "size"
-> & {
-  size?: AnimationSize;
+export type LogoAnimationProps = {
   isWaiting: boolean;
   isStreaming: boolean;
+  size?: "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 };
 
-function sizeToCssVariable(size: AnimationSize) {
-  const sizeString = `var(--font-size-${size}, calc(16px * var(--scaling, 1))`;
-  return { width: sizeString, height: sizeString };
-}
-
-const EYE_ANIMATION_FRAMES: [number, number] = [0, 70];
-const CHAR_ANIMATION_FRAMES: [number, number] = [79, 213];
-const SPIN_ANIMATION_FRAMES: [number, number] = [214, 254];
-
 export const LogoAnimation: React.FC<LogoAnimationProps> = ({
-  size = defaultSize,
   isWaiting,
   isStreaming,
-  ...props
+  size = "8",
 }) => {
-  const options: LottieOptions = useMemo(() => {
-    const sizeProps = sizeToCssVariable(size);
-    const styleProps = { ...sizeProps, ...props.style };
-    return {
-      ...props,
-      style: styleProps,
-      animationData: logoAnimationData,
-      loop: isStreaming || isWaiting,
-    };
-  }, [isStreaming, isWaiting, props, size]);
-
-  const { View, playSegments } = useLottie(options);
-  useEffect(() => {
-    if (isWaiting && !isStreaming) {
-      playSegments([EYE_ANIMATION_FRAMES, SPIN_ANIMATION_FRAMES], true);
-    } else if (isStreaming) {
-      playSegments(CHAR_ANIMATION_FRAMES, true);
-    }
-  }, [isStreaming, isWaiting, playSegments]);
-
   if (!isStreaming && !isWaiting) return false;
 
-  return View;
+  const style = { fontSize: `var(--font-size-${size})` };
+
+  if (isStreaming) {
+    return (
+      <span className={`${styles.root} ${styles.streaming}`} style={style} />
+    );
+  }
+
+  return (
+    <span className={styles.waiting} style={style}>
+      <span className={styles.dot} />
+      <span className={styles.dot} />
+    </span>
+  );
 };
