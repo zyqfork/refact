@@ -58,14 +58,11 @@ impl MCPTransportInitializer for IntegrationMCPSse {
         session: Arc<AMutex<Box<dyn crate::integrations::sessions::IntegrationSession>>>,
         handler: McpClientHandler,
     ) -> Option<McpRunningService> {
-        let config = StreamableHttpClientTransportConfig {
-            uri: Arc::<str>::from(self.cfg.mcp_url.trim()),
-            retry_config: Arc::new(ExponentialBackoff {
-                max_times: Some(3),
-                base_duration: Duration::from_millis(500),
-            }),
-            ..Default::default()
-        };
+        let mut retry_config = ExponentialBackoff::default();
+        retry_config.max_times = Some(3);
+        retry_config.base_duration = Duration::from_millis(500);
+        let mut config = StreamableHttpClientTransportConfig::with_uri(self.cfg.mcp_url.trim());
+        config.retry_config = Arc::new(retry_config);
 
         if self.cfg.auth.auth_type == AuthType::Oauth2Pkce {
             let auth_client = build_auth_client_for_mcp(
