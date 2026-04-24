@@ -110,18 +110,17 @@ impl LlmWireAdapter for RefactAdapter {
                 "anthropic_effort" => {
                     match &req.reasoning {
                         crate::llm::params::ReasoningIntent::BudgetTokens(_n) => {
-                            // Effort-mode models (adaptive thinking) don't support budget_tokens;
-                            // map explicit budget to max effort level.
                             body["thinking"] = json!({"type": "adaptive"});
                             body["output_config"] = json!({"effort": "high"});
                         }
                         _ => {
                             if let Some(effort) = req.reasoning.to_anthropic_effort() {
-                                let effort = if effort == "max" {
-                                    "high"  // litellm doesn't support "max" reasoning type yet 
+                                let effort = if effort == "max" || effort == "xhigh" {
+                                    "high"  // litellm doesn't support "max"/"xhigh" yet
                                 } else {
                                     effort
                                 };
+                                body["thinking"] = json!({"type": "adaptive"});
                                 body["reasoning_effort"] = json!(effort);
                                 body["output_config"] = json!({"effort": effort});
                             }
@@ -302,6 +301,25 @@ impl LlmWireAdapter for RefactAdapter {
                                     deltas.push(LlmStreamDelta::AddCitation {
                                         citation: citation.clone(),
                                     });
+                                }
+                            }
+                        }
+                        // Anthropic web_search_tool_result blocks via LiteLLM — streamed as
+                        // delta.provider_specific_fields.web_search_results (array).
+                        // These server content blocks must be stored in ChatMessage.server_content_blocks
+                        // so they can eventually be forwarded back to Anthropic in multi-turn.
+                        // Note: the refact wire currently strips thinking_blocks for turns
+                        // that had srvtoolu_ tool calls (see convert_messages_to_refact), because
+                        // LiteLLM does not yet forward server_content_blocks to Anthropic on replay.
+                        // See: https://github.com/BerriAI/litellm/issues/22240
+                        if let Some(web_results) = psf.get("web_search_results") {
+                            if let Some(arr) = web_results.as_array() {
+                                for block in arr {
+                                    if !block.is_null() {
+                                        deltas.push(LlmStreamDelta::AddServerContentBlock {
+                                            block: block.clone(),
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -492,29 +510,46 @@ fn convert_messages_to_refact(messages: &[crate::call_validation::ChatMessage], 
                         // dropped keys, etc.), or signatures may fail validation on multi-turn.
                         // Only filter out non-Anthropic block types (e.g. OpenAI Responses
                         // reasoning items) while preserving the raw JSON for valid blocks.
-                        let keep: Vec<Value> = blocks
-                            .iter()
-                            .filter(|block| {
-                                let is_anthropic_block = matches!(
-                                    block.get("type").and_then(|t| t.as_str()),
-                                    Some("thinking") | Some("redacted_thinking")
-                                );
-                                if !is_anthropic_block {
-                                    return false;
-                                }
+                        //
+                        // When an assistant turn used Anthropic's internal web_search tool,
+                        // the response contained server_content_blocks (server_tool_use +
+                        // web_search_tool_result) interleaved with thinking blocks. The
+                        // refact/LiteLLM wire cannot forward these blocks back to Anthropic:
+                        // LiteLLM converts server_tool_use → delta.tool_calls (srvtoolu_ IDs)
+                        // but does not reconstruct the full Anthropic content array on replay
+                        // (see https://github.com/BerriAI/litellm/issues/22240). Re-sending
+                        // thinking_blocks without their paired server_content_blocks causes
+                        // Anthropic to reject with "thinking blocks cannot be modified". Strip
+                        // thinking_blocks for such turns (detected by srvtoolu_ in tool_calls)
+                        // so that multi-turn continues without a hard error.
+                        let has_server_tool_calls = msg.tool_calls.as_ref()
+                            .is_some_and(|tcs| tcs.iter().any(|tc| tc.id.starts_with("srvtoolu_")));
 
-                                // Anthropic validates integrity of thinking blocks.
-                                // Blocks without a non-empty signature are invalid for replay.
-                                block
-                                    .get("signature")
-                                    .and_then(|s| s.as_str())
-                                    .is_some_and(|s| !s.trim().is_empty())
-                            })
-                            .cloned()
-                            .collect();
+                        if !has_server_tool_calls {
+                            let keep: Vec<Value> = blocks
+                                .iter()
+                                .filter(|block| {
+                                    let is_anthropic_block = matches!(
+                                        block.get("type").and_then(|t| t.as_str()),
+                                        Some("thinking") | Some("redacted_thinking")
+                                    );
+                                    if !is_anthropic_block {
+                                        return false;
+                                    }
 
-                        if !keep.is_empty() {
-                            obj["thinking_blocks"] = Value::Array(keep);
+                                    // Anthropic validates integrity of thinking blocks.
+                                    // Blocks without a non-empty signature are invalid for replay.
+                                    block
+                                        .get("signature")
+                                        .and_then(|s| s.as_str())
+                                        .is_some_and(|s| !s.trim().is_empty())
+                                })
+                                .cloned()
+                                .collect();
+
+                            if !keep.is_empty() {
+                                obj["thinking_blocks"] = Value::Array(keep);
+                            }
                         }
                     }
                 }
@@ -1824,6 +1859,93 @@ mod tests {
     }
 
     #[test]
+    fn test_thinking_blocks_stripped_when_srvtoolu_present() {
+        use crate::call_validation::{ChatContent, ChatMessage, ChatToolCall, ChatToolFunction};
+
+        // When an assistant turn used Anthropic's internal web_search (server tool),
+        // LiteLLM streams the server_tool_use as delta.tool_calls with srvtoolu_ prefix.
+        // The paired web_search_tool_result (server_content_blocks) cannot be forwarded
+        // through LiteLLM, so thinking_blocks from that turn are invalid for multi-turn
+        // replay (Anthropic would reject with "thinking blocks cannot be modified").
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "Search for X".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::SimpleText("Found it.".to_string()),
+                thinking_blocks: Some(vec![
+                    json!({"type": "thinking", "thinking": "Let me search", "signature": "sig1"}),
+                    json!({"type": "thinking", "thinking": "Got results", "signature": "sig2"}),
+                ]),
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "srvtoolu_web_search_123".to_string(),
+                    tool_type: "function".to_string(),
+                    extra_content: None,
+                    function: ChatToolFunction {
+                        name: "web_search".to_string(),
+                        arguments: r#"{"query": "X"}"#.to_string(),
+                    },
+                    index: None,
+                }]),
+                ..Default::default()
+            },
+            ChatMessage::new("user".to_string(), "Tell me more".to_string()),
+        ];
+
+        let converted = convert_messages_to_refact(&messages, "claude-3-5-sonnet", Some("anthropic_budget"));
+
+        let assistant = &converted[1];
+        assert!(assistant.get("thinking_blocks").is_none(),
+            "thinking_blocks must be stripped when srvtoolu_ tool calls present (web_search without server_content_blocks)");
+    }
+
+    #[test]
+    fn test_thinking_blocks_kept_without_srvtoolu() {
+        use crate::call_validation::{ChatContent, ChatMessage};
+
+        // Regular thinking (no server tools) should pass through unchanged.
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "What is 2+2?".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::SimpleText("4".to_string()),
+                thinking_blocks: Some(vec![
+                    json!({"type": "thinking", "thinking": "simple math", "signature": "sig1"}),
+                ]),
+                tool_calls: None,
+                ..Default::default()
+            },
+            ChatMessage::new("user".to_string(), "And 3+3?".to_string()),
+        ];
+
+        let converted = convert_messages_to_refact(&messages, "claude-3-5-sonnet", Some("anthropic_budget"));
+
+        let assistant = &converted[1];
+        assert!(assistant.get("thinking_blocks").is_some(),
+            "thinking_blocks should be kept when no srvtoolu_ tool calls are present");
+        let blocks = assistant["thinking_blocks"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["signature"], "sig1");
+    }
+
+    #[test]
+    fn test_parse_web_search_results_from_provider_specific_fields() {
+        let adapter = RefactAdapter;
+        let chunk = r#"{"choices":[{"delta":{"provider_specific_fields":{"web_search_results":[{"type":"web_search_tool_result","tool_use_id":"srvtoolu_abc","content":[{"type":"web_search_result","url":"https://example.com","title":"Example","encrypted_content":"enc123"}]}]}}}]}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        let server_blocks: Vec<_> = deltas.iter()
+            .filter(|d| matches!(d, LlmStreamDelta::AddServerContentBlock { .. }))
+            .collect();
+        assert_eq!(server_blocks.len(), 1, "Should capture web_search_tool_result as server content block");
+
+        if let Some(LlmStreamDelta::AddServerContentBlock { block }) = server_blocks.first() {
+            assert_eq!(block.get("type").and_then(|v| v.as_str()), Some("web_search_tool_result"));
+            assert_eq!(block.get("tool_use_id").and_then(|v| v.as_str()), Some("srvtoolu_abc"));
+        }
+    }
+
+    #[test]
     fn test_encrypted_citations_always_stripped_in_refact() {
         use crate::call_validation::{ChatContent, ChatMessage};
 
@@ -1857,5 +1979,41 @@ mod tests {
         assert_eq!(citations.len(), 1,
             "Encrypted citations should always be stripped in Refact wire");
         assert_eq!(citations[0]["type"], "char_location");
+    }
+
+    fn anthropic_effort_settings() -> AdapterSettings {
+        AdapterSettings {
+            model_name: "claude-opus-4-7".to_string(),
+            supports_reasoning: true,
+            reasoning_type: Some("anthropic_effort".to_string()),
+            ..default_settings()
+        }
+    }
+
+    #[test]
+    fn test_anthropic_effort_medium_sends_adaptive() {
+        use crate::llm::params::ReasoningIntent;
+        let adapter = RefactAdapter;
+        let req = LlmRequest::new(
+            "claude-opus-4-7".to_string(),
+            vec![ChatMessage::new("user".to_string(), "hi".to_string())],
+        ).with_reasoning(ReasoningIntent::Medium);
+        let http = adapter.build_http(&req, &anthropic_effort_settings()).unwrap();
+        assert_eq!(http.body["thinking"]["type"], "adaptive");
+        assert_eq!(http.body["output_config"]["effort"], "medium");
+    }
+
+    #[test]
+    fn test_anthropic_effort_budget_tokens_sends_adaptive() {
+        use crate::llm::params::ReasoningIntent;
+        let adapter = RefactAdapter;
+        let req = LlmRequest::new(
+            "claude-opus-4-7".to_string(),
+            vec![ChatMessage::new("user".to_string(), "hi".to_string())],
+        ).with_reasoning(ReasoningIntent::BudgetTokens(5000));
+        let http = adapter.build_http(&req, &anthropic_effort_settings()).unwrap();
+        assert_eq!(http.body["thinking"]["type"], "adaptive");
+        assert!(http.body["thinking"].get("budget_tokens").is_none());
+        assert_eq!(http.body["output_config"]["effort"], "high");
     }
 }

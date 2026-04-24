@@ -26,14 +26,26 @@ pub fn to_css_selector(locator: &BrowserLocator) -> Option<String> {
 
 fn css_escape_ident(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 8);
-    for (i, ch) in s.chars().enumerate() {
+    let mut chars = s.chars().enumerate().peekable();
+    while let Some((i, ch)) = chars.next() {
         if ch == '\0' {
             result.push_str("\\fffd ");
-        } else if i == 0 && ch.is_ascii_digit() {
-            result.push('\\');
+        } else if ch.is_ascii_digit() && i == 0 {
+            result.push_str(&format!("\\{:x} ", ch as u32));
+        } else if i == 0 && ch == '-' {
+            if let Some((_, next_ch)) = chars.peek().copied() {
+                if next_ch.is_ascii_digit() {
+                    result.push('-');
+                    result.push_str(&format!("\\{:x} ", next_ch as u32));
+                    chars.next();
+                    continue;
+                }
+            }
+            result.push('-');
+        } else if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || (ch as u32) >= 0x80 {
             result.push(ch);
-        } else if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-            result.push(ch);
+        } else if (ch as u32) < 0x20 || ch == '\x7f' {
+            result.push_str(&format!("\\{:x} ", ch as u32));
         } else {
             result.push('\\');
             result.push(ch);
@@ -87,14 +99,6 @@ pub fn generate_resolve_js(locator: &BrowserLocator) -> String {
 
 pub fn generate_find_fragment_js(locator: &BrowserLocator) -> String {
     let find_code = generate_find_js(&locator.strategy);
-    let scope_code = match &locator.within {
-        Some(sel) => format!(
-            "var scope = document.querySelector({});\n\
-             if (!scope) {{ var elements = []; }}",
-            js_string_literal(sel),
-        ),
-        None => "var scope = document;".to_string(),
-    };
     let nth_code = match locator.nth {
         Some(n) => format!(
             "if (elements.length > {n}) {{ elements = [elements[{n}]]; }}\n\
@@ -102,7 +106,15 @@ pub fn generate_find_fragment_js(locator: &BrowserLocator) -> String {
         ),
         None => String::new(),
     };
-    format!("{scope_code}\n  {find_code}\n  {nth_code}")
+    match &locator.within {
+        Some(sel) => format!(
+            "var elements = [];\n\
+             var scope = document.querySelector({});\n\
+             if (scope) {{\n  {find_code}\n  {nth_code}\n}}",
+            js_string_literal(sel),
+        ),
+        None => format!("var scope = document;\n  {find_code}\n  {nth_code}"),
+    }
 }
 
 fn generate_find_js(strategy: &LocatorStrategy) -> String {
@@ -304,7 +316,21 @@ pub fn js_click_element() -> &'static str {
   var el = window.__refact_resolved_el;
   if (!el) return JSON.stringify({error: 'No resolved element'});
   el.scrollIntoView({block: 'center', behavior: 'instant'});
-  el.click();
+  var rect = el.getBoundingClientRect();
+  var cx = rect.left + rect.width / 2;
+  var cy = rect.top + rect.height / 2;
+  var opts = {bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0};
+  var events = ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+  for (var i = 0; i < events.length; i++) {
+    var type = events[i];
+    var ev;
+    if (type.indexOf('pointer') === 0 && typeof PointerEvent === 'function') {
+      ev = new PointerEvent(type, opts);
+    } else {
+      ev = new MouseEvent(type, opts);
+    }
+    el.dispatchEvent(ev);
+  }
   return JSON.stringify({ok: true});
 })()"#
 }
@@ -690,7 +716,22 @@ mod tests {
 
     #[test]
     fn test_css_escape_ident_starts_with_digit() {
-        assert_eq!(css_escape_ident("1st"), "\\1st");
+        assert_eq!(css_escape_ident("1st"), "\\31 st");
+    }
+
+    #[test]
+    fn test_css_escape_ident_starts_with_dash_digit() {
+        assert_eq!(css_escape_ident("-1st"), "-\\31 st");
+    }
+
+    #[test]
+    fn test_css_escape_ident_digit_only_first() {
+        assert_eq!(css_escape_ident("a1b"), "a1b");
+    }
+
+    #[test]
+    fn test_css_escape_ident_unicode_preserved() {
+        assert_eq!(css_escape_ident("café"), "café");
     }
 
     #[test]
@@ -910,7 +951,10 @@ mod tests {
         let js = js_click_element();
         assert!(js.contains("__refact_resolved_el"));
         assert!(js.contains("scrollIntoView"));
-        assert!(js.contains(".click()"));
+        assert!(js.contains("dispatchEvent"));
+        assert!(js.contains("pointerdown"));
+        assert!(js.contains("mouseup"));
+        assert!(js.contains("'click'"));
     }
 
     #[test]

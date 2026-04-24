@@ -104,6 +104,12 @@ impl LlmRequest {
         self.previous_response_id = previous_response_id;
         self
     }
+
+    #[cfg(test)]
+    pub fn with_extra_body(mut self, extra: std::collections::HashMap<String, Value>) -> Self {
+        self.extra_body = Some(extra.into_iter().collect());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

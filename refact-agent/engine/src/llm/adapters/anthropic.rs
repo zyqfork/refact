@@ -139,8 +139,6 @@ impl LlmWireAdapter for AnthropicAdapter {
             if is_effort_mode {
                 match &req.reasoning {
                     crate::llm::params::ReasoningIntent::BudgetTokens(_n) => {
-                        // Effort-mode models (adaptive thinking) don't support budget_tokens;
-                        // map explicit budget to max effort level.
                         body["thinking"] = json!({"type": "adaptive"});
                         body["output_config"] = json!({"effort": "high"});
                     }
@@ -172,12 +170,28 @@ impl LlmWireAdapter for AnthropicAdapter {
             claude_code_compat::inject_billing_block(&mut body);
             claude_code_compat::inject_metadata(&mut body);
         }
+
+        if let Some(extra) = &req.extra_body {
+            if let Some(obj) = body.as_object_mut() {
+                for (k, v) in extra {
+                    if PROTECTED_FIELDS.contains(&k.as_str()) {
+                        tracing::warn!("extra_body attempted to override protected field '{}', ignoring", k);
+                        continue;
+                    }
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
         {
             let mut betas: Vec<&str> = Vec::new();
-            if body.get("thinking").and_then(|t| t.get("type")).and_then(|t| t.as_str()) == Some("enabled") {
+            let thinking_type = body.get("thinking").and_then(|t| t.get("type")).and_then(|t| t.as_str());
+            if thinking_type == Some("enabled") {
                 if !betas.contains(&INTERLEAVED_THINKING_BETA) {
                     betas.push(INTERLEAVED_THINKING_BETA);
                 }
+            }
+            if matches!(thinking_type, Some("enabled") | Some("adaptive")) {
                 if !betas.contains(&EFFORT) {
                     betas.push(EFFORT);
                 }
@@ -196,18 +210,6 @@ impl LlmWireAdapter for AnthropicAdapter {
                     HeaderValue::from_str(&beta_value)
                         .map_err(|e| format!("invalid anthropic-beta: {e}"))?,
                 );
-            }
-        }
-
-        if let Some(extra) = &req.extra_body {
-            if let Some(obj) = body.as_object_mut() {
-                for (k, v) in extra {
-                    if PROTECTED_FIELDS.contains(&k.as_str()) {
-                        tracing::warn!("extra_body attempted to override protected field '{}', ignoring", k);
-                        continue;
-                    }
-                    obj.insert(k.clone(), v.clone());
-                }
             }
         }
 
@@ -2193,5 +2195,64 @@ mod tests {
             b.get("text").and_then(|t| t.as_str()).map_or(false, |t| t.contains("AGENTS.md"))
         });
         assert!(has_content, "CC mode sanitization should preserve file header");
+    }
+
+    fn effort_settings() -> AdapterSettings {
+        AdapterSettings {
+            reasoning_type: Some("anthropic_effort".to_string()),
+            ..settings()
+        }
+    }
+
+    #[test]
+    fn test_effort_mode_medium_sends_adaptive() {
+        use crate::llm::params::ReasoningIntent;
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude-opus-4-7".to_string(),
+            vec![ChatMessage::new("user".to_string(), "hi".to_string())],
+        ).with_reasoning(ReasoningIntent::Medium);
+        let http = adapter.build_http(&req, &effort_settings()).unwrap();
+        assert_eq!(http.body["thinking"]["type"], "adaptive");
+        assert!(http.body["thinking"].get("budget_tokens").is_none());
+        assert_eq!(http.body["output_config"]["effort"], "medium");
+        let beta = http.headers.get("anthropic-beta").unwrap().to_str().unwrap();
+        assert!(beta.contains(EFFORT));
+        assert!(!beta.contains(INTERLEAVED_THINKING_BETA));
+    }
+
+    #[test]
+    fn test_effort_mode_budget_tokens_sends_adaptive() {
+        use crate::llm::params::ReasoningIntent;
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude-opus-4-7".to_string(),
+            vec![ChatMessage::new("user".to_string(), "hi".to_string())],
+        ).with_reasoning(ReasoningIntent::BudgetTokens(5000));
+        let http = adapter.build_http(&req, &effort_settings()).unwrap();
+        assert_eq!(http.body["thinking"]["type"], "adaptive");
+        assert!(http.body["thinking"].get("budget_tokens").is_none());
+        assert_eq!(http.body["output_config"]["effort"], "high");
+        let beta = http.headers.get("anthropic-beta").unwrap().to_str().unwrap();
+        assert!(beta.contains(EFFORT));
+        assert!(!beta.contains(INTERLEAVED_THINKING_BETA));
+    }
+
+    #[test]
+    fn test_effort_mode_extra_body_thinking_override_updates_betas() {
+        use crate::llm::params::ReasoningIntent;
+        use std::collections::HashMap;
+        let adapter = AnthropicAdapter;
+        let mut extra = HashMap::new();
+        extra.insert("thinking".to_string(), json!({"type": "enabled", "budget_tokens": 4096}));
+        let req = LlmRequest::new(
+            "claude-opus-4-7".to_string(),
+            vec![ChatMessage::new("user".to_string(), "hi".to_string())],
+        ).with_reasoning(ReasoningIntent::Medium).with_extra_body(extra);
+        let http = adapter.build_http(&req, &effort_settings()).unwrap();
+        assert_eq!(http.body["thinking"]["type"], "enabled");
+        let beta = http.headers.get("anthropic-beta").unwrap().to_str().unwrap();
+        assert!(beta.contains(INTERLEAVED_THINKING_BETA));
+        assert!(beta.contains(EFFORT));
     }
 }

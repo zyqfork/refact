@@ -14,6 +14,29 @@ use crate::integrations::browser_models::*;
 use crate::integrations::browser_runtime::BrowserRuntime;
 
 const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5_000;
+const MAX_WAIT_TIMEOUT_MS: u64 = 60_000;
+const MAX_WAIT_SECONDS: f64 = 60.0;
+const MIN_WAIT_SECONDS: f64 = 0.0;
+
+const MAX_DOM_SNAPSHOT_CHARS: usize = 100_000;
+const MAX_EXTRACT_LINKS: usize = 500;
+const ACCESSIBILITY_MAX_NODES: usize = 1_000;
+const ACCESSIBILITY_MAX_DEPTH: u32 = 6;
+const ACCESSIBILITY_MAX_CHILDREN: u32 = 20;
+
+fn clamp_timeout_ms(requested: Option<u64>) -> u64 {
+    requested.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS).min(MAX_WAIT_TIMEOUT_MS)
+}
+
+fn clamp_wait_seconds(requested: f64) -> f64 {
+    if requested.is_nan() || requested.is_infinite() || requested < MIN_WAIT_SECONDS {
+        MIN_WAIT_SECONDS
+    } else if requested > MAX_WAIT_SECONDS {
+        MAX_WAIT_SECONDS
+    } else {
+        requested
+    }
+}
 
 const DEFAULT_POLL_INTERVAL_MS: u64 = 200;
 
@@ -100,9 +123,10 @@ pub fn execute_steps(tab: &Tab, steps: &[BrowserStep]) -> ExecutionReport {
 
     let mut results = Vec::new();
     let mut all_ok = true;
+    let mut pre_step_url: Option<String> = Some(tab.get_url());
 
     for (idx, step) in steps.iter().enumerate() {
-        let result = execute_single_step(tab, step, idx);
+        let result = execute_single_step(tab, step, idx, pre_step_url.as_deref());
         let is_non_fatal = matches!(step, BrowserStep::ClickIfExists { .. });
         if !result.ok && !is_non_fatal {
             all_ok = false;
@@ -112,6 +136,7 @@ pub fn execute_steps(tab: &Tab, steps: &[BrowserStep]) -> ExecutionReport {
         if result.ok && is_navigation_step(step) {
             let _ = tab.evaluate(INSPECT_ELEMENT_JS, false);
         }
+        pre_step_url = Some(tab.get_url());
         results.push(result);
     }
 
@@ -135,7 +160,7 @@ pub fn is_tab_management_step(step: &BrowserStep) -> bool {
 
 pub fn execute_step(tab: &Tab, step: &BrowserStep, idx: usize) -> StepResult {
     let _ = tab.evaluate(INSPECT_ELEMENT_JS, false);
-    let result = execute_single_step(tab, step, idx);
+    let result = execute_single_step(tab, step, idx, None);
     if result.ok && is_navigation_step(step) {
         let _ = tab.evaluate(INSPECT_ELEMENT_JS, false);
     }
@@ -249,6 +274,7 @@ pub fn execute_steps_with_runtime(
 
     let mut results = Vec::new();
     let mut all_ok = true;
+    let mut pre_step_url: Option<String> = current_tab.as_ref().map(|t| t.get_url());
 
     for (idx, step) in steps.iter().enumerate() {
         let result = match step {
@@ -344,7 +370,7 @@ pub fn execute_steps_with_runtime(
             }
             other => {
                 match &current_tab {
-                    Some(tab) => execute_single_step(tab, other, idx),
+                    Some(tab) => execute_single_step(tab, other, idx, pre_step_url.as_deref()),
                     None => StepResult::failure(idx, "No active tab", "No tab available. Use OpenTab first."),
                 }
             }
@@ -361,6 +387,7 @@ pub fn execute_steps_with_runtime(
                 let _ = tab.evaluate(INSPECT_ELEMENT_JS, false);
             }
         }
+        pre_step_url = current_tab.as_ref().map(|t| t.get_url());
         results.push(result);
     }
 
@@ -386,7 +413,7 @@ fn is_navigation_step(step: &BrowserStep) -> bool {
     )
 }
 
-fn execute_single_step(tab: &Tab, step: &BrowserStep, idx: usize) -> StepResult {
+fn execute_single_step(tab: &Tab, step: &BrowserStep, idx: usize, pre_step_url: Option<&str>) -> StepResult {
     match step {
         BrowserStep::Navigate { url } => step_navigate(tab, idx, url),
         BrowserStep::Reload => step_nav_js(tab, idx, "location.reload()", "Reloaded page"),
@@ -419,27 +446,27 @@ fn execute_single_step(tab: &Tab, step: &BrowserStep, idx: usize) -> StepResult 
         BrowserStep::Uncheck { locator } => step_check_uncheck(tab, idx, locator, false),
 
         BrowserStep::WaitForSelector { locator, timeout_ms } => {
-            step_wait_for_selector(tab, idx, locator, timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS))
+            step_wait_for_selector(tab, idx, locator, clamp_timeout_ms(*timeout_ms))
         }
         BrowserStep::WaitForNavigation { timeout_ms } => {
-            step_wait_for_navigation(tab, idx, timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS))
+            step_wait_for_navigation(tab, idx, clamp_timeout_ms(*timeout_ms), pre_step_url)
         }
         BrowserStep::WaitForUrl { contains, timeout_ms } => {
-            step_wait_for_url(tab, idx, contains, timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS))
+            step_wait_for_url(tab, idx, contains, clamp_timeout_ms(*timeout_ms))
         }
         BrowserStep::WaitForText { text, timeout_ms } => {
-            step_wait_for_text(tab, idx, text, timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS))
+            step_wait_for_text(tab, idx, text, clamp_timeout_ms(*timeout_ms))
         }
         BrowserStep::WaitForNetworkIdle { timeout_ms } => {
-            step_wait_seconds(idx, timeout_ms.unwrap_or(2000) as f64 / 1000.0)
+            step_wait_for_network_idle(tab, idx, clamp_timeout_ms(*timeout_ms))
         }
         BrowserStep::WaitForElementHidden { locator, timeout_ms } => {
-            step_wait_for_element_hidden(tab, idx, locator, timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS))
+            step_wait_for_element_hidden(tab, idx, locator, clamp_timeout_ms(*timeout_ms))
         }
         BrowserStep::WaitForElementStable { locator, timeout_ms } => {
-            step_wait_for_element_stable(tab, idx, locator, timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS))
+            step_wait_for_element_stable(tab, idx, locator, clamp_timeout_ms(*timeout_ms))
         }
-        BrowserStep::WaitSeconds { seconds } => step_wait_seconds(idx, *seconds),
+        BrowserStep::WaitSeconds { seconds } => step_wait_seconds(idx, clamp_wait_seconds(*seconds)),
 
         BrowserStep::GetText { locator } => step_get_text(tab, idx, locator),
         BrowserStep::GetHtml { locator } => step_get_html(tab, idx, locator),
@@ -662,6 +689,65 @@ fn step_clear(tab: &Tab, idx: usize, locator: &BrowserLocator, verify: bool) -> 
         Err(e) => return StepResult::failure(idx, "Clear: element resolution failed", e),
     };
 
+    match info.field_kind {
+        FieldKind::Checkbox | FieldKind::Radio => {
+            return StepResult::failure(
+                idx,
+                "Clear not supported for this field",
+                format!("Use uncheck instead for <{}> ({:?})", info.tag, info.field_kind),
+            );
+        }
+        FieldKind::FileInput => {
+            return StepResult::failure(
+                idx,
+                "Clear not supported for file inputs",
+                "Security restrictions prevent clearing file inputs programmatically".to_string(),
+            );
+        }
+        FieldKind::HiddenInput => {
+            return StepResult::failure(
+                idx,
+                "Clear not supported for hidden inputs",
+                format!("Element <{}> is a hidden input", info.tag),
+            );
+        }
+        FieldKind::Select => {
+            let js = r#"(function() {
+  var el = window.__refact_resolved_el;
+  if (!el || el.tagName !== 'SELECT') return JSON.stringify({error: 'Not a SELECT element'});
+  var hadEmpty = false;
+  el.selectedIndex = -1;
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === '' || el.options[i].text.trim() === '') {
+      el.selectedIndex = i;
+      hadEmpty = true;
+      break;
+    }
+  }
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+  return JSON.stringify({ok: true, value: el.value, had_empty_option: hadEmpty});
+})()"#;
+            return match eval_js_ok(tab, js) {
+                Ok(result) => {
+                    let had_empty = result.get("had_empty_option")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if verify && !had_empty {
+                        StepResult::failure(
+                            idx,
+                            "Clear select: no empty option found",
+                            "No option with empty value/text exists to select",
+                        )
+                    } else {
+                        StepResult::success(idx, format!("Cleared <{}> (select)", info.tag))
+                    }
+                }
+                Err(e) => StepResult::failure(idx, "Clear failed", e),
+            };
+        }
+        _ => {}
+    }
+
     let clear_js = generate_clear_js(&info.field_kind);
     match eval_js_ok(tab, &clear_js) {
         Ok(_) => {
@@ -723,31 +809,71 @@ fn step_select_option(
 }
 
 fn step_check_uncheck(tab: &Tab, idx: usize, locator: &BrowserLocator, check: bool) -> StepResult {
-    match resolve_interactable(tab, locator) {
-        Ok(info) => {
-            let action = if check { "check" } else { "uncheck" };
-            let js = format!(
-                r#"(function() {{
+    let action = if check { "check" } else { "uncheck" };
+    let info = match resolve_interactable(tab, locator) {
+        Ok(i) => i,
+        Err(e) => return StepResult::failure(idx, "Check/uncheck: resolution failed", e),
+    };
+
+    if !check && info.field_kind == FieldKind::Radio {
+        return StepResult::failure(
+            idx,
+            "Uncheck not supported for radio buttons",
+            "Radio buttons cannot be unchecked; select a different radio instead".to_string(),
+        );
+    }
+
+    let is_supported = matches!(info.field_kind, FieldKind::Checkbox | FieldKind::Radio);
+    let is_aria = !is_supported && {
+        let check_aria = r#"(function() {
+  var el = window.__refact_resolved_el;
+  if (!el) return JSON.stringify({ok: false});
+  var role = el.getAttribute('role');
+  var supported = role === 'checkbox' || role === 'switch' || role === 'radio';
+  return JSON.stringify({ok: supported});
+})()"#;
+        eval_js_ok(tab, check_aria)
+            .ok()
+            .and_then(|v| v.get("ok").and_then(|b| b.as_bool()))
+            .unwrap_or(false)
+    };
+
+    if !is_supported && !is_aria {
+        return StepResult::failure(
+            idx,
+            format!("{} not supported for this element", action),
+            format!(
+                "Element <{}> has field_kind={:?} and no checkbox/radio/switch role",
+                info.tag, info.field_kind
+            ),
+        );
+    }
+
+    let js = format!(
+        r#"(function() {{
   var el = window.__refact_resolved_el;
   if (!el) return JSON.stringify({{error: 'No resolved element'}});
-  var want = {};
+  var want = {want};
+  var role = el.getAttribute('role');
+  var isAria = role === 'checkbox' || role === 'switch' || role === 'radio';
+  if (isAria && !('checked' in el)) {{
+    var current = el.getAttribute('aria-checked') === 'true';
+    if (current !== want) {{
+      el.click();
+    }}
+    var final_state = el.getAttribute('aria-checked') === 'true';
+    return JSON.stringify({{ok: final_state === want, checked: final_state, verified: true}});
+  }}
   if (el.checked !== want) {{
     el.click();
-    if (el.checked !== want) {{
-      el.checked = want;
-      el.dispatchEvent(new Event('change', {{bubbles: true}}));
-    }}
   }}
-  return JSON.stringify({{ok: true, checked: el.checked}});
+  return JSON.stringify({{ok: el.checked === want, checked: el.checked, verified: true}});
 }})()"#,
-                if check { "true" } else { "false" },
-            );
-            match eval_js_ok(tab, &js) {
-                Ok(_) => StepResult::success(idx, format!("{}ed <{}>", action, info.tag)),
-                Err(e) => StepResult::failure(idx, format!("{} failed", action), e),
-            }
-        }
-        Err(e) => StepResult::failure(idx, "Check/uncheck: resolution failed", e),
+        want = if check { "true" } else { "false" },
+    );
+    match eval_js_ok(tab, &js) {
+        Ok(_) => StepResult::success(idx, format!("{}ed <{}>", action, info.tag)),
+        Err(e) => StepResult::failure(idx, format!("{} failed", action), e),
     }
 }
 
@@ -801,22 +927,41 @@ fn step_wait_for_selector(
     }
 }
 
-fn step_wait_for_navigation(tab: &Tab, idx: usize, timeout_ms: u64) -> StepResult {
-    let start_url = tab.get_url();
-    let js = format!(
+fn step_wait_for_navigation(
+    tab: &Tab,
+    idx: usize,
+    timeout_ms: u64,
+    pre_step_url: Option<&str>,
+) -> StepResult {
+    let current_url = tab.get_url();
+    let reference_url = pre_step_url.unwrap_or(&current_url);
+
+    if current_url != reference_url {
+        let complete_js = r#"(function() { return document.readyState === 'complete'; })()"#;
+        let _ = poll_condition(tab, complete_js, timeout_ms, DEFAULT_POLL_INTERVAL_MS);
+        return StepResult::success(
+            idx,
+            format!("Navigation detected: {} -> {}", reference_url, current_url),
+        );
+    }
+
+    let url_changed_js = format!(
         r#"(function() {{ return window.location.href !== {}; }})()"#,
-        js_string_literal(&start_url),
+        js_string_literal(reference_url),
     );
-    match poll_condition(tab, &js, timeout_ms, DEFAULT_POLL_INTERVAL_MS) {
-        Ok(()) => StepResult::success(idx, format!("Navigation detected from {}", start_url)),
-        Err(_) => {
-            match tab.evaluate("document.readyState", false) {
-                Ok(r) if r.value.as_ref().and_then(|v| v.as_str()) == Some("complete") => {
-                    StepResult::success(idx, "Page load complete".to_string())
-                }
-                _ => StepResult::failure(idx, "Wait for navigation", "Timed out"),
-            }
+    let complete_js = r#"(function() { return document.readyState === 'complete'; })()"#;
+
+    match poll_condition(tab, &url_changed_js, timeout_ms, DEFAULT_POLL_INTERVAL_MS) {
+        Ok(()) => {
+            let end_url = tab.get_url();
+            let _ = poll_condition(tab, complete_js, timeout_ms, DEFAULT_POLL_INTERVAL_MS);
+            StepResult::success(idx, format!("Navigation detected: {} -> {}", reference_url, end_url))
         }
+        Err(_) => StepResult::failure(
+            idx,
+            "Wait for navigation",
+            format!("Timed out after {}ms; URL unchanged ({})", timeout_ms, current_url),
+        ),
     }
 }
 
@@ -910,6 +1055,98 @@ fn step_wait_seconds(idx: usize, seconds: f64) -> StepResult {
     StepResult::success(idx, format!("Waited {:.1}s", seconds))
 }
 
+const NETWORK_IDLE_WINDOW_MS: u64 = 500;
+
+const NETWORK_INFLIGHT_TRACKER_JS: &str = r#"(function() {
+  if (window.__refact_inflight_installed) return;
+  window.__refact_inflight_installed = true;
+  window.__refact_inflight = 0;
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function() {
+      window.__refact_inflight++;
+      var p = origFetch.apply(this, arguments);
+      var done = function() { window.__refact_inflight = Math.max(0, window.__refact_inflight - 1); };
+      return p.then(function(r) { done(); return r; }, function(e) { done(); throw e; });
+    };
+  }
+  var XHR = window.XMLHttpRequest;
+  if (typeof XHR === 'function') {
+    var origSend = XHR.prototype.send;
+    XHR.prototype.send = function() {
+      window.__refact_inflight++;
+      var self = this;
+      var done = false;
+      var finish = function() {
+        if (done) return;
+        done = true;
+        window.__refact_inflight = Math.max(0, window.__refact_inflight - 1);
+      };
+      self.addEventListener('loadend', finish);
+      self.addEventListener('error', finish);
+      self.addEventListener('abort', finish);
+      self.addEventListener('timeout', finish);
+      return origSend.apply(this, arguments);
+    };
+  }
+})()"#;
+
+fn step_wait_for_network_idle(tab: &Tab, idx: usize, timeout_ms: u64) -> StepResult {
+    let _ = tab.evaluate(NETWORK_INFLIGHT_TRACKER_JS, false);
+
+    let snapshot_js = r#"(function() {
+  var inflight = window.__refact_inflight_installed ? (window.__refact_inflight | 0) : -1;
+  return JSON.stringify({inflight: inflight, ready: document.readyState});
+})()"#;
+
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let idle_window = Duration::from_millis(NETWORK_IDLE_WINDOW_MS);
+    let poll = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS);
+    let mut idle_since: Option<Instant> = None;
+
+    loop {
+        let snapshot = eval_js_value(tab, snapshot_js).unwrap_or(serde_json::Value::Null);
+        let (inflight, ready) = match snapshot.as_str() {
+            Some(s) => {
+                let parsed: serde_json::Value = serde_json::from_str(s)
+                    .unwrap_or(serde_json::Value::Null);
+                let i = parsed.get("inflight").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let r = parsed.get("ready").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                (i, r)
+            }
+            None => (-1, String::new()),
+        };
+
+        let is_idle = inflight == 0 && ready == "complete";
+        if is_idle {
+            if let Some(since) = idle_since {
+                if Instant::now().duration_since(since) >= idle_window {
+                    return StepResult::success(
+                        idx,
+                        format!("Network idle (inflight=0, readyState=complete, window={}ms)", NETWORK_IDLE_WINDOW_MS),
+                    );
+                }
+            } else {
+                idle_since = Some(Instant::now());
+            }
+        } else {
+            idle_since = None;
+        }
+
+        if Instant::now() >= deadline {
+            return StepResult::failure(
+                idx,
+                "Wait for network idle",
+                format!(
+                    "Timed out after {}ms (inflight={}, readyState={})",
+                    timeout_ms, inflight, ready
+                ),
+            );
+        }
+        std::thread::sleep(poll);
+    }
+}
+
 fn step_get_text(tab: &Tab, idx: usize, locator: &BrowserLocator) -> StepResult {
     match resolve_element(tab, locator) {
         Ok(info) => match eval_js_ok(tab, browser_locators::js_get_text()) {
@@ -976,7 +1213,7 @@ fn step_extract_links(
     } else {
         let _ = tab.evaluate("window.__refact_resolved_el = null", false);
     }
-    let effective_limit = limit.unwrap_or(50);
+    let effective_limit = limit.unwrap_or(50).min(MAX_EXTRACT_LINKS);
     let js = browser_locators::js_extract_links(effective_limit);
     match eval_js_ok(tab, &js) {
         Ok(result) => StepResult::success(idx, "Extracted links".to_string())
@@ -1005,14 +1242,19 @@ fn step_dom_snapshot(
     selector: &str,
     max_chars: Option<usize>,
 ) -> StepResult {
-    let limit = max_chars.unwrap_or(5000);
+    let limit = max_chars.unwrap_or(5000).min(MAX_DOM_SNAPSHOT_CHARS);
     let js = format!(
         r#"(function() {{
   var el = document.querySelector({sel});
   if (!el) return JSON.stringify({{error: 'Selector not found'}});
-  var html = el.outerHTML;
-  if (html.length > {limit}) html = html.substring(0, {limit}) + '... (truncated)';
-  return JSON.stringify({{ok: true, html: html, length: el.outerHTML.length}});
+  var full = el.outerHTML;
+  var truncated = false;
+  var html = full;
+  if (html.length > {limit}) {{
+    html = html.substring(0, {limit}) + '... (truncated)';
+    truncated = true;
+  }}
+  return JSON.stringify({{ok: true, html: html, length: full.length, truncated: truncated, max_chars: {limit}}});
 }})()"#,
         sel = js_string_literal(selector),
         limit = limit,
@@ -1025,23 +1267,37 @@ fn step_dom_snapshot(
 }
 
 fn step_accessibility_snapshot(tab: &Tab, idx: usize) -> StepResult {
-    let js = r#"(function() {
-  function walk(el, depth) {
-    if (depth > 6) return null;
+    let js = format!(
+        r#"(function() {{
+  var MAX_NODES = {max_nodes};
+  var MAX_DEPTH = {max_depth};
+  var MAX_CHILDREN = {max_children};
+  var nodeCount = 0;
+  var truncated = false;
+  function walk(el, depth) {{
+    if (depth > MAX_DEPTH) return null;
+    if (nodeCount >= MAX_NODES) {{ truncated = true; return null; }}
+    nodeCount++;
     var role = el.getAttribute('role') || el.tagName.toLowerCase();
     var name = el.getAttribute('aria-label') || el.getAttribute('title') || '';
     if (!name && el.innerText) name = el.innerText.substring(0, 80);
     var children = [];
-    for (var i = 0; i < el.children.length && children.length < 20; i++) {
+    for (var i = 0; i < el.children.length && children.length < MAX_CHILDREN; i++) {{
+      if (nodeCount >= MAX_NODES) {{ truncated = true; break; }}
       var c = walk(el.children[i], depth + 1);
       if (c) children.push(c);
-    }
-    return {role: role, name: name.trim(), children: children};
-  }
+    }}
+    return {{role: role, name: name.trim(), children: children}};
+  }}
+  if (!document.body) return JSON.stringify({{ok: false, error: 'document.body is null'}});
   var tree = walk(document.body, 0);
-  return JSON.stringify({ok: true, tree: tree});
-})()"#;
-    match eval_js_ok(tab, js) {
+  return JSON.stringify({{ok: true, tree: tree, node_count: nodeCount, truncated: truncated, max_nodes: MAX_NODES}});
+}})()"#,
+        max_nodes = ACCESSIBILITY_MAX_NODES,
+        max_depth = ACCESSIBILITY_MAX_DEPTH,
+        max_children = ACCESSIBILITY_MAX_CHILDREN,
+    );
+    match eval_js_ok(tab, &js) {
         Ok(result) => StepResult::success(idx, "Accessibility snapshot".to_string())
             .with_data(result),
         Err(e) => StepResult::failure(idx, "Accessibility snapshot failed", e),

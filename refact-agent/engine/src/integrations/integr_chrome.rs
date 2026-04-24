@@ -760,11 +760,11 @@ async fn session_open_tab(
                 .headless_tab
                 .add_event_listener(Arc::new(move |event: &Event| {
                     if let Event::LogEntryAdded(e) = event {
-                        let formatted_ts = {
-                            let dt = DateTime::from_timestamp(e.params.entry.timestamp as i64, 0)
-                                .unwrap();
-                            dt.format("%Y-%m-%d %H:%M:%S").to_string()
-                        };
+                        let ts_raw = e.params.entry.timestamp;
+                        let formatted_ts = crate::integrations::browser_runtime::normalize_timestamp_ms_opt(ts_raw)
+                            .and_then(|ms| DateTime::from_timestamp_millis(ms as i64))
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| format!("ts={}", ts_raw));
                         let mut tab_log_lock = tab_log.lock().unwrap();
                         tab_log_lock.push(format!(
                             "{} [{:?}]: {}",
@@ -837,39 +837,30 @@ async fn execute_via_controller(
             cs.tabs.get(tab_id).cloned()
         };
 
-        if let Some(tab_arc) = session_tab {
-            let tab_lock = tab_arc.lock().await;
-            (tab_lock.headless_tab.clone(), tab_lock.state_string())
-        } else {
-            let runtime_id = {
-                let mut session_locked = chrome_session.lock().await;
-                let cs = session_locked
-                    .as_any_mut()
-                    .downcast_mut::<ChromeSession>()
-                    .ok_or("Failed to downcast to ChromeSession")?;
-                cs.runtime_id.clone()
-            };
-            let runtime_arc = {
-                let gcx_locked = gcx.read().await;
-                gcx_locked
-                    .browser_runtimes
-                    .get(&runtime_id)
-                    .cloned()
-                    .ok_or_else(|| format!(
-                        "BrowserRuntime {} not found. Browser may have been closed.",
-                        runtime_id
-                    ))?
-            };
-            let tab = {
-                let rt = runtime_arc.lock().await;
-                rt.get_active_tab()
-                    .ok_or_else(|| format!(
-                        "No active tab in runtime and tab_id '{}' not in session. Use 'open_tab {} desktop' first.",
-                        tab_id, tab_id
-                    ))?
-            };
-            let state = format!("tab_id `{}` (runtime active) uri `{}`", tab_id, tab.get_url());
-            (tab, state)
+        match session_tab {
+            Some(tab_arc) => {
+                let tab_lock = tab_arc.lock().await;
+                (tab_lock.headless_tab.clone(), tab_lock.state_string())
+            }
+            None => {
+                let available: Vec<String> = {
+                    let mut session_locked = chrome_session.lock().await;
+                    let cs = session_locked
+                        .as_any_mut()
+                        .downcast_mut::<ChromeSession>()
+                        .ok_or("Failed to downcast to ChromeSession")?;
+                    cs.tabs.keys().cloned().collect()
+                };
+                let suggestion = if available.is_empty() {
+                    format!("No tabs are open. Use 'open_tab {} desktop' first.", tab_id)
+                } else {
+                    format!("Available tabs: {:?}.", available)
+                };
+                return Err(format!(
+                    "Tab '{}' not found. {}",
+                    tab_id, suggestion
+                ));
+            }
         }
     };
 
@@ -979,11 +970,13 @@ fn execution_report_to_multimodal(
     report: &ExecutionReport,
 ) -> Result<Vec<MultimodalElement>, String> {
     let mut content = Vec::new();
-    content.push(MultimodalElement::new(
-        "text".to_string(),
-        serde_json::to_string_pretty(report)
-            .map_err(|e| format!("Failed to serialize browser report: {}", e))?,
-    )?);
+
+    let mut text_report = serde_json::to_value(report)
+        .map_err(|e| format!("Failed to serialize browser report: {}", e))?;
+    strip_image_data_for_text(&mut text_report);
+    let text_pretty = serde_json::to_string_pretty(&text_report)
+        .map_err(|e| format!("Failed to pretty-print browser report: {}", e))?;
+    content.push(MultimodalElement::new("text".to_string(), text_pretty)?);
 
     for result in &report.steps {
         if let Some(ref data) = result.data {
@@ -1002,6 +995,43 @@ fn execution_report_to_multimodal(
     }
 
     Ok(content)
+}
+
+fn strip_image_data_for_text(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let is_image = map.get("mime")
+                .and_then(|v| v.as_str())
+                .map(|m| m.starts_with("image/"))
+                .unwrap_or(false);
+            if is_image {
+                let b64_len = map.get("data")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                if b64_len > 0 {
+                    let bytes = b64_len * 3 / 4;
+                    map.insert(
+                        "data".to_string(),
+                        serde_json::Value::String("<omitted>".to_string()),
+                    );
+                    map.insert(
+                        "bytes".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(bytes)),
+                    );
+                }
+            }
+            for v in map.values_mut() {
+                strip_image_data_for_text(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_image_data_for_text(v);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn resize_screenshot_b64(b64_data: &str) -> Result<String, String> {
@@ -1250,7 +1280,7 @@ async fn chrome_command_exec(
             }
         }
         BrowserAction::CloseTab { tab_id } => {
-            let (tab_arc, available) = {
+            let (tab_arc, available, runtime_id) = {
                 let mut chrome_session_locked = chrome_session.lock().await;
                 let cs = chrome_session_locked
                     .as_any_mut()
@@ -1258,21 +1288,37 @@ async fn chrome_command_exec(
                     .ok_or("Failed to downcast to ChromeSession")?;
                 let tab = cs.tabs.get(tab_id).cloned();
                 let avail: Vec<String> = cs.tabs.keys().cloned().collect();
-                (tab, avail)
+                (tab, avail, cs.runtime_id.clone())
             };
             match tab_arc {
                 Some(tab_arc) => {
                     let tab_lock = tab_arc.lock().await;
                     let state = tab_lock.state_string();
+                    let target_id = tab_lock.headless_tab.get_target_id().to_string();
                     match tab_lock.headless_tab.close(false) {
                         Ok(_) => {
                             drop(tab_lock);
-                            let mut chrome_session_locked = chrome_session.lock().await;
-                            if let Some(cs) = chrome_session_locked
-                                .as_any_mut()
-                                .downcast_mut::<ChromeSession>()
                             {
-                                cs.tabs.remove(tab_id);
+                                let mut chrome_session_locked = chrome_session.lock().await;
+                                if let Some(cs) = chrome_session_locked
+                                    .as_any_mut()
+                                    .downcast_mut::<ChromeSession>()
+                                {
+                                    cs.tabs.remove(tab_id);
+                                }
+                            }
+                            let runtime_arc = {
+                                let gcx_locked = gcx.read().await;
+                                gcx_locked.browser_runtimes.get(&runtime_id).cloned()
+                            };
+                            if let Some(arc) = runtime_arc {
+                                let mut rt = arc.lock().await;
+                                if rt.recording_tab_target_id.as_deref() == Some(&target_id) {
+                                    rt.recording_tab_target_id = None;
+                                }
+                                if rt.active_tab_target_id().as_deref() == Some(target_id.as_str()) {
+                                    rt.active_tab_target_id = None;
+                                }
                             }
                             tool_log.push(format!("Closed tab: {}.", state));
                         }

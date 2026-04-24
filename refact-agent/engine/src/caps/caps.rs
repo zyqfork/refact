@@ -156,10 +156,6 @@ impl ChatModelRecord {
     pub fn reasoning_type_string(&self) -> Option<String> {
         if self.supports_adaptive_thinking_budget {
             Some("anthropic_effort".to_string())
-        } else if self.supports_thinking_budget && self.reasoning_effort_options.is_some() {
-            // Model has both old budget thinking and effort options (e.g., claude-opus-4).
-            // The Anthropic API for such models requires adaptive thinking with output_config.effort.
-            Some("anthropic_effort".to_string())
         } else if self.supports_thinking_budget {
             Some("anthropic_budget".to_string())
         } else if self.reasoning_effort_options.is_some() {

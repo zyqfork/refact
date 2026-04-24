@@ -142,7 +142,8 @@ pub fn enforce_buffer_limit<T>(buffer: &mut Vec<T>, cursor: &mut usize) {
 }
 
 pub fn flush_buffer_since<T: Clone>(buffer: &[T], cursor: &mut usize) -> Vec<T> {
-    let items = buffer[*cursor..].to_vec();
+    let start = (*cursor).min(buffer.len());
+    let items = buffer[start..].to_vec();
     *cursor = buffer.len();
     items
 }
@@ -360,6 +361,24 @@ mod tests {
         let flushed2 = flush_buffer_since(&buffer, &mut cursor);
         assert_eq!(flushed2.len(), 1);
         assert_eq!(flushed2[0].method, "POST");
+    }
+
+    #[test]
+    fn test_flush_buffer_since_stale_cursor_does_not_panic() {
+        let buffer: Vec<u32> = vec![1, 2, 3];
+        let mut cursor = 10usize;
+        let flushed = flush_buffer_since(&buffer, &mut cursor);
+        assert_eq!(flushed.len(), 0);
+        assert_eq!(cursor, 3);
+    }
+
+    #[test]
+    fn test_flush_buffer_since_cursor_exactly_at_len() {
+        let buffer: Vec<u32> = vec![1, 2, 3];
+        let mut cursor = 3usize;
+        let flushed = flush_buffer_since(&buffer, &mut cursor);
+        assert_eq!(flushed.len(), 0);
+        assert_eq!(cursor, 3);
     }
 
     #[test]

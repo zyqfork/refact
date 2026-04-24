@@ -4,15 +4,14 @@ import { AssistantInput } from "./AssistantInput";
 import type { DiffChunk, ToolCall } from "../../services/refact/types";
 
 describe("AssistantInput", () => {
-  test("renders streaming message content as plain text until the stream settles", () => {
+  test("renders streaming message content as markdown immediately", () => {
     const { rerender } = render(
       <AssistantInput message="## Streaming title" isStreaming />,
     );
 
     expect(
-      screen.queryByRole("heading", { name: "Streaming title" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText("## Streaming title")).toBeInTheDocument();
+      screen.getByRole("heading", { name: "Streaming title" }),
+    ).toBeInTheDocument();
 
     rerender(<AssistantInput message="## Streaming title" />);
 

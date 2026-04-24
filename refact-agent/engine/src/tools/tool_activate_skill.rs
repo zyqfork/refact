@@ -528,6 +528,7 @@ mod tests {
             skills_available_count: 0,
             skills_included: Vec::new(),
             pending_skill_deactivation: None,
+            stop_hook_handle: None,
         };
 
         let skill_name = match session.thread.active_skill.clone() {

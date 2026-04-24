@@ -65,11 +65,24 @@ pub fn build_recorder_script(mask_passwords: bool) -> String {
     )
 }
 
-fn normalize_timestamp_ms(ts: f64) -> f64 {
+pub fn normalize_timestamp_ms(ts: f64) -> f64 {
+    if !ts.is_finite() || ts < 0.0 {
+        return 0.0;
+    }
     if ts < 10_000_000_000.0 {
         ts * 1000.0
     } else {
         ts
+    }
+}
+
+pub fn normalize_timestamp_ms_opt(ts: f64) -> Option<f64> {
+    if !ts.is_finite() || ts < 0.0 {
+        None
+    } else if ts < 10_000_000_000.0 {
+        Some(ts * 1000.0)
+    } else {
+        Some(ts)
     }
 }
 

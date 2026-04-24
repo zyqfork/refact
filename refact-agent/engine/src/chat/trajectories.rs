@@ -3025,6 +3025,7 @@ mod tests {
             skills_available_count: 0,
             skills_included: Vec::new(),
             pending_skill_deactivation: None,
+            stop_hook_handle: None,
         };
 
         let snapshot = TrajectorySnapshot::from_session(&session);
@@ -3086,6 +3087,7 @@ mod tests {
             skills_available_count: 0,
             skills_included: Vec::new(),
             pending_skill_deactivation: None,
+            stop_hook_handle: None,
         };
 
         let snapshot = TrajectorySnapshot::from_session(&session);

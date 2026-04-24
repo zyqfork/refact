@@ -92,3 +92,7 @@
   flex: 0 0 auto;
   min-height: 0;
 }
+
+.offlineState {
+  flex: 1;
+}
