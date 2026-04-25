@@ -293,6 +293,7 @@ pub struct GlobalContext {
     pub git_operations_abort_flag: Arc<AtomicBool>,
     pub app_searchable_id: String,
     pub trajectory_events_tx: Option<tokio::sync::broadcast::Sender<crate::chat::TrajectoryEvent>>,
+    pub workspace_changed_tx: Option<tokio::sync::broadcast::Sender<()>>,
     pub task_events_tx:
         Option<tokio::sync::broadcast::Sender<crate::tasks::events::TaskEventEnvelope>>,
     pub task_events_seq: Option<Arc<std::sync::atomic::AtomicU64>>,
@@ -301,9 +302,7 @@ pub struct GlobalContext {
     pub voice_service: SharedVoiceService,
     pub project_registry_cache: Arc<StdRwLock<RegistryCacheManager>>,
     pub providers: Arc<ARwLock<ProviderRegistry>>,
-    // Fast in-memory index for knowledge cards. Built asynchronously.
     pub knowledge_index: Arc<AMutex<KnowledgeIndex>>,
-
     pub llm_stats_sender: Option<tokio::sync::mpsc::Sender<crate::stats::event::LlmCallEvent>>,
     pub ext_cache_generation: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -591,6 +590,7 @@ pub async fn create_global_context(
         git_operations_abort_flag: Arc::new(AtomicBool::new(false)),
         app_searchable_id: get_app_searchable_id(&workspace_dirs),
         trajectory_events_tx: Some(tokio::sync::broadcast::channel(1024).0),
+        workspace_changed_tx: Some(tokio::sync::broadcast::channel(16).0),
         task_events_tx: Some(tokio::sync::broadcast::channel(1024).0),
         task_events_seq: Some(Arc::new(std::sync::atomic::AtomicU64::new(0))),
         notification_events_tx: Some(tokio::sync::broadcast::channel(256).0),
@@ -699,6 +699,7 @@ pub mod tests {
             git_operations_abort_flag: Arc::new(AtomicBool::new(false)),
             app_searchable_id: "test".to_string(),
             trajectory_events_tx: Some(tokio::sync::broadcast::channel(1024).0),
+            workspace_changed_tx: Some(tokio::sync::broadcast::channel(16).0),
             task_events_tx: Some(tokio::sync::broadcast::channel(1024).0),
             task_events_seq: Some(Arc::new(std::sync::atomic::AtomicU64::new(0))),
             notification_events_tx: Some(tokio::sync::broadcast::channel(256).0),

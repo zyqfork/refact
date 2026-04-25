@@ -2107,46 +2107,6 @@ pub async fn list_all_trajectories_meta(
         }
     }
 
-    enrich_with_session_state(gcx, &mut result).await;
-    result.sort_by(|a, b| {
-        match b.updated_at.cmp(&a.updated_at) {
-            std::cmp::Ordering::Equal => b.id.cmp(&a.id),
-            other => other,
-        }
-    });
-
-    Ok(result)
-}
-
-pub async fn handle_v1_trajectories_all(
-    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
-) -> Result<Response<Body>, ScratchError> {
-    let mut result: Vec<TrajectoryMeta> = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-
-    for trajectories_dir in get_all_trajectories_dirs(gcx.clone()).await {
-        if !trajectories_dir.exists() {
-            continue;
-        }
-        let mut entries = match fs::read_dir(&trajectories_dir).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(content) = fs::read_to_string(&path).await {
-                if let Ok(data) = serde_json::from_str::<TrajectoryData>(&content) {
-                    if seen_ids.insert(data.id.clone()) {
-                        result.push(trajectory_data_to_meta(&data));
-                    }
-                }
-            }
-        }
-    }
-
     for tasks_dir in crate::tasks::storage::get_all_tasks_dirs(gcx.clone()).await {
         if !tasks_dir.exists() {
             continue;
@@ -2165,7 +2125,6 @@ pub async fn handle_v1_trajectories_all(
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
-
             for role in &["planner", "agents"] {
                 let role_dir = task_dir.join("trajectories").join(role);
                 if !role_dir.exists() {
@@ -2181,7 +2140,22 @@ pub async fn handle_v1_trajectories_all(
     }
 
     enrich_with_session_state(gcx, &mut result).await;
-    result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    result.sort_by(|a, b| {
+        match b.updated_at.cmp(&a.updated_at) {
+            std::cmp::Ordering::Equal => b.id.cmp(&a.id),
+            other => other,
+        }
+    });
+
+    Ok(result)
+}
+
+pub async fn handle_v1_trajectories_all(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<Response<Body>, ScratchError> {
+    let result = list_all_trajectories_meta(gcx)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")

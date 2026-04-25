@@ -812,10 +812,10 @@ pub async fn on_workspaces_init(gcx: Arc<ARwLock<GlobalContext>>) -> i32 {
     watcher_init(gcx.clone()).await;
     let files_enqueued = enqueue_all_files_from_workspace_folders(gcx.clone(), false, false).await;
 
-    // enqueue shadow repos initialization
     crate::git::checkpoints::enqueue_init_shadow_repos(gcx.clone()).await;
 
-    // Start or connect to mcp servers
+    crate::chat::start_trajectory_watcher(gcx.clone());
+
     let _ = load_integrations(gcx.clone(), &["**/mcp_*".to_string()]).await;
 
     files_enqueued

@@ -70,11 +70,16 @@ async fn fetch_snapshot(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(Vec<Traject
 pub async fn handle_sidebar_subscribe(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
 ) -> Result<Response<Body>, ScratchError> {
-    let (trajectory_rx, task_rx, notification_rx, seq_counter) = {
+    let (trajectory_rx, workspace_changed_rx, task_rx, notification_rx, seq_counter) = {
         let gcx_locked = gcx.read().await;
 
         let trajectory_rx = gcx_locked
             .trajectory_events_tx
+            .as_ref()
+            .map(|tx| tx.subscribe());
+
+        let workspace_changed_rx = gcx_locked
+            .workspace_changed_tx
             .as_ref()
             .map(|tx| tx.subscribe());
 
@@ -96,7 +101,7 @@ pub async fn handle_sidebar_subscribe(
         }
 
         let seq_counter = Arc::new(AtomicU64::new(0));
-        (trajectory_rx, task_rx, notification_rx, seq_counter)
+        (trajectory_rx, workspace_changed_rx, task_rx, notification_rx, seq_counter)
     };
 
     let (trajectories, tasks) = fetch_snapshot(gcx.clone())
@@ -115,6 +120,7 @@ pub async fn handle_sidebar_subscribe(
         }
 
         let mut trajectory_rx = trajectory_rx;
+        let mut workspace_changed_rx = workspace_changed_rx;
         let mut task_rx = task_rx;
         let mut notification_rx = notification_rx;
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -158,6 +164,31 @@ pub async fn handle_sidebar_subscribe(
                             if task_rx.is_none() && notification_rx.is_none() {
                                 break;
                             }
+                        }
+                    }
+                }
+
+                result = async {
+                    match &mut workspace_changed_rx {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match result {
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                            if let Ok((trajectories, tasks)) = fetch_snapshot(gcx_for_stream.clone()).await {
+                                let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let envelope = SidebarEventEnvelope {
+                                    seq,
+                                    event: SidebarEvent::Snapshot { trajectories, tasks },
+                                };
+                                if let Ok(json) = serde_json::to_string(&envelope) {
+                                    yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
+                                }
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            workspace_changed_rx = None;
                         }
                     }
                 }
