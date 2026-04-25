@@ -499,6 +499,7 @@ type DisplayItemAssistant = {
   type: "assistant";
   key: string;
   index: number;
+  messageIndex: number;
   message: AssistantMessage;
   contextFilesByToolId: Record<string, ChatContextFile[]>;
   diffsByToolId: Record<string, DiffChunk[]>;
@@ -509,6 +510,7 @@ type DisplayItemUser = {
   type: "user";
   key: string;
   index: number;
+  messageIndex: number;
   message: UserMessage;
   isLastUser: boolean;
 };
@@ -516,6 +518,7 @@ type DisplayItemUser = {
 type DisplayItemContextFiles = {
   type: "context_files";
   key: string;
+  messageIndex: number;
   files: ChatContextFile[];
   toolCallId?: string;
 };
@@ -523,24 +526,28 @@ type DisplayItemContextFiles = {
 type DisplayItemDiffGroup = {
   type: "diff_group";
   key: string;
+  messageIndex: number;
   diffs: DiffMessage[];
 };
 
 type DisplayItemSystem = {
   type: "system";
   key: string;
+  messageIndex: number;
   content: string;
 };
 
 type DisplayItemPlainText = {
   type: "plain_text";
   key: string;
+  messageIndex: number;
   content: string;
 };
 
 type DisplayItemSkillActivated = {
   type: "skill_activated";
   key: string;
+  messageIndex: number;
   name: string;
   body: string;
   allowedTools: string[];
@@ -550,6 +557,7 @@ type DisplayItemSkillActivated = {
 type DisplayItemSkillReport = {
   type: "skill_report";
   key: string;
+  messageIndex: number;
   skillName: string;
   report: string;
 };
@@ -590,6 +598,74 @@ function updateAssistantStreamingFlags(
   });
 }
 
+function findLastAssistantMessageIndex(messages: ChatMessages): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") return i;
+  }
+  return -1;
+}
+
+function findRebuildStartIndex(messages: ChatMessages, index: number): number {
+  let rebuildStart = index;
+  let sawSupplemental = false;
+
+  for (let i = index - 1; i >= 0; i--) {
+    const msg = messages[i];
+
+    if (
+      isToolMessage(msg) ||
+      isChatContextFileMessage(msg) ||
+      isDiffMessage(msg)
+    ) {
+      sawSupplemental = true;
+      rebuildStart = i;
+      continue;
+    }
+
+    if (msg.role === "assistant") {
+      return i;
+    }
+
+    return sawSupplemental ? rebuildStart : index;
+  }
+
+  return sawSupplemental ? rebuildStart : index;
+}
+
+function rebuildDisplayItemsFromStart(
+  previousItems: DisplayItem[],
+  nextMessages: ChatMessages,
+  isStreaming: boolean,
+  rebuildStart: number,
+): DisplayItem[] {
+  const hidden = computeHiddenQaMessageIndices(nextMessages);
+  const tailItems = buildDisplayItemsFromIndex(
+    nextMessages,
+    isStreaming,
+    hidden,
+    rebuildStart,
+  );
+  const prefixItems = previousItems.filter(
+    (item) => item.messageIndex < rebuildStart,
+  );
+
+  return updateAssistantStreamingFlags(
+    [...prefixItems, ...tailItems],
+    isStreaming,
+    findLastAssistantMessageIndex(nextMessages),
+  );
+}
+
+function assistantGroupingSignature(message: AssistantMessage): string {
+  return (message.tool_calls ?? [])
+    .map((toolCall) => {
+      const name = toolCall.function.name ?? "";
+      const id = toolCall.id ?? "";
+      return `${id}:${name}`;
+    })
+    .join("|");
+}
+
 function buildDisplayItemsFromIndex(
   messages: ChatMessages,
   isStreaming: boolean,
@@ -627,6 +703,7 @@ function buildDisplayItemsFromIndex(
           items.push({
             type: "skill_report",
             key: getMessageKey(head, i),
+            messageIndex: i,
             skillName: parsed.skillName,
             report: parsed.report,
           });
@@ -636,6 +713,7 @@ function buildDisplayItemsFromIndex(
       items.push({
         type: "plain_text",
         key: getMessageKey(head, i),
+        messageIndex: i,
         content: head.content,
       });
       continue;
@@ -654,6 +732,7 @@ function buildDisplayItemsFromIndex(
       const key = getMessageKey(head, i);
       const contextFilesAfter: DisplayItemContextFiles[] = [];
       const diffMessagesAfter: DiffMessage[] = [];
+      let diffGroupStartIndex: number | null = null;
       const contextFilesByToolId: Partial<Record<string, ChatContextFile[]>> =
         {};
       const diffsByToolId: Partial<Record<string, DiffChunk[]>> = {};
@@ -715,6 +794,7 @@ function buildDisplayItemsFromIndex(
             contextFilesAfter.push({
               type: "context_files",
               key: getMessageKey(nextMsg, j),
+              messageIndex: j,
               files: nextMsg.content,
               toolCallId: nextMsg.tool_call_id,
             });
@@ -731,6 +811,7 @@ function buildDisplayItemsFromIndex(
               ...nextMsg.content,
             ];
           } else {
+            if (diffGroupStartIndex === null) diffGroupStartIndex = j;
             diffMessagesAfter.push(nextMsg);
           }
           j++;
@@ -744,6 +825,7 @@ function buildDisplayItemsFromIndex(
         type: "assistant",
         key,
         index: i,
+        messageIndex: i,
         message: head,
         contextFilesByToolId: contextFilesByToolId as Record<
           string,
@@ -761,6 +843,7 @@ function buildDisplayItemsFromIndex(
         items.push({
           type: "diff_group",
           key: `diffs-${key}`,
+          messageIndex: diffGroupStartIndex ?? i,
           diffs: diffMessagesAfter,
         });
       }
@@ -778,6 +861,7 @@ function buildDisplayItemsFromIndex(
         type: "user",
         key: getMessageKey(head, i),
         index: i,
+        messageIndex: i,
         message: head,
         isLastUser: i === lastUserIdx,
       });
@@ -790,6 +874,7 @@ function buildDisplayItemsFromIndex(
         items.push({
           type: "skill_activated",
           key: getMessageKey(head, i),
+          messageIndex: i,
           ...parsed,
         });
       }
@@ -800,6 +885,7 @@ function buildDisplayItemsFromIndex(
       items.push({
         type: "context_files",
         key: getMessageKey(head, i),
+        messageIndex: i,
         files: head.content,
         toolCallId: head.tool_call_id,
       });
@@ -810,6 +896,7 @@ function buildDisplayItemsFromIndex(
       items.push({
         type: "system",
         key: getMessageKey(head, i),
+        messageIndex: i,
         content: head.content,
       });
       continue;
@@ -836,6 +923,7 @@ function buildDisplayItemsFromIndex(
       items.push({
         type: "diff_group",
         key: `diffs-${key}`,
+        messageIndex: i,
         diffs,
       });
       i = j - 1;
@@ -859,51 +947,20 @@ function patchTailDisplayItems(
     if (previousMessages[i] !== nextMessages[i]) return null;
   }
 
-  const firstAppended = nextMessages[sharedLen];
-  if (
-    isChatContextFileMessage(firstAppended) ||
-    isDiffMessage(firstAppended) ||
-    isToolMessage(firstAppended)
-  ) {
-    return null;
-  }
-
-  const hidden = computeHiddenQaMessageIndices(nextMessages);
-  const tailItems = buildDisplayItemsFromIndex(
+  const rebuildStart = findRebuildStartIndex(nextMessages, sharedLen);
+  const nextItems = rebuildDisplayItemsFromStart(
+    previousItems,
     nextMessages,
     isStreaming,
-    hidden,
-    sharedLen,
+    rebuildStart,
   );
 
-  if (tailItems.length === 0) {
-    const lastAssistantIdx = (() => {
-      for (let i = nextMessages.length - 1; i >= 0; i--) {
-        if (nextMessages[i].role === "assistant") return i;
-      }
-      return -1;
-    })();
-    return updateAssistantStreamingFlags(
-      previousItems,
-      isStreaming,
-      lastAssistantIdx,
-    );
-  }
-
-  const combined = [...previousItems, ...tailItems];
-  const lastAssistantIdx = (() => {
-    for (let i = nextMessages.length - 1; i >= 0; i--) {
-      if (nextMessages[i].role === "assistant") return i;
-    }
-    return -1;
-  })();
-
-  return updateAssistantStreamingFlags(combined, isStreaming, lastAssistantIdx);
+  return nextItems;
 }
 
 function tryParseSkillActivated(
   content: string,
-): Omit<DisplayItemSkillActivated, "type" | "key"> | null {
+): Omit<DisplayItemSkillActivated, "type" | "key" | "messageIndex"> | null {
   const prefix = "💿 SKILL_ACTIVATED ";
   const firstNewline = content.indexOf("\n");
   const headerLine =
@@ -965,6 +1022,7 @@ function buildDisplayItems(
           items.push({
             type: "skill_report",
             key: getMessageKey(head, i),
+            messageIndex: i,
             skillName: parsed.skillName,
             report: parsed.report,
           });
@@ -974,6 +1032,7 @@ function buildDisplayItems(
       items.push({
         type: "plain_text",
         key: getMessageKey(head, i),
+        messageIndex: i,
         content: head.content,
       });
       continue;
@@ -992,6 +1051,7 @@ function buildDisplayItems(
       const key = getMessageKey(head, i);
       const contextFilesAfter: DisplayItemContextFiles[] = [];
       const diffMessagesAfter: DiffMessage[] = [];
+      let diffGroupStartIndex: number | null = null;
       const contextFilesByToolId: Record<string, ChatContextFile[]> = {};
       const diffsByToolId: Record<string, DiffChunk[]> = {};
 
@@ -1053,6 +1113,7 @@ function buildDisplayItems(
             contextFilesAfter.push({
               type: "context_files",
               key: getMessageKey(nextMsg, j),
+              messageIndex: j,
               files: nextMsg.content,
               toolCallId: nextMsg.tool_call_id,
             });
@@ -1070,6 +1131,7 @@ function buildDisplayItems(
               ...nextMsg.content,
             ];
           } else {
+            if (diffGroupStartIndex === null) diffGroupStartIndex = j;
             diffMessagesAfter.push(nextMsg);
           }
           j++;
@@ -1083,6 +1145,7 @@ function buildDisplayItems(
         type: "assistant",
         key,
         index: i,
+        messageIndex: i,
         message: head,
         contextFilesByToolId,
         diffsByToolId,
@@ -1097,6 +1160,7 @@ function buildDisplayItems(
         items.push({
           type: "diff_group",
           key: `diffs-${key}`,
+          messageIndex: diffGroupStartIndex ?? i,
           diffs: diffMessagesAfter,
         });
       }
@@ -1114,6 +1178,7 @@ function buildDisplayItems(
         type: "user",
         key: getMessageKey(head, i),
         index: i,
+        messageIndex: i,
         message: head,
         isLastUser: i === lastUserIdx,
       });
@@ -1126,6 +1191,7 @@ function buildDisplayItems(
         items.push({
           type: "skill_activated",
           key: getMessageKey(head, i),
+          messageIndex: i,
           ...parsed,
         });
       }
@@ -1136,6 +1202,7 @@ function buildDisplayItems(
       items.push({
         type: "context_files",
         key: getMessageKey(head, i),
+        messageIndex: i,
         files: head.content,
         toolCallId: head.tool_call_id,
       });
@@ -1146,6 +1213,7 @@ function buildDisplayItems(
       items.push({
         type: "system",
         key: getMessageKey(head, i),
+        messageIndex: i,
         content: head.content,
       });
       continue;
@@ -1172,6 +1240,7 @@ function buildDisplayItems(
       items.push({
         type: "diff_group",
         key: `diffs-${key}`,
+        messageIndex: i,
         diffs,
       });
       i = j - 1;
@@ -1225,6 +1294,20 @@ function tryIncrementalDisplayItemsUpdate(
   const changedMessage = nextMessages[changedIndex];
   if (changedMessage.role !== "assistant") return null;
   if (!isAssistantMessage(changedMessage)) return null;
+
+  const previousMessage = previousMessages[changedIndex];
+  if (
+    !isAssistantMessage(previousMessage) ||
+    assistantGroupingSignature(previousMessage) !==
+      assistantGroupingSignature(changedMessage)
+  ) {
+    return rebuildDisplayItemsFromStart(
+      previousItems,
+      nextMessages,
+      isStreaming,
+      changedIndex,
+    );
+  }
 
   const nextItems = previousItems.map((item) => {
     if (item.type !== "assistant") return item;

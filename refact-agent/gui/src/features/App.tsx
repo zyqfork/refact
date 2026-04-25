@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Flex } from "@radix-ui/themes";
 import { Chat, newChatAction, selectChatId, selectIsStreaming } from "./Chat";
 
@@ -11,6 +17,7 @@ import {
   useSidebarSubscription,
   useAllChatsSubscription,
   useGetConfiguredProvidersQuery,
+  useResizeObserverOnRef,
 } from "../hooks";
 import { useGetPing } from "../hooks/useGetPing";
 import { useBrowserOnlineStatus } from "../hooks/useBrowserOnlineStatus";
@@ -61,6 +68,8 @@ export interface AppProps {
 
 export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   const dispatch = useAppDispatch();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const sawZeroHeightRef = useRef(false);
 
   const pages = useAppSelector(selectPages);
   const isStreaming = useAppSelector(selectIsStreaming);
@@ -93,6 +102,48 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   }, []);
 
   const config = useConfig();
+
+  const checkIdeRootLayout = useCallback(() => {
+    if (config.host !== "jetbrains" && config.host !== "ide") return;
+
+    const elem = rootRef.current;
+    if (!elem) return;
+
+    const rect = elem.getBoundingClientRect();
+    const height = Math.max(elem.clientHeight, rect.height);
+
+    if (height <= 0) {
+      sawZeroHeightRef.current = true;
+      return;
+    }
+
+    if (!sawZeroHeightRef.current) return;
+
+    sawZeroHeightRef.current = false;
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  }, [config.host]);
+
+  useResizeObserverOnRef(rootRef, checkIdeRootLayout);
+
+  useEffect(() => {
+    if (config.host !== "jetbrains" && config.host !== "ide") return;
+
+    const onResize = () => {
+      checkIdeRootLayout();
+    };
+
+    window.addEventListener("resize", onResize);
+    const rafId = requestAnimationFrame(() => {
+      checkIdeRootLayout();
+    });
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(rafId);
+    };
+  }, [checkIdeRootLayout, config.host]);
 
   const desiredPage = pages[pages.length - 1];
   const [renderedPage, setRenderedPage] = useState(desiredPage);
@@ -210,6 +261,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
 
   return (
     <Flex
+      ref={rootRef}
       align="stretch"
       direction="column"
       style={style}
@@ -217,6 +269,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
         [styles.integrationsPagePadding]:
           renderedPage.name === "integrations page" && isPaddingApplied,
       })}
+      data-element="app-root"
     >
       {activeTab && <Toolbar activeTab={activeTab} />}
       <PageWrapper

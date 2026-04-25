@@ -64,6 +64,7 @@ const _ShikiCodeBlock: React.FC<ShikiCodeBlockProps> = ({
   const shouldHighlight =
     isBlock &&
     !isSpecialBlock &&
+    !isStreaming &&
     isReady &&
     textWithOutIndent &&
     textWithOutIndent.length <= MAX_HIGHLIGHT_CHARS;
@@ -151,19 +152,19 @@ const _ShikiCodeBlock: React.FC<ShikiCodeBlockProps> = ({
         })}
         {...preTagProps}
       >
-        {highlightedHtml ? (
-          <div
-            className={classNames(styles.shiki_code, wrap && styles.code_wrap)}
-          >
-            {showLineNumbers && (
-              <div className={styles.line_numbers}>
-                {textWithOutIndent?.split("\n").map((_, i) => (
-                  <span key={i} className={styles.line_number}>
-                    {i + 1}
-                  </span>
-                ))}
-              </div>
-            )}
+        <div
+          className={classNames(styles.shiki_code, wrap && styles.code_wrap)}
+        >
+          {showLineNumbers && highlightedHtml && (
+            <div className={styles.line_numbers}>
+              {textWithOutIndent?.split("\n").map((_, i) => (
+                <span key={i} className={styles.line_number}>
+                  {i + 1}
+                </span>
+              ))}
+            </div>
+          )}
+          {highlightedHtml ? (
             <code
               ref={codeRef}
               className={classNames(styles.code, styles.code_block)}
@@ -173,19 +174,20 @@ const _ShikiCodeBlock: React.FC<ShikiCodeBlockProps> = ({
                 ),
               }}
             />
-          </div>
-        ) : (
-          <code
-            className={classNames(
-              styles.code,
-              styles.code_block,
-              wrap && styles.code_wrap,
-            )}
-            ref={codeRef}
-          >
-            {textWithOutIndent}
-          </code>
-        )}
+          ) : (
+            <code
+              className={classNames(
+                styles.code,
+                styles.code_block,
+                wrap && styles.code_wrap,
+              )}
+              ref={codeRef}
+              style={!wrap ? { whiteSpace: "pre" } : undefined}
+            >
+              {textWithOutIndent}
+            </code>
+          )}
+        </div>
       </PreTag>
     </Box>
   );

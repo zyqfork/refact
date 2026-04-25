@@ -1,8 +1,73 @@
-import { describe, it, expect } from "vitest";
+import React from "react";
+import { describe, it, expect, vi } from "vitest";
 import { applyDeltaOps, DeltaOp } from "../services/refact/chatSubscription";
 import type { ChatMessage } from "../services/refact/types";
 import { selectToolResultById } from "../features/Chat/Thread/selectors";
 import type { RootState } from "../app/store";
+import type { Config } from "../features/Config/configSlice";
+import { render, waitFor, createDefaultChatState } from "../utils/test-utils";
+import { ChatContent } from "../components/ChatContent";
+import { Chat } from "../components/Chat";
+import { InnerApp } from "../features/App";
+import { MARKDOWN_ISSUE } from "../__fixtures__";
+import { applyChatEvent } from "../features/Chat/Thread";
+import type {
+  ChatMessages,
+  DiffChunk,
+  ToolConfirmationPauseReason,
+} from "../services/refact";
+
+const codeToHtmlSpy = vi.fn((code: string, options: { lang: string }) => {
+  return `<pre><code class="language-${options.lang}"><span data-token="1">${code}</span></code></pre>`;
+});
+
+const createHighlighterSpy = vi.fn(() =>
+  Promise.resolve({
+    getLoadedLanguages: () => ["typescript", "plaintext", "text"],
+    loadLanguage: () => Promise.resolve(),
+    codeToHtml: codeToHtmlSpy,
+  }),
+);
+
+vi.mock("shiki", () => ({
+  createHighlighter: createHighlighterSpy,
+}));
+
+function createThreadState(messages: ChatMessages) {
+  const chat = createDefaultChatState();
+  const id = MARKDOWN_ISSUE.id;
+  const runtime = {
+    ...chat.threads[chat.current_thread_id],
+    thread: {
+      ...MARKDOWN_ISSUE,
+      id,
+      messages,
+    },
+    snapshot_received: true,
+  };
+
+  const config: Config = {
+    host: "web",
+    lspPort: 8001,
+    themeProps: { appearance: "dark" },
+    features: {},
+    apiKey: "test",
+    addressURL: "http://127.0.0.1:8001",
+  };
+
+  return {
+    chat: {
+      ...chat,
+      current_thread_id: id,
+      open_thread_ids: [id],
+      threads: {
+        [id]: runtime,
+      },
+    },
+    config,
+    pages: [{ name: "chat" as const }],
+  };
+}
 
 describe("applyDeltaOps", () => {
   it("appends content correctly across multiple deltas", () => {
@@ -142,5 +207,409 @@ describe("selectToolResultById optimization", () => {
 
     const result = selectToolResultById(mockState, "nonexistent");
     expect(result).toBeUndefined();
+  });
+});
+
+describe("chat rendering regressions", () => {
+  it("streaming markdown still renders immediately while deferring Shiki", async () => {
+    const streamingState = createThreadState([
+      {
+        role: "assistant",
+        message_id: "msg-stream",
+        content: "## Streaming title\n\n```ts\nconst value = 1\n```\n\n- item",
+      },
+    ]);
+    streamingState.chat.threads[MARKDOWN_ISSUE.id].streaming = true;
+
+    const { container, unmount } = render(
+      React.createElement(ChatContent, {
+        onRetry: () => undefined,
+        onStopStreaming: () => undefined,
+      }),
+      {
+        preloadedState: streamingState,
+      },
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector("h2")?.textContent).toBe(
+        "Streaming title",
+      );
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(container.textContent).toContain("const value = 1");
+    expect(container.querySelector("pre code span[style]")).toBeNull();
+
+    unmount();
+
+    const settled = render(
+      React.createElement(ChatContent, {
+        onRetry: () => undefined,
+        onStopStreaming: () => undefined,
+      }),
+      {
+        preloadedState: createThreadState([
+          {
+            role: "assistant",
+            message_id: "msg-stream",
+            content:
+              "## Streaming title\n\n```ts\nconst value = 1\n```\n\n- item",
+          },
+        ]),
+      },
+    );
+
+    await waitFor(() => {
+      expect(
+        settled.container.querySelector("pre code span[style]"),
+      ).not.toBeNull();
+    });
+  });
+
+  it("incremental tail update renders appended tool context and diffs", async () => {
+    const baseMessages: ChatMessages = [
+      {
+        role: "user",
+        content: "show me the plan",
+      },
+      {
+        role: "assistant",
+        message_id: "msg-plan",
+        content: "Here is the plan.",
+        tool_calls: [
+          {
+            id: "tool-1",
+            type: "function",
+            index: 0,
+            function: {
+              name: "cat",
+              arguments: '{"paths":"README.md"}',
+            },
+          },
+        ],
+      },
+    ];
+
+    const diffs: DiffChunk[] = [
+      {
+        file_name: "README.md",
+        file_action: "edit",
+        line1: 1,
+        line2: 1,
+        lines_remove: "old line\n",
+        lines_add: "new line\n",
+      },
+    ];
+
+    const { store, container } = render(
+      React.createElement(ChatContent, {
+        onRetry: () => undefined,
+        onStopStreaming: () => undefined,
+      }),
+      {
+        preloadedState: createThreadState(baseMessages),
+      },
+    );
+
+    store.dispatch(
+      applyChatEvent({
+        chat_id: MARKDOWN_ISSUE.id,
+        seq: "1",
+        type: "message_added",
+        index: 2,
+        message: {
+          role: "context_file",
+          tool_call_id: "tool-1",
+          content: [
+            {
+              file_name: "README.md",
+              file_content: "# Demo\n\n```ts\nconsole.log('hello')\n```",
+              line1: 1,
+              line2: 4,
+            },
+          ],
+        },
+      }),
+    );
+
+    store.dispatch(
+      applyChatEvent({
+        chat_id: MARKDOWN_ISSUE.id,
+        seq: "2",
+        type: "message_added",
+        index: 3,
+        message: {
+          role: "diff",
+          tool_call_id: "tool-1",
+          content: diffs,
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Here is the plan.");
+      expect(container.textContent).toContain("README.md");
+      expect(container.textContent).toContain("+2 -2");
+    });
+  });
+
+  it("keeps appended context files grouped with the preceding read tool", async () => {
+    const baseMessages: ChatMessages = [
+      {
+        role: "assistant",
+        message_id: "msg-read",
+        content: "I'll inspect the file.",
+        tool_calls: [
+          {
+            id: "tool-read",
+            type: "function",
+            index: 0,
+            function: {
+              name: "cat",
+              arguments: '{"paths":"README.md"}',
+            },
+          },
+        ],
+      },
+    ];
+
+    const { store, container } = render(
+      React.createElement(ChatContent, {
+        onRetry: () => undefined,
+        onStopStreaming: () => undefined,
+      }),
+      {
+        preloadedState: createThreadState(baseMessages),
+      },
+    );
+
+    store.dispatch(
+      applyChatEvent({
+        chat_id: MARKDOWN_ISSUE.id,
+        seq: "1",
+        type: "message_added",
+        index: 1,
+        message: {
+          role: "context_file",
+          tool_call_id: "tool-read",
+          content: [
+            {
+              file_name: "README.md",
+              file_content: "hello",
+              line1: 1,
+              line2: 1,
+            },
+          ],
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Read README.md");
+    });
+
+    expect(container.textContent).not.toContain("Memories (1)");
+    expect(container.textContent).not.toContain("Project context (1)");
+  });
+
+  it("rebuilds grouped tool output when assistant tool calls change without changing message count", async () => {
+    const messages: ChatMessages = [
+      {
+        role: "assistant",
+        message_id: "msg-change",
+        content: "I'll inspect the file.",
+      },
+      {
+        role: "context_file",
+        tool_call_id: "tool-read",
+        content: [
+          {
+            file_name: "README.md",
+            file_content: "hello",
+            line1: 1,
+            line2: 1,
+          },
+        ],
+      },
+    ];
+
+    const { store, container } = render(
+      React.createElement(ChatContent, {
+        onRetry: () => undefined,
+        onStopStreaming: () => undefined,
+      }),
+      {
+        preloadedState: createThreadState(messages),
+      },
+    );
+
+    store.dispatch(
+      applyChatEvent({
+        chat_id: MARKDOWN_ISSUE.id,
+        seq: "1",
+        type: "message_updated",
+        message_id: "msg-change",
+        message: {
+          role: "assistant",
+          message_id: "msg-change",
+          content: "I'll inspect the file.",
+          tool_calls: [
+            {
+              id: "tool-read",
+              type: "function",
+              index: 0,
+              function: {
+                name: "cat",
+                arguments: '{"paths":"README.md"}',
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Read README.md");
+    });
+
+    expect(container.textContent).not.toContain("Memories (1)");
+    expect(container.textContent).not.toContain("Project context (1)");
+  });
+
+  it("chat form renders tool confirmation immediately alongside a large chat", async () => {
+    const base = createThreadState(MARKDOWN_ISSUE.messages);
+    const pauseReasons: ToolConfirmationPauseReason[] = [
+      {
+        type: "confirmation",
+        tool_name: "apply_patch",
+        command: "apply_patch",
+        rule: "ask_user",
+        tool_call_id: "tool-1",
+        integr_config_path: null,
+      },
+    ];
+
+    const { container } = render(
+      React.createElement(Chat, {
+        host: "web",
+        tabbed: false,
+        backFromChat: () => undefined,
+        unCalledTools: true,
+        maybeSendToSidebar: () => undefined,
+      }),
+      {
+        preloadedState: {
+          ...base,
+          chat: {
+            ...base.chat,
+            threads: {
+              [MARKDOWN_ISSUE.id]: {
+                ...base.chat.threads[MARKDOWN_ISSUE.id],
+                confirmation: {
+                  pause: true,
+                  pause_reasons: pauseReasons,
+                  status: {
+                    wasInteracted: false,
+                    confirmationStatus: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Allow Once");
+      expect(container.textContent).toContain("Stop");
+    });
+  });
+
+  it("dispatches a resize after the IDE root recovers from zero height", async () => {
+    const base = createThreadState(MARKDOWN_ISSUE.messages);
+    const resizeSpy = vi.spyOn(window, "dispatchEvent");
+    const originalResizeObserver = globalThis.ResizeObserver;
+    let resizeCallback: ResizeObserverCallback | undefined;
+
+    vi.stubGlobal(
+      "ResizeObserver",
+      vi.fn((cb: ResizeObserverCallback) => {
+        resizeCallback = cb;
+        return {
+          observe: vi.fn(),
+          unobserve: vi.fn(),
+          disconnect: vi.fn(),
+        };
+      }),
+    );
+
+    let rootHeight = 0;
+    const clientHeightSpy = vi
+      .spyOn(HTMLElement.prototype, "clientHeight", "get")
+      .mockImplementation(function mockClientHeight(this: HTMLElement) {
+        if (this.getAttribute("data-element") === "app-root") {
+          return rootHeight;
+        }
+        return 400;
+      });
+
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function mockRect(this: HTMLElement) {
+        if (this.getAttribute("data-element") === "app-root") {
+          return {
+            width: 400,
+            height: rootHeight,
+            top: 0,
+            left: 0,
+            right: 400,
+            bottom: rootHeight,
+            x: 0,
+            y: 0,
+            toJSON: () => undefined,
+          } as DOMRect;
+        }
+
+        return {
+          width: 400,
+          height: 400,
+          top: 0,
+          left: 0,
+          right: 400,
+          bottom: 400,
+          x: 0,
+          y: 0,
+          toJSON: () => undefined,
+        } as DOMRect;
+      });
+
+    render(React.createElement(InnerApp), {
+      preloadedState: {
+        ...base,
+        config: {
+          ...base.config,
+          host: "jetbrains",
+        },
+      },
+    });
+
+    resizeCallback?.([] as ResizeObserverEntry[], {} as ResizeObserver);
+    rootHeight = 400;
+    resizeCallback?.([] as ResizeObserverEntry[], {} as ResizeObserver);
+
+    await waitFor(() => {
+      expect(
+        resizeSpy.mock.calls.some(
+          ([event]) => event instanceof Event && event.type === "resize",
+        ),
+      ).toBe(true);
+    });
+
+    clientHeightSpy.mockRestore();
+    rectSpy.mockRestore();
+    vi.stubGlobal("ResizeObserver", originalResizeObserver);
   });
 });
