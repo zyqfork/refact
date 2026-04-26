@@ -64,19 +64,16 @@ where
             } else {
                 svc.workflow_failed(&workflow_id_owned, activity);
             }
-        }
-        drop(buddy);
-
-        if let Some(root) = project_root {
-            let path = root.join(format!(".refact/buddy/chats/workflows/{}.json", workflow_id_owned));
-            append_workflow_entry(&path, &summary, success).await;
+            if let Some(ref root) = project_root {
+                svc.append_workflow_transcript(root, &workflow_id_owned, &summary, success).await;
+            }
         }
     });
 
     result
 }
 
-async fn append_workflow_entry(path: &std::path::Path, output_summary: &str, success: bool) {
+pub async fn append_workflow_entry(path: &std::path::Path, output_summary: &str, success: bool) {
     let entry = WorkflowEntry {
         timestamp: Utc::now().to_rfc3339(),
         input_summary: String::new(),
@@ -96,12 +93,7 @@ async fn append_workflow_entry(path: &std::path::Path, output_summary: &str, suc
         transcript.entries.drain(0..drain);
     }
 
-    match serde_json::to_string(&transcript) {
-        Ok(json) => {
-            if let Err(e) = tokio::fs::write(path, json).await {
-                warn!("buddy: failed to write workflow transcript {:?}: {}", path, e);
-            }
-        }
-        Err(e) => warn!("buddy: failed to serialize workflow transcript: {}", e),
+    if let Err(e) = super::storage::atomic_write_json(path, &transcript).await {
+        warn!("buddy: failed to write workflow transcript {:?}: {}", path, e);
     }
 }

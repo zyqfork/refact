@@ -121,6 +121,17 @@ impl BuddyService {
         }
     }
 
+    pub async fn append_workflow_transcript(
+        &self,
+        project_root: &std::path::Path,
+        workflow_id: &str,
+        output_summary: &str,
+        success: bool,
+    ) {
+        let path = project_root.join(format!(".refact/buddy/chats/workflows/{}.json", workflow_id));
+        super::workflows::append_workflow_entry(&path, output_summary, success).await;
+    }
+
     pub fn expire_suggestions(&mut self) {
         let now = chrono::Utc::now();
         let mut changed = false;
