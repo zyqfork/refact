@@ -73,6 +73,8 @@ import {
   setManualPreviewItems,
   removeManualPreviewItem,
   clearManualPreviewItems,
+  openBuddyChat,
+  newBuddyChatAction,
 } from "./actions";
 import { applyDeltaOps } from "../../../services/refact/chatSubscription";
 import {
@@ -494,6 +496,51 @@ export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(setTaskWidgetExpanded, (state, action) => {
     const rt = getRuntime(state, action.payload.id);
     if (rt) rt.task_widget_expanded = action.payload.expanded;
+  });
+
+  builder.addCase(openBuddyChat, (state, action) => {
+    const { chat_id, title } = action.payload;
+    const existingRt = getRuntime(state, chat_id);
+    if (existingRt) {
+      if (!state.open_thread_ids.includes(chat_id)) {
+        state.open_thread_ids.push(chat_id);
+      }
+      state.current_thread_id = chat_id;
+      return;
+    }
+    const newRuntime = createThreadRuntime(state.tool_use, null, "buddy");
+    newRuntime.thread.id = chat_id;
+    newRuntime.thread.buddy_meta = {
+      is_buddy_chat: true,
+      buddy_chat_kind: "conversation",
+      workflow_id: null,
+    };
+    if (title) newRuntime.thread.title = title;
+    state.threads[chat_id] = newRuntime;
+    state.open_thread_ids.push(chat_id);
+    state.current_thread_id = chat_id;
+  });
+
+  builder.addCase(newBuddyChatAction, (state, action) => {
+    const { chat_id } = action.payload;
+    const existingRt = getRuntime(state, chat_id);
+    if (existingRt) {
+      if (!state.open_thread_ids.includes(chat_id)) {
+        state.open_thread_ids.push(chat_id);
+      }
+      state.current_thread_id = chat_id;
+      return;
+    }
+    const newRuntime = createThreadRuntime(state.tool_use, null, "buddy");
+    newRuntime.thread.id = chat_id;
+    newRuntime.thread.buddy_meta = {
+      is_buddy_chat: true,
+      buddy_chat_kind: "conversation",
+      workflow_id: null,
+    };
+    state.threads[chat_id] = newRuntime;
+    state.open_thread_ids.push(chat_id);
+    state.current_thread_id = chat_id;
   });
 
   builder.addCase(setAutoEnrichmentEnabled, (state, action) => {
@@ -927,6 +974,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
         const snapshotTaskMeta = event.thread.task_meta ?? existing?.task_meta;
         const isTaskChat =
           Boolean(existing?.is_task_chat) || Boolean(snapshotTaskMeta?.task_id);
+        const snapshotBuddyMeta =
+          (event.thread as { buddy_meta?: ChatThread["buddy_meta"] })
+            .buddy_meta ?? existing?.buddy_meta;
 
         const snapshotTitle = event.thread.title;
         const existingTitle = existingRuntime?.thread.title;
@@ -996,6 +1046,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
             typeof event.thread.auto_enrichment_enabled === "boolean"
               ? (event.thread.auto_enrichment_enabled as boolean)
               : existing?.auto_enrichment_enabled ?? false,
+          buddy_meta: snapshotBuddyMeta,
         };
 
         const snapshotState = event.runtime.state as string;
@@ -1038,7 +1089,12 @@ export const chatReducer = createReducer(initialState, (builder) => {
 
         state.threads[chat_id] = newRt;
 
-        if (!isTaskChat && !state.open_thread_ids.includes(chat_id)) {
+        const isBuddyChat = Boolean(snapshotBuddyMeta?.is_buddy_chat);
+        if (
+          !isTaskChat &&
+          !isBuddyChat &&
+          !state.open_thread_ids.includes(chat_id)
+        ) {
           state.open_thread_ids.push(chat_id);
         }
         if (!state.current_thread_id) {

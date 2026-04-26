@@ -64,6 +64,7 @@ export type TabDisplayData = {
   title: string;
   session_state?: string;
   mode?: string;
+  is_buddy_chat?: boolean;
 };
 
 export const selectTabsDisplayData = createSelector(
@@ -84,6 +85,7 @@ export const selectTabsDisplayData = createSelector(
         title: runtime?.thread.title ?? historyItem?.title ?? "New Chat",
         session_state: liveSessionState ?? historyItem?.session_state,
         mode: runtime?.thread.mode ?? historyItem?.mode,
+        is_buddy_chat: !!runtime?.thread.buddy_meta?.is_buddy_chat,
       };
     }),
 );
@@ -625,3 +627,6 @@ export const selectManualPreviewItemsById = (
 
 export const selectManualPreviewRan = (state: RootState) =>
   state.chat.threads[state.chat.current_thread_id]?.manual_preview_ran ?? false;
+
+export const selectIsBuddyChat = (state: RootState, chatId: string): boolean =>
+  !!state.chat.threads[chatId]?.thread.buddy_meta?.is_buddy_chat;

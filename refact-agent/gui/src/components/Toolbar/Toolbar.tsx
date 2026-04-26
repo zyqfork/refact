@@ -531,8 +531,10 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
                   <span className={styles.tabStatus}>
                     <StatusDot state={statusState} size="small" />
                   </span>
-                  <span className={styles.tabTitle}>{tab.title}</span>
-                  {modeLabel && (
+                  <span className={styles.tabTitle}>
+                    {tab.is_buddy_chat ? `👾 ${tab.title}` : tab.title}
+                  </span>
+                  {!tab.is_buddy_chat && modeLabel && (
                     <Badge
                       size="1"
                       color={getModeColor(tab.mode)}

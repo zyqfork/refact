@@ -62,6 +62,12 @@ export function isTaskChatLike(
   return Boolean(x.task_id ?? x.task_meta?.task_id ?? x.is_task_chat);
 }
 
+export function isBuddyChatLike(
+  x: Partial<Pick<ChatHistoryItem, "buddy_meta">>,
+): boolean {
+  return Boolean(x.buddy_meta?.is_buddy_chat);
+}
+
 export type HistoryMeta = Pick<
   ChatHistoryItem,
   "id" | "title" | "createdAt" | "model" | "updatedAt"
@@ -94,7 +100,7 @@ export function buildHistoryTree(
   chats: Record<string, ChatHistoryItem>,
 ): HistoryTreeNode[] {
   const nodes = Object.values(chats)
-    .filter((x) => !isTaskChatLike(x))
+    .filter((x) => !isTaskChatLike(x) && !isBuddyChatLike(x))
     .map((x) => ({ ...x, children: [] as HistoryTreeNode[] }));
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -281,6 +287,7 @@ export const historySlice = createSlice({
     saveChat: (state, action: PayloadAction<ChatThread>) => {
       if (action.payload.messages.length === 0) return;
       if (isTaskChatLike(action.payload)) return;
+      if (isBuddyChatLike(action.payload)) return;
       const chat = chatThreadToHistoryItem(action.payload);
       chat.message_count = action.payload.messages.length;
       chat.messages = [];
@@ -562,7 +569,7 @@ export const historySlice = createSlice({
 
     getHistory: (state): ChatHistoryItem[] =>
       Object.values(state.chats)
-        .filter((item) => !isTaskChatLike(item))
+        .filter((item) => !isTaskChatLike(item) && !isBuddyChatLike(item))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
 
     getHistoryTree: (state): HistoryTreeNode[] => buildHistoryTree(state.chats),
@@ -662,6 +669,7 @@ startHistoryListening({
     const runtime = state.chat.threads[id];
     if (!runtime) return;
     if (isTaskChatLike(runtime.thread)) return;
+    if (isBuddyChatLike(runtime.thread)) return;
     listenerApi.dispatch(
       upsertChatStub({
         id,
@@ -693,6 +701,7 @@ startHistoryListening({
   actionCreator: restoreChat,
   effect: (action, listenerApi) => {
     if (isTaskChatLike(action.payload)) return;
+    if (isBuddyChatLike(action.payload)) return;
     listenerApi.dispatch(
       upsertChatStub({
         id: action.payload.id,
@@ -710,6 +719,7 @@ startHistoryListening({
     const runtime = state.chat.threads[action.payload.id];
     if (!runtime) return;
     if (isTaskChatLike(runtime.thread)) return;
+    if (isBuddyChatLike(runtime.thread)) return;
     listenerApi.dispatch(
       upsertChatStub({
         id: action.payload.id,

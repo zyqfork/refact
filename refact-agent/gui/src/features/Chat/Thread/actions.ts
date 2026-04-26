@@ -544,3 +544,11 @@ export const setTaskWidgetExpanded = createAction<{
   id: string;
   expanded: boolean;
 }>("chatThread/setTaskWidgetExpanded");
+
+export const openBuddyChat = createAction<{ chat_id: string; title?: string }>(
+  "chat/openBuddyChat",
+);
+
+export const newBuddyChatAction = createAction<{ chat_id: string }>(
+  "chat/newBuddyChat",
+);

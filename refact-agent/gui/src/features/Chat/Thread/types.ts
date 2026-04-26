@@ -2,6 +2,7 @@ import { ToolConfirmationPauseReason, Usage } from "../../../services/refact";
 import { SystemPrompts } from "../../../services/refact/prompts";
 import { ChatMessages } from "../../../services/refact/types";
 import { parseOrElse } from "../../../utils/parseOrElse";
+import { BuddyThreadMeta } from "../../Buddy/types";
 
 export type ImageFile = {
   name: string;
@@ -136,6 +137,8 @@ export type ChatThread = {
   active_skill?: string | null;
 
   auto_enrichment_enabled?: boolean;
+
+  buddy_meta?: BuddyThreadMeta;
 };
 
 export type SuggestedChat = {
