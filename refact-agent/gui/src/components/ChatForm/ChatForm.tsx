@@ -123,6 +123,7 @@ import {
   selectIsBuddyChat,
 } from "../../features/Chat";
 import { telemetryApi } from "../../services/refact";
+import { useReportErrorMutation } from "../../services/refact/buddy";
 import { push } from "../../features/Pages/pagesSlice";
 
 import { useUsageCounter } from "../UsageCounter/useUsageCounter";
@@ -160,6 +161,12 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   );
   const information = useAppSelector(getInformationMessage);
   const pauseReasonsWithPause = useAppSelector(selectThreadConfirmation);
+  const [reportError] = useReportErrorMutation();
+  useEffect(() => {
+    if (chatError) {
+      void reportError({ error: chatError, chat_id: chatId });
+    }
+  }, [chatError, chatId, reportError]);
   const [helpInfo, setHelpInfo] = React.useState<React.ReactNode | null>(null);
   const [isVoiceActive, setIsVoiceActive] = React.useState(false);
   const [liveTranscript, setLiveTranscript] = React.useState("");

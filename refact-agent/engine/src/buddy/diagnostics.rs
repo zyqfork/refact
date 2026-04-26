@@ -29,11 +29,12 @@ pub async fn collect_diagnostics(
     _gcx: Arc<ARwLock<GlobalContext>>,
     error: &str,
 ) -> DiagnosticContext {
-    let severity = if error.contains("critical") || error.contains("panic") {
+    let lower = error.to_lowercase();
+    let severity = if lower.contains("critical") || lower.contains("panic") {
         DiagnosticSeverity::Critical
-    } else if error.contains("error") || error.contains("Error") {
+    } else if lower.contains("error") {
         DiagnosticSeverity::High
-    } else if error.contains("warn") || error.contains("Warn") {
+    } else if lower.contains("warn") {
         DiagnosticSeverity::Medium
     } else {
         DiagnosticSeverity::Low
@@ -50,13 +51,14 @@ pub async fn collect_diagnostics(
 }
 
 fn classify_error(error: &str) -> String {
-    if error.contains("timeout") || error.contains("Timeout") {
+    let lower = error.to_lowercase();
+    if lower.contains("timeout") {
         "timeout".to_string()
-    } else if error.contains("permission") || error.contains("Permission") {
+    } else if lower.contains("permission") {
         "permission".to_string()
-    } else if error.contains("network") || error.contains("connect") {
+    } else if lower.contains("network") || lower.contains("connect") {
         "network".to_string()
-    } else if error.contains("parse") || error.contains("Parse") {
+    } else if lower.contains("parse") {
         "parse".to_string()
     } else {
         "generic".to_string()

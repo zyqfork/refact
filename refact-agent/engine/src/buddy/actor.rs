@@ -132,6 +132,38 @@ impl BuddyService {
         super::workflows::append_workflow_entry(&path, output_summary, success).await;
     }
 
+    pub fn report_error(&mut self, error_type: &str, error_msg: &str, source: Option<&str>, chat_id: Option<&str>) {
+        let lower = error_msg.to_lowercase();
+        let severity = if lower.contains("critical") || lower.contains("panic") {
+            super::diagnostics::DiagnosticSeverity::Critical
+        } else if lower.contains("error") {
+            super::diagnostics::DiagnosticSeverity::High
+        } else if lower.contains("warn") {
+            super::diagnostics::DiagnosticSeverity::Medium
+        } else {
+            super::diagnostics::DiagnosticSeverity::High
+        };
+        let ctx = super::diagnostics::DiagnosticContext {
+            error_type: error_type.to_string(),
+            error_message: error_msg.to_string(),
+            source_file: source.map(|s| s.to_string()),
+            tool_name: None,
+            chat_id: chat_id.map(|s| s.to_string()),
+            collected_at: Utc::now().to_rfc3339(),
+            severity,
+        };
+        self.add_diagnostic(ctx);
+        let end = 80.min(error_msg.len());
+        let truncated = &error_msg[..end];
+        self.add_activity(BuddyActivity {
+            icon: "⚠️".to_string(),
+            title: format!("{}: {}", error_type, truncated),
+            description: error_msg.to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            activity_type: "error".to_string(),
+        });
+    }
+
     pub fn expire_suggestions(&mut self) {
         let now = chrono::Utc::now();
         let mut changed = false;

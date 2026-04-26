@@ -580,6 +580,16 @@ pub fn start_generation(
                 let task_meta_opt = {
                     let mut session = session_arc.lock().await;
                     if !session.abort_flag.load(Ordering::SeqCst) {
+                        let gcx2 = gcx.clone();
+                        let err_clone = e.clone();
+                        let chat_id2 = chat_id.clone();
+                        tokio::spawn(async move {
+                            let buddy_arc = gcx2.read().await.buddy.clone();
+                            let mut lock = buddy_arc.lock().await;
+                            if let Some(svc) = lock.as_mut() {
+                                svc.report_error("llm_error", &err_clone, Some("chat/generation.rs"), Some(&chat_id2));
+                            }
+                        });
                         session.finish_stream_with_error(e);
                     }
                     session.thread.task_meta.clone()

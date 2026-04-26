@@ -103,6 +103,27 @@ export const buddyApi = createApi({
         return { data: { dismissed: true } };
       },
     }),
+    reportError: builder.mutation<
+      void,
+      {
+        error: string;
+        source_file?: string;
+        tool_name?: string;
+        chat_id?: string;
+      }
+    >({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/diagnostics/collect`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: undefined };
+      },
+    }),
   }),
 });
 
@@ -114,4 +135,5 @@ export const {
   useGetBuddyConversationsQuery,
   useCreateBuddyConversationMutation,
   useDismissBuddySuggestionMutation,
+  useReportErrorMutation,
 } = buddyApi;
