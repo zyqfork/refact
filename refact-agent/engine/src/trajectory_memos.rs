@@ -146,11 +146,17 @@ async fn process_single_trajectory(
 
     let chat_messages = build_chat_messages(messages);
 
-    let extraction = extract_memos_and_meta(
+    let gcx2 = gcx.clone();
+    let title2 = current_title.clone();
+    let extraction = crate::buddy::workflows::buddy_wrap_workflow(
         gcx.clone(),
-        chat_messages,
-        &current_title,
-        is_title_generated,
+        "memo_extraction",
+        "🧠",
+        8,
+        |r: &ExtractionResult| format!("Memory extracted: {} memos", r.memos.len()),
+        move || async move {
+            extract_memos_and_meta(gcx2, chat_messages, &title2, is_title_generated).await
+        },
     )
     .await?;
 

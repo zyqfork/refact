@@ -111,76 +111,95 @@ pub async fn generate_commit_message_by_diff(
     if diff.is_empty() {
         return Err("The provided diff is empty".to_string());
     }
+    let diff = diff.clone();
+    let commit_message_prompt = commit_message_prompt.clone();
+    let gcx2 = gcx.clone();
+    crate::buddy::workflows::buddy_wrap_workflow(
+        gcx,
+        "commit_message",
+        "📦",
+        5,
+        |msg: &String| {
+            let short: String = msg.lines().next().unwrap_or("").chars().take(50).collect();
+            format!("Commit message: {}", short)
+        },
+        move || async move {
+            let subagent_config = get_subagent_config(gcx2.clone(), SUBAGENT_ID, None)
+                .await
+                .ok_or_else(|| format!("subagent config '{}' not found", SUBAGENT_ID))?;
 
-    let subagent_config = get_subagent_config(gcx.clone(), SUBAGENT_ID, None)
-        .await
-        .ok_or_else(|| format!("subagent config '{}' not found", SUBAGENT_ID))?;
+            let messages = if let Some(text) = commit_message_prompt {
+                let system_prompt = subagent_config
+                    .prompts
+                    .diff_with_user_text
+                    .as_ref()
+                    .ok_or_else(|| {
+                        format!(
+                            "prompts.diff_with_user_text not defined for subagent '{}'",
+                            SUBAGENT_ID
+                        )
+                    })?;
+                vec![
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: ChatContent::SimpleText(system_prompt.clone()),
+                        ..Default::default()
+                    },
+                    ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::SimpleText(format!(
+                            "Commit message:\n```\n{}\n```\nDiff:\n```\n{}\n```\n",
+                            text, diff
+                        )),
+                        ..Default::default()
+                    },
+                ]
+            } else {
+                let system_prompt =
+                    subagent_config.prompts.diff_only.as_ref().ok_or_else(|| {
+                        format!(
+                            "prompts.diff_only not defined for subagent '{}'",
+                            SUBAGENT_ID
+                        )
+                    })?;
+                vec![
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: ChatContent::SimpleText(system_prompt.clone()),
+                        ..Default::default()
+                    },
+                    ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::SimpleText(format!(
+                            "Diff:\n```\n{}\n```\n",
+                            diff
+                        )),
+                        ..Default::default()
+                    },
+                ]
+            };
+            let result = run_subchat_once(gcx2, SUBAGENT_ID, messages)
+                .await
+                .map_err(|e| format!("Error: {}", e))?;
 
-    let messages = if let Some(text) = commit_message_prompt {
-        let system_prompt = subagent_config
-            .prompts
-            .diff_with_user_text
-            .as_ref()
-            .ok_or_else(|| {
-                format!(
-                    "prompts.diff_with_user_text not defined for subagent '{}'",
-                    SUBAGENT_ID
-                )
-            })?;
-        vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: ChatContent::SimpleText(system_prompt.clone()),
-                ..Default::default()
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: ChatContent::SimpleText(format!(
-                    "Commit message:\n```\n{}\n```\nDiff:\n```\n{}\n```\n",
-                    text, diff
-                )),
-                ..Default::default()
-            },
-        ]
-    } else {
-        let system_prompt = subagent_config.prompts.diff_only.as_ref().ok_or_else(|| {
-            format!(
-                "prompts.diff_only not defined for subagent '{}'",
-                SUBAGENT_ID
-            )
-        })?;
-        vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: ChatContent::SimpleText(system_prompt.clone()),
-                ..Default::default()
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: ChatContent::SimpleText(format!("Diff:\n```\n{}\n```\n", diff)),
-                ..Default::default()
-            },
-        ]
-    };
-    let result = run_subchat_once(gcx, SUBAGENT_ID, messages)
-        .await
-        .map_err(|e| format!("Error: {}", e))?;
+            let commit_message = result
+                .messages
+                .last()
+                .and_then(|last_m| match &last_m.content {
+                    ChatContent::SimpleText(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .ok_or("No commit message was generated".to_string())?;
 
-    let commit_message = result
-        .messages
-        .last()
-        .and_then(|last_m| match &last_m.content {
-            ChatContent::SimpleText(text) => Some(text.clone()),
-            _ => None,
-        })
-        .ok_or("No commit message was generated".to_string())?;
-
-    let code_blocks = remove_fencing(&commit_message);
-    if !code_blocks.is_empty() {
-        Ok(code_blocks[0].clone())
-    } else {
-        Ok(commit_message)
-    }
+            let code_blocks = remove_fencing(&commit_message);
+            if !code_blocks.is_empty() {
+                Ok(code_blocks[0].clone())
+            } else {
+                Ok(commit_message)
+            }
+        },
+    )
+    .await
 }
 
 pub async fn _generate_commit_message_for_projects(
