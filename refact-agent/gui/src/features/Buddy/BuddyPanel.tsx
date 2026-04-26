@@ -8,8 +8,9 @@ import { useBuddyState } from "./hooks/useBuddyState";
 import {
   selectBuddySnapshot,
   selectIsBuddyEnabled,
+  selectNowPlaying,
 } from "./buddySlice";
-import { PALETTES, STAGES } from "./constants";
+import { PALETTES, STAGES, SIGNALS } from "./constants";
 import { computeXpFill } from "./buddyUtils";
 import { useCreateBuddyConversationMutation } from "../../services/refact/buddy";
 import { useGetSetupStatusQuery } from "../../services/refact/setupStatus";
@@ -19,6 +20,7 @@ export const BuddyPanel: React.FC = () => {
   const dispatch = useAppDispatch();
   const snapshot = useAppSelector(selectBuddySnapshot);
   const enabled = useAppSelector(selectIsBuddyEnabled);
+  const nowPlaying = useAppSelector(selectNowPlaying);
   const [createConversation] = useCreateBuddyConversationMutation();
   const { data: setupData } = useGetSetupStatusQuery(undefined, {
     refetchOnMountOrArgChange: true,
@@ -99,6 +101,22 @@ export const BuddyPanel: React.FC = () => {
 
           {statusText && (
             <div className={styles.statusText}>{statusText}</div>
+          )}
+
+          {nowPlaying && (
+            <div className={styles.statusBubble}>
+              <span className={styles.statusIcon}>
+                {SIGNALS[nowPlaying.signal_type]?.icon ?? "⚡"}
+              </span>
+              <div className={styles.statusContent}>
+                <span className={styles.statusTitle}>{nowPlaying.title}</span>
+                {nowPlaying.progress != null && (
+                  <div className={styles.progressBar}>
+                    <div style={{ width: `${nowPlaying.progress}%` }} />
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           <div className={styles.xpRow}>

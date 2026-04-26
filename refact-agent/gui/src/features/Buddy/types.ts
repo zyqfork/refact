@@ -456,10 +456,25 @@ export interface DiagnosticContext {
   severity: "low" | "medium" | "high" | "critical";
 }
 
+export interface BuddyRuntimeEvent {
+  id: string;
+  signal_type: string;
+  title: string;
+  description?: string;
+  source: string;
+  status: "started" | "progress" | "completed" | "failed" | "info";
+  progress?: number;
+  dedupe_key?: string;
+  priority: string;
+  created_at: string;
+  ttl_ms?: number;
+}
+
 export type BuddySSEEvent =
   | { event_type: "StateUpdated"; state: BuddyState }
   | { event_type: "ActivityAdded"; activity: BuddyActivityEntry }
   | { event_type: "SuggestionAdded"; suggestion: BuddySuggestion }
   | { event_type: "SuggestionDismissed"; suggestion_id: string }
   | { event_type: "SettingsChanged"; settings: BuddySettings }
-  | { event_type: "DiagnosticAdded"; diagnostic: DiagnosticContext };
+  | { event_type: "DiagnosticAdded"; diagnostic: DiagnosticContext }
+  | { event_type: "RuntimeEvent"; event: BuddyRuntimeEvent };

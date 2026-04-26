@@ -9,6 +9,10 @@ import {
   selectBuddySnapshot,
   selectBuddySignalQueue,
   consumeBuddySignal,
+  selectRuntimeQueue,
+  selectNowPlaying,
+  dequeueRuntimeEvent,
+  clearNowPlaying,
 } from "../buddySlice";
 import type { BuddySemanticState, BuddyEvent } from "../types";
 
@@ -34,6 +38,8 @@ export function useBuddyState(
   const reduxDispatch = useAppDispatch();
   const reduxSnapshot = useAppSelector(selectBuddySnapshot);
   const signalQueue = useAppSelector(selectBuddySignalQueue);
+  const runtimeQueue = useAppSelector(selectRuntimeQueue);
+  const nowPlaying = useAppSelector(selectNowPlaying);
 
   useEffect(() => {
     if (!reduxSnapshot) return;
@@ -53,6 +59,21 @@ export function useBuddyState(
     dispatch({ kind: "signal", signalType: next.signalType });
     reduxDispatch(consumeBuddySignal());
   }, [signalQueue, reduxDispatch]);
+
+  useEffect(() => {
+    if (!nowPlaying && runtimeQueue.length > 0) {
+      reduxDispatch(dequeueRuntimeEvent());
+    }
+  }, [nowPlaying, runtimeQueue.length, reduxDispatch]);
+
+  useEffect(() => {
+    if (!nowPlaying) return;
+    dispatch({ kind: "signal", signalType: nowPlaying.signal_type });
+    const ttl =
+      nowPlaying.status === "progress" ? 8000 : (nowPlaying.ttl_ms ?? 4000);
+    const timer = setTimeout(() => reduxDispatch(clearNowPlaying()), ttl);
+    return () => clearTimeout(timer);
+  }, [nowPlaying, reduxDispatch]);
 
   const signal = useCallback(
     (signalType: string) => dispatch({ kind: "signal", signalType }),

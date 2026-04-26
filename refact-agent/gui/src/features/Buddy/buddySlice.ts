@@ -7,6 +7,7 @@ import type {
   BuddySettings,
   BuddyConversationMeta,
   DiagnosticContext,
+  BuddyRuntimeEvent,
 } from "./types";
 
 interface BuddySignalQueueItem {
@@ -20,6 +21,8 @@ interface BuddySliceState {
   conversations: BuddyConversationMeta[];
   recentDiagnostics: DiagnosticContext[];
   signalQueue: BuddySignalQueueItem[];
+  runtimeQueue: BuddyRuntimeEvent[];
+  nowPlaying: BuddyRuntimeEvent | null;
 }
 
 const initialState: BuddySliceState = {
@@ -28,6 +31,8 @@ const initialState: BuddySliceState = {
   conversations: [],
   recentDiagnostics: [],
   signalQueue: [],
+  runtimeQueue: [],
+  nowPlaying: null,
 };
 
 export const buddySlice = createSlice({
@@ -86,6 +91,50 @@ export const buddySlice = createSlice({
     consumeBuddySignal: (state) => {
       state.signalQueue.shift();
     },
+    enqueueRuntimeEvent: (state, action: PayloadAction<BuddyRuntimeEvent>) => {
+      const event = action.payload;
+      if (event.dedupe_key) {
+        const idx = state.runtimeQueue.findIndex(
+          (e) => e.dedupe_key === event.dedupe_key,
+        );
+        if (idx >= 0) {
+          state.runtimeQueue[idx] = event;
+          return;
+        }
+        if (state.nowPlaying?.dedupe_key === event.dedupe_key) {
+          state.nowPlaying = event;
+          return;
+        }
+      }
+      if (event.priority === "critical" || event.priority === "high") {
+        state.runtimeQueue.unshift(event);
+      } else {
+        state.runtimeQueue.push(event);
+      }
+      if (state.runtimeQueue.length > 100) {
+        state.runtimeQueue.splice(100);
+      }
+    },
+    dequeueRuntimeEvent: (state) => {
+      if (state.runtimeQueue.length > 0) {
+        state.nowPlaying = state.runtimeQueue.shift()!;
+      }
+    },
+    clearNowPlaying: (state) => {
+      state.nowPlaying = null;
+    },
+    updateRuntimeProgress: (
+      state,
+      action: PayloadAction<{ dedupe_key: string; progress: number }>,
+    ) => {
+      const { dedupe_key, progress } = action.payload;
+      const item = state.runtimeQueue.find((e) => e.dedupe_key === dedupe_key);
+      if (item) {
+        item.progress = progress;
+      } else if (state.nowPlaying?.dedupe_key === dedupe_key) {
+        state.nowPlaying.progress = progress;
+      }
+    },
   },
   selectors: {
     selectBuddySnapshot: (state) => state.snapshot,
@@ -99,6 +148,8 @@ export const buddySlice = createSlice({
     selectIsBuddyEnabled: (state) => state.snapshot?.enabled ?? false,
     selectBuddyDiagnostics: (state) => state.recentDiagnostics,
     selectBuddySignalQueue: (state) => state.signalQueue,
+    selectRuntimeQueue: (state) => state.runtimeQueue,
+    selectNowPlaying: (state) => state.nowPlaying,
   },
 });
 
@@ -113,6 +164,10 @@ export const {
   addBuddyDiagnostic,
   enqueueBuddySignal,
   consumeBuddySignal,
+  enqueueRuntimeEvent,
+  dequeueRuntimeEvent,
+  clearNowPlaying,
+  updateRuntimeProgress,
 } = buddySlice.actions;
 
 export const {
@@ -125,4 +180,6 @@ export const {
   selectIsBuddyEnabled,
   selectBuddyDiagnostics,
   selectBuddySignalQueue,
+  selectRuntimeQueue,
+  selectNowPlaying,
 } = buddySlice.selectors;

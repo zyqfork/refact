@@ -9,8 +9,9 @@ import { useBuddyState } from "./hooks/useBuddyState";
 import {
   selectBuddySnapshot,
   selectBuddyActivities,
+  selectNowPlaying,
 } from "./buddySlice";
-import { PALETTES, STAGES, SKILLS } from "./constants";
+import { PALETTES, STAGES, SKILLS, SIGNALS } from "./constants";
 import { computeXpFill } from "./buddyUtils";
 import { useGetStatsSummaryQuery } from "../../services/refact/stats";
 import { useGetSetupStatusQuery } from "../../services/refact/setupStatus";
@@ -21,6 +22,7 @@ export const BuddyHome: React.FC = () => {
   const dispatch = useAppDispatch();
   const snapshot = useAppSelector(selectBuddySnapshot);
   const activities = useAppSelector(selectBuddyActivities);
+  const nowPlaying = useAppSelector(selectNowPlaying);
   const buddy = useBuddyState();
   const { state } = buddy;
   const [setupDismissed, setSetupDismissed] = useState(false);
@@ -124,6 +126,22 @@ export const BuddyHome: React.FC = () => {
 
         {statusText && (
           <div className={styles.statusText}>{statusText}</div>
+        )}
+
+        {nowPlaying && (
+          <div className={styles.statusBubble}>
+            <span className={styles.statusIcon}>
+              {SIGNALS[nowPlaying.signal_type]?.icon ?? "⚡"}
+            </span>
+            <div className={styles.statusContent}>
+              <span className={styles.statusTitle}>{nowPlaying.title}</span>
+              {nowPlaying.progress != null && (
+                <div className={styles.progressBar}>
+                  <div style={{ width: `${nowPlaying.progress}%` }} />
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {setupNeeded && (

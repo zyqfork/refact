@@ -31,6 +31,7 @@ import {
   updateBuddySettings,
   addBuddyDiagnostic,
   enqueueBuddySignal,
+  enqueueRuntimeEvent,
 } from "../features/Buddy/buddySlice";
 import type { BuddySSEEvent } from "../features/Buddy/types";
 
@@ -409,6 +410,9 @@ export function useSidebarSubscription() {
           break;
         case "DiagnosticAdded":
           dispatch(addBuddyDiagnostic(buddy_event.diagnostic));
+          break;
+        case "RuntimeEvent":
+          dispatch(enqueueRuntimeEvent(buddy_event.event));
           break;
       }
       const signal = mapBuddyEventToSignal(buddy_event);
