@@ -94,6 +94,10 @@ export interface MarketplaceHubPage {
   name: "marketplace hub";
 }
 
+export interface BuddyPage {
+  name: "buddy";
+}
+
 export interface IntegrationsSetupPage {
   name: "integrations page";
   projectPath?: string;
@@ -125,7 +129,8 @@ export type Page =
   | SkillsMarketplacePage
   | CommandsMarketplacePage
   | SubagentsMarketplacePage
-  | MarketplaceHubPage;
+  | MarketplaceHubPage
+  | BuddyPage;
 
 export function isIntegrationSetupPage(
   page: Page,

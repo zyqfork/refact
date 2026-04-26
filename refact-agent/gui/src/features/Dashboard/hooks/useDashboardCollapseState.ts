@@ -3,6 +3,7 @@ import { useState, useCallback } from "react";
 const STORAGE_KEY = "dashboard:v1:collapse";
 
 type CollapseState = {
+  buddy: boolean;
   stats: boolean;
   open: boolean;
   setup: boolean;
@@ -11,6 +12,7 @@ type CollapseState = {
 };
 
 const DEFAULTS: CollapseState = {
+  buddy: false,
   stats: false,
   open: false,
   setup: false,
@@ -30,6 +32,7 @@ function load(): CollapseState {
         Record<keyof CollapseState, unknown>
       >;
       return {
+        buddy: isBool(parsed.buddy) ? parsed.buddy : DEFAULTS.buddy,
         stats: isBool(parsed.stats) ? parsed.stats : DEFAULTS.stats,
         open: isBool(parsed.open) ? parsed.open : DEFAULTS.open,
         setup: isBool(parsed.setup) ? parsed.setup : DEFAULTS.setup,

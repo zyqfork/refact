@@ -57,6 +57,7 @@ import { SubagentsMarketplace } from "./SubagentsMarketplace";
 import { MarketplaceHub } from "./MarketplaceHub";
 import { StatsDashboard } from "./StatsDashboard";
 import { Dashboard } from "./Dashboard";
+import { BuddyHome } from "./Buddy/BuddyHome";
 import { ChatLoading } from "../components/ChatContent/ChatLoading";
 
 import styles from "./App.module.css";
@@ -405,6 +406,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
             host={config.host}
           />
         )}
+        {!pageSwitching && renderedPage.name === "buddy" && <BuddyHome />}
       </PageWrapper>
     </Flex>
   );

@@ -1,0 +1,149 @@
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.block[data-collapsed] {
+  gap: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  width: 100%;
+  text-align: left;
+  gap: var(--space-2);
+}
+
+.header:hover {
+  opacity: 0.8;
+}
+
+.headerLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex: 1;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.glowWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.glow {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  opacity: 0.2;
+  filter: blur(14px);
+  pointer-events: none;
+}
+
+.info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.stageBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.statusText {
+  font-size: 11px;
+  color: var(--gray-11);
+  text-align: center;
+}
+
+.xpRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.xpLabel {
+  font-size: 10px;
+  color: var(--gray-9);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.xpBar {
+  flex: 1;
+  height: 4px;
+  background: var(--gray-a4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.xpFill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent-9), var(--accent-11));
+  transition: width 0.5s ease;
+}
+
+.palettePicker {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.paletteDot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.paletteDot:hover {
+  transform: scale(1.2);
+}
+
+.paletteDotActive {
+  border-color: var(--gray-12);
+  transform: scale(1.2);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-1);
+  width: 100%;
+  justify-content: center;
+}

@@ -14,6 +14,7 @@ import { useDashboardCollapseState } from "./hooks/useDashboardCollapseState";
 import { useDashboardResize } from "./hooks/useDashboardResize";
 import { SetupBanner } from "../Setup/SetupBanner";
 import { SetupActionsSection } from "./components/SetupActionsSection";
+import { BuddyPanel } from "../Buddy/BuddyPanel";
 import { useGetPing } from "../../hooks/useGetPing";
 import styles from "./Dashboard.module.css";
 import chatLoadingStyles from "../../components/ChatContent/ChatLoading.module.css";
@@ -76,6 +77,13 @@ export const Dashboard: React.FC = () => {
         <OfflineState />
       ) : (
         <>
+          <BuddyPanel
+            collapsed={collapsed.buddy}
+            onToggleCollapsed={() => toggle("buddy")}
+          />
+
+          <div className={styles.sectionDivider} />
+
           {/* Stats — collapsible, content-sized */}
           <div
             className={styles.statsBlock}

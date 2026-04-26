@@ -1,4 +1,8 @@
 export { BuddyCanvas } from "./BuddyCanvas";
+export { BuddyHome } from "./BuddyHome";
+export { BuddyPanel } from "./BuddyPanel";
+export { BuddyRecentChats } from "./BuddyRecentChats";
+export { BuddySuggestionBar } from "./BuddySuggestionBar";
 export { useBuddyState } from "./hooks/useBuddyState";
 export {
   createInitialSemanticState,
