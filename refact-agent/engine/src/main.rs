@@ -22,6 +22,7 @@ use rusqlite::ffi::sqlite3_auto_extension;
 // mods roughly sorted by dependency ↓
 
 mod background_tasks;
+mod buddy;
 mod caps;
 mod custom_error;
 mod global_context;

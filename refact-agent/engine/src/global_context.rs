@@ -307,6 +307,8 @@ pub struct GlobalContext {
     pub knowledge_index: Arc<AMutex<KnowledgeIndex>>,
     pub llm_stats_sender: Option<tokio::sync::mpsc::Sender<crate::stats::event::LlmCallEvent>>,
     pub ext_cache_generation: Arc<std::sync::atomic::AtomicU64>,
+    pub buddy: Arc<AMutex<Option<crate::buddy::actor::BuddyService>>>,
+    pub buddy_events_tx: Option<tokio::sync::broadcast::Sender<crate::buddy::events::BuddyEvent>>,
 }
 
 pub type SharedGlobalContext = Arc<ARwLock<GlobalContext>>; // TODO: remove this type alias, confusing
@@ -612,6 +614,8 @@ pub async fn create_global_context(
         knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
         llm_stats_sender: None,
         ext_cache_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        buddy: Arc::new(AMutex::new(None)),
+        buddy_events_tx: Some(tokio::sync::broadcast::channel(256).0),
     };
     let gcx = Arc::new(ARwLock::new(cx));
     crate::files_in_workspace::watcher_init(gcx.clone()).await;
@@ -717,6 +721,8 @@ pub mod tests {
             knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
             llm_stats_sender: None,
             ext_cache_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            buddy: Arc::new(AMutex::new(None)),
+            buddy_events_tx: Some(tokio::sync::broadcast::channel(256).0),
         };
         Arc::new(ARwLock::new(cx))
     }

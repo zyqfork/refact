@@ -109,6 +109,7 @@ pub async fn start_background_tasks(
                 .await = index;
             tracing::info!("knowledge_index: built");
         }),
+        tokio::spawn(crate::buddy::actor::buddy_background_task(gcx.clone())),
     ]);
     let ast = gcx.clone().read().await.ast_service.clone();
     if let Some(ast_service) = ast {
