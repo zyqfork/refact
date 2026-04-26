@@ -207,6 +207,7 @@ pub struct TrajectorySnapshot {
     pub previous_response_id: Option<String>,
     pub active_skill: Option<String>,
     pub auto_enrichment_enabled: Option<bool>,
+    pub buddy_meta: Option<crate::buddy::types::BuddyThreadMeta>,
 }
 
 impl TrajectorySnapshot {
@@ -240,6 +241,7 @@ impl TrajectorySnapshot {
             previous_response_id: session.thread.previous_response_id.clone(),
             active_skill: session.thread.active_skill.clone(),
             auto_enrichment_enabled: session.thread.auto_enrichment_enabled,
+            buddy_meta: session.thread.buddy_meta.clone(),
         }
     }
 }
@@ -310,6 +312,12 @@ async fn get_all_trajectories_dirs_from_weak(
     }
 }
 
+pub async fn get_buddy_conversations_dir(gcx: Arc<ARwLock<GlobalContext>>) -> Result<PathBuf, String> {
+    let project_dirs = get_project_dirs(gcx).await;
+    let workspace_root = project_dirs.first().ok_or("No workspace folder found")?;
+    Ok(workspace_root.join(".refact/buddy/chats/conversations"))
+}
+
 fn fix_tool_call_indexes(messages: &mut [ChatMessage]) {
     for msg in messages.iter_mut() {
         if let Some(ref mut tool_calls) = msg.tool_calls {
@@ -326,6 +334,13 @@ pub async fn find_trajectory_path(
     gcx: Arc<ARwLock<GlobalContext>>,
     chat_id: &str,
 ) -> Option<PathBuf> {
+    if let Ok(buddy_dir) = get_buddy_conversations_dir(gcx.clone()).await {
+        let buddy_path = buddy_dir.join(format!("{}.json", chat_id));
+        if buddy_path.exists() {
+            return Some(buddy_path);
+        }
+    }
+
     let traj_dirs = get_all_trajectories_dirs(gcx.clone()).await;
     if let Some(path) = traj_dirs
         .iter()
@@ -513,6 +528,10 @@ pub async fn load_trajectory_for_chat(
             .map(|s| s.to_string()),
 
         auto_enrichment_enabled: t.get("auto_enrichment_enabled").and_then(|v| v.as_bool()),
+
+        buddy_meta: t
+            .get("buddy_meta")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
     };
 
     let auto_approve_editing_tools_present = t
@@ -629,6 +648,7 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
         parallel_tool_calls: None,
         previous_response_id: None,
         active_skill: None,
+        buddy_meta: None,
     };
 
     save_trajectory_snapshot(gcx, snapshot).await
@@ -671,6 +691,7 @@ pub async fn save_trajectory_as(
         previous_response_id: thread.previous_response_id.clone(),
         active_skill: thread.active_skill.clone(),
         auto_enrichment_enabled: thread.auto_enrichment_enabled,
+        buddy_meta: thread.buddy_meta.clone(),
     };
     if let Err(e) = save_trajectory_snapshot(gcx, snapshot).await {
         warn!("Failed to save trajectory: {}", e);
@@ -737,6 +758,9 @@ pub async fn save_trajectory_snapshot(
     if let Some(auto_enrich) = snapshot.auto_enrichment_enabled {
         trajectory["auto_enrichment_enabled"] = json!(auto_enrich);
     }
+    if let Some(ref buddy_meta) = snapshot.buddy_meta {
+        trajectory["buddy_meta"] = serde_json::to_value(buddy_meta).unwrap_or_default();
+    }
 
     if let Some(ref parent_id) = snapshot.parent_id {
         trajectory["parent_id"] = serde_json::Value::String(parent_id.clone());
@@ -767,6 +791,12 @@ pub async fn save_trajectory_snapshot(
             .await
             .map_err(|e| format!("Failed to create task trajectories dir: {}", e))?;
         traj_dir.join(format!("{}.json", snapshot.chat_id))
+    } else if snapshot.buddy_meta.is_some() {
+        let buddy_dir = get_buddy_conversations_dir(gcx.clone()).await?;
+        tokio::fs::create_dir_all(&buddy_dir)
+            .await
+            .map_err(|e| format!("Failed to create buddy conversations dir: {}", e))?;
+        buddy_dir.join(format!("{}.json", snapshot.chat_id))
     } else {
         let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
         tokio::fs::create_dir_all(&trajectories_dir)
@@ -797,7 +827,7 @@ pub async fn save_trajectory_snapshot(
             .await;
     }
 
-    if snapshot.task_meta.is_none() {
+    if snapshot.task_meta.is_none() && snapshot.buddy_meta.is_none() {
         let effective_root = snapshot
             .root_chat_id
             .clone()
@@ -2103,6 +2133,9 @@ pub async fn handle_v1_trajectories_list(
             }
             if let Ok(content) = fs::read_to_string(&path).await {
                 if let Ok(data) = serde_json::from_str::<TrajectoryData>(&content) {
+                    if data.extra.get("buddy_meta").map_or(false, |v| !v.is_null()) {
+                        continue;
+                    }
                     if seen_ids.insert(data.id.clone()) {
                         all_items.push(trajectory_data_to_meta(&data));
                     }
@@ -2188,6 +2221,9 @@ pub async fn list_all_trajectories_meta(
             }
             if let Ok(content) = fs::read_to_string(&path).await {
                 if let Ok(data) = serde_json::from_str::<TrajectoryData>(&content) {
+                    if data.extra.get("buddy_meta").map_or(false, |v| !v.is_null()) {
+                        continue;
+                    }
                     if seen_ids.insert(data.id.clone()) {
                         result.push(trajectory_data_to_meta(&data));
                     }
@@ -3062,6 +3098,7 @@ mod tests {
                 browser_meta: None,
                 active_skill: None,
                 auto_enrichment_enabled: None,
+                buddy_meta: None,
             },
             messages: vec![ChatMessage::new("user".to_string(), "Hello".to_string())],
             runtime: super::super::types::RuntimeState::default(),

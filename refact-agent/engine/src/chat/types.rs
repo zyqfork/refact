@@ -175,6 +175,9 @@ pub struct ThreadParams {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_enrichment_enabled: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buddy_meta: Option<crate::buddy::types::BuddyThreadMeta>,
 }
 
 impl Default for ThreadParams {
@@ -206,6 +209,7 @@ impl Default for ThreadParams {
             browser_meta: None,
             active_skill: None,
             auto_enrichment_enabled: None,
+            buddy_meta: None,
         }
     }
 }

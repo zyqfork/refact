@@ -531,6 +531,7 @@ impl Tool for ToolTaskSpawnAgent {
                 browser_meta: None,
                 active_skill: None,
                 auto_enrichment_enabled: None,
+                buddy_meta: None,
             };
 
             let user_prompt = build_agent_prompt(

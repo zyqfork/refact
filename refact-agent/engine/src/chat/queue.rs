@@ -413,6 +413,12 @@ pub fn apply_setparams_patch(
             }
         }
     }
+    if let Some(v) = patch.get("buddy_meta") {
+        if let Ok(meta) = serde_json::from_value::<Option<crate::buddy::types::BuddyThreadMeta>>(v.clone()) {
+            thread.buddy_meta = meta;
+            changed = true;
+        }
+    }
     if let Some(parent_id) = patch.get("parent_id").and_then(|v| v.as_str()) {
         let new_val = if parent_id.is_empty() {
             None

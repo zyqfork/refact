@@ -274,6 +274,7 @@ impl Tool for ToolHandoffToMode {
             previous_response_id: None,
             active_skill: None,
             auto_enrichment_enabled: thread.auto_enrichment_enabled,
+            buddy_meta: None,
         };
 
         save_trajectory_snapshot(gcx.clone(), snapshot)
