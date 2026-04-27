@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::path::Path;
 use std::time::Instant;
 use chrono::Utc;
-use tokio::sync::{broadcast, RwLock as ARwLock};
+use tokio::sync::{broadcast, mpsc, RwLock as ARwLock};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -12,6 +12,7 @@ use super::events::BuddyEvent;
 use super::runtime_queue::RuntimeQueue;
 use super::settings::BuddySettings;
 use super::snapshot::BuddySnapshot;
+use super::storage::RuntimeQueueRecord;
 use super::types::{
     BuddyActivity, BuddyCareAction, BuddyQuest, BuddyRuntimeEvent, BuddySpeechItem,
     BuddyState, BuddySuggestion,
@@ -29,28 +30,87 @@ pub(crate) fn validate_workflow_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Redact common credential shapes. Uses regex with case-insensitive matching
+/// so **all** occurrences are scrubbed regardless of capitalization. Mirrors
+/// the secret patterns used by the GUI's `reportBuddyFrontendError.ts` so the
+/// backend can't leak something the frontend would have masked.
 pub(crate) fn redact_sensitive(text: &str) -> String {
-    let mut result = text.to_string();
-    let patterns = [
-        "sk-",
-        "Bearer ",
-        "token=",
-        "api_key=",
-        "apikey=",
-        "Authorization: ",
-    ];
-    for pat in &patterns {
-        if let Some(pos) = result.find(pat) {
-            let start = pos + pat.len();
-            let end = result[start..]
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                .map(|e| start + e)
-                .unwrap_or(result.len());
-            let redacted = format!("{}[REDACTED]", pat);
-            result = format!("{}{}{}", &result[..pos], redacted, &result[end..]);
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    /// `(regex, replacement)`. `$1` style backrefs work in `replace_all`.
+    static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        vec![
+            (
+                Regex::new(r#"(?i)Bearer\s+[^\s"',]+"#).unwrap(),
+                "Bearer [REDACTED]",
+            ),
+            (
+                Regex::new(r"sk-[A-Za-z0-9]{8,}").unwrap(),
+                "[REDACTED_SK_TOKEN]",
+            ),
+            (
+                Regex::new(r#"(?i)\bghp_[A-Za-z0-9]{10,}\b"#).unwrap(),
+                "[REDACTED_GH_TOKEN]",
+            ),
+            (
+                Regex::new(r#"(?i)\bglpat-[A-Za-z0-9_-]{10,}\b"#).unwrap(),
+                "[REDACTED_GL_TOKEN]",
+            ),
+            (
+                Regex::new(
+                    r#"(?i)\b(api[_-]?key|apikey|token|secret|password)\s*[:=]\s*[^\s"',;]+"#,
+                )
+                .unwrap(),
+                "$1=[REDACTED]",
+            ),
+            (
+                Regex::new(r#"(?i)Authorization:\s*[^\s"',]+"#).unwrap(),
+                "Authorization: [REDACTED]",
+            ),
+        ]
+    });
+
+    let mut out = text.to_string();
+    for (re, replacement) in patterns {
+        out = re.replace_all(&out, *replacement).into_owned();
+    }
+    out
+}
+
+/// Single producer/consumer for the runtime_queue.jsonl log. Funneling all
+/// mutations through one task gives us a strict total order on disk that
+/// matches the in-memory mutation order, which is what makes restart-replay
+/// correct in the face of concurrent backend events.
+#[derive(Debug)]
+pub enum RuntimeQueueWriteOp {
+    Append(RuntimeQueueRecord),
+    Compact(RuntimeQueue),
+}
+
+pub async fn run_runtime_queue_writer(
+    project_root: std::path::PathBuf,
+    mut rx: mpsc::UnboundedReceiver<RuntimeQueueWriteOp>,
+) {
+    while let Some(op) = rx.recv().await {
+        match op {
+            RuntimeQueueWriteOp::Append(record) => {
+                if let Err(err) =
+                    super::storage::append_runtime_record(&project_root, &record).await
+                {
+                    warn!("buddy: failed to persist runtime queue record: {}", err);
+                }
+            }
+            RuntimeQueueWriteOp::Compact(queue) => {
+                if let Err(err) =
+                    super::storage::compact_runtime_queue(&project_root, &queue).await
+                {
+                    warn!("buddy: failed to compact runtime queue: {}", err);
+                }
+            }
         }
     }
-    result
 }
 
 pub struct BuddyService {
@@ -65,6 +125,10 @@ pub struct BuddyService {
     pub runtime_queue: RuntimeQueue,
     pub dirty: bool,
     pub active_speech: Option<BuddySpeechItem>,
+    /// Sink for ordered JSONL writes. `None` in unit tests where the writer
+    /// task isn't running; production code (`buddy_background_task`) always
+    /// supplies a real sender.
+    pub queue_writer: Option<mpsc::UnboundedSender<RuntimeQueueWriteOp>>,
 }
 
 impl BuddyService {
@@ -75,6 +139,7 @@ impl BuddyService {
         recent_diagnostics: Vec<super::diagnostics::DiagnosticContext>,
         runtime_queue: RuntimeQueue,
         events_tx: broadcast::Sender<BuddyEvent>,
+        queue_writer: Option<mpsc::UnboundedSender<RuntimeQueueWriteOp>>,
     ) -> Self {
         Self {
             project_root,
@@ -88,18 +153,30 @@ impl BuddyService {
             runtime_queue,
             dirty: false,
             active_speech: None,
+            queue_writer,
         }
     }
 
-    /// Fire-and-forget JSONL append for a runtime event. Each mutation calls
-    /// this so the on-disk log carries the latest state per `id`.
-    fn spawn_persist_runtime_event(&self, event: BuddyRuntimeEvent) {
-        let project_root = self.project_root.clone();
-        tokio::spawn(async move {
-            if let Err(err) = super::storage::append_runtime_event(&project_root, &event).await {
-                warn!("buddy: failed to persist runtime event: {}", err);
-            }
-        });
+    /// Push a record into the writer queue. The writer task applies them in
+    /// strict order — see [`run_runtime_queue_writer`].
+    fn persist_record(&self, record: RuntimeQueueRecord) {
+        if let Some(tx) = &self.queue_writer {
+            // send only fails if the receiver was dropped (shutdown). In that
+            // case the data is no longer needed; nothing to do.
+            let _ = tx.send(RuntimeQueueWriteOp::Append(record));
+        }
+    }
+
+    fn persist_event(&self, event: BuddyRuntimeEvent) {
+        self.persist_record(RuntimeQueueRecord::Event { event });
+    }
+
+    fn persist_removal(&self, id: String) {
+        self.persist_record(RuntimeQueueRecord::Removed { id });
+    }
+
+    fn persist_now_playing(&self, slot: Option<BuddyRuntimeEvent>) {
+        self.persist_record(RuntimeQueueRecord::NowPlaying { event: slot });
     }
 
     pub fn snapshot(&self) -> BuddySnapshot {
@@ -140,10 +217,10 @@ impl BuddyService {
         });
         let dedupe_key = event.dedupe_key.clone();
         let input_id = event.id.clone();
-        self.runtime_queue.enqueue(event);
-        // After coalesce, persist the in-queue version (might keep an older `id`
-        // with refreshed fields). If no coalesce happened, the just-pushed event
-        // is what we want.
+        let evicted = self.runtime_queue.enqueue(event);
+        // Persist the in-queue version: after coalesce that's an existing item
+        // (possibly with an older `id` and refreshed fields); on a fresh push
+        // it's the just-inserted event.
         let to_persist = if let Some(key) = dedupe_key.as_deref() {
             self.runtime_queue
                 .items
@@ -158,7 +235,11 @@ impl BuddyService {
                 .cloned()
         };
         if let Some(ev) = to_persist {
-            self.spawn_persist_runtime_event(ev);
+            self.persist_event(ev);
+        }
+        // Tombstone every evicted id so replay matches in-memory state.
+        for id in evicted {
+            self.persist_removal(id);
         }
     }
 
@@ -176,7 +257,17 @@ impl BuddyService {
             let _ = self
                 .events_tx
                 .send(BuddyEvent::RuntimeEvent { event: e.clone() });
-            self.spawn_persist_runtime_event(e);
+            self.persist_event(e);
+        }
+        // If progress also touched now_playing, persist the new slot value.
+        if self
+            .runtime_queue
+            .now_playing
+            .as_ref()
+            .and_then(|np| np.dedupe_key.as_deref())
+            == Some(dedupe_key)
+        {
+            self.persist_now_playing(self.runtime_queue.now_playing.clone());
         }
     }
 
@@ -192,7 +283,16 @@ impl BuddyService {
             let _ = self
                 .events_tx
                 .send(BuddyEvent::RuntimeEvent { event: e.clone() });
-            self.spawn_persist_runtime_event(e);
+            self.persist_event(e);
+        }
+        if self
+            .runtime_queue
+            .now_playing
+            .as_ref()
+            .and_then(|np| np.dedupe_key.as_deref())
+            == Some(dedupe_key)
+        {
+            self.persist_now_playing(self.runtime_queue.now_playing.clone());
         }
     }
 
@@ -221,7 +321,18 @@ impl BuddyService {
             let _ = self
                 .events_tx
                 .send(BuddyEvent::RuntimeEvent { event: event.clone() });
-            self.spawn_persist_runtime_event(event);
+            self.persist_event(event);
+            // The dismiss path may also have flipped the `dismissed` flag on
+            // now_playing; record the slot's current state so replay sees it.
+            if self
+                .runtime_queue
+                .now_playing
+                .as_ref()
+                .map(|np| np.id == id)
+                .unwrap_or(false)
+            {
+                self.persist_now_playing(self.runtime_queue.now_playing.clone());
+            }
         }
         found
     }
@@ -894,6 +1005,15 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         .buddy_events_tx
         .clone()
         .expect("buddy_events_tx must be set");
+
+    // Spawn the single-writer task that owns runtime_queue.jsonl. All queue
+    // mutations forward to this channel, which preserves on-disk write order.
+    let (queue_tx, queue_rx) = mpsc::unbounded_channel::<RuntimeQueueWriteOp>();
+    let writer_root = project_root.clone();
+    let writer_handle = tokio::spawn(async move {
+        run_runtime_queue_writer(writer_root, queue_rx).await;
+    });
+
     let service = BuddyService::new(
         project_root.clone(),
         state,
@@ -901,6 +1021,7 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         recent_diagnostics,
         runtime_queue,
         events_tx,
+        Some(queue_tx),
     );
 
     let buddy_arc = gcx.read().await.buddy.clone();
@@ -983,18 +1104,16 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
             }
         }
 
-        // Periodic compaction: rewrite the runtime_queue.jsonl file from the
-        // in-memory queue every 5 minutes. The append-on-mutation log can grow
-        // unbounded under churn (progress updates, repeated coalesces); this
-        // collapses it back to one line per surviving event.
+        // Periodic compaction: ask the writer task to rewrite the JSONL from
+        // the in-memory queue every 5 minutes. The append-on-mutation log can
+        // grow unbounded under churn (progress updates, repeated coalesces);
+        // this collapses it back to one line per surviving event. Routing
+        // through the same channel keeps writes strictly ordered.
         if expiry_tick % 300 == 0 {
-            let queue_snapshot = {
-                let buddy = buddy_arc.lock().await;
-                buddy.as_ref().map(|svc| svc.runtime_queue.clone())
-            };
-            if let Some(q) = queue_snapshot {
-                if let Err(e) = super::storage::compact_runtime_queue(&project_root, &q).await {
-                    warn!("buddy: failed to compact runtime queue: {}", e);
+            let buddy = buddy_arc.lock().await;
+            if let Some(svc) = buddy.as_ref() {
+                if let Some(tx) = &svc.queue_writer {
+                    let _ = tx.send(RuntimeQueueWriteOp::Compact(svc.runtime_queue.clone()));
                 }
             }
         }
@@ -1008,14 +1127,19 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         let _ = super::state::save_state(&project_root, &s).await;
     }
 
-    // Final compaction on shutdown so the JSONL on disk is canonical.
-    let queue_opt = {
+    // Final compaction on shutdown so the JSONL on disk is canonical, then
+    // drop the writer sender (replacing the service slot does that for us)
+    // and wait for the writer task to drain.
+    {
         let buddy = buddy_arc.lock().await;
-        buddy.as_ref().map(|svc| svc.runtime_queue.clone())
-    };
-    if let Some(q) = queue_opt {
-        let _ = super::storage::compact_runtime_queue(&project_root, &q).await;
+        if let Some(svc) = buddy.as_ref() {
+            if let Some(tx) = &svc.queue_writer {
+                let _ = tx.send(RuntimeQueueWriteOp::Compact(svc.runtime_queue.clone()));
+            }
+        }
     }
+    *buddy_arc.lock().await = None;
+    let _ = writer_handle.await;
 
     info!("buddy: background task stopped");
 }

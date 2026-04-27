@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback } from "react";
 import { useAppDispatch, useAppSelector } from "../../hooks";
 import { push } from "../Pages/pagesSlice";
 import { BuddyCanvas } from "./BuddyCanvas";
@@ -12,21 +12,8 @@ import {
 } from "./buddySlice";
 import { executeBuddyAction } from "./executeBuddyAction";
 import type { BuddyControl } from "./types";
-import { PALETTES, STAGES, SIGNALS } from "./constants";
-import { computeXpFill } from "./buddyUtils";
+import { PALETTES, SIGNALS } from "./constants";
 import styles from "./BuddyPanel.module.css";
-
-const PANEL_CARE_ACTIONS: BuddyControl[] = [
-  { id: "feed", label: "Feed", action: "care_feed", style: "primary" },
-  {
-    id: "play",
-    label: "Play",
-    action: "care_play",
-    action_param: "bug",
-    style: "primary",
-  },
-  { id: "pet", label: "Pet", action: "care_pet", style: "secondary" },
-];
 
 export const BuddyPanel: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -47,35 +34,6 @@ export const BuddyPanel: React.FC = () => {
     snapshot?.state.identity.palette_index ?? state.paletteIndex;
   const palette = PALETTES[paletteIndex] ?? PALETTES[0];
 
-  const progression = snapshot?.state.progression;
-  const identity = snapshot?.state.identity;
-  const pet = snapshot?.state.pet;
-  const activeQuest = snapshot?.state.active_quest;
-
-  const stageIdx = progression?.stage ?? state.progress.stage;
-  const stage = STAGES[stageIdx] ?? STAGES[0];
-
-  const xp = progression?.xp ?? state.progress.xp;
-
-  const xpFill = useMemo(
-    () => computeXpFill(progression?.xp ?? 0, progression?.xp_next ?? 100),
-    [progression],
-  );
-
-  const name = identity?.name ?? state.name;
-
-  const handleOpen = useCallback(() => {
-    dispatch(push({ name: "buddy" }));
-  }, [dispatch]);
-
-  const handleCare = useCallback(
-    async (ctrl: BuddyControl) => {
-      await executeBuddyAction(ctrl, dispatch);
-    },
-    [dispatch],
-  );
-
-  // activeSpeech takes priority; fall back to nowPlaying status text
   const speechText = activeSpeech
     ? activeSpeech.text
     : nowPlaying?.speech_text ?? nowPlaying?.title ?? null;
@@ -91,6 +49,10 @@ export const BuddyPanel: React.FC = () => {
       }
     : undefined;
 
+  const handleOpen = useCallback(() => {
+    dispatch(push({ name: "buddy" }));
+  }, [dispatch]);
+
   if (snapshot === null) return null;
   if (!enabled) return null;
 
@@ -102,7 +64,6 @@ export const BuddyPanel: React.FC = () => {
     >
       <div className={styles.body}>
         <div className={styles.scene}>
-          {/* Stop propagation so bubble action buttons don't also open the Buddy page */}
           <div className={styles.glowWrap} onClick={(e) => e.stopPropagation()}>
             <div
               className={styles.glow}
@@ -120,59 +81,6 @@ export const BuddyPanel: React.FC = () => {
         </div>
 
         <div className={styles.info}>
-          <div className={styles.nameRow}>
-            <span className={styles.name}>{name}</span>
-            <span
-              className={styles.stageBadge}
-              style={{
-                backgroundColor: palette.body + "33",
-                color: palette.body,
-              }}
-            >
-              {stage.emoji} {stage.name}
-            </span>
-            <div className={styles.xpBarInline}>
-              <div
-                className={styles.xpFillInline}
-                style={{ width: `${xpFill}%` }}
-              />
-            </div>
-            <span className={styles.xpText}>{xp}</span>
-          </div>
-
-          <div className={styles.needsMini}>
-            <span>🍜 {pet?.needs.hunger ?? 0}</span>
-            <span>⚡ {pet?.needs.energy ?? 0}</span>
-            <span>💕 {pet?.needs.affection ?? 0}</span>
-          </div>
-
-          {activeQuest && (
-            <div
-              className={styles.questPill}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span>{activeQuest.icon}</span>
-              <span className={styles.questText}>{activeQuest.title}</span>
-              <span className={styles.questMeta}>
-                {Math.min(activeQuest.progress, activeQuest.goal)}/
-                {activeQuest.goal}
-              </span>
-            </div>
-          )}
-
-          <div className={styles.careRow} onClick={(e) => e.stopPropagation()}>
-            {PANEL_CARE_ACTIONS.map((ctrl) => (
-              <button
-                key={ctrl.id}
-                type="button"
-                className={styles.careButton}
-                onClick={() => void handleCare(ctrl)}
-              >
-                {ctrl.label}
-              </button>
-            ))}
-          </div>
-
           {nowPlaying && nowPlaying.progress != null && (
             <div className={styles.statusBubble}>
               <span className={styles.statusIcon}>

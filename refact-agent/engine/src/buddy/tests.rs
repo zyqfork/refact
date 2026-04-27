@@ -21,6 +21,7 @@ fn make_service() -> BuddyService {
         Vec::new(),
         super::runtime_queue::RuntimeQueue::new(),
         tx,
+        None,
     )
 }
 
@@ -1269,3 +1270,245 @@ fn test_chat_error_event_includes_chat_id() {
     assert_eq!(ev.chat_id.as_deref(), Some(chat_id));
     assert_eq!(ev.status, "failed");
 }
+
+// =============================================================================
+// Runtime queue persistence — JSONL log invariants
+// =============================================================================
+
+/// Enqueue an event then dismiss it; the JSONL log must replay to a queue
+/// where the event is still present and `dismissed = true`.
+#[tokio::test]
+async fn test_runtime_queue_dismissal_survives_restart() {
+    use super::actor::make_runtime_event;
+    use super::storage::{append_runtime_record, load_runtime_queue, RuntimeQueueRecord};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let mut ev = make_runtime_event(
+        "error",
+        "boom",
+        "frontend/window_error",
+        "key-1",
+        "failed",
+        Some("high"),
+    );
+    let id = ev.id.clone();
+    append_runtime_record(root, &RuntimeQueueRecord::Event { event: ev.clone() })
+        .await
+        .unwrap();
+
+    // Dismissal is recorded as a fresh Event with dismissed=true.
+    ev.dismissed = true;
+    append_runtime_record(root, &RuntimeQueueRecord::Event { event: ev.clone() })
+        .await
+        .unwrap();
+
+    let queue = load_runtime_queue(root).await;
+    let restored = queue.items.iter().find(|e| e.id == id).expect("event missing");
+    assert!(restored.dismissed, "dismissal must survive replay");
+}
+
+/// Fill the queue past its cap, write a `Removed` tombstone for an evicted
+/// event, then verify replay matches the in-memory survivors.
+#[tokio::test]
+async fn test_runtime_queue_eviction_tombstones_replay() {
+    use super::actor::make_runtime_event;
+    use super::storage::{append_runtime_record, load_runtime_queue, RuntimeQueueRecord};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let mut victim = make_runtime_event(
+        "signal",
+        "doomed",
+        "src",
+        "victim-key",
+        "started",
+        Some("low"),
+    );
+    victim.priority = "low".to_string();
+    let victim_id = victim.id.clone();
+    append_runtime_record(root, &RuntimeQueueRecord::Event { event: victim.clone() })
+        .await
+        .unwrap();
+
+    let survivor = make_runtime_event(
+        "signal",
+        "kept",
+        "src",
+        "survivor-key",
+        "started",
+        Some("normal"),
+    );
+    let survivor_id = survivor.id.clone();
+    append_runtime_record(root, &RuntimeQueueRecord::Event { event: survivor.clone() })
+        .await
+        .unwrap();
+
+    // Eviction tombstone for the victim.
+    append_runtime_record(
+        root,
+        &RuntimeQueueRecord::Removed {
+            id: victim_id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let queue = load_runtime_queue(root).await;
+    assert!(
+        !queue.items.iter().any(|e| e.id == victim_id),
+        "evicted event must not resurrect"
+    );
+    assert!(
+        queue.items.iter().any(|e| e.id == survivor_id),
+        "survivor must remain"
+    );
+}
+
+/// Two writes for the same id; on disk, the LATER record (in file order) wins.
+/// Because all production writes are funneled through one writer task, file
+/// order matches in-memory order — this test pins down the contract.
+#[tokio::test]
+async fn test_runtime_queue_replay_uses_latest_event() {
+    use super::actor::make_runtime_event;
+    use super::storage::{append_runtime_record, load_runtime_queue, RuntimeQueueRecord};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let mut ev = make_runtime_event(
+        "error",
+        "first title",
+        "src",
+        "race-key",
+        "started",
+        Some("normal"),
+    );
+    let id = ev.id.clone();
+    append_runtime_record(root, &RuntimeQueueRecord::Event { event: ev.clone() })
+        .await
+        .unwrap();
+
+    ev.title = "second title".to_string();
+    ev.status = "completed".to_string();
+    append_runtime_record(root, &RuntimeQueueRecord::Event { event: ev.clone() })
+        .await
+        .unwrap();
+
+    let queue = load_runtime_queue(root).await;
+    let restored = queue.items.iter().find(|e| e.id == id).expect("missing");
+    assert_eq!(restored.title, "second title");
+    assert_eq!(restored.status, "completed");
+}
+
+/// `now_playing` is its own JSONL record kind. Setting it, then clearing it,
+/// must survive a round-trip.
+#[tokio::test]
+async fn test_runtime_queue_now_playing_persists() {
+    use super::actor::make_runtime_event;
+    use super::storage::{append_runtime_record, load_runtime_queue, RuntimeQueueRecord};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let np = make_runtime_event(
+        "streaming",
+        "live",
+        "chat",
+        "np-key",
+        "started",
+        Some("normal"),
+    );
+    let np_id = np.id.clone();
+    append_runtime_record(
+        root,
+        &RuntimeQueueRecord::NowPlaying {
+            event: Some(np.clone()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let queue = load_runtime_queue(root).await;
+    assert_eq!(
+        queue.now_playing.as_ref().map(|e| e.id.clone()),
+        Some(np_id.clone()),
+        "now_playing must round-trip"
+    );
+
+    append_runtime_record(root, &RuntimeQueueRecord::NowPlaying { event: None })
+        .await
+        .unwrap();
+    let queue = load_runtime_queue(root).await;
+    assert!(queue.now_playing.is_none(), "clearing now_playing must persist");
+}
+
+/// Backward-compat: legacy logs that contain bare `BuddyRuntimeEvent` JSON
+/// objects (no `kind` tag) must still load successfully.
+#[tokio::test]
+async fn test_runtime_queue_loads_legacy_format() {
+    use super::actor::make_runtime_event;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = root.join(".refact/buddy/runtime_queue.jsonl");
+    tokio::fs::create_dir_all(path.parent().unwrap())
+        .await
+        .unwrap();
+
+    let ev = make_runtime_event(
+        "error",
+        "legacy",
+        "src",
+        "legacy-key",
+        "failed",
+        Some("high"),
+    );
+    let id = ev.id.clone();
+    let line = format!("{}\n", serde_json::to_string(&ev).unwrap());
+    tokio::fs::write(&path, line).await.unwrap();
+
+    let queue = super::storage::load_runtime_queue(root).await;
+    assert!(
+        queue.items.iter().any(|e| e.id == id),
+        "legacy bare-event line must be readable"
+    );
+}
+
+// =============================================================================
+// Redaction strength
+// =============================================================================
+
+#[test]
+fn test_redact_handles_multiple_secrets_and_case() {
+    let input = "first Bearer abc def then bearer XYZ and api_key=p1 plus API_KEY=p2 token=tok1";
+    let output = super::actor::redact_sensitive(input);
+    assert!(
+        !output.contains("abc"),
+        "first Bearer secret leaked: {}",
+        output
+    );
+    assert!(
+        !output.contains("XYZ"),
+        "lowercase bearer leaked: {}",
+        output
+    );
+    assert!(!output.contains("p1"), "first api_key leaked: {}", output);
+    assert!(
+        !output.contains("p2"),
+        "second case-variant api_key leaked: {}",
+        output
+    );
+    assert!(!output.contains("tok1"), "token leaked: {}", output);
+    // Should redact at least 4 distinct secrets in this string.
+    let redactions = output.matches("[REDACTED]").count();
+    assert!(
+        redactions >= 4,
+        "expected >=4 redactions, got {}: {}",
+        redactions,
+        output
+    );
+}
+

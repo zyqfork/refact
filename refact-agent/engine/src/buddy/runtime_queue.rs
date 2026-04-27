@@ -20,7 +20,10 @@ impl RuntimeQueue {
         }
     }
 
-    pub fn enqueue(&mut self, event: BuddyRuntimeEvent) {
+    /// Insert or coalesce an event. Returns the list of ids that were evicted
+    /// to keep the queue under `MAX_QUEUE_SIZE`. Callers persist tombstones
+    /// for those ids so the on-disk JSONL log replays to the same state.
+    pub fn enqueue(&mut self, event: BuddyRuntimeEvent) -> Vec<String> {
         // Coalesce by dedupe_key if present
         if let Some(ref key) = event.dedupe_key {
             if let Some(existing) = self
@@ -44,7 +47,7 @@ impl RuntimeQueue {
                 // event also takes effect, but a fresh (undismissed)
                 // event can never silently un-dismiss the existing one.
                 existing.dismissed = existing.dismissed || event.dismissed;
-                return;
+                return Vec::new();
             }
         }
 
@@ -57,13 +60,20 @@ impl RuntimeQueue {
         }
 
         // Cap queue size, drop oldest low-priority first
+        let mut evicted = Vec::new();
         while self.items.len() > MAX_QUEUE_SIZE {
-            if let Some(pos) = self.items.iter().position(|e| e.priority == "low") {
-                self.items.remove(pos);
+            let dropped = if let Some(pos) =
+                self.items.iter().position(|e| e.priority == "low")
+            {
+                self.items.remove(pos)
             } else {
-                self.items.pop_back();
+                self.items.pop_back()
+            };
+            if let Some(ev) = dropped {
+                evicted.push(ev.id);
             }
         }
+        evicted
     }
 
     #[allow(dead_code)]

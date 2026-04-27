@@ -1,7 +1,8 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use serde::Serialize;
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
@@ -14,6 +15,35 @@ use super::types::BuddyRuntimeEvent;
 /// Maximum number of items kept after replay+cap on load. Mirrors the in-memory cap.
 const RUNTIME_QUEUE_MAX_ITEMS: usize = 100;
 
+/// One line of the runtime queue JSONL log. The tagged enum lets the writer
+/// record more than just events: removals (eviction or coalescing wipeout) and
+/// the current `now_playing` slot. Old log files that contain bare
+/// `BuddyRuntimeEvent` JSON objects are still understood — see [`parse_record`].
+///
+/// Note: every variant uses **struct** form because `#[serde(tag = "kind")]`
+/// does not support newtype variants that hold an `Option` (the `now_playing`
+/// case), so for consistency all three are struct variants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeQueueRecord {
+    /// Insert/update an event by id.
+    Event { event: BuddyRuntimeEvent },
+    /// Tombstone — remove an event by id.
+    Removed { id: String },
+    /// Replace the `now_playing` slot. `event = None` clears it.
+    NowPlaying { event: Option<BuddyRuntimeEvent> },
+}
+
+fn parse_record(line: &str) -> Option<RuntimeQueueRecord> {
+    if let Ok(rec) = serde_json::from_str::<RuntimeQueueRecord>(line) {
+        return Some(rec);
+    }
+    // Backward-compat: legacy lines were just a serialized BuddyRuntimeEvent.
+    serde_json::from_str::<BuddyRuntimeEvent>(line)
+        .ok()
+        .map(|event| RuntimeQueueRecord::Event { event })
+}
+
 const DEFAULT_MAIN_PROMPT: &str = "You are Buddy, a persistent project companion inside Refact.\nYou help with code tasks, project setup, diagnostics, and keeping things running smoothly.\nYou are friendly, concise, and focused on being genuinely useful.\n";
 
 fn diagnostics_history_path(project_root: &Path) -> PathBuf {
@@ -24,11 +54,13 @@ fn runtime_queue_path(project_root: &Path) -> PathBuf {
     project_root.join(".refact/buddy/runtime_queue.jsonl")
 }
 
-/// Append-only persistence: every mutation writes one JSON line carrying the
-/// post-mutation event. On load, latest entry per `id` wins.
-pub async fn append_runtime_event(
+/// Append-only persistence: every mutation writes one JSON record. The caller
+/// must serialize concurrent calls — see the writer task in `actor.rs`. The
+/// writer task is the single producer for this file in production code, so the
+/// on-disk order matches the in-memory mutation order.
+pub async fn append_runtime_record(
     project_root: &Path,
-    event: &BuddyRuntimeEvent,
+    record: &RuntimeQueueRecord,
 ) -> Result<(), String> {
     let path = runtime_queue_path(project_root);
     if let Some(parent) = path.parent() {
@@ -38,8 +70,8 @@ pub async fn append_runtime_event(
     }
     let line = format!(
         "{}\n",
-        serde_json::to_string(event)
-            .map_err(|e| format!("Failed to serialize runtime event: {}", e))?
+        serde_json::to_string(record)
+            .map_err(|e| format!("Failed to serialize runtime queue record: {}", e))?
     );
     let mut file = OpenOptions::new()
         .create(true)
@@ -55,8 +87,17 @@ pub async fn append_runtime_event(
         .map_err(|e| format!("Failed to flush runtime queue {:?}: {}", path, e))
 }
 
-/// Replay the JSONL file: keep only the most recent entry per id, preserve
-/// order of first occurrence, and cap to `RUNTIME_QUEUE_MAX_ITEMS`.
+/// Replay the JSONL log into a `RuntimeQueue`.
+///
+/// Records are applied in file order:
+///   * `Event` inserts or updates by id, preserving first-seen position.
+///   * `Removed { id }` removes that id from the queue (tombstone).
+///   * `NowPlaying(opt)` overwrites `queue.now_playing`.
+///
+/// After replay, the queue is capped to `RUNTIME_QUEUE_MAX_ITEMS` from the
+/// front (oldest first) as a defensive safety net for corrupted/imported logs;
+/// in normal operation the writer emits explicit removals so this cap is a
+/// no-op.
 pub async fn load_runtime_queue(project_root: &Path) -> RuntimeQueue {
     let path = runtime_queue_path(project_root);
     let content = match fs::read_to_string(&path).await {
@@ -71,47 +112,57 @@ pub async fn load_runtime_queue(project_root: &Path) -> RuntimeQueue {
         }
     };
 
-    let mut order: Vec<String> = Vec::new();
-    let mut latest: HashMap<String, BuddyRuntimeEvent> = HashMap::new();
+    // IndexMap preserves first-insertion order, which is the queue's logical order.
+    let mut events: IndexMap<String, BuddyRuntimeEvent> = IndexMap::new();
+    let mut now_playing: Option<BuddyRuntimeEvent> = None;
+
     for (idx, raw) in content.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
         }
-        match serde_json::from_str::<BuddyRuntimeEvent>(line) {
-            Ok(ev) => {
-                if !latest.contains_key(&ev.id) {
-                    order.push(ev.id.clone());
-                }
-                latest.insert(ev.id.clone(), ev);
+        match parse_record(line) {
+            Some(RuntimeQueueRecord::Event { event }) => {
+                let id = event.id.clone();
+                events.insert(id, event);
             }
-            Err(err) => {
+            Some(RuntimeQueueRecord::Removed { id }) => {
+                events.shift_remove(&id);
+                if let Some(ref np) = now_playing {
+                    if np.id == id {
+                        now_playing = None;
+                    }
+                }
+            }
+            Some(RuntimeQueueRecord::NowPlaying { event }) => {
+                now_playing = event;
+            }
+            None => {
                 warn!(
-                    "buddy: failed to parse runtime queue line {} in {:?}: {}",
+                    "buddy: failed to parse runtime queue line {} in {:?}",
                     idx + 1,
-                    path,
-                    err
+                    path
                 );
             }
         }
     }
 
-    if order.len() > RUNTIME_QUEUE_MAX_ITEMS {
-        let drop_count = order.len() - RUNTIME_QUEUE_MAX_ITEMS;
-        order.drain(..drop_count);
-    }
-
     let mut queue = RuntimeQueue::new();
-    for id in order {
-        if let Some(ev) = latest.remove(&id) {
-            queue.items.push_back(ev);
+    let total = events.len();
+    let skip = total.saturating_sub(RUNTIME_QUEUE_MAX_ITEMS);
+    for (i, (_, ev)) in events.into_iter().enumerate() {
+        if i < skip {
+            continue;
         }
+        queue.items.push_back(ev);
     }
+    queue.now_playing = now_playing;
     queue
 }
 
-/// Compaction: rewrite the JSONL file from the in-memory queue to drop
-/// superseded entries. Called periodically from the background loop.
+/// Rewrite the JSONL file from a canonical in-memory queue, dropping all
+/// tombstones and stale Event records. Called periodically from the writer
+/// task to keep the log bounded.
 pub async fn compact_runtime_queue(
     project_root: &Path,
     queue: &RuntimeQueue,
@@ -124,8 +175,18 @@ pub async fn compact_runtime_queue(
     }
     let mut buf = String::new();
     for ev in &queue.items {
-        let line = serde_json::to_string(ev)
-            .map_err(|e| format!("Failed to serialize runtime event: {}", e))?;
+        let rec = RuntimeQueueRecord::Event { event: ev.clone() };
+        let line = serde_json::to_string(&rec)
+            .map_err(|e| format!("Failed to serialize runtime queue record: {}", e))?;
+        buf.push_str(&line);
+        buf.push('\n');
+    }
+    if queue.now_playing.is_some() {
+        let rec = RuntimeQueueRecord::NowPlaying {
+            event: queue.now_playing.clone(),
+        };
+        let line = serde_json::to_string(&rec)
+            .map_err(|e| format!("Failed to serialize runtime queue record: {}", e))?;
         buf.push_str(&line);
         buf.push('\n');
     }
