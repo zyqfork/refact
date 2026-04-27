@@ -19,6 +19,7 @@ fn make_service() -> BuddyService {
         default_buddy_state(),
         BuddySettings::default(),
         Vec::new(),
+        super::runtime_queue::RuntimeQueue::new(),
         tx,
     )
 }

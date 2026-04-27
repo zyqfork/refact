@@ -1,10 +1,14 @@
 use std::collections::VecDeque;
+use serde::{Deserialize, Serialize};
 use super::types::BuddyRuntimeEvent;
 
 const MAX_QUEUE_SIZE: usize = 100;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RuntimeQueue {
+    #[serde(default)]
     pub items: VecDeque<BuddyRuntimeEvent>,
+    #[serde(default)]
     pub now_playing: Option<BuddyRuntimeEvent>,
 }
 

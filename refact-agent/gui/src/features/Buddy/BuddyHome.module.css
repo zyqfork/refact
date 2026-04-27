@@ -600,5 +600,45 @@
   padding: var(--space-2) var(--space-1);
 }
 
+/* Recent errors panel — extends .listRow with per-card actions and a muted
+ * "acknowledged" state so previously-dismissed errors stay in the history but
+ * fade out visually. */
+.errorRow {
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 8px;
+  flex-wrap: wrap;
+}
+
+.errorRowAcknowledged {
+  opacity: 0.55;
+}
+
+.errorRowAcknowledged .listTitle,
+.errorRowAcknowledged .listSubtitle {
+  color: var(--gray-10);
+}
+
+.ackBadge {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--gray-11);
+  background: var(--gray-a3);
+  border-radius: var(--radius-2);
+  vertical-align: 1px;
+}
+
+.errorActions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-1);
+  align-items: center;
+}
+
 /* Recent chats panel uses the shared .panel; its internals already render
    their own header/filters/rows from BuddyRecentChats. */

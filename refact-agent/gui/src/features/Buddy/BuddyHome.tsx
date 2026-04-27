@@ -15,10 +15,21 @@ import {
   selectNowPlaying,
   selectActiveSpeech,
   selectBuddyDiagnostics,
+  selectRuntimeQueue,
+  dismissRuntimeEvent,
 } from "./buddySlice";
-import { openChatInModeAndStart } from "../Chat/Thread";
+import {
+  openChatInModeAndStart,
+  startBuddyInvestigation,
+} from "../Chat/Thread";
 import { executeBuddyAction } from "./executeBuddyAction";
-import type { BuddyControl, BuddyCareAction, BuddyNeeds } from "./types";
+import { useDismissBuddyRuntimeEventMutation } from "../../services/refact/buddy";
+import type {
+  BuddyControl,
+  BuddyCareAction,
+  BuddyNeeds,
+  BuddyRuntimeEvent,
+} from "./types";
 import { PALETTES, STAGES, SKILLS, SIGNALS } from "./constants";
 import { computeXpFill } from "./buddyUtils";
 import { useGetStatsSummaryQuery } from "../../services/refact/stats";
@@ -60,11 +71,6 @@ function formatTime(ts: string): string {
   });
 }
 
-function formatDate(ts: string): string {
-  if (!ts) return "";
-  return new Date(ts).toLocaleDateString();
-}
-
 export const BuddyHome: React.FC = () => {
   const dispatch = useAppDispatch();
   const snapshot = useAppSelector(selectBuddySnapshot);
@@ -74,6 +80,8 @@ export const BuddyHome: React.FC = () => {
   const nowPlaying = useAppSelector(selectNowPlaying);
   const activeSpeech = useAppSelector(selectActiveSpeech);
   const diagnostics = useAppSelector(selectBuddyDiagnostics);
+  const runtimeQueue = useAppSelector(selectRuntimeQueue);
+  const [dismissRuntimeMutation] = useDismissBuddyRuntimeEventMutation();
   const buddy = useBuddyState();
   const { state } = buddy;
   const [setupDismissed, setSetupDismissed] = useState(false);
@@ -222,7 +230,72 @@ export const BuddyHome: React.FC = () => {
   );
 
   const unlockedSkills = skills?.unlocked ?? state.skills;
-  const workflowSummaries = snapshot?.state.workflow_summaries ?? [];
+
+  // All buddy-collected runtime errors, ordered newest-first. Includes
+  // dismissed/acknowledged entries so the user can see the full history of
+  // what Buddy has noticed. The "Investigate" button per card opens a fresh
+  // Buddy chat scoped to that error, the "Dismiss" button persists the ack.
+  const recentErrors = useMemo(() => {
+    const items: BuddyRuntimeEvent[] = [];
+    if (
+      nowPlaying &&
+      (nowPlaying.status === "failed" ||
+        nowPlaying.priority === "critical" ||
+        nowPlaying.priority === "high")
+    ) {
+      items.push(nowPlaying);
+    }
+    for (const e of runtimeQueue) {
+      if (
+        e.status === "failed" ||
+        e.priority === "critical" ||
+        e.priority === "high"
+      ) {
+        if (!items.find((x) => x.id === e.id)) items.push(e);
+      }
+    }
+    items.sort((a, b) => {
+      const ta = new Date(a.created_at).getTime() || 0;
+      const tb = new Date(b.created_at).getTime() || 0;
+      return tb - ta;
+    });
+    return items.slice(0, 25);
+  }, [nowPlaying, runtimeQueue]);
+
+  const handleInvestigateError = useCallback(
+    (event: BuddyRuntimeEvent) => {
+      const triggerText = event.description
+        ? `${event.title}: ${event.description}`
+        : event.title;
+      const diagnostic =
+        event.chat_id != null
+          ? diagnostics.find((d) => d.chat_id === event.chat_id) ?? null
+          : null;
+      void dispatch(
+        startBuddyInvestigation({
+          triggerText,
+          triggerSource: "runtime",
+          sourceChatId: event.chat_id,
+          diagnostic,
+        }),
+      );
+      // Investigating implicitly acknowledges the error.
+      if (!event.dismissed) {
+        dispatch(dismissRuntimeEvent(event.id));
+        void dismissRuntimeMutation(event.id).catch(() => undefined);
+      }
+    },
+    [dispatch, diagnostics, dismissRuntimeMutation],
+  );
+
+  const handleDismissError = useCallback(
+    (event: BuddyRuntimeEvent) => {
+      if (event.dismissed) return;
+      dispatch(dismissRuntimeEvent(event.id));
+      void dismissRuntimeMutation(event.id).catch(() => undefined);
+    },
+    [dispatch, dismissRuntimeMutation],
+  );
 
   if (!loaded) {
     return (
@@ -703,7 +776,7 @@ export const BuddyHome: React.FC = () => {
         </div>
       </div>
 
-      {/* Row 3 — Recent workflows + Recent chats (both scroll internally) */}
+      {/* Row 3 — Recent errors + Recent chats (both scroll internally) */}
       <div className={classNames(styles.row, styles.rowFlex)}>
         <div className={classNames(styles.panel, styles.panelScroll)}>
           <div className={styles.panelHeader}>
@@ -713,35 +786,79 @@ export const BuddyHome: React.FC = () => {
               color="gray"
               className={styles.sectionLabel}
             >
-              RECENT WORKFLOWS
+              RECENT ERRORS
             </Text>
           </div>
           <div className={styles.scrollList}>
-            {workflowSummaries.length === 0 && (
+            {recentErrors.length === 0 && (
               <Text size="1" className={styles.emptyText}>
-                No recent workflows
+                No errors recorded — all clear ✨
               </Text>
             )}
-            {workflowSummaries.map((w) => (
-              <div key={w.workflow_id} className={styles.listRow}>
-                <span className={styles.listIcon}>
-                  {w.last_outcome === "success"
-                    ? "✅"
-                    : w.last_outcome === "failed"
-                      ? "❌"
-                      : "⚙️"}
-                </span>
-                <div className={styles.listContent}>
-                  <span className={styles.listTitle}>
-                    {w.workflow_id.replace(/_/g, " ")}
+            {recentErrors.map((e) => {
+              const icon = e.dismissed
+                ? "✅"
+                : e.priority === "critical"
+                  ? "🚨"
+                  : "❌";
+              const subtitle = [
+                e.source,
+                e.chat_id ? `chat ${e.chat_id.slice(0, 8)}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <div
+                  key={e.id}
+                  className={classNames(
+                    styles.listRow,
+                    styles.errorRow,
+                    e.dismissed && styles.errorRowAcknowledged,
+                  )}
+                >
+                  <span className={styles.listIcon}>{icon}</span>
+                  <div className={styles.listContent}>
+                    <span className={styles.listTitle}>
+                      {e.title}
+                      {e.dismissed && (
+                        <span className={styles.ackBadge}>acknowledged</span>
+                      )}
+                    </span>
+                    {(e.description || subtitle) && (
+                      <span className={styles.listSubtitle}>
+                        {e.description ?? subtitle}
+                      </span>
+                    )}
+                  </div>
+                  <div className={styles.errorActions}>
+                    <Tooltip content="Open a Buddy chat to investigate this error">
+                      <Button
+                        size="1"
+                        variant="soft"
+                        onClick={() => handleInvestigateError(e)}
+                      >
+                        Investigate
+                      </Button>
+                    </Tooltip>
+                    {!e.dismissed && (
+                      <Tooltip content="Mark as acknowledged">
+                        <Button
+                          size="1"
+                          variant="ghost"
+                          color="gray"
+                          onClick={() => handleDismissError(e)}
+                        >
+                          Dismiss
+                        </Button>
+                      </Tooltip>
+                    )}
+                  </div>
+                  <span className={styles.listMeta}>
+                    {formatTime(e.created_at)}
                   </span>
                 </div>
-                <span className={styles.listMeta}>
-                  ×{w.run_count}
-                  {w.last_run ? ` · ${formatDate(w.last_run)}` : ""}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

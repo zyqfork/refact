@@ -73,6 +73,7 @@ impl BuddyService {
         state: BuddyState,
         settings: BuddySettings,
         recent_diagnostics: Vec<super::diagnostics::DiagnosticContext>,
+        runtime_queue: RuntimeQueue,
         events_tx: broadcast::Sender<BuddyEvent>,
     ) -> Self {
         Self {
@@ -84,10 +85,21 @@ impl BuddyService {
             recent_diagnostics,
             last_issue_at: None,
             recent_issue_errors: Vec::new(),
-            runtime_queue: RuntimeQueue::new(),
+            runtime_queue,
             dirty: false,
             active_speech: None,
         }
+    }
+
+    /// Fire-and-forget JSONL append for a runtime event. Each mutation calls
+    /// this so the on-disk log carries the latest state per `id`.
+    fn spawn_persist_runtime_event(&self, event: BuddyRuntimeEvent) {
+        let project_root = self.project_root.clone();
+        tokio::spawn(async move {
+            if let Err(err) = super::storage::append_runtime_event(&project_root, &event).await {
+                warn!("buddy: failed to persist runtime event: {}", err);
+            }
+        });
     }
 
     pub fn snapshot(&self) -> BuddySnapshot {
@@ -126,7 +138,28 @@ impl BuddyService {
         let _ = self.events_tx.send(BuddyEvent::RuntimeEvent {
             event: event.clone(),
         });
+        let dedupe_key = event.dedupe_key.clone();
+        let input_id = event.id.clone();
         self.runtime_queue.enqueue(event);
+        // After coalesce, persist the in-queue version (might keep an older `id`
+        // with refreshed fields). If no coalesce happened, the just-pushed event
+        // is what we want.
+        let to_persist = if let Some(key) = dedupe_key.as_deref() {
+            self.runtime_queue
+                .items
+                .iter()
+                .find(|e| e.dedupe_key.as_deref() == Some(key))
+                .cloned()
+        } else {
+            self.runtime_queue
+                .items
+                .iter()
+                .find(|e| e.id == input_id)
+                .cloned()
+        };
+        if let Some(ev) = to_persist {
+            self.spawn_persist_runtime_event(ev);
+        }
     }
 
     #[allow(dead_code)]
@@ -138,10 +171,12 @@ impl BuddyService {
             .items
             .iter()
             .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
+            .cloned()
         {
             let _ = self
                 .events_tx
                 .send(BuddyEvent::RuntimeEvent { event: e.clone() });
+            self.spawn_persist_runtime_event(e);
         }
     }
 
@@ -152,10 +187,12 @@ impl BuddyService {
             .items
             .iter()
             .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
+            .cloned()
         {
             let _ = self
                 .events_tx
                 .send(BuddyEvent::RuntimeEvent { event: e.clone() });
+            self.spawn_persist_runtime_event(e);
         }
     }
 
@@ -181,7 +218,10 @@ impl BuddyService {
         }
         if let Some(event) = updated_event {
             self.dirty = true;
-            let _ = self.events_tx.send(BuddyEvent::RuntimeEvent { event });
+            let _ = self
+                .events_tx
+                .send(BuddyEvent::RuntimeEvent { event: event.clone() });
+            self.spawn_persist_runtime_event(event);
         }
         found
     }
@@ -453,9 +493,53 @@ impl BuddyService {
                 warn!("buddy: failed to persist diagnostic history: {}", err);
             }
         });
-        let _ = self
-            .events_tx
-            .send(BuddyEvent::DiagnosticAdded { diagnostic: ctx });
+        let _ = self.events_tx.send(BuddyEvent::DiagnosticAdded {
+            diagnostic: ctx.clone(),
+        });
+
+        // Surface every diagnostic as a runtime event so it lands in the
+        // "Recent Errors" panel and is persisted to runtime_queue.jsonl.
+        // This catches frontend errors (POST /v1/buddy/diagnostics/collect)
+        // and backend report_error paths (chrome / mcp tools) which would
+        // otherwise be invisible to the panel.
+        self.enqueue_diagnostic_runtime_event(&ctx);
+    }
+
+    fn enqueue_diagnostic_runtime_event(
+        &mut self,
+        ctx: &super::diagnostics::DiagnosticContext,
+    ) {
+        use super::diagnostics::DiagnosticSeverity;
+        let priority = match ctx.severity {
+            DiagnosticSeverity::Critical => "critical",
+            DiagnosticSeverity::High => "high",
+            DiagnosticSeverity::Medium => "normal",
+            DiagnosticSeverity::Low => "low",
+        };
+        let redacted = redact_sensitive(&ctx.error_message);
+        let truncated: String = redacted.chars().take(80).collect();
+        let title = if ctx.error_type.is_empty() {
+            truncated.clone()
+        } else {
+            format!("{}: {}", ctx.error_type, truncated)
+        };
+        let dedupe_key = format!("diag:{}", super::diagnostics::diagnostic_id(ctx));
+        let source = ctx
+            .source_file
+            .as_deref()
+            .or(ctx.tool_name.as_deref())
+            .unwrap_or("buddy");
+        let mut ev = make_runtime_event(
+            "error",
+            &title,
+            source,
+            &dedupe_key,
+            "failed",
+            Some(priority),
+        );
+        ev.description = Some(redacted);
+        ev.chat_id = ctx.chat_id.clone();
+        self.enqueue_runtime_event(ev);
     }
 
     pub fn diagnostic_by_collected_at(
@@ -802,6 +886,7 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
     let state = super::state::load_state(&project_root).await;
     let settings = super::settings::load_settings(&project_root).await;
     let recent_diagnostics = load_diagnostics_for_service(&project_root).await;
+    let runtime_queue = super::storage::load_runtime_queue(&project_root).await;
 
     let events_tx = gcx
         .read()
@@ -809,7 +894,14 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         .buddy_events_tx
         .clone()
         .expect("buddy_events_tx must be set");
-    let service = BuddyService::new(project_root.clone(), state, settings, recent_diagnostics, events_tx);
+    let service = BuddyService::new(
+        project_root.clone(),
+        state,
+        settings,
+        recent_diagnostics,
+        runtime_queue,
+        events_tx,
+    );
 
     let buddy_arc = gcx.read().await.buddy.clone();
     *buddy_arc.lock().await = Some(service);
@@ -890,6 +982,22 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
                 }
             }
         }
+
+        // Periodic compaction: rewrite the runtime_queue.jsonl file from the
+        // in-memory queue every 5 minutes. The append-on-mutation log can grow
+        // unbounded under churn (progress updates, repeated coalesces); this
+        // collapses it back to one line per surviving event.
+        if expiry_tick % 300 == 0 {
+            let queue_snapshot = {
+                let buddy = buddy_arc.lock().await;
+                buddy.as_ref().map(|svc| svc.runtime_queue.clone())
+            };
+            if let Some(q) = queue_snapshot {
+                if let Err(e) = super::storage::compact_runtime_queue(&project_root, &q).await {
+                    warn!("buddy: failed to compact runtime queue: {}", e);
+                }
+            }
+        }
     }
 
     let state_opt = {
@@ -898,6 +1006,15 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
     };
     if let Some(s) = state_opt {
         let _ = super::state::save_state(&project_root, &s).await;
+    }
+
+    // Final compaction on shutdown so the JSONL on disk is canonical.
+    let queue_opt = {
+        let buddy = buddy_arc.lock().await;
+        buddy.as_ref().map(|svc| svc.runtime_queue.clone())
+    };
+    if let Some(q) = queue_opt {
+        let _ = super::storage::compact_runtime_queue(&project_root, &q).await;
     }
 
     info!("buddy: background task stopped");
