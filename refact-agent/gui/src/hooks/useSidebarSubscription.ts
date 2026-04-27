@@ -33,6 +33,11 @@ import {
   addBuddyDiagnostic,
   enqueueRuntimeEvent,
   setActiveSpeech,
+  addOpportunity,
+  resolveOpportunity,
+  setPulse,
+  addDraft,
+  consumeDraft,
 } from "../features/Buddy/buddySlice";
 import { executeBuddyNavigation } from "../features/Buddy/executeBuddyAction";
 
@@ -411,11 +416,27 @@ export function useSidebarSubscription() {
           dispatch(setActiveSpeech(buddy_event.speech));
           break;
         case "NavigationRequest":
-          executeBuddyNavigation(
-            buddy_event.view,
-            buddy_event.params as Record<string, unknown> | undefined,
-            dispatch,
+          executeBuddyNavigation(buddy_event.page, dispatch);
+          break;
+        case "OpportunityProduced":
+          dispatch(addOpportunity(buddy_event.opportunity));
+          break;
+        case "OpportunityResolved":
+          dispatch(
+            resolveOpportunity({
+              id: buddy_event.opportunity_id,
+              status: buddy_event.status,
+            }),
           );
+          break;
+        case "PulseUpdated":
+          dispatch(setPulse(buddy_event.pulse));
+          break;
+        case "DraftCreated":
+          dispatch(addDraft(buddy_event.draft));
+          break;
+        case "DraftConsumed":
+          dispatch(consumeDraft(buddy_event.draft_id));
           break;
       }
     },

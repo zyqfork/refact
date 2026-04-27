@@ -9,6 +9,11 @@ import type {
   BuddyCareResponse,
   BuddyQuestAcceptResponse,
   BuddyPersonalityRerollResponse,
+  BuddyOpportunity,
+  OpportunityStatus,
+  BuddyPulse,
+  BuddyDraft,
+  InvestigationContext,
 } from "../../features/Buddy/types";
 
 type BuddyApiState = {
@@ -36,6 +41,23 @@ export type BuddyErrorReport = {
 };
 
 export type BuddyInvestigationContextRequest = BuddyErrorReport;
+
+export interface CreateDraftRequest {
+  title: string;
+  yaml_or_json: string;
+  explanation: string;
+}
+
+export interface LaunchInvestigationResponse {
+  chat_id: string;
+}
+
+export interface FrontendErrorReport {
+  error: string;
+  source_file?: string;
+  tool_name?: string;
+  chat_id?: string;
+}
 
 export interface BuddyInvestigationContextResponse {
   logs: string;
@@ -330,6 +352,205 @@ export const buddyApi = createApi({
         }
       },
     }),
+    getOpportunities: builder.query<
+      BuddyOpportunity[],
+      { status?: OpportunityStatus } | undefined
+    >({
+      queryFn: async (args, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const url = args?.status
+          ? `http://127.0.0.1:${port}/v1/buddy/opportunities?status=${encodeURIComponent(
+              args.status,
+            )}`
+          : `http://127.0.0.1:${port}/v1/buddy/opportunities`;
+        const result = await baseQuery(url);
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyOpportunity[] };
+      },
+    }),
+    acceptOpportunity: builder.mutation<{ accepted: boolean }, string>({
+      queryFn: async (id, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/opportunities/${encodeURIComponent(
+            id,
+          )}/accept`,
+          method: "POST",
+        });
+        if (result.error) return { error: result.error };
+        return { data: { accepted: true } };
+      },
+    }),
+    dismissOpportunity: builder.mutation<{ dismissed: boolean }, string>({
+      queryFn: async (id, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/opportunities/${encodeURIComponent(
+            id,
+          )}/dismiss`,
+          method: "POST",
+        });
+        if (result.error) return { error: result.error };
+        return { data: { dismissed: true } };
+      },
+    }),
+    getPulse: builder.query<BuddyPulse, undefined>({
+      queryFn: async (_args, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery(
+          `http://127.0.0.1:${port}/v1/buddy/pulse`,
+        );
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyPulse };
+      },
+    }),
+    createSkillDraft: builder.mutation<BuddyDraft, CreateDraftRequest>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/skill`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    createCommandDraft: builder.mutation<BuddyDraft, CreateDraftRequest>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/command`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    createSubagentDraft: builder.mutation<BuddyDraft, CreateDraftRequest>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/subagent`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    createModeDraft: builder.mutation<BuddyDraft, CreateDraftRequest>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/mode`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    createAgentsMdDraft: builder.mutation<BuddyDraft, CreateDraftRequest>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/agents_md`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    createDefaultsDraft: builder.mutation<BuddyDraft, CreateDraftRequest>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/defaults`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    getDraft: builder.query<BuddyDraft, string>({
+      queryFn: async (id, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery(
+          `http://127.0.0.1:${port}/v1/buddy/drafts/${encodeURIComponent(id)}`,
+        );
+        if (result.error) return { error: result.error };
+        return { data: result.data as BuddyDraft };
+      },
+    }),
+    deleteDraft: builder.mutation<undefined, string>({
+      queryFn: async (id, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/drafts/${encodeURIComponent(
+            id,
+          )}`,
+          method: "DELETE",
+        });
+        if (result.error) return { error: result.error };
+        return { data: undefined };
+      },
+    }),
+    launchInvestigation: builder.mutation<
+      LaunchInvestigationResponse,
+      InvestigationContext
+    >({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/investigations`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as LaunchInvestigationResponse };
+      },
+    }),
+    reportFrontendError: builder.mutation<undefined, FrontendErrorReport>({
+      queryFn: async (body, api) => {
+        const state = api.getState() as BuddyApiState;
+        const port: number = state.config.lspPort;
+        const apiKey: string | undefined = state.config.apiKey ?? undefined;
+        try {
+          const headers = new Headers({ "Content-Type": "application/json" });
+          if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
+          await fetch(`http://127.0.0.1:${port}/v1/buddy/frontend-error`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+          return { data: undefined };
+        } catch (error) {
+          return {
+            error: {
+              status: "FETCH_ERROR",
+              error: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+      },
+    }),
   }),
 });
 
@@ -347,4 +568,18 @@ export const {
   useDismissBuddySuggestionMutation,
   useDismissBuddyRuntimeEventMutation,
   useReportErrorMutation,
+  useGetOpportunitiesQuery,
+  useAcceptOpportunityMutation,
+  useDismissOpportunityMutation,
+  useGetPulseQuery,
+  useCreateSkillDraftMutation,
+  useCreateCommandDraftMutation,
+  useCreateSubagentDraftMutation,
+  useCreateModeDraftMutation,
+  useCreateAgentsMdDraftMutation,
+  useCreateDefaultsDraftMutation,
+  useGetDraftQuery,
+  useDeleteDraftMutation,
+  useLaunchInvestigationMutation,
+  useReportFrontendErrorMutation,
 } = buddyApi;

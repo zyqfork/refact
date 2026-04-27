@@ -16,6 +16,12 @@ import {
   setActiveSpeech,
   clearActiveSpeech,
   enqueueRuntimeEvent,
+  addOpportunity,
+  resolveOpportunity,
+  setPulse,
+  addDraft,
+  consumeDraft,
+  selectUnreadOpportunities,
 } from "../features/Buddy/buddySlice";
 import { registerBuddySpeechTtlListener } from "../features/Buddy/buddySpeechTtl";
 import { PALETTES, SIGNALS, STAGES } from "../features/Buddy/constants";
@@ -32,6 +38,11 @@ import type {
   DiagnosticContext,
   BuddySpeechItem,
   BuddyRuntimeEvent,
+  BuddyOpportunity,
+  BuddyDraft,
+  BuddyPulse,
+  BuddyAction,
+  BuddyPage,
 } from "../features/Buddy/types";
 import { buildBuddyInvestigationPrompt } from "../features/Buddy/investigation";
 import { withBuddyErrorReport } from "../features/Buddy/BuddyErrorBoundary";
@@ -110,6 +121,7 @@ function makeState(): BuddyState {
       },
     },
     active_quest: null,
+    opportunities: [],
   };
 }
 
@@ -122,6 +134,23 @@ function makeSnapshot(overrides?: Partial<BuddySnapshot>): BuddySnapshot {
       auto_issue_creation: false,
       personality_prompt: null,
       proactive_enabled: true,
+      message_observation_enabled: false,
+      housekeeping_enabled: true,
+      humor_enabled: true,
+      humor_level: "light",
+      autonomy_level: "suggest",
+      quiet_mode: false,
+      observers: {
+        task_health: true,
+        trajectory_clutter: true,
+        chat_pattern: false,
+        customization_drift: true,
+        memory_garden: true,
+        mcp_auth: true,
+        git_pressure: true,
+        diagnostic_cluster: true,
+        provider_health: true,
+      },
     },
     enabled: true,
     recent_diagnostics: [],
@@ -1234,5 +1263,208 @@ describe("Buddy frontend error reporting helpers", () => {
     );
 
     spy.mockRestore();
+  });
+});
+
+describe("buddy opportunities, pulse, and drafts", () => {
+  function makeOpportunity(
+    overrides?: Partial<BuddyOpportunity>,
+  ): BuddyOpportunity {
+    return {
+      id: "opp-1",
+      kind: "diagnostic_investigation",
+      summary: "Test opportunity",
+      priority: "normal",
+      confidence: 0.8,
+      fact_keys: [],
+      cooldown_key: "opp-1",
+      status: "new",
+      proposed_actions: [],
+      humor_allowed: false,
+      related: { chat_ids: [], task_ids: [], memory_ids: [], config_paths: [] },
+      created_at: "2024-01-01T00:00:00Z",
+      expires_at: "2099-12-31T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  function makeDraft(overrides?: Partial<BuddyDraft>): BuddyDraft {
+    return {
+      id: "draft-1",
+      kind: "skill",
+      title: "Test Skill",
+      yaml_or_json: "{}",
+      explanation: "Test explanation",
+      created_at: "2024-01-01T00:00:00Z",
+      expires_at: "2099-12-31T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  function makePulse(): BuddyPulse {
+    return {
+      generated_at: "2024-01-01T00:00:00Z",
+      tasks: { total: 1, stuck: 0, abandoned: 0, by_status: {} },
+      trajectories: { total: 5, untitled: 1, oldest_age_days: 30 },
+      memory: { total: 10, orphan: 2, stale_conflicts: 0 },
+      providers: { defaults_ok: true, broken_refs: 0, quota_warnings: 0 },
+      mcp: { total: 3, failing: 0, auth_expiring: 0 },
+      customization: {
+        modes: 2,
+        skills: 1,
+        commands: 0,
+        subagents: 0,
+        hooks: 0,
+      },
+      diagnostics: { last_hour: 0, top_error_types: [] },
+      git: { uncommitted_files: 2, diff_lines_4h: 100, branches: 3 },
+    };
+  }
+
+  test("addOpportunity adds to list", () => {
+    const opp = makeOpportunity();
+    const state = reducer(undefined, addOpportunity(opp));
+    expect(state.opportunities).toHaveLength(1);
+    expect(state.opportunities[0].id).toBe("opp-1");
+  });
+
+  test("addOpportunity dedupes by id", () => {
+    const opp = makeOpportunity({ status: "new" });
+    const s1 = reducer(undefined, addOpportunity(opp));
+    const updated = makeOpportunity({ status: "shown" });
+    const s2 = reducer(s1, addOpportunity(updated));
+    expect(s2.opportunities).toHaveLength(1);
+    expect(s2.opportunities[0].status).toBe("shown");
+  });
+
+  test("resolveOpportunity updates status in place", () => {
+    const opp = makeOpportunity({ id: "opp-x", status: "new" });
+    const s1 = reducer(undefined, addOpportunity(opp));
+    const s2 = reducer(
+      s1,
+      resolveOpportunity({ id: "opp-x", status: "dismissed" }),
+    );
+    expect(s2.opportunities[0].status).toBe("dismissed");
+  });
+
+  test("resolveOpportunity no-ops on unknown id", () => {
+    const opp = makeOpportunity({ id: "opp-x", status: "new" });
+    const s1 = reducer(undefined, addOpportunity(opp));
+    const s2 = reducer(
+      s1,
+      resolveOpportunity({ id: "unknown", status: "dismissed" }),
+    );
+    expect(s2.opportunities[0].status).toBe("new");
+  });
+
+  test("setPulse stores pulse", () => {
+    const pulse = makePulse();
+    const state = reducer(undefined, setPulse(pulse));
+    expect(state.pulse).not.toBeNull();
+    expect(state.pulse?.tasks.total).toBe(1);
+    expect(state.pulse?.git.uncommitted_files).toBe(2);
+  });
+
+  test("addDraft adds to activeDrafts", () => {
+    const draft = makeDraft();
+    const state = reducer(undefined, addDraft(draft));
+    expect(state.activeDrafts).toHaveLength(1);
+    expect(state.activeDrafts[0].id).toBe("draft-1");
+  });
+
+  test("addDraft dedupes by id", () => {
+    const d = makeDraft({ title: "Original" });
+    const s1 = reducer(undefined, addDraft(d));
+    const updated = makeDraft({ title: "Updated" });
+    const s2 = reducer(s1, addDraft(updated));
+    expect(s2.activeDrafts).toHaveLength(1);
+    expect(s2.activeDrafts[0].title).toBe("Updated");
+  });
+
+  test("consumeDraft removes by id", () => {
+    const d1 = makeDraft({ id: "d1" });
+    const d2 = makeDraft({ id: "d2" });
+    const s1 = reducer(undefined, addDraft(d1));
+    const s2 = reducer(s1, addDraft(d2));
+    const s3 = reducer(s2, consumeDraft("d1"));
+    expect(s3.activeDrafts).toHaveLength(1);
+    expect(s3.activeDrafts[0].id).toBe("d2");
+  });
+
+  test("setBuddySnapshot without pulse defaults defensively", () => {
+    const snap = makeSnapshot();
+    const state = reducer(undefined, setBuddySnapshot(snap));
+    expect(state.pulse).toBeNull();
+    expect(state.activeDrafts).toEqual([]);
+  });
+
+  test("setBuddySnapshot hydrates pulse when present", () => {
+    const snap = makeSnapshot({ pulse: makePulse() });
+    const state = reducer(undefined, setBuddySnapshot(snap));
+    expect(state.pulse?.tasks.total).toBe(1);
+  });
+
+  test("setBuddySnapshot hydrates activeDrafts when present", () => {
+    const snap = makeSnapshot({ active_drafts: [makeDraft()] });
+    const state = reducer(undefined, setBuddySnapshot(snap));
+    expect(state.activeDrafts).toHaveLength(1);
+    expect(state.activeDrafts[0].id).toBe("draft-1");
+  });
+
+  test("selectUnreadOpportunities filters by status", () => {
+    const s1 = reducer(
+      undefined,
+      addOpportunity(makeOpportunity({ id: "o1", status: "new" })),
+    );
+    const s2 = reducer(
+      s1,
+      addOpportunity(makeOpportunity({ id: "o2", status: "shown" })),
+    );
+    const s3 = reducer(
+      s2,
+      addOpportunity(makeOpportunity({ id: "o3", status: "dismissed" })),
+    );
+    const rootState = { buddy: s3 };
+    const unread = selectUnreadOpportunities(rootState);
+    expect(unread).toHaveLength(2);
+    expect(unread.map((o) => o.id)).toContain("o1");
+    expect(unread.map((o) => o.id)).toContain("o2");
+    expect(unread.map((o) => o.id)).not.toContain("o3");
+  });
+
+  test("BuddyAction discriminated union type check", () => {
+    const a1: BuddyAction = { kind: "dismiss" };
+    expect(a1.kind).toBe("dismiss");
+
+    const a2: BuddyAction = {
+      kind: "open_page",
+      page: { type: "buddy" },
+      params: undefined,
+    };
+    expect(a2.kind).toBe("open_page");
+
+    const a3: BuddyAction = {
+      kind: "draft_defaults_change",
+      defaults_kind: "chat_model",
+      patch: {},
+    };
+    expect(a3.kind).toBe("draft_defaults_change");
+  });
+
+  test("BuddyPage discriminated union type check", () => {
+    const pages: BuddyPage[] = [
+      { type: "buddy" },
+      { type: "task_workspace", task_id: "task-123" },
+      { type: "knowledge_graph" },
+    ];
+    const types = pages.map((p) => p.type);
+    expect(types).toContain("buddy");
+    expect(types).toContain("task_workspace");
+    expect(types).toContain("knowledge_graph");
+    for (const page of pages) {
+      if (page.type === "task_workspace") {
+        expect(page.task_id).toBe("task-123");
+      }
+    }
   });
 });

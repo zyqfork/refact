@@ -3,11 +3,10 @@ import { push } from "../Pages/pagesSlice";
 import { clearActiveSpeech, setBuddySnapshot } from "./buddySlice";
 import {
   openChatInModeAndStart,
-  switchToThread,
   startBuddyInvestigation,
 } from "../Chat/Thread";
 import { isValidSetupMode } from "../Setup/setupModes";
-import type { BuddyControl } from "./types";
+import type { BuddyControl, BuddyPage } from "./types";
 import type { DiagnosticContext } from "./types";
 import { buddyApi } from "../../services/refact/buddy";
 
@@ -115,57 +114,48 @@ export async function executeBuddyAction(
 /**
  * Central executor for engine-driven NavigationRequest events.
  *
- * Maps engine view names to actual GUI page dispatches.
+ * Maps BuddyPage variants to actual GUI page dispatches.
  * Every NavigationRequest from the sidebar SSE must route through here.
  */
 export function executeBuddyNavigation(
-  view: string,
-  params: Record<string, unknown> | undefined,
+  page: BuddyPage,
   dispatch: AppDispatch,
 ): void {
-  switch (view) {
+  switch (page.type) {
     case "buddy":
-    case "buddy_home":
       dispatch(push({ name: "buddy" }));
       break;
 
     case "stats":
-    case "dashboard":
       dispatch(push({ name: "stats dashboard" }));
       break;
 
-    case "chat": {
-      const chatId =
-        typeof params?.chat_id === "string" ? params.chat_id : undefined;
-      if (chatId) {
-        dispatch(switchToThread({ id: chatId }));
-      }
-      dispatch(push({ name: "chat" }));
-      break;
-    }
-
-    case "setup": {
-      const mode = typeof params?.mode === "string" ? params.mode : "setup";
-      const validMode = isValidSetupMode(mode) ? mode : "setup";
-      void dispatch(openChatInModeAndStart({ mode: validMode }));
-      break;
-    }
-
-    case "settings":
     case "customization":
+    case "providers":
+    case "default_models":
+    case "extensions":
       dispatch(push({ name: "customization" }));
       break;
 
-    case "knowledge":
-      dispatch(push({ name: "knowledge graph" }));
+    case "integrations":
+    case "marketplace_hub":
+    case "mcp_marketplace":
+    case "skills_marketplace":
+    case "commands_marketplace":
+    case "subagents_marketplace":
+      dispatch(push({ name: "integrations page" }));
       break;
 
-    case "tasks":
+    case "tasks_list":
       dispatch(push({ name: "tasks list" }));
       break;
 
-    case "integrations":
-      dispatch(push({ name: "integrations page" }));
+    case "task_workspace":
+      dispatch(push({ name: "task workspace", taskId: page.task_id }));
+      break;
+
+    case "knowledge_graph":
+      dispatch(push({ name: "knowledge graph" }));
       break;
   }
 }

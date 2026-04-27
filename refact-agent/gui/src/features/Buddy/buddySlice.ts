@@ -9,6 +9,10 @@ import type {
   DiagnosticContext,
   BuddyRuntimeEvent,
   BuddySpeechItem,
+  BuddyOpportunity,
+  OpportunityStatus,
+  BuddyPulse,
+  BuddyDraft,
 } from "./types";
 
 function defaultBuddyState(): BuddyState {
@@ -77,16 +81,48 @@ function defaultBuddyState(): BuddyState {
       },
     },
     active_quest: null,
+    opportunities: [],
   };
 }
 
-function defaultBuddySettings() {
+function defaultBuddySettings(): BuddySettings {
   return {
     enabled: true,
     auto_diagnostics: true,
     auto_issue_creation: false,
     personality_prompt: null,
     proactive_enabled: true,
+    message_observation_enabled: false,
+    housekeeping_enabled: true,
+    humor_enabled: true,
+    humor_level: "light",
+    autonomy_level: "suggest",
+    quiet_mode: false,
+    observers: {
+      task_health: true,
+      trajectory_clutter: true,
+      chat_pattern: false,
+      customization_drift: true,
+      memory_garden: true,
+      mcp_auth: true,
+      git_pressure: true,
+      diagnostic_cluster: true,
+      provider_health: true,
+    },
+  };
+}
+
+function defaultBuddyPulse(): BuddyPulse {
+  return {
+    generated_at: null,
+    tasks: { total: 0, stuck: 0, abandoned: 0, by_status: {} },
+    trajectories: { total: 0, untitled: 0, oldest_age_days: 0 },
+    memory: { total: 0, orphan: 0, stale_conflicts: 0 },
+    providers: { defaults_ok: true, broken_refs: 0, quota_warnings: 0 },
+    mcp: { total: 0, failing: 0, auth_expiring: 0 },
+    customization: { modes: 0, skills: 0, commands: 0, subagents: 0, hooks: 0 },
+    diagnostics: { last_hour: 0, top_error_types: [] },
+    git: { uncommitted_files: 0, diff_lines_4h: 0, branches: 0 },
   };
 }
 
@@ -139,6 +175,7 @@ function normalizeBuddyState(state: Partial<BuddyState>): BuddyState {
       },
     },
     active_quest: state.active_quest ?? base.active_quest,
+    opportunities: state.opportunities ?? base.opportunities,
   };
 }
 
@@ -154,6 +191,8 @@ function normalizeBuddySnapshot(snapshot: BuddySnapshot): BuddySnapshot {
     runtime_queue: snapshot.runtime_queue ?? [],
     now_playing: snapshot.now_playing ?? null,
     active_speech: snapshot.active_speech ?? null,
+    pulse: snapshot.pulse ?? defaultBuddyPulse(),
+    active_drafts: snapshot.active_drafts ?? [],
   };
 }
 
@@ -166,6 +205,9 @@ export interface BuddySliceState {
   runtimeQueue: BuddyRuntimeEvent[];
   nowPlaying: BuddyRuntimeEvent | null;
   activeSpeech: BuddySpeechItem | null;
+  opportunities: BuddyOpportunity[];
+  pulse: BuddyPulse | null;
+  activeDrafts: BuddyDraft[];
 }
 
 const initialState: BuddySliceState = {
@@ -176,6 +218,9 @@ const initialState: BuddySliceState = {
   runtimeQueue: [],
   nowPlaying: null,
   activeSpeech: null,
+  opportunities: [],
+  pulse: null,
+  activeDrafts: [],
 };
 
 export const buddySlice = createSlice({
@@ -183,13 +228,17 @@ export const buddySlice = createSlice({
   initialState,
   reducers: {
     setBuddySnapshot: (state, action: PayloadAction<BuddySnapshot>) => {
-      const snapshot = normalizeBuddySnapshot(action.payload);
+      const raw = action.payload;
+      const snapshot = normalizeBuddySnapshot(raw);
       state.snapshot = snapshot;
       state.loaded = true;
       state.recentDiagnostics = snapshot.recent_diagnostics ?? [];
       state.activeSpeech = snapshot.active_speech ?? null;
       state.runtimeQueue = snapshot.runtime_queue ?? [];
       state.nowPlaying = snapshot.now_playing ?? null;
+      state.opportunities = snapshot.state.opportunities;
+      state.pulse = raw.pulse ?? null;
+      state.activeDrafts = raw.active_drafts ?? [];
     },
     /** Called when SSE snapshot reports buddy as disabled/not-ready (no state). */
     setBuddyUnavailable: (state) => {
@@ -268,12 +317,14 @@ export const buddySlice = createSlice({
         if (idx >= 0) {
           // Sticky dismissal on coalesce — see runtime_queue.rs::enqueue.
           const wasDismissed =
-            state.runtimeQueue[idx].dismissed || event.dismissed;
+            (state.runtimeQueue[idx].dismissed ?? false) ||
+            (event.dismissed ?? false);
           state.runtimeQueue[idx] = { ...event, dismissed: wasDismissed };
           return;
         }
         if (state.nowPlaying?.dedupe_key === event.dedupe_key) {
-          const wasDismissed = state.nowPlaying.dismissed || event.dismissed;
+          const wasDismissed =
+            (state.nowPlaying.dismissed ?? false) || (event.dismissed ?? false);
           state.nowPlaying = { ...event, dismissed: wasDismissed };
           return;
         }
@@ -288,8 +339,9 @@ export const buddySlice = createSlice({
       }
     },
     dequeueRuntimeEvent: (state) => {
-      if (state.runtimeQueue.length > 0) {
-        state.nowPlaying = state.runtimeQueue.shift()!;
+      const next = state.runtimeQueue.shift();
+      if (next !== undefined) {
+        state.nowPlaying = next;
       }
     },
     clearNowPlaying: (state) => {
@@ -322,6 +374,61 @@ export const buddySlice = createSlice({
         state.nowPlaying = { ...state.nowPlaying, dismissed: true };
       }
     },
+    addOpportunity: (state, action: PayloadAction<BuddyOpportunity>) => {
+      const opp = action.payload;
+      const idx = state.opportunities.findIndex((o) => o.id === opp.id);
+      if (idx >= 0) {
+        state.opportunities[idx] = opp;
+        return;
+      }
+      state.opportunities.push(opp);
+      if (state.opportunities.length > 200) {
+        state.opportunities.shift();
+      }
+    },
+    resolveOpportunity: (
+      state,
+      action: PayloadAction<{ id: string; status: OpportunityStatus }>,
+    ) => {
+      const { id, status } = action.payload;
+      const opp = state.opportunities.find((o) => o.id === id);
+      if (opp) {
+        opp.status = status;
+      }
+    },
+    expireOpportunities: (state, action: PayloadAction<string>) => {
+      const now = action.payload;
+      for (const opp of state.opportunities) {
+        if (opp.status === "new" || opp.status === "shown") {
+          if (opp.expires_at <= now) {
+            opp.status = "expired";
+          }
+        }
+      }
+    },
+    setPulse: (state, action: PayloadAction<BuddyPulse>) => {
+      state.pulse = action.payload;
+    },
+    addDraft: (state, action: PayloadAction<BuddyDraft>) => {
+      const draft = action.payload;
+      const idx = state.activeDrafts.findIndex((d) => d.id === draft.id);
+      if (idx >= 0) {
+        state.activeDrafts[idx] = draft;
+      } else {
+        state.activeDrafts.push(draft);
+      }
+    },
+    consumeDraft: (state, action: PayloadAction<string>) => {
+      state.activeDrafts = state.activeDrafts.filter(
+        (d) => d.id !== action.payload,
+      );
+    },
+    replaceOpportunities: (
+      state,
+      action: PayloadAction<BuddyOpportunity[]>,
+    ) => {
+      state.opportunities = action.payload;
+    },
   },
   selectors: {
     selectBuddySnapshot: (state) => state.snapshot,
@@ -339,6 +446,13 @@ export const buddySlice = createSlice({
     selectRuntimeQueue: (state) => state.runtimeQueue,
     selectNowPlaying: (state) => state.nowPlaying,
     selectActiveSpeech: (state) => state.activeSpeech,
+    selectOpportunities: (state) => state.opportunities,
+    selectUnreadOpportunities: (state) =>
+      state.opportunities.filter(
+        (o) => o.status === "new" || o.status === "shown",
+      ),
+    selectPulse: (state) => state.pulse,
+    selectActiveDrafts: (state) => state.activeDrafts,
   },
 });
 
@@ -359,6 +473,13 @@ export const {
   setActiveSpeech,
   clearActiveSpeech,
   dismissRuntimeEvent,
+  addOpportunity,
+  resolveOpportunity,
+  expireOpportunities,
+  setPulse,
+  addDraft,
+  consumeDraft,
+  replaceOpportunities,
 } = buddySlice.actions;
 
 export const {
@@ -374,4 +495,18 @@ export const {
   selectRuntimeQueue,
   selectNowPlaying,
   selectActiveSpeech,
+  selectOpportunities,
+  selectUnreadOpportunities,
+  selectPulse,
+  selectActiveDrafts,
 } = buddySlice.selectors;
+
+export const selectOpportunityById = (
+  state: { buddy: BuddySliceState },
+  id: string,
+) => state.buddy.opportunities.find((o) => o.id === id);
+
+export const selectDraftById = (
+  state: { buddy: BuddySliceState },
+  id: string,
+) => state.buddy.activeDrafts.find((d) => d.id === id);
