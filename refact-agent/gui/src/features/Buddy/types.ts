@@ -24,7 +24,6 @@ export interface SignalDef {
   animationType: AnimType;
   xp: number;
   icon: string;
-  statusTexts: string[];
   isError: boolean;
   isWin: boolean;
   scene?: string;
@@ -103,7 +102,10 @@ export type IdleActionType =
   | "confidentPose"
   | "wave"
   | "spin"
-  | "type_code";
+  | "type_code"
+  | "scratch"
+  | "peekAround"
+  | "sniff";
 
 export type ToyType = "duck" | "dice" | "coffee" | "bug" | "scroll";
 
@@ -385,6 +387,8 @@ export type BuddyEvent =
   | { type: "petted" }
   | { type: "semantic_update"; patch: Partial<BuddySemanticState> };
 
+export type BubblePosition = "above" | "left" | "right";
+
 export interface BuddyCanvasProps {
   state: BuddySemanticState;
   onEvent?: (event: BuddyEvent) => void;
@@ -393,6 +397,12 @@ export interface BuddyCanvasProps {
   style?: React.CSSProperties;
   /** Override speech bubble text (from runtime/backend), takes priority over canvas statusText */
   speechOverride?: string | null;
+  /** Buttons rendered inside the speech bubble */
+  speechControls?: BuddyControl[];
+  /** Called when a speech bubble button is clicked */
+  onSpeechControlClick?: (ctrl: BuddyControl) => void;
+  /** Where to position the speech bubble relative to the buddy. Default: "above" */
+  bubblePosition?: BubblePosition;
 }
 
 export interface BuddyIdentity {

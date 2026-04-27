@@ -19,16 +19,26 @@ const SUGGESTION_EXPIRY_SECS: i64 = 300;
 pub(crate) fn validate_workflow_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 pub(crate) fn redact_sensitive(text: &str) -> String {
     let mut result = text.to_string();
-    let patterns = ["sk-", "Bearer ", "token=", "api_key=", "apikey=", "Authorization: "];
+    let patterns = [
+        "sk-",
+        "Bearer ",
+        "token=",
+        "api_key=",
+        "apikey=",
+        "Authorization: ",
+    ];
     for pat in &patterns {
         if let Some(pos) = result.find(pat) {
             let start = pos + pat.len();
-            let end = result[start..].find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+            let end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
                 .map(|e| start + e)
                 .unwrap_or(result.len());
             let redacted = format!("{}[REDACTED]", pat);
@@ -52,8 +62,23 @@ pub struct BuddyService {
 }
 
 impl BuddyService {
-    pub fn new(state: BuddyState, settings: BuddySettings, events_tx: broadcast::Sender<BuddyEvent>) -> Self {
-        Self { state, settings, events_tx, last_suggestion_at: None, recent_diagnostics: Vec::new(), last_issue_at: None, recent_issue_errors: Vec::new(), runtime_queue: RuntimeQueue::new(), dirty: false, active_speech: None }
+    pub fn new(
+        state: BuddyState,
+        settings: BuddySettings,
+        events_tx: broadcast::Sender<BuddyEvent>,
+    ) -> Self {
+        Self {
+            state,
+            settings,
+            events_tx,
+            last_suggestion_at: None,
+            recent_diagnostics: Vec::new(),
+            last_issue_at: None,
+            recent_issue_errors: Vec::new(),
+            runtime_queue: RuntimeQueue::new(),
+            dirty: false,
+            active_speech: None,
+        }
     }
 
     pub fn snapshot(&self) -> BuddySnapshot {
@@ -82,26 +107,45 @@ impl BuddyService {
     }
 
     pub fn send_navigation(&self, view: String, params: Option<serde_json::Value>) {
-        let _ = self.events_tx.send(BuddyEvent::NavigationRequest { view, params });
+        let _ = self
+            .events_tx
+            .send(BuddyEvent::NavigationRequest { view, params });
     }
 
     pub fn enqueue_runtime_event(&mut self, event: BuddyRuntimeEvent) {
-        let _ = self.events_tx.send(BuddyEvent::RuntimeEvent { event: event.clone() });
+        let _ = self.events_tx.send(BuddyEvent::RuntimeEvent {
+            event: event.clone(),
+        });
         self.runtime_queue.enqueue(event);
     }
 
     #[allow(dead_code)]
     pub fn update_runtime_progress(&mut self, dedupe_key: &str, progress: u8, title: Option<&str>) {
-        self.runtime_queue.update_progress(dedupe_key, progress, title);
-        if let Some(e) = self.runtime_queue.items.iter().find(|e| e.dedupe_key.as_deref() == Some(dedupe_key)) {
-            let _ = self.events_tx.send(BuddyEvent::RuntimeEvent { event: e.clone() });
+        self.runtime_queue
+            .update_progress(dedupe_key, progress, title);
+        if let Some(e) = self
+            .runtime_queue
+            .items
+            .iter()
+            .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
+        {
+            let _ = self
+                .events_tx
+                .send(BuddyEvent::RuntimeEvent { event: e.clone() });
         }
     }
 
     pub fn complete_runtime_event(&mut self, dedupe_key: &str, status: &str) {
         self.runtime_queue.complete(dedupe_key, status);
-        if let Some(e) = self.runtime_queue.items.iter().find(|e| e.dedupe_key.as_deref() == Some(dedupe_key)) {
-            let _ = self.events_tx.send(BuddyEvent::RuntimeEvent { event: e.clone() });
+        if let Some(e) = self
+            .runtime_queue
+            .items
+            .iter()
+            .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
+        {
+            let _ = self
+                .events_tx
+                .send(BuddyEvent::RuntimeEvent { event: e.clone() });
         }
     }
 
@@ -111,11 +155,12 @@ impl BuddyService {
         let _ = self.events_tx.send(BuddyEvent::ActivityAdded { activity });
     }
 
-    #[allow(dead_code)]
     pub fn grant_xp(&mut self, amount: u64) {
         super::state::grant_xp(&mut self.state, amount);
         self.dirty = true;
-        let _ = self.events_tx.send(BuddyEvent::StateUpdated { state: self.state.clone() });
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
     }
 
     pub fn add_suggestion(&mut self, suggestion: BuddySuggestion) {
@@ -127,7 +172,9 @@ impl BuddyService {
         self.state.suggestion_state.push(suggestion.clone());
         self.last_suggestion_at = Some(Instant::now());
         self.dirty = true;
-        let _ = self.events_tx.send(BuddyEvent::SuggestionAdded { suggestion });
+        let _ = self
+            .events_tx
+            .send(BuddyEvent::SuggestionAdded { suggestion });
     }
 
     pub fn maybe_add_suggestion(&mut self, suggestion: BuddySuggestion) -> bool {
@@ -137,7 +184,9 @@ impl BuddyService {
             }
         }
         let dupe = self.state.suggestion_state.iter().any(|s| {
-            !s.dismissed && s.suggestion_type == suggestion.suggestion_type && s.title == suggestion.title
+            !s.dismissed
+                && s.suggestion_type == suggestion.suggestion_type
+                && s.title == suggestion.title
         });
         if dupe {
             return false;
@@ -151,47 +200,72 @@ impl BuddyService {
             s.dismissed = true;
         }
         self.dirty = true;
-        let _ = self.events_tx.send(BuddyEvent::SuggestionDismissed { suggestion_id: id.to_string() });
+        let _ = self.events_tx.send(BuddyEvent::SuggestionDismissed {
+            suggestion_id: id.to_string(),
+        });
     }
 
-    pub fn workflow_completed(&mut self, workflow_id: &str, xp: u64, activity: super::types::BuddyActivity) {
+    pub fn workflow_completed(
+        &mut self,
+        workflow_id: &str,
+        xp: u64,
+        activity: super::types::BuddyActivity,
+    ) {
         super::state::add_activity(&mut self.state, activity.clone());
         let _ = self.events_tx.send(BuddyEvent::ActivityAdded { activity });
         super::state::grant_xp(&mut self.state, xp);
         let now = Utc::now().to_rfc3339();
-        if let Some(ws) = self.state.workflow_summaries.iter_mut().find(|w| w.workflow_id == workflow_id) {
+        if let Some(ws) = self
+            .state
+            .workflow_summaries
+            .iter_mut()
+            .find(|w| w.workflow_id == workflow_id)
+        {
             ws.last_run = Some(now);
             ws.run_count += 1;
             ws.last_outcome = Some("success".to_string());
         } else {
-            self.state.workflow_summaries.push(super::types::BuddyWorkflowSummary {
-                workflow_id: workflow_id.to_string(),
-                last_run: Some(now),
-                run_count: 1,
-                last_outcome: Some("success".to_string()),
-            });
+            self.state
+                .workflow_summaries
+                .push(super::types::BuddyWorkflowSummary {
+                    workflow_id: workflow_id.to_string(),
+                    last_run: Some(now),
+                    run_count: 1,
+                    last_outcome: Some("success".to_string()),
+                });
         }
         self.dirty = true;
-        let _ = self.events_tx.send(BuddyEvent::StateUpdated { state: self.state.clone() });
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
     }
 
     pub fn workflow_failed(&mut self, workflow_id: &str, activity: super::types::BuddyActivity) {
         self.add_activity(activity);
         let now = Utc::now().to_rfc3339();
-        if let Some(ws) = self.state.workflow_summaries.iter_mut().find(|w| w.workflow_id == workflow_id) {
+        if let Some(ws) = self
+            .state
+            .workflow_summaries
+            .iter_mut()
+            .find(|w| w.workflow_id == workflow_id)
+        {
             ws.last_run = Some(now);
             ws.run_count += 1;
             ws.last_outcome = Some("failed".to_string());
         } else {
-            self.state.workflow_summaries.push(super::types::BuddyWorkflowSummary {
-                workflow_id: workflow_id.to_string(),
-                last_run: Some(now),
-                run_count: 1,
-                last_outcome: Some("failed".to_string()),
-            });
+            self.state
+                .workflow_summaries
+                .push(super::types::BuddyWorkflowSummary {
+                    workflow_id: workflow_id.to_string(),
+                    last_run: Some(now),
+                    run_count: 1,
+                    last_outcome: Some("failed".to_string()),
+                });
         }
         self.dirty = true;
-        let _ = self.events_tx.send(BuddyEvent::StateUpdated { state: self.state.clone() });
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
     }
 
     pub fn add_diagnostic(&mut self, ctx: super::diagnostics::DiagnosticContext) {
@@ -199,12 +273,15 @@ impl BuddyService {
         if self.recent_diagnostics.len() > 100 {
             self.recent_diagnostics.remove(0);
         }
-        let _ = self.events_tx.send(BuddyEvent::DiagnosticAdded { diagnostic: ctx });
+        let _ = self
+            .events_tx
+            .send(BuddyEvent::DiagnosticAdded { diagnostic: ctx });
     }
 
     pub fn record_issue_created(&mut self, error_message: String) {
         self.last_issue_at = Some(Instant::now());
-        self.recent_issue_errors.push((error_message, chrono::Utc::now()));
+        self.recent_issue_errors
+            .push((error_message, chrono::Utc::now()));
         if self.recent_issue_errors.len() > 200 {
             self.recent_issue_errors.remove(0);
         }
@@ -221,11 +298,20 @@ impl BuddyService {
             warn!("buddy: rejecting invalid workflow_id: {:?}", workflow_id);
             return;
         }
-        let path = project_root.join(format!(".refact/buddy/chats/workflows/{}.json", workflow_id));
+        let path = project_root.join(format!(
+            ".refact/buddy/chats/workflows/{}.json",
+            workflow_id
+        ));
         super::workflows::append_workflow_entry(&path, output_summary, success).await;
     }
 
-    pub fn report_error(&mut self, error_type: &str, error_msg: &str, source: Option<&str>, chat_id: Option<&str>) {
+    pub fn report_error(
+        &mut self,
+        error_type: &str,
+        error_msg: &str,
+        source: Option<&str>,
+        chat_id: Option<&str>,
+    ) {
         let lower = error_msg.to_lowercase();
         let severity = if lower.contains("critical") || lower.contains("panic") {
             super::diagnostics::DiagnosticSeverity::Critical
@@ -246,8 +332,8 @@ impl BuddyService {
             severity,
         };
         self.add_diagnostic(ctx);
-        let truncated: String = error_msg.chars().take(80).collect();
         let redacted = redact_sensitive(error_msg);
+        let truncated: String = redacted.chars().take(80).collect();
         self.add_activity(BuddyActivity {
             icon: "⚠️".to_string(),
             title: format!("{}: {}", error_type, truncated),
@@ -286,7 +372,9 @@ impl BuddyService {
         });
         if changed || self.state.suggestion_state.len() != before {
             self.dirty = true;
-            let _ = self.events_tx.send(BuddyEvent::StateUpdated { state: self.state.clone() });
+            let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+                state: self.state.clone(),
+            });
         }
     }
 }
@@ -320,7 +408,11 @@ pub fn make_runtime_event(
     }
 }
 
-pub async fn buddy_complete_event(gcx: Arc<ARwLock<GlobalContext>>, dedupe_key: &str, status: &str) {
+pub async fn buddy_complete_event(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    dedupe_key: &str,
+    status: &str,
+) {
     let buddy_arc = gcx.read().await.buddy.clone();
     let mut lock = buddy_arc.lock().await;
     if let Some(svc) = lock.as_mut() {
@@ -333,6 +425,47 @@ pub async fn buddy_enqueue_event(gcx: Arc<ARwLock<GlobalContext>>, event: BuddyR
     let mut lock = buddy_arc.lock().await;
     if let Some(svc) = lock.as_mut() {
         svc.enqueue_runtime_event(event);
+    }
+}
+
+
+pub struct BuddyMutation {
+    pub runtime_event: Option<BuddyRuntimeEvent>,
+    pub xp: u64,
+    pub activity: Option<super::types::BuddyActivity>,
+    pub mood: Option<String>,
+}
+
+impl Default for BuddyMutation {
+    fn default() -> Self {
+        Self {
+            runtime_event: None,
+            xp: 0,
+            activity: None,
+            mood: None,
+        }
+    }
+}
+
+pub async fn buddy_apply(gcx: Arc<ARwLock<GlobalContext>>, m: BuddyMutation) {
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let mut lock = buddy_arc.lock().await;
+    let Some(svc) = lock.as_mut() else { return };
+    if let Some(ev) = m.runtime_event {
+        svc.enqueue_runtime_event(ev);
+    }
+    if m.xp > 0 {
+        svc.grant_xp(m.xp);
+    }
+    if let Some(activity) = m.activity {
+        svc.add_activity(activity);
+    }
+    if let Some(mood) = m.mood {
+        svc.state.semantic.mood = mood;
+        svc.dirty = true;
+        let _ = svc.events_tx.send(BuddyEvent::StateUpdated {
+            state: svc.state.clone(),
+        });
     }
 }
 
@@ -356,7 +489,12 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
     let state = super::state::load_state(&project_root).await;
     let settings = super::settings::load_settings(&project_root).await;
 
-    let events_tx = gcx.read().await.buddy_events_tx.clone().expect("buddy_events_tx must be set");
+    let events_tx = gcx
+        .read()
+        .await
+        .buddy_events_tx
+        .clone()
+        .expect("buddy_events_tx must be set");
     let service = BuddyService::new(state, settings, events_tx);
 
     let buddy_arc = gcx.read().await.buddy.clone();
@@ -367,13 +505,19 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
     if !setup_done {
         let mut guard = buddy_arc.lock().await;
         if let Some(svc) = guard.as_mut() {
-            let already = svc.state.suggestion_state.iter().any(|s| s.suggestion_type == "setup");
+            let already = svc
+                .state
+                .suggestion_state
+                .iter()
+                .any(|s| s.suggestion_type == "setup");
             if !already {
                 let suggestion = BuddySuggestion {
                     id: "setup".to_string(),
                     suggestion_type: "setup".to_string(),
                     title: "Set up this project".to_string(),
-                    description: "Run setup to generate guidelines, integrations, and toolbox commands.".to_string(),
+                    description:
+                        "Run setup to generate guidelines, integrations, and toolbox commands."
+                            .to_string(),
                     created_at: chrono::Utc::now().to_rfc3339(),
                     dismissed: false,
                 };
@@ -401,7 +545,9 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
             }
         }
         if expiry_tick % 30 == 0 {
-            scheduler.tick(gcx.clone(), buddy_arc.clone(), &project_root).await;
+            scheduler
+                .tick(gcx.clone(), buddy_arc.clone(), &project_root)
+                .await;
         }
         let state_to_save = {
             let mut buddy = buddy_arc.lock().await;

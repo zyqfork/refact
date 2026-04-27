@@ -35,17 +35,16 @@ export function renderFrame(
 
   updateAndRenderAfterimages(ctx, anim, pal.body);
 
-  let shakeX = 0,
-    shakeY = 0;
-  if (anim.shakeIntensity > 0.3) {
-    shakeX = Math.round((Math.random() - 0.5) * anim.shakeIntensity);
-    shakeY = Math.round((Math.random() - 0.5) * anim.shakeIntensity);
-    anim.shakeIntensity *= 0.82;
-  } else {
-    anim.shakeIntensity = 0;
-  }
+  // shakeIntensity is decayed in stepAnimFrame; read-only here
+  const shakeX =
+    anim.shakeIntensity > 0.3
+      ? Math.round((Math.random() - 0.5) * anim.shakeIntensity)
+      : 0;
+  const shakeY =
+    anim.shakeIntensity > 0.3
+      ? Math.round((Math.random() - 0.5) * anim.shakeIntensity)
+      : 0;
 
-  anim.bobPhase += 0.07;
   const isSleeping = anim.idleAction === "doze";
   const bobAmount = isSleeping ? 1 : anim.walking ? 1 : 2;
 
@@ -79,12 +78,8 @@ export function renderFrame(
       ? Math.round(Math.abs(Math.sin(anim.frame * 0.18)) * 5)
       : 0;
 
-  anim.squashX += (anim.squashTargetX - anim.squashX) * 0.12;
-  anim.squashY += (anim.squashTargetY - anim.squashY) * 0.12;
-  anim.squashTargetX += (1 - anim.squashTargetX) * 0.04;
-  anim.squashTargetY += (1 - anim.squashTargetY) * 0.04;
-
-  let leanX = 0;
+  // headTilt contributes as body lean when cursor isn't close enough to override
+  let leanX = Math.round(anim.headTilt * 2);
   if (anim.mouseProximity > 0.3 && !anim.walking)
     leanX = Math.round(anim.cursorTargetX * anim.mouseProximity * 3);
   if (anim.walking) leanX += anim.walkDirection * 2;
@@ -144,7 +139,8 @@ export function renderFrame(
   const centerX = ox + spriteW / 2;
   const centerY = oy + spriteH / 2;
   ctx.translate(centerX, centerY);
-  ctx.scale(anim.squashX, anim.squashY);
+  // breathScale adds energy-based breathing oscillation on top of squash
+  ctx.scale(anim.squashX, anim.squashY + anim.breathScale);
   ctx.translate(-centerX, -centerY);
   drawStageCharacter(ctx, stage, ox, oy, m, anim, semantic.paletteIndex);
   ctx.restore();
@@ -169,9 +165,6 @@ export function renderFrame(
       fillPixel(ctx, ox + spriteW / 2, oy - 2, 1, 1, "#FFF");
     }
   }
-  if (anim.idleAction === "lookAround") {
-    anim.cursorTargetX = Math.sin(anim.idleActionTimer * 0.15) * 1.5;
-  }
   if (
     anim.idleAction === "yawn" &&
     anim.idleActionTimer > 20 &&
@@ -187,16 +180,6 @@ export function renderFrame(
       pal.eyeDark,
     );
     ctx.globalAlpha = 1;
-  }
-  if (anim.idleAction === "hover" && anim.frame % 40 === 0) {
-    anim.floatingEmojis.push({
-      emoji: "💕",
-      x: ox + spriteW / 2,
-      y: oy - 10,
-      velocityX: 0,
-      velocityY: -0.3,
-      life: 1,
-    });
   }
   if (anim.idleAction === "confidentPose") {
     ctx.globalAlpha = 0.25 + Math.sin(anim.frame * 0.1) * 0.15;
@@ -249,22 +232,12 @@ export function renderFrame(
   updateAndRenderSleepParticles(ctx, anim, pal.accent, anim.frame);
   updateAndRenderOrbitingOrbs(ctx, anim);
 
-  if (anim.combo.displayTimer > 0 && anim.frame % 6 === 0) {
-    anim.sparks.push({
-      x: CANVAS_CENTER_X + anim.walkOffsetX + (Math.random() - 0.5) * 40,
-      y: CANVAS_CENTER_Y + (Math.random() - 0.5) * 20 - 8,
-      velocityX: (Math.random() - 0.5) * 1.2,
-      velocityY: -0.4 - Math.random() * 1.2,
-      life: 1,
-      color: `hsl(${anim.combo.rainbowHue},100%,60%)`,
-    });
-  }
+  // Combo sparks are spawned in stepAnimFrame (render.ts is read-only)
 
   if (anim.screenFlash > 0.01) {
     ctx.globalAlpha = anim.screenFlash;
     fillRect(ctx, 0, 0, CANVAS_SIZE, CANVAS_SIZE, "#FFF");
     ctx.globalAlpha = 1;
-    anim.screenFlash *= 0.85;
   }
 
   if (anim.screenGlitch > 0.01) {
@@ -283,6 +256,5 @@ export function renderFrame(
       }
     }
     ctx.globalAlpha = 1;
-    anim.screenGlitch *= 0.88;
   }
 }

@@ -1,0 +1,19 @@
+.companion {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  z-index: 50;
+  padding-bottom: 4px;
+  animation: slideUp 0.25s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

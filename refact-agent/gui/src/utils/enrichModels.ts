@@ -12,6 +12,7 @@ export type EnrichedModel = {
   isDefault?: boolean;
   isThinking?: boolean;
   isLight?: boolean;
+  isBuddy?: boolean;
   provider: string;
 };
 
@@ -102,6 +103,7 @@ export function enrichModels(
       isDefault: caps.chat_default_model === modelKey,
       isThinking: caps.chat_thinking_model === modelKey,
       isLight: caps.chat_light_model === modelKey,
+      isBuddy: caps.chat_buddy_model === modelKey,
       provider: extractProvider(modelKey),
     };
   });
@@ -115,6 +117,8 @@ function sortModelsInGroup(models: EnrichedModel[]): EnrichedModel[] {
     if (b.isThinking) return 1;
     if (a.isLight) return -1;
     if (b.isLight) return 1;
+    if (a.isBuddy) return -1;
+    if (b.isBuddy) return 1;
     return a.displayName.localeCompare(b.displayName);
   });
 }

@@ -80,7 +80,13 @@ impl Tool for ToolMCP {
             )
         };
         if session_maybe.is_none() {
-            tracing::error!("No session for {:?}, strange (2)", session_key);
+            let msg = format!("No session for {:?}, MCP server may not be running", session_key);
+            tracing::error!("{}", msg);
+            let buddy_arc = gcx.read().await.buddy.clone();
+            let mut lock = buddy_arc.lock().await;
+            if let Some(svc) = lock.as_mut() {
+                svc.report_error("mcp_no_session", &msg, Some("mcp/tool_mcp.rs"), None);
+            }
             return Err(format!("No session for {:?}", session_key));
         }
         let session = session_maybe.unwrap();
@@ -102,16 +108,33 @@ impl Tool for ToolMCP {
                 })?;
             match &session_downcasted.connection_status {
                 MCPConnectionStatus::Reconnecting { .. } => {
-                    return Err(format!(
+                    let msg = format!(
                         "MCP server '{}' is reconnecting, please try again shortly",
                         self.mcp_tool.name
-                    ));
+                    );
+                    let buddy_arc = gcx.read().await.buddy.clone();
+                    let mut lock = buddy_arc.lock().await;
+                    if let Some(svc) = lock.as_mut() {
+                        svc.report_error("mcp_reconnecting", &msg, Some("mcp/tool_mcp.rs"), None);
+                    }
+                    return Err(msg);
                 }
                 MCPConnectionStatus::Failed { message } => {
-                    return Err(format!(
+                    let msg = format!(
                         "MCP server '{}' connection failed: {}",
                         self.mcp_tool.name, message
-                    ));
+                    );
+                    let buddy_arc = gcx.read().await.buddy.clone();
+                    let mut lock = buddy_arc.lock().await;
+                    if let Some(svc) = lock.as_mut() {
+                        svc.report_error(
+                            "mcp_connection_failed",
+                            &msg,
+                            Some("mcp/tool_mcp.rs"),
+                            None,
+                        );
+                    }
+                    return Err(msg);
                 }
                 _ => {}
             }
@@ -155,7 +178,15 @@ impl Tool for ToolMCP {
             let mcp_client_locked = self.mcp_client.lock().await;
             match &*mcp_client_locked {
                 Some(client) => client.peer().clone(),
-                None => return Err("MCP client is not available".to_string()),
+                None => {
+                    let msg = format!("MCP client for '{}' is not available", self.mcp_tool.name);
+                    let buddy_arc = gcx.read().await.buddy.clone();
+                    let mut lock = buddy_arc.lock().await;
+                    if let Some(svc) = lock.as_mut() {
+                        svc.report_error("mcp_client_unavailable", &msg, Some("mcp/tool_mcp.rs"), None);
+                    }
+                    return Err(msg);
+                }
             }
         };
 
@@ -187,6 +218,18 @@ impl Tool for ToolMCP {
                     {
                         let mut m = session_metrics.lock().await;
                         m.record_call_failure(&self.mcp_tool.name, call_start);
+                    }
+                    {
+                        let buddy_arc = gcx.read().await.buddy.clone();
+                        let mut lock = buddy_arc.lock().await;
+                        if let Some(svc) = lock.as_mut() {
+                            svc.report_error(
+                                "mcp_tool_error",
+                                &error_msg,
+                                Some("mcp/tool_mcp.rs"),
+                                None,
+                            );
+                        }
                     }
                     return Err(error_msg);
                 }
@@ -308,10 +351,22 @@ impl Tool for ToolMCP {
             Err(e) => {
                 let error_msg = format!("Failed to call tool: {:?}", e);
                 tracing::error!("{}", error_msg);
-                add_log_entry(session_logs.clone(), error_msg).await;
+                add_log_entry(session_logs.clone(), error_msg.clone()).await;
                 {
                     let mut m = session_metrics.lock().await;
                     m.record_call_failure(&self.mcp_tool.name, call_start);
+                }
+                {
+                    let buddy_arc = gcx.read().await.buddy.clone();
+                    let mut lock = buddy_arc.lock().await;
+                    if let Some(svc) = lock.as_mut() {
+                        svc.report_error(
+                            "mcp_tool_error",
+                            &error_msg,
+                            Some("mcp/tool_mcp.rs"),
+                            None,
+                        );
+                    }
                 }
                 return Err(e.to_string());
             }

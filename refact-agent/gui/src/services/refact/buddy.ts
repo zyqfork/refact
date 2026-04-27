@@ -144,7 +144,7 @@ export const buddyApi = createApi({
       },
     }),
     reportError: builder.mutation<
-      void,
+      undefined,
       {
         error: string;
         source_file?: string;

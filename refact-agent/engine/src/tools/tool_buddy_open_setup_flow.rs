@@ -58,7 +58,8 @@ impl Tool for ToolBuddyOpenSetupFlow {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let flow = args.get("flow")
+        let flow = args
+            .get("flow")
             .and_then(|v| v.as_str())
             .ok_or("argument `flow` is missing or not a string")?
             .to_string();
@@ -92,8 +93,12 @@ impl Tool for ToolBuddyOpenSetupFlow {
                 "last_message_at": null,
                 "messages": []
             });
-            let path = root.join(format!(".refact/buddy/chats/conversations/{}.json", chat_id));
-            crate::buddy::storage::atomic_write_json(&path, &conv).await
+            let path = root.join(format!(
+                ".refact/buddy/chats/conversations/{}.json",
+                chat_id
+            ));
+            crate::buddy::storage::atomic_write_json(&path, &conv)
+                .await
                 .map_err(|e| format!("failed to create setup conversation: {}", e))?;
         }
 
@@ -112,16 +117,19 @@ impl Tool for ToolBuddyOpenSetupFlow {
             });
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(format!(
-                "Setup flow '{}' launched. chat_id: {}",
-                flow, chat_id
-            )),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(format!(
+                    "Setup flow '{}' launched. chat_id: {}",
+                    flow, chat_id
+                )),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

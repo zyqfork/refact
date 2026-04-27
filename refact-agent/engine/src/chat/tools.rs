@@ -1719,22 +1719,46 @@ pub async fn execute_tools(
     }
 
     let gcx2 = gcx.clone();
-    let is_buddy = thread.buddy_meta.as_ref().map(|m| m.is_buddy_chat).unwrap_or(false);
-    let first_tool_name = tool_calls.first().map(|tc| tc.function.name.clone()).unwrap_or_default();
+    let is_buddy = thread
+        .buddy_meta
+        .as_ref()
+        .map(|m| m.is_buddy_chat)
+        .unwrap_or(false);
+    let first_tool_name = tool_calls
+        .first()
+        .map(|tc| tc.function.name.clone())
+        .unwrap_or_default();
     let chat_id = thread.id.clone();
     let chat_label = {
         let t = thread.title.trim().to_string();
-        if t.is_empty() || t == "New Chat" { "Untitled chat".to_string() } else { t.chars().take(60).collect() }
+        if t.is_empty() || t == "New Chat" {
+            "Untitled chat".to_string()
+        } else {
+            t.chars().take(60).collect()
+        }
     };
-    let tool_meta: Vec<(String, String)> = tool_calls.iter()
-        .map(|tc| (tc.id.clone(), format!("tool_{}_{}", chat_id, tc.function.name)))
+    let tool_meta: Vec<(String, String)> = tool_calls
+        .iter()
+        .map(|tc| {
+            (
+                tc.id.clone(),
+                format!("tool_{}_{}", chat_id, tc.function.name),
+            )
+        })
         .collect();
     for (tc, (_, dedupe_key)) in tool_calls.iter().zip(tool_meta.iter()) {
         let mut ev = crate::buddy::actor::make_runtime_event(
-            "tool_used", &format!("Running {} in '{}'", tc.function.name, chat_label), "tool",
-            dedupe_key, "started", None,
+            "tool_used",
+            &format!("Running {} in '{}'", tc.function.name, chat_label),
+            "tool",
+            dedupe_key,
+            "started",
+            None,
         );
-        ev.speech_text = Some(format!("Using {} to help with '{}'...", tc.function.name, chat_label));
+        ev.speech_text = Some(format!(
+            "Using {} to help with '{}'...",
+            tc.function.name, chat_label
+        ));
         ev.scene = Some("working".to_string());
         ev.chat_id = Some(chat_id.to_string());
         crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
@@ -1746,9 +1770,15 @@ pub async fn execute_tools(
     .await;
 
     for (tool_call_id, dedupe_key) in &tool_meta {
-        let failed = result_msgs.iter()
+        let failed = result_msgs
+            .iter()
             .any(|m| &m.tool_call_id == tool_call_id && m.tool_failed == Some(true));
-        crate::buddy::actor::buddy_complete_event(gcx2.clone(), dedupe_key, if failed { "failed" } else { "completed" }).await;
+        crate::buddy::actor::buddy_complete_event(
+            gcx2.clone(),
+            dedupe_key,
+            if failed { "failed" } else { "completed" },
+        )
+        .await;
     }
 
     if !is_buddy && result_msgs.iter().any(|m| m.tool_failed == Some(true)) {

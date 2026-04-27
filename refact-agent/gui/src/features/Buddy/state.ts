@@ -1,4 +1,4 @@
-import { NAMES, PALETTES, SIGNALS, SKILLS, STAGES } from "./constants";
+import { NAMES, PALETTES, SIGNALS } from "./constants";
 import type {
   BuddySemanticState,
   BuddyAnimState,
@@ -135,39 +135,6 @@ function addLogEntry(log: LogEntry[], entry: LogEntry): LogEntry[] {
   return [entry, ...log].slice(0, 40);
 }
 
-function resolveStageFromXP(xp: number): number {
-  let stage = 0;
-  for (let i = STAGES.length - 1; i >= 0; i--) {
-    if (xp >= STAGES[i].xpThreshold) {
-      stage = i;
-      break;
-    }
-  }
-  return stage;
-}
-
-function checkNewSkills(state: BuddySemanticState): {
-  newSkills: string[];
-  updatedLog: LogEntry[];
-} {
-  const newSkills: string[] = [];
-  let updatedLog = state.log;
-  for (const skill of SKILLS) {
-    if (
-      !state.skills.includes(skill.id) &&
-      state.progress.xp >= skill.xpThreshold
-    ) {
-      newSkills.push(skill.id);
-      updatedLog = addLogEntry(updatedLog, {
-        icon: "⭐",
-        message: `Learned: ${skill.name}`,
-        timestamp: makeLogTimestamp(),
-      });
-    }
-  }
-  return { newSkills, updatedLog };
-}
-
 export type SemanticAction =
   | { kind: "signal"; signalType: string }
   | { kind: "add_xp"; amount: number }
@@ -188,8 +155,8 @@ export function reduceSemanticState(
 
       const xpGain = def.xp;
       const newXP = state.progress.xp + xpGain;
-      const newStage = resolveStageFromXP(newXP);
-      const stageEvolved = newStage > state.progress.stage;
+      // Stage is backend-authoritative; never advance it locally from signals.
+      // Stage only updates via snapshot sync (the "patch" action).
 
       const moodDelta = def.isError
         ? { happiness: -9, anxiety: 18, energy: -2 }
@@ -228,57 +195,27 @@ export function reduceSemanticState(
         ),
       };
 
-      const logEntry: LogEntry = {
-        icon: def.icon,
-        message: action.signalType.replace(/_/g, " "),
-        timestamp: makeLogTimestamp(),
-        ...(xpGain > 0 ? { xpGained: `+${xpGain}xp` } : {}),
-      };
-
-      let newLog = addLogEntry(state.log, logEntry);
-
-      if (stageEvolved) {
-        newLog = addLogEntry(newLog, {
-          icon: "🌟",
-          message: `EVOLVED → ${STAGES[newStage].name}`,
-          timestamp: makeLogTimestamp(),
-        });
-      }
-
-      const baseState: BuddySemanticState = {
+      return {
         ...state,
         mood: newMood,
         personality: newPersonality,
-        progress: { xp: newXP, stage: newStage },
+        // Keep existing stage — stage advances only via backend snapshot sync
+        progress: { xp: newXP, stage: state.progress.stage },
         activity: {
           mood: def.mood,
           animationType: def.animationType,
           lastSignalTime: Date.now(),
           lastSignalType: action.signalType,
         },
-        log: newLog,
-      };
-
-      const { newSkills, updatedLog } = checkNewSkills(baseState);
-      return {
-        ...baseState,
-        skills: [...baseState.skills, ...newSkills],
-        log: updatedLog,
       };
     }
 
     case "add_xp": {
+      // Local XP accumulation for mood tracking; stage is backend-authoritative.
       const newXP = state.progress.xp + action.amount;
-      const newStage = resolveStageFromXP(newXP);
-      const baseState = {
-        ...state,
-        progress: { xp: newXP, stage: newStage },
-      };
-      const { newSkills, updatedLog } = checkNewSkills(baseState);
       return {
-        ...baseState,
-        skills: [...baseState.skills, ...newSkills],
-        log: updatedLog,
+        ...state,
+        progress: { xp: newXP, stage: state.progress.stage },
       };
     }
 

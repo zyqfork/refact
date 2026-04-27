@@ -19,7 +19,11 @@ impl RuntimeQueue {
     pub fn enqueue(&mut self, event: BuddyRuntimeEvent) {
         // Coalesce by dedupe_key if present
         if let Some(ref key) = event.dedupe_key {
-            if let Some(existing) = self.items.iter_mut().find(|e| e.dedupe_key.as_deref() == Some(key)) {
+            if let Some(existing) = self
+                .items
+                .iter_mut()
+                .find(|e| e.dedupe_key.as_deref() == Some(key))
+            {
                 existing.title = event.title;
                 existing.description = event.description;
                 existing.progress = event.progress;
@@ -53,7 +57,11 @@ impl RuntimeQueue {
 
     #[allow(dead_code)]
     pub fn update_progress(&mut self, dedupe_key: &str, progress: u8, title: Option<&str>) {
-        if let Some(e) = self.items.iter_mut().find(|e| e.dedupe_key.as_deref() == Some(dedupe_key)) {
+        if let Some(e) = self
+            .items
+            .iter_mut()
+            .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
+        {
             e.progress = Some(progress);
             if let Some(t) = title {
                 e.title = t.to_string();
@@ -70,7 +78,11 @@ impl RuntimeQueue {
     }
 
     pub fn complete(&mut self, dedupe_key: &str, status: &str) {
-        if let Some(e) = self.items.iter_mut().find(|e| e.dedupe_key.as_deref() == Some(dedupe_key)) {
+        if let Some(e) = self
+            .items
+            .iter_mut()
+            .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
+        {
             e.status = status.to_string();
         }
         if let Some(ref mut np) = self.now_playing {

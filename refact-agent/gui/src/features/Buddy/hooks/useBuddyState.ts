@@ -8,10 +8,7 @@ import {
 import {
   selectBuddySnapshot,
   selectBuddySignalQueue,
-  consumeBuddySignal,
-  selectRuntimeQueue,
   selectNowPlaying,
-  dequeueRuntimeEvent,
   clearNowPlaying,
 } from "../buddySlice";
 import { SIGNALS, STAGES, SKILLS } from "../constants";
@@ -41,11 +38,15 @@ export function useBuddyState(
   const reduxDispatch = useAppDispatch();
   const reduxSnapshot = useAppSelector(selectBuddySnapshot);
   const signalQueue = useAppSelector(selectBuddySignalQueue);
-  const runtimeQueue = useAppSelector(selectRuntimeQueue);
+
   const nowPlaying = useAppSelector(selectNowPlaying);
   const prevSnapshotStageRef = useRef<number | null>(null);
-  const prevLocalStageRef = useRef<number>(state.progress.stage);
-  const prevLocalSkillsRef = useRef<string[]>(state.skills);
+  // Track by seq number (rollover-safe) instead of array-length index
+  const lastProcessedSeq = useRef<number | null>(null);
+  const prevNowPlayingIdRef = useRef<string | null>(null);
+  // null = not yet initialized; prevents fake milestone events on first hydration
+  const prevLocalStageRef = useRef<number | null>(null);
+  const prevLocalSkillsRef = useRef<string[] | null>(null);
   const onBuddyEventRef = useRef(onBuddyEvent);
   useEffect(() => {
     onBuddyEventRef.current = onBuddyEvent;
@@ -68,18 +69,14 @@ export function useBuddyState(
 
   useEffect(() => {
     if (!reduxSnapshot) return;
-    const { progression, skills } = reduxSnapshot.state;
+    const { progression } = reduxSnapshot.state;
     const curr = progression.stage;
     const prev = prevSnapshotStageRef.current;
     prevSnapshotStageRef.current = curr;
 
-    // Sync XP + stage into local canvas semantic state
     dispatch({
       kind: "patch",
-      patch: {
-        progress: { xp: progression.xp, stage: curr },
-        skills: skills.unlocked,
-      },
+      patch: { progress: { xp: progression.xp, stage: curr } },
     });
 
     if (prev !== null && curr > prev) {
@@ -90,12 +87,28 @@ export function useBuddyState(
     reduxSnapshot?.state.progression.xp,
   ]);
 
-  // Emit stage_evolved and skill_unlocked events when local canvas state changes
+  // Skills sync is independent — fires when skills change even without XP/stage change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const skillsKey = reduxSnapshot?.state.skills.unlocked.join(",") ?? "";
+  useEffect(() => {
+    if (!reduxSnapshot) return;
+    dispatch({
+      kind: "patch",
+      patch: { skills: reduxSnapshot.state.skills.unlocked },
+    });
+    // skillsKey changes whenever unlocked array contents change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skillsKey]);
+
+  // Emit stage_evolved and skill_unlocked events when canvas state changes.
+  // prevLocalStageRef / prevLocalSkillsRef start as null so first hydration
+  // from snapshot never triggers false milestone events.
   useEffect(() => {
     const prev = prevLocalStageRef.current;
     const curr = state.progress.stage;
     prevLocalStageRef.current = curr;
-    if (curr > prev) {
+    // Only emit after the ref has been initialised (prev !== null)
+    if (prev !== null && curr > prev) {
       const stageDef = STAGES[curr];
       onBuddyEventRef.current?.({
         type: "stage_evolved",
@@ -109,6 +122,7 @@ export function useBuddyState(
     const prev = prevLocalSkillsRef.current;
     const curr = state.skills;
     prevLocalSkillsRef.current = curr;
+    if (prev === null) return; // skip first hydration
     const newSkills = curr.filter((s) => !prev.includes(s));
     for (const skillId of newSkills) {
       const def = SKILLS.find((s) => s.id === skillId);
@@ -123,21 +137,41 @@ export function useBuddyState(
   }, [state.skills]);
 
   useEffect(() => {
-    if (signalQueue.length === 0) return;
-    const next = signalQueue[0];
-    dispatch({ kind: "signal", signalType: next.signalType });
-    reduxDispatch(consumeBuddySignal());
-  }, [signalQueue, reduxDispatch]);
-
-  useEffect(() => {
-    if (!nowPlaying && runtimeQueue.length > 0) {
-      reduxDispatch(dequeueRuntimeEvent());
+    if (lastProcessedSeq.current === null) {
+      // On mount: mark all existing signals as already processed (skip history)
+      const maxSeq =
+        signalQueue.length > 0
+          ? Math.max(...signalQueue.map((s) => s.seq))
+          : -1;
+      lastProcessedSeq.current = maxSeq;
+      return;
     }
-  }, [nowPlaying, runtimeQueue.length, reduxDispatch]);
+    // Process only signals with seq strictly greater than last processed.
+    // This is safe even when the queue rolls over and drops old items.
+    const newSigs = signalQueue
+      .filter((s) => s.seq > lastProcessedSeq.current!)
+      .sort((a, b) => a.seq - b.seq);
+    for (const sig of newSigs) {
+      dispatch({ kind: "signal", signalType: sig.signalType });
+      lastProcessedSeq.current = sig.seq;
+    }
+  }, [signalQueue]);
+
+  // Queue dequeue is handled centrally by the Redux listener in app/middleware.ts
+  // to prevent multiple mounted useBuddyState instances from racing.
 
   useEffect(() => {
-    if (!nowPlaying) return;
-    dispatch({ kind: "signal", signalType: nowPlaying.signal_type });
+    if (!nowPlaying) {
+      prevNowPlayingIdRef.current = null;
+      return;
+    }
+    // Only trigger animation burst when a genuinely NEW event arrives
+    const isNewEvent = nowPlaying.id !== prevNowPlayingIdRef.current;
+    prevNowPlayingIdRef.current = nowPlaying.id;
+    if (isNewEvent) {
+      dispatch({ kind: "signal", signalType: nowPlaying.signal_type });
+    }
+
     const signalDef = SIGNALS[nowPlaying.signal_type];
     const isActive = signalDef?.category === "active";
     const isCompleted =

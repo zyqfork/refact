@@ -353,19 +353,75 @@ pub async fn handle_update_task_status(
     let mut meta = storage::load_task_meta(gcx.clone(), &task_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    let old_status = meta.status;
     meta.status = req.status;
     meta.updated_at = Utc::now().to_rfc3339();
     storage::save_task_meta(gcx.clone(), &task_id, &meta)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     crate::tasks::events::emit_task_event(
-        gcx,
+        gcx.clone(),
         TaskEvent::TaskUpdated {
-            task_id,
+            task_id: task_id.clone(),
             meta: meta.clone(),
         },
     )
     .await;
+    if old_status != meta.status {
+        match meta.status {
+            TaskStatus::Completed => {
+                crate::buddy::actor::buddy_apply(
+                    gcx.clone(),
+                    crate::buddy::actor::BuddyMutation {
+                        runtime_event: Some(crate::buddy::actor::make_runtime_event(
+                            "task_completed",
+                            &format!("Task done: {}", meta.name),
+                            "task",
+                            &format!("task_{}", task_id),
+                            "completed",
+                            None,
+                        )),
+                        xp: 30,
+                        activity: Some(crate::buddy::types::BuddyActivity {
+                            icon: "✅".to_string(),
+                            title: format!("Task completed: {}", meta.name),
+                            description: format!("Task {} finished successfully", task_id),
+                            timestamp: Utc::now().to_rfc3339(),
+                            activity_type: "task_completed".to_string(),
+                        }),
+                        mood: Some("excited".to_string()),
+                    },
+                )
+                .await;
+            }
+            TaskStatus::Abandoned => {
+                crate::buddy::actor::buddy_apply(
+                    gcx.clone(),
+                    crate::buddy::actor::BuddyMutation {
+                        runtime_event: Some(crate::buddy::actor::make_runtime_event(
+                            "task_abandoned",
+                            &format!("Task abandoned: {}", meta.name),
+                            "task",
+                            &format!("task_{}", task_id),
+                            "failed",
+                            Some("high"),
+                        )),
+                        activity: Some(crate::buddy::types::BuddyActivity {
+                            icon: "🗑️".to_string(),
+                            title: format!("Task abandoned: {}", meta.name),
+                            description: format!("Task {} was abandoned", task_id),
+                            timestamp: Utc::now().to_rfc3339(),
+                            activity_type: "task_abandoned".to_string(),
+                        }),
+                        mood: Some("worried".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            }
+            _ => {}
+        }
+    }
     Ok(Json(meta))
 }
 

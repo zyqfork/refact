@@ -27,6 +27,8 @@ pub struct ProviderDefaults {
     pub chat_light: ModelTypeDefaults,
     #[serde(default)]
     pub chat_thinking: ModelTypeDefaults,
+    #[serde(default)]
+    pub chat_buddy: ModelTypeDefaults,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -40,9 +42,12 @@ impl ProviderDefaults {
         _chat_default_model: &str,
         chat_light_model: &str,
         chat_thinking_model: &str,
+        chat_buddy_model: &str,
     ) -> &ModelTypeDefaults {
         if !chat_thinking_model.is_empty() && model_id == chat_thinking_model {
             &self.chat_thinking
+        } else if !chat_buddy_model.is_empty() && model_id == chat_buddy_model {
+            &self.chat_buddy
         } else if !chat_light_model.is_empty() && model_id == chat_light_model {
             &self.chat_light
         } else {

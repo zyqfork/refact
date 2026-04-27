@@ -74,13 +74,24 @@ impl Tool for ToolBuddyGetLogs {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let lines_req = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_LINES as u64) as usize;
+        let lines_req = args
+            .get("lines")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(DEFAULT_LINES as u64) as usize;
         let line_limit = lines_req.min(MAX_LINES);
-        let filter_pat = args.get("filter").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let errors_only = args.get("errors_only").and_then(|v| v.as_bool()).unwrap_or(false);
+        let filter_pat = args
+            .get("filter")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let errors_only = args
+            .get("errors_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let filter_re = match &filter_pat {
-            Some(pat) => Some(regex::Regex::new(pat).map_err(|e| format!("invalid filter regex: {}", e))?),
+            Some(pat) => {
+                Some(regex::Regex::new(pat).map_err(|e| format!("invalid filter regex: {}", e))?)
+            }
             None => None,
         };
 
@@ -122,16 +133,23 @@ impl Tool for ToolBuddyGetLogs {
         let output = if tail.is_empty() {
             "No log lines found matching the criteria.".to_string()
         } else {
-            format!("Log lines ({} shown, redacted):\n{}", tail.len(), tail.join("\n"))
+            format!(
+                "Log lines ({} shown, redacted):\n{}",
+                tail.len(),
+                tail.join("\n")
+            )
         };
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(output),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(output),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

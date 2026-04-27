@@ -249,6 +249,79 @@
   gap: 2px;
 }
 
+.setupActions {
+  padding: 0 var(--space-3) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.setupActionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.setupActionButton {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-2);
+  background: var(--gray-a2);
+  border: 1px solid var(--gray-a4);
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--gray-12);
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+
+.setupActionButton:hover {
+  background: var(--gray-a4);
+}
+
+.workflowsSection {
+  padding: 0 var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.workflowItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--gray-a3);
+}
+
+.workflowItem:last-child {
+  border-bottom: none;
+}
+
+.workflowIcon {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.workflowName {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflowMeta {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--gray-9);
+}
+
 .chatsSection {
   padding: 0 var(--space-3) var(--space-4);
   flex: 1;

@@ -10,13 +10,17 @@ use super::types::{
 };
 
 const BUDDY_NAMES: &[&str] = &[
-    "Pixel", "Byte", "Spark", "Nova", "Echo",
-    "Chip", "Flux", "Glow", "Dash", "Zen",
+    "Pixel", "Byte", "Spark", "Nova", "Echo", "Chip", "Flux", "Glow", "Dash", "Zen",
 ];
 
 const STAGE_THRESHOLDS: &[(u64, &str)] = &[
-    (0, "Egg"), (30, "Hatch"), (100, "Sprite"), (300, "Imp"),
-    (700, "Daemon"), (1500, "Sage"), (3000, "Archon"),
+    (0, "Egg"),
+    (30, "Hatch"),
+    (100, "Sprite"),
+    (300, "Imp"),
+    (700, "Daemon"),
+    (1500, "Sage"),
+    (3000, "Archon"),
 ];
 
 pub fn default_buddy_state() -> BuddyState {

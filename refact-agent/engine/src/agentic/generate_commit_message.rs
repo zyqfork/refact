@@ -170,10 +170,7 @@ pub async fn generate_commit_message_by_diff(
                     },
                     ChatMessage {
                         role: "user".to_string(),
-                        content: ChatContent::SimpleText(format!(
-                            "Diff:\n```\n{}\n```\n",
-                            diff
-                        )),
+                        content: ChatContent::SimpleText(format!("Diff:\n```\n{}\n```\n", diff)),
                         ..Default::default()
                     },
                 ]

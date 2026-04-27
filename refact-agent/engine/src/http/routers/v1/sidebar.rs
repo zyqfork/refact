@@ -52,7 +52,9 @@ pub enum SidebarEvent {
     Trajectory(TrajectoryEvent),
     Task(TaskEvent),
     Notification(NotificationEvent),
-    Buddy { buddy_event: BuddyEvent },
+    Buddy {
+        buddy_event: BuddyEvent,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,8 +78,9 @@ async fn fetch_buddy_snapshot(gcx: Arc<ARwLock<GlobalContext>>) -> serde_json::V
     let buddy_arc = gcx.read().await.buddy.clone();
     let locked = buddy_arc.lock().await;
     match locked.as_ref() {
-        Some(svc) => serde_json::to_value(&svc.snapshot())
-            .unwrap_or(serde_json::json!({"enabled": false})),
+        Some(svc) => {
+            serde_json::to_value(&svc.snapshot()).unwrap_or(serde_json::json!({"enabled": false}))
+        }
         None => serde_json::json!({"enabled": false}),
     }
 }
@@ -105,10 +108,7 @@ pub async fn handle_sidebar_subscribe(
             .as_ref()
             .map(|tx| tx.subscribe());
 
-        let buddy_rx = gcx_locked
-            .buddy_events_tx
-            .as_ref()
-            .map(|tx| tx.subscribe());
+        let buddy_rx = gcx_locked.buddy_events_tx.as_ref().map(|tx| tx.subscribe());
 
         if trajectory_rx.is_none() && task_rx.is_none() && notification_rx.is_none() {
             return Err(ScratchError::new(

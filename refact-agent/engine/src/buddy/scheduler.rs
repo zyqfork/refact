@@ -4,7 +4,10 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::global_context::GlobalContext;
 use super::actor::BuddyService;
-use super::types::{BuddyJobState, BuddySpeechItem, BuddySuggestion, BuddyActivity, BuddyRuntimeEvent, BuddyOnboarding};
+use super::types::{
+    BuddyJobState, BuddySpeechItem, BuddySuggestion, BuddyActivity, BuddyRuntimeEvent,
+    BuddyOnboarding,
+};
 use super::diagnostics::DiagnosticContext;
 
 pub struct BuddyJobContext {
@@ -13,6 +16,7 @@ pub struct BuddyJobContext {
     pub recent_diagnostics: Vec<DiagnosticContext>,
     pub project_root: std::path::PathBuf,
     pub job_state: BuddyJobState,
+    pub total_workflow_runs: u64,
 }
 
 pub struct BuddyJobResult {
@@ -20,11 +24,18 @@ pub struct BuddyJobResult {
     pub suggestion: Option<BuddySuggestion>,
     pub activity: Option<BuddyActivity>,
     pub runtime_event: Option<BuddyRuntimeEvent>,
+    pub last_result: Option<String>,
 }
 
 impl Default for BuddyJobResult {
     fn default() -> Self {
-        Self { speech: None, suggestion: None, activity: None, runtime_event: None }
+        Self {
+            speech: None,
+            suggestion: None,
+            activity: None,
+            runtime_event: None,
+            last_result: None,
+        }
     }
 }
 
@@ -33,9 +44,19 @@ pub trait BuddyJob: Send + Sync {
     fn id(&self) -> &str;
     fn cooldown_seconds(&self) -> u64;
     fn priority(&self) -> u32;
-    fn produces_suggestion(&self) -> bool { false }
-    async fn should_run(&self, gcx: Arc<tokio::sync::RwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool;
-    async fn execute(&self, gcx: Arc<tokio::sync::RwLock<GlobalContext>>, ctx: BuddyJobContext) -> BuddyJobResult;
+    fn produces_suggestion(&self) -> bool {
+        false
+    }
+    async fn should_run(
+        &self,
+        gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
+        ctx: &BuddyJobContext,
+    ) -> bool;
+    async fn execute(
+        &self,
+        gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult;
 }
 
 const MAX_UNREAD_SUGGESTIONS: usize = 3;
@@ -49,10 +70,17 @@ impl BuddyScheduler {
         let mut s = Self { jobs: vec![] };
         s.jobs.push(Box::new(super::jobs::greeting::GreetingJob));
         s.jobs.push(Box::new(super::jobs::tour::TourJob));
-        s.jobs.push(Box::new(super::jobs::error_triage::ErrorTriageJob));
-        s.jobs.push(Box::new(super::jobs::config_watcher::ConfigWatcherJob));
-        s.jobs.push(Box::new(super::jobs::stats_watcher::StatsWatcherJob));
-        s.jobs.push(Box::new(super::jobs::health_watcher::HealthWatcherJob));
+        s.jobs
+            .push(Box::new(super::jobs::error_triage::ErrorTriageJob));
+        s.jobs
+            .push(Box::new(super::jobs::config_watcher::ConfigWatcherJob));
+        s.jobs
+            .push(Box::new(super::jobs::stats_watcher::StatsWatcherJob));
+        s.jobs
+            .push(Box::new(super::jobs::health_watcher::HealthWatcherJob));
+        s.jobs.push(Box::new(
+            super::jobs::proactive_suggestions::ProactiveSuggestionsJob,
+        ));
         s.jobs.sort_by_key(|j| j.priority());
         s
     }
@@ -65,39 +93,63 @@ impl BuddyScheduler {
     ) {
         let ctx_opt = {
             let buddy = buddy_arc.lock().await;
-            buddy.as_ref().map(|svc| {
-                Some((svc.state.clone(), svc.recent_diagnostics.clone(), svc.settings.proactive_enabled))
-            }).flatten()
+            buddy
+                .as_ref()
+                .map(|svc| {
+                    Some((
+                        svc.state.clone(),
+                        svc.recent_diagnostics.clone(),
+                        svc.settings.proactive_enabled,
+                    ))
+                })
+                .flatten()
         };
         let (state, diags, proactive_enabled) = match ctx_opt {
             Some(x) => x,
             None => return,
         };
 
-        let unread = state.suggestion_state.iter().filter(|s| !s.dismissed).count();
+        let unread = state
+            .suggestion_state
+            .iter()
+            .filter(|s| !s.dismissed)
+            .count();
 
         for job in &self.jobs {
-            if job.produces_suggestion() && (!proactive_enabled || unread >= MAX_UNREAD_SUGGESTIONS) {
+            if job.produces_suggestion() && (!proactive_enabled || unread >= MAX_UNREAD_SUGGESTIONS)
+            {
                 continue;
             }
-            let job_state = state.job_cooldowns.get(job.id()).cloned().unwrap_or_default();
+            let job_state = state
+                .job_cooldowns
+                .get(job.id())
+                .cloned()
+                .unwrap_or_default();
             if job_state.dismissed {
                 continue;
             }
-            let elapsed = job_state.last_run.as_deref()
+            let elapsed = job_state
+                .last_run
+                .as_deref()
                 .and_then(|r| chrono::DateTime::parse_from_rfc3339(r).ok())
-                .map(|t| chrono::Utc::now().signed_duration_since(t).num_seconds().max(0) as u64)
+                .map(|t| {
+                    chrono::Utc::now()
+                        .signed_duration_since(t)
+                        .num_seconds()
+                        .max(0) as u64
+                })
                 .unwrap_or(u64::MAX);
             if elapsed < job.cooldown_seconds() {
                 continue;
             }
+            let total_workflow_runs = state.workflow_summaries.iter().map(|w| w.run_count).sum();
             let ctx = BuddyJobContext {
                 identity_name: state.identity.name.clone(),
                 onboarding: state.onboarding.clone(),
                 recent_diagnostics: diags.clone(),
-
                 project_root: project_root.to_path_buf(),
                 job_state: job_state.clone(),
+                total_workflow_runs,
             };
             if !job.should_run(gcx.clone(), &ctx).await {
                 continue;
@@ -105,10 +157,18 @@ impl BuddyScheduler {
             let result = job.execute(gcx.clone(), ctx).await;
             let mut buddy = buddy_arc.lock().await;
             if let Some(svc) = buddy.as_mut() {
-                let mut js = svc.state.job_cooldowns.entry(job.id().to_string()).or_default().clone();
+                let mut js = svc
+                    .state
+                    .job_cooldowns
+                    .entry(job.id().to_string())
+                    .or_default()
+                    .clone();
                 js.last_run = Some(chrono::Utc::now().to_rfc3339());
                 js.run_count += 1;
-                js.last_result = Some("ok".to_string());
+                js.last_result = result
+                    .last_result
+                    .clone()
+                    .or_else(|| Some(total_workflow_runs.to_string()));
                 svc.state.job_cooldowns.insert(job.id().to_string(), js);
                 svc.dirty = true;
                 if let Some(suggestion) = result.suggestion {

@@ -11,6 +11,7 @@ import {
   CANVAS_CENTER_X,
   CANVAS_CENTER_Y,
   STAGE_SIZES,
+  PALETTES,
 } from "./constants";
 import type {
   BuddyCanvasProps,
@@ -19,6 +20,60 @@ import type {
   BuddyEvent,
 } from "./types";
 
+const BUBBLE_STYLES: Record<
+  string,
+  {
+    container: React.CSSProperties;
+    tail: React.CSSProperties;
+  }
+> = {
+  above: {
+    container: {
+      bottom: "70%",
+      left: "50%",
+      transform: "translateX(-50%)",
+    },
+    tail: {
+      top: "100%",
+      left: "50%",
+      transform: "translateX(-50%)",
+      borderLeft: "7px solid transparent",
+      borderRight: "7px solid transparent",
+      /* borderTop set dynamically via palette */
+    },
+  },
+  left: {
+    container: {
+      right: "100%",
+      top: "10%",
+      marginRight: "8px",
+    },
+    tail: {
+      left: "100%",
+      top: "50%",
+      transform: "translateY(-50%)",
+      borderTop: "7px solid transparent",
+      borderBottom: "7px solid transparent",
+      /* borderLeft set dynamically via palette */
+    },
+  },
+  right: {
+    container: {
+      left: "100%",
+      top: "10%",
+      marginLeft: "8px",
+    },
+    tail: {
+      right: "100%",
+      top: "50%",
+      transform: "translateY(-50%)",
+      borderTop: "7px solid transparent",
+      borderBottom: "7px solid transparent",
+      /* borderRight set dynamically via palette */
+    },
+  },
+};
+
 export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   state,
   onEvent,
@@ -26,6 +81,9 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   className,
   style,
   speechOverride,
+  speechControls,
+  onSpeechControlClick,
+  bubblePosition = "above",
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<BuddyAnimState>(createInitialAnimState());
@@ -39,6 +97,8 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   useEffect(() => {
     speechOverrideRef.current = speechOverride;
   }, [speechOverride]);
+
+  const palette = PALETTES[state.paletteIndex] ?? PALETTES[0];
 
   useEffect(() => {
     semanticRef.current = state;
@@ -72,7 +132,6 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         renderFrame(ctx, animRef.current, sem);
         if (bubbleRef.current) {
           const anim = animRef.current;
-          // speechOverride (backend/runtime) takes priority; falls back to canvas statusText
           const overrideText = speechOverrideRef.current ?? "";
           const text = overrideText || anim.statusText || "";
           const opacity = overrideText ? 1 : anim.statusOpacity;
@@ -142,17 +201,21 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
     anim.mouseOnBuddy = false;
     anim.mouseProximity = 0;
     anim.mouseNearTimer = 0;
+    anim.dragging = false;
   }, []);
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const coords = toCanvasCoords(e);
       if (!coords) return;
+      const stage = semanticRef.current.progress.stage;
+      const [spriteW] = STAGE_SIZES[stage] ?? [28, 18];
+      const hitRadius = spriteW / 2 + 4;
       const buddyX = CANVAS_CENTER_X + animRef.current.walkOffsetX;
       if (
         Math.sqrt(
           (coords.x - buddyX) ** 2 + (coords.y - CANVAS_CENTER_Y) ** 2,
-        ) < 20
+        ) < hitRadius
       ) {
         animRef.current.dragging = true;
       }
@@ -173,7 +236,8 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const coords = toCanvasCoords(e);
       if (!coords) return;
-      handlePet(animRef.current, coords.x, coords.y, emit);
+      const stage = semanticRef.current.progress.stage;
+      handlePet(animRef.current, coords.x, coords.y, emit, stage);
     },
     [toCanvasCoords, emit],
   );
@@ -207,47 +271,90 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         onMouseUp={onMouseUp}
         onClick={onClick}
       />
-      {displaySize >= 100 && (
-        <div
-          ref={bubbleRef}
-          style={{
-            position: "absolute",
-            bottom: "68%",
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "var(--color-panel-solid, rgba(18,18,24,0.96))",
-            border: "1.5px solid var(--gray-a6, rgba(255,255,255,0.18))",
-            borderRadius: "10px",
-            padding: "3px 9px",
-            fontSize: "11px",
-            fontFamily: "'ui-monospace','SFMono-Regular',monospace",
-            fontWeight: 500,
-            whiteSpace: "nowrap",
-            pointerEvents: "none",
-            color: "var(--gray-12, #e8e8f0)",
-            boxShadow: "0 4px 14px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.25)",
-            zIndex: 5,
-            visibility: "hidden",
-            opacity: 0,
-          }}
-        >
-          <span />
-          <div
-            style={{
-              position: "absolute",
-              top: "100%",
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: 0,
-              height: 0,
-              borderLeft: "5px solid transparent",
-              borderRight: "5px solid transparent",
-              borderTop:
-                "5px solid var(--color-panel-solid, rgba(18,18,24,0.96))",
-            }}
-          />
-        </div>
-      )}
+      {displaySize >= 100 &&
+        (() => {
+          const pos = BUBBLE_STYLES[bubblePosition] ?? BUBBLE_STYLES.above;
+          const tailColor: React.CSSProperties =
+            bubblePosition === "left"
+              ? { borderLeft: `7px solid ${palette.body}` }
+              : bubblePosition === "right"
+                ? { borderRight: `7px solid ${palette.body}` }
+                : { borderTop: `7px solid ${palette.body}` };
+          return (
+            <div
+              ref={bubbleRef}
+              style={{
+                position: "absolute",
+                ...pos.container,
+                background: "#0d0d16",
+                border: `2px solid ${palette.body}`,
+                borderRadius: "2px",
+                padding: "4px 10px",
+                fontSize: "10px",
+                fontFamily: "'Courier New', Courier, monospace",
+                fontWeight: 700,
+                letterSpacing: "0.3px",
+                whiteSpace: speechControls?.length ? "normal" : "nowrap",
+                width: speechControls?.length ? "300px" : "max-content",
+                pointerEvents: speechControls?.length ? "auto" : "none",
+                color: palette.light,
+                boxShadow: `3px 3px 0 ${palette.dark}, 0 0 0 3px #000`,
+                zIndex: 5,
+                visibility: "hidden",
+                opacity: 0,
+              }}
+            >
+              <span />
+              {speechControls?.length ? (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "4px",
+                    flexWrap: "wrap",
+                    marginTop: "6px",
+                  }}
+                >
+                  {speechControls.map((ctrl) => (
+                    <button
+                      key={ctrl.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSpeechControlClick?.(ctrl);
+                      }}
+                      style={{
+                        background:
+                          ctrl.style === "primary"
+                            ? palette.body
+                            : "transparent",
+                        border: `2px solid ${palette.body}`,
+                        borderRadius: "2px",
+                        color:
+                          ctrl.style === "primary" ? "#0d0d16" : palette.light,
+                        fontFamily: "'Courier New', Courier, monospace",
+                        fontWeight: 700,
+                        fontSize: "9px",
+                        padding: "2px 6px",
+                        cursor: "pointer",
+                        letterSpacing: "0.3px",
+                      }}
+                    >
+                      {ctrl.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div
+                style={{
+                  position: "absolute",
+                  width: 0,
+                  height: 0,
+                  ...pos.tail,
+                  ...tailColor,
+                }}
+              />
+            </div>
+          );
+        })()}
     </div>
   );
 };

@@ -29,7 +29,7 @@ type DefaultModelsProps = {
   tabbed: Config["tabbed"];
 };
 
-type ModelTypeKey = "chat" | "chat_light" | "chat_thinking";
+type ModelTypeKey = "chat" | "chat_light" | "chat_thinking" | "chat_buddy";
 
 const MODEL_TYPE_LABELS: Record<
   ModelTypeKey,
@@ -46,6 +46,10 @@ const MODEL_TYPE_LABELS: Record<
   chat_thinking: {
     title: "Thinking Model",
     description: "Reasoning-focused model for complex analysis tasks",
+  },
+  chat_buddy: {
+    title: "Buddy Model",
+    description: "Model used by Buddy for background tasks and suggestions",
   },
 };
 
@@ -127,6 +131,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
       chat: capsData?.chat_default_model ?? "",
       chat_light: capsData?.chat_light_model ?? "",
       chat_thinking: capsData?.chat_thinking_model ?? "",
+      chat_buddy: capsData?.chat_buddy_model ?? "",
     }),
     [capsData],
   );
@@ -135,6 +140,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
     chat: {},
     chat_light: {},
     chat_thinking: {},
+    chat_buddy: {},
   });
 
   const [hasChanges, setHasChanges] = useState(false);
@@ -142,7 +148,14 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
 
   useEffect(() => {
     if (defaults) {
-      setLocalDefaults(defaults);
+      setLocalDefaults({
+        chat: defaults.chat ?? {},
+        chat_light: defaults.chat_light ?? {},
+        chat_thinking: defaults.chat_thinking ?? {},
+        chat_buddy: defaults.chat_buddy ?? {},
+        completion_model: defaults.completion_model,
+        embedding_model: defaults.embedding_model,
+      });
       setHasChanges(false);
     }
   }, [defaults]);
@@ -247,7 +260,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
               <ModelTypeSection
                 key={key}
                 typeKey={key}
-                config={localDefaults[key]}
+                config={localDefaults[key] ?? {}}
                 capsDefault={capsDefaults[key]}
                 onChange={handleModelTypeChange}
               />

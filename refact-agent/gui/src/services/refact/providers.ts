@@ -249,6 +249,7 @@ export type ProviderDefaults = {
   chat: ModelTypeDefaults;
   chat_light: ModelTypeDefaults;
   chat_thinking: ModelTypeDefaults;
+  chat_buddy?: ModelTypeDefaults;
   completion_model?: string;
   embedding_model?: string;
 };
@@ -1166,6 +1167,8 @@ function isProviderDefaults(data: unknown): data is ProviderDefaults {
     hasProperty(obj, "chat_thinking") &&
     !isModelTypeDefaults(obj.chat_thinking)
   )
+    return false;
+  if (hasProperty(obj, "chat_buddy") && !isModelTypeDefaults(obj.chat_buddy))
     return false;
   if (hasProperty(obj, "detail")) return false;
   return true;

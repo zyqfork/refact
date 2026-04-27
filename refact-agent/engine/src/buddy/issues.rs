@@ -40,7 +40,8 @@ fn gate_error(gate: &IssueGate, manual: bool) -> String {
         return "gate blocked: no diagnostic information (need non-empty error with source file or tool name)".to_string();
     }
     if !manual && !gate.has_repro_context {
-        return "gate blocked: no reproduction context (source file or tool name required)".to_string();
+        return "gate blocked: no reproduction context (source file or tool name required)"
+            .to_string();
     }
     if !gate.integration_configured {
         return "gate blocked: no issue tracker integration configured".to_string();
@@ -68,7 +69,10 @@ fn validate_binary_name(binary: &str, allowed: &[&str]) -> Result<(), String> {
     if allowed.contains(&name) {
         Ok(())
     } else {
-        Err(format!("binary '{}' is not in the allowed list {:?}", binary, allowed))
+        Err(format!(
+            "binary '{}' is not in the allowed list {:?}",
+            binary, allowed
+        ))
     }
 }
 
@@ -280,7 +284,11 @@ pub async fn create_issue(
     let mut redacted = context.clone();
     redacted.error_message = redact_diagnostic_text(&context.error_message);
 
-    let raw_title = format!("[Buddy] {}: {}", context.error_type, &context.error_message.chars().take(80).collect::<String>());
+    let raw_title = format!(
+        "[Buddy] {}: {}",
+        context.error_type,
+        &context.error_message.chars().take(80).collect::<String>()
+    );
     let title = sanitize_title(&raw_title);
     let raw_body = format_issue_body(&redacted);
     let body = sanitize_body(&raw_body);

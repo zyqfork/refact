@@ -70,7 +70,8 @@ impl Tool for ToolBuddySay {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let text = args.get("text")
+        let text = args
+            .get("text")
             .and_then(|v| v.as_str())
             .ok_or("argument `text` is missing or not a string")?
             .to_string();
@@ -79,11 +80,28 @@ impl Tool for ToolBuddySay {
             return Err("text cannot be empty".to_string());
         }
 
-        let mood = args.get("mood").and_then(|v| v.as_str()).unwrap_or("neutral").to_string();
-        let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("global").to_string();
-        let persistent = args.get("persistent").and_then(|v| v.as_bool()).unwrap_or(false);
-        let ttl_seconds = args.get("ttl_seconds").and_then(|v| v.as_u64()).unwrap_or(10);
-        let dedupe_key = args.get("dedupe_key").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let mood = args
+            .get("mood")
+            .and_then(|v| v.as_str())
+            .unwrap_or("neutral")
+            .to_string();
+        let scope = args
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global")
+            .to_string();
+        let persistent = args
+            .get("persistent")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let ttl_seconds = args
+            .get("ttl_seconds")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10);
+        let dedupe_key = args
+            .get("dedupe_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let speech = BuddySpeechItem {
             id: Uuid::new_v4().to_string(),
@@ -105,13 +123,16 @@ impl Tool for ToolBuddySay {
             svc.update_speech(speech);
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(format!("Speech bubble displayed: \"{}\"", text)),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(format!("Speech bubble displayed: \"{}\"", text)),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {
@@ -193,7 +214,8 @@ impl Tool for ToolBuddyRenderControls {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let controls_val = args.get("controls")
+        let controls_val = args
+            .get("controls")
             .ok_or("argument `controls` is missing")?;
 
         let controls: Vec<BuddyControl> = match controls_val {
@@ -208,18 +230,34 @@ impl Tool for ToolBuddyRenderControls {
             return Err("controls array cannot be empty".to_string());
         }
 
-        let valid_actions = ["open_chat", "open_setup", "open_setup_mcp", "open_setup_skills", "open_stats", "open_buddy", "dismiss", "run_command"];
+        let valid_actions = [
+            "open_chat",
+            "open_setup",
+            "open_setup_mcp",
+            "open_setup_skills",
+            "open_stats",
+            "open_buddy",
+            "dismiss",
+            "run_command",
+        ];
         for c in &controls {
             if !valid_actions.contains(&c.action.as_str()) {
-                return Err(format!("invalid action '{}' for control '{}'", c.action, c.id));
+                return Err(format!(
+                    "invalid action '{}' for control '{}'",
+                    c.action, c.id
+                ));
             }
         }
 
-        let speech_text = args.get("speech_text")
+        let speech_text = args
+            .get("speech_text")
             .and_then(|v| v.as_str())
             .unwrap_or("What would you like to do?")
             .to_string();
-        let dedupe_key = args.get("dedupe_key").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let dedupe_key = args
+            .get("dedupe_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let speech = BuddySpeechItem {
             id: uuid::Uuid::new_v4().to_string(),
@@ -241,13 +279,18 @@ impl Tool for ToolBuddyRenderControls {
             svc.update_speech(speech);
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText("Controls rendered in Buddy's speech bubble.".to_string()),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(
+                    "Controls rendered in Buddy's speech bubble.".to_string(),
+                ),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

@@ -25,7 +25,7 @@ import type {
   BuddyState,
   BuddyActivityEntry,
   BuddySuggestion,
-  BuddyConversationMeta,
+  BuddyConversationEntry,
   DiagnosticContext,
   BuddySpeechItem,
   BuddyRuntimeEvent,
@@ -112,7 +112,7 @@ describe("buddySlice reducers", () => {
     const snap = makeSnapshot();
     const state = reducer(undefined, setBuddySnapshot(snap));
     expect(state.snapshot).toEqual(snap);
-    expect(state.loading).toBe(false);
+    expect(state.loaded).toBe(true);
   });
 
   test("updateBuddyState patches existing state", () => {
@@ -131,9 +131,11 @@ describe("buddySlice reducers", () => {
     expect(next.snapshot?.state.semantic.headline).toBe("Working!");
   });
 
-  test("updateBuddyState does nothing without snapshot", () => {
-    const state = reducer(undefined, updateBuddyState(makeState()));
-    expect(state.snapshot).toBeNull();
+  test("updateBuddyState bootstraps snapshot when none exists", () => {
+    const newState = makeState();
+    const state = reducer(undefined, updateBuddyState(newState));
+    expect(state.snapshot).not.toBeNull();
+    expect(state.snapshot?.state).toEqual(newState);
   });
 
   test("addBuddyActivity prepends to activities list", () => {
@@ -236,27 +238,31 @@ describe("stage fallback", () => {
 describe("recent chats", () => {
   function makeConversation(
     id: string,
-    lastMessageAt: string | null,
-  ): BuddyConversationMeta {
+    updatedAt: string,
+  ): BuddyConversationEntry {
     return {
-      chat_id: id,
+      id,
+      kind: "chat",
       title: `Chat ${id}`,
       created_at: "2024-01-01T00:00:00Z",
-      last_message_at: lastMessageAt,
+      updated_at: updatedAt,
+      status: "completed",
       message_count: 1,
+      icon: "💬",
+      badge: null,
     };
   }
 
   test("recent chats render newest first", () => {
-    const conversations: BuddyConversationMeta[] = [
+    const conversations: BuddyConversationEntry[] = [
       makeConversation("c-3", "2024-03-01T00:00:00Z"),
       makeConversation("c-2", "2024-02-01T00:00:00Z"),
       makeConversation("c-1", "2024-01-01T00:00:00Z"),
     ];
     const state = reducer(undefined, setBuddyConversations(conversations));
-    expect(state.conversations[0].chat_id).toBe("c-3");
-    expect(state.conversations[1].chat_id).toBe("c-2");
-    expect(state.conversations[2].chat_id).toBe("c-1");
+    expect(state.conversations[0].id).toBe("c-3");
+    expect(state.conversations[1].id).toBe("c-2");
+    expect(state.conversations[2].id).toBe("c-1");
   });
 
   test("empty conversations list renders gracefully", () => {
@@ -346,15 +352,15 @@ describe("snapshot hydration", () => {
 
 describe("BuddyChatCompanion triggers", () => {
   test("chat_error signal is marked as error in SIGNALS", () => {
-    expect(SIGNALS["chat_error"]?.isError).toBe(true);
+    expect(SIGNALS.chat_error.isError).toBe(true);
   });
 
   test("tool_failed signal is marked as error in SIGNALS", () => {
-    expect(SIGNALS["tool_failed"]?.isError).toBe(true);
+    expect(SIGNALS.tool_failed.isError).toBe(true);
   });
 
   test("chat_completed signal is not an error", () => {
-    expect(SIGNALS["chat_completed"]?.isError).toBe(false);
+    expect(SIGNALS.chat_completed.isError).toBe(false);
   });
 
   test("diagnostic stored in recentDiagnostics on addBuddyDiagnostic", () => {
@@ -375,14 +381,14 @@ describe("BuddyCanvas displaySize", () => {
       "task_failed",
     ];
     for (const t of errorTypes) {
-      expect(SIGNALS[t]?.isError, `${t} should be error`).toBe(true);
+      expect(SIGNALS[t].isError, `${t} should be error`).toBe(true);
     }
   });
 
   test("SIGNALS has isError=false for success types", () => {
     const okTypes = ["chat_completed", "edit_applied", "task_completed"];
     for (const t of okTypes) {
-      expect(SIGNALS[t]?.isError, `${t} should not be error`).toBe(false);
+      expect(SIGNALS[t].isError, `${t} should not be error`).toBe(false);
     }
   });
 });
@@ -488,19 +494,19 @@ describe("runtime event new fields", () => {
 
 describe("SIGNALS scene categories", () => {
   test("streaming signal is active category", () => {
-    expect(SIGNALS["streaming"]?.category).toBe("active");
+    expect(SIGNALS.streaming.category).toBe("active");
   });
 
   test("indexing signal is active category", () => {
-    expect(SIGNALS["indexing"]?.category).toBe("active");
+    expect(SIGNALS.indexing.category).toBe("active");
   });
 
   test("chat_error signal is speech category", () => {
-    expect(SIGNALS["chat_error"]?.category).toBe("speech");
+    expect(SIGNALS.chat_error.category).toBe("speech");
   });
 
   test("chat_completed signal is transient category", () => {
-    expect(SIGNALS["chat_completed"]?.category).toBe("transient");
+    expect(SIGNALS.chat_completed.category).toBe("transient");
   });
 
   test("all signals have scene defined", () => {
@@ -692,12 +698,9 @@ describe("BuddyPanel hero layout", () => {
     expect(src).not.toContain("BuddyRecentChats");
   });
 
-  test("BuddySpeechCloud accepts variant overlay prop", () => {
-    const src = fs.readFileSync(
-      path.join(buddyDir, "BuddySpeechCloud.tsx"),
-      "utf8",
-    );
-    expect(src).toContain("variant");
-    expect(src).toContain("overlay");
+  test("BuddyCanvas accepts speechControls prop", () => {
+    const src = fs.readFileSync(path.join(buddyDir, "BuddyCanvas.tsx"), "utf8");
+    expect(src).toContain("speechControls");
+    expect(src).toContain("onSpeechControlClick");
   });
 });

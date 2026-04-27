@@ -371,9 +371,10 @@ pub async fn resolve_subchat_params(
         Some(mt) if mt.eq_ignore_ascii_case("light") => ChatModelType::Light,
         Some(mt) if mt.eq_ignore_ascii_case("thinking") => ChatModelType::Thinking,
         Some(mt) if mt.eq_ignore_ascii_case("default") => ChatModelType::Default,
+        Some(mt) if mt.eq_ignore_ascii_case("buddy") => ChatModelType::Buddy,
         Some(mt) => {
             return Err(format!(
-                "invalid model_type '{}' for '{}', expected: light, default, thinking",
+                "invalid model_type '{}' for '{}', expected: light, default, thinking, buddy",
                 mt, tool_name
             ))
         }
@@ -441,6 +442,7 @@ pub async fn resolve_subchat_model(
         ChatModelType::Light => &caps.defaults.chat_light_model,
         ChatModelType::Default => &caps.defaults.chat_default_model,
         ChatModelType::Thinking => &caps.defaults.chat_thinking_model,
+        ChatModelType::Buddy => &caps.defaults.chat_buddy_model,
     };
 
     if model_id.is_empty() {

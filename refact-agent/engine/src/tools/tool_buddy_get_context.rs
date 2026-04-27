@@ -68,10 +68,21 @@ impl Tool for ToolBuddyGetContext {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let all_sections = vec!["local_config", "global_config", "integrations", "mcp_servers", "modes", "setup_status", "project_info"];
+        let all_sections = vec![
+            "local_config",
+            "global_config",
+            "integrations",
+            "mcp_servers",
+            "modes",
+            "setup_status",
+            "project_info",
+        ];
 
         let requested: Vec<String> = match args.get("sections") {
-            Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
             Some(Value::String(s)) => serde_json::from_str::<Vec<String>>(s)
                 .unwrap_or_else(|_| all_sections.iter().map(|s| s.to_string()).collect()),
             _ => all_sections.iter().map(|s| s.to_string()).collect(),
@@ -80,7 +91,10 @@ impl Tool for ToolBuddyGetContext {
         let gcx = ccx.lock().await.global_context.clone();
         let (config_dir, project_dirs) = {
             let lock = gcx.read().await;
-            (lock.config_dir.clone(), crate::files_correction::get_project_dirs(gcx.clone()))
+            (
+                lock.config_dir.clone(),
+                crate::files_correction::get_project_dirs(gcx.clone()),
+            )
         };
         let project_dirs = project_dirs.await;
         let project_root = project_dirs.into_iter().next();
@@ -127,16 +141,18 @@ impl Tool for ToolBuddyGetContext {
             }
         }
 
-        let output = serde_json::to_string_pretty(&result)
-            .unwrap_or_else(|_| "{}".to_string());
+        let output = serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(output),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(output),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {
@@ -155,11 +171,18 @@ async fn read_dir_summary(dir: &std::path::Path, depth: usize) -> String {
     let mut count = 0;
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
         if path.is_dir() {
             lines.push(format!("  {}/", name));
         } else {
-            let size = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
+            let size = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
             lines.push(format!("  {} ({}B)", name, size));
         }
         count += 1;
@@ -171,7 +194,9 @@ async fn read_dir_summary(dir: &std::path::Path, depth: usize) -> String {
     lines.join("\n")
 }
 
-async fn read_integrations_summary(gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>) -> String {
+async fn read_integrations_summary(
+    gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>,
+) -> String {
     let config_dir = gcx.read().await.config_dir.clone();
     let integr_dir = config_dir.join("integrations.d");
     if !integr_dir.exists() {
@@ -208,7 +233,9 @@ async fn read_mcp_summary(config_dir: &std::path::Path) -> String {
     format!("MCP servers: {}", mcp_names.join(", "))
 }
 
-async fn read_modes_summary(gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>) -> String {
+async fn read_modes_summary(
+    gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>,
+) -> String {
     use crate::yaml_configs::customization_registry::get_project_registry;
     let Some(registry) = get_project_registry(gcx).await else {
         return "no mode registry available".to_string();
@@ -230,7 +257,10 @@ async fn read_setup_status(
 
     let buddy_arc = gcx.read().await.buddy.clone();
     let lock = buddy_arc.lock().await;
-    let stage = lock.as_ref().map(|s| s.state.progression.stage_name.clone()).unwrap_or_default();
+    let stage = lock
+        .as_ref()
+        .map(|s| s.state.progression.stage_name.clone())
+        .unwrap_or_default();
     let xp = lock.as_ref().map(|s| s.state.progression.xp).unwrap_or(0);
 
     format!(
@@ -245,7 +275,15 @@ mod tests {
 
     #[test]
     fn test_buddy_get_context_sections() {
-        let all = vec!["local_config", "global_config", "integrations", "mcp_servers", "modes", "setup_status", "project_info"];
+        let all = vec![
+            "local_config",
+            "global_config",
+            "integrations",
+            "mcp_servers",
+            "modes",
+            "setup_status",
+            "project_info",
+        ];
         assert_eq!(all.len(), 7);
     }
 

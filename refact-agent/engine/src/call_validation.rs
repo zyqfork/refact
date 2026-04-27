@@ -305,6 +305,7 @@ pub enum ChatModelType {
     Light,
     Default,
     Thinking,
+    Buddy,
 }
 
 impl Default for ChatModelType {

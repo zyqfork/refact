@@ -312,7 +312,9 @@ async fn get_all_trajectories_dirs_from_weak(
     }
 }
 
-pub async fn get_buddy_conversations_dir(gcx: Arc<ARwLock<GlobalContext>>) -> Result<PathBuf, String> {
+pub async fn get_buddy_conversations_dir(
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> Result<PathBuf, String> {
     let project_dirs = get_project_dirs(gcx).await;
     let workspace_root = project_dirs.first().ok_or("No workspace folder found")?;
     Ok(workspace_root.join(".refact/buddy/chats/conversations"))
@@ -1480,10 +1482,13 @@ fn spawn_title_generation_task(
             5,
             |t: &String| format!("Title generated: {}", t),
             move || async move {
-                generate_title_llm(gcx2, &messages2).await
+                generate_title_llm(gcx2, &messages2)
+                    .await
                     .ok_or_else(|| "No title generated".to_string())
             },
-        ).await.ok();
+        )
+        .await
+        .ok();
         let title = match generated_title {
             Some(t) => t,
             None => match extract_first_user_message(&messages) {

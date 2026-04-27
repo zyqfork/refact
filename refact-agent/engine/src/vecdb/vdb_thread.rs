@@ -325,7 +325,14 @@ async fn vectorize_thread(
                         } else {
                             "VecDB indexing complete".to_string()
                         };
-                        let ev = crate::buddy::actor::make_runtime_event("vecdb_building", &vecdb_msg, "indexer", "vecdb", "completed", None);
+                        let ev = crate::buddy::actor::make_runtime_event(
+                            "vecdb_building",
+                            &vecdb_msg,
+                            "indexer",
+                            "vecdb",
+                            "completed",
+                            None,
+                        );
                         crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
                         vstatus_notify.notify_waiters();
                         {
@@ -346,7 +353,14 @@ async fn vectorize_thread(
         };
         if !reported_vecdb_started {
             reported_vecdb_started = true;
-            let ev = crate::buddy::actor::make_runtime_event("vecdb_building", "Building vector embeddings...", "indexer", "vecdb", "started", None);
+            let ev = crate::buddy::actor::make_runtime_event(
+                "vecdb_building",
+                "Building vector embeddings...",
+                "indexer",
+                "vecdb",
+                "started",
+                None,
+            );
             crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
         }
 

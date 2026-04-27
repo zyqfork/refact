@@ -95,6 +95,7 @@ export type CapsResponse = {
   embedding_model?: EmbeddingModel;
   chat_thinking_model: string;
   chat_light_model: string;
+  chat_buddy_model: string;
 
   endpoint_chat_passthrough: string;
   endpoint_style: string;

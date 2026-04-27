@@ -14,6 +14,7 @@ export type UiModel = SimplifiedModel & {
   isDefault?: boolean;
   isLight?: boolean;
   isThinking?: boolean;
+  isBuddy?: boolean;
   capabilities?: ModelCapabilities;
 };
 
@@ -193,6 +194,7 @@ export function attachPricingAndCapabilities(
       uiModel.isDefault = caps.chat_default_model === `refact/${m.name}`;
       uiModel.isLight = caps.chat_light_model === `refact/${m.name}`;
       uiModel.isThinking = caps.chat_thinking_model === `refact/${m.name}`;
+      uiModel.isBuddy = caps.chat_buddy_model === `refact/${m.name}`;
 
       if (typeof capsModel === "object") {
         uiModel.capabilities = extractCapabilities(capsModel as CodeChatModel);

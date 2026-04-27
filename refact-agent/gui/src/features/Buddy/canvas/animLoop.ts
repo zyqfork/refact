@@ -11,6 +11,7 @@ import {
   CANVAS_CENTER_X,
   CANVAS_CENTER_Y,
   SIGNALS,
+  STAGE_SIZES,
   TOY_DEFS,
   TOY_EMOJI,
   PERSISTENT_TOY_ACTIONS,
@@ -73,6 +74,18 @@ function selectIdleAction(
         weight: p.playfulness > 35 && m.energy > 45 ? 4 : 0,
       },
       { action: "type_code" as IdleActionType, weight: 7 },
+      {
+        action: "scratch" as IdleActionType,
+        weight: 5 + m.anxiety * 0.04 + (100 - m.energy) * 0.02,
+      },
+      {
+        action: "peekAround" as IdleActionType,
+        weight: 5 + m.curiosity * 0.06,
+      },
+      {
+        action: "sniff" as IdleActionType,
+        weight: 4 + m.curiosity * 0.05,
+      },
     ] as { action: IdleActionType; weight: number }[]
   ).filter((c) => c.weight > 0.4);
 
@@ -103,6 +116,9 @@ function getIdleActionDuration(action: IdleActionType): number {
     wave: 80,
     spin: 55,
     type_code: 120 + Math.random() * 80,
+    scratch: 65,
+    peekAround: 90,
+    sniff: 32,
   };
   return durations[action] ?? 60;
 }
@@ -200,6 +216,10 @@ function updateWalk(anim: BuddyAnimState, semantic: BuddySemanticState): void {
   }
   anim.walkOffsetX += anim.walkDirection * anim.walkSpeed;
   anim.walkPhase += 0.13 + anim.walkSpeed * 0.04;
+  if (semantic.mood.happiness > 65 && anim.frame % 22 === 0) {
+    anim.squashTargetX = 1.12;
+    anim.squashTargetY = 0.88;
+  }
   if (anim.frame % 5 === 0)
     spawnGroundEffect(
       anim,
@@ -208,6 +228,13 @@ function updateWalk(anim: BuddyAnimState, semantic: BuddySemanticState): void {
       CANVAS_CENTER_Y + 13,
     );
   if (Math.abs(anim.walkOffsetX - anim.walkTargetX) < 1.5) {
+    // Natural pause: stop and look around before heading somewhere new
+    if (Math.random() < 0.22 && semantic.mood.curiosity > 20) {
+      anim.walking = false;
+      anim.idleAction = "lookAround";
+      anim.idleActionTimer = 30 + Math.floor(Math.random() * 50);
+      return;
+    }
     if (Math.random() < 0.38) {
       stopWalk(anim);
       return;
@@ -306,9 +333,9 @@ export function triggerSignalAnimation(
     const bonus = recent.length * 10;
     emit({ type: "xp_gained", amount: bonus, newTotal: 0 });
     spawnRainbowSparks(anim, 20 + recent.length * 5);
-    anim.squashTargetX = 1.4;
-    anim.squashTargetY = 0.6;
-    anim.screenFlash = 0.5;
+    anim.squashTargetX = 1.2;
+    anim.squashTargetY = 0.82;
+    anim.screenFlash = 0.14;
     spawnAfterimage(anim);
     spawnAfterimage(anim);
   }
@@ -360,21 +387,15 @@ export function triggerSignalAnimation(
       ? Math.max(120, Math.round((def.duration / 1000) * 60))
       : 300;
 
-  setStatus(
-    anim,
-    def.statusTexts[Math.floor(Math.random() * def.statusTexts.length)],
-    220,
-  );
-
   const cx = CANVAS_CENTER_X + anim.walkOffsetX;
   switch (def.animationType) {
     case "celebrate":
       anim.celebrationTimer = 120;
       spawnSparks(anim, 18);
       spawnFloatingEmoji(anim, def.icon, undefined, undefined, 3);
-      anim.squashTargetX = 1.3;
-      anim.squashTargetY = 0.7;
-      anim.screenFlash = 0.6;
+      anim.squashTargetX = 1.15;
+      anim.squashTargetY = 0.86;
+      anim.screenFlash = 0.14;
       spawnGroundEffect(anim, "impact", cx, CANVAS_CENTER_Y + 12);
       spawnGroundEffect(anim, "dust", cx - 8, CANVAS_CENTER_Y + 10);
       spawnGroundEffect(anim, "dust", cx + 8, CANVAS_CENTER_Y + 10);
@@ -384,9 +405,9 @@ export function triggerSignalAnimation(
     case "shake":
       anim.shakeIntensity = 7;
       spawnFloatingEmoji(anim, def.icon, cx, CANVAS_CENTER_Y - 24);
-      anim.screenGlitch = 0.8;
-      anim.squashTargetX = 0.85;
-      anim.squashTargetY = 1.15;
+      anim.screenGlitch = 0.15;
+      anim.squashTargetX = 0.9;
+      anim.squashTargetY = 1.1;
       spawnGroundEffect(anim, "crack", cx, CANVAS_CENTER_Y + 12);
       spawnSpeedLines(anim, 4, Math.random() * 6.28, 0);
       break;
@@ -394,8 +415,8 @@ export function triggerSignalAnimation(
       spawnFloatingEmoji(anim, "🍕", cx + 16, CANVAS_CENTER_Y - 4);
       spawnFloatingEmoji(anim, "🍪", cx - 12, CANVAS_CENTER_Y - 8);
       spawnFloatingEmoji(anim, def.icon);
-      anim.squashTargetX = 1.15;
-      anim.squashTargetY = 0.85;
+      anim.squashTargetX = 1.08;
+      anim.squashTargetY = 0.93;
       break;
     case "sleep":
       anim.squashTargetX = 1.05;
@@ -403,30 +424,30 @@ export function triggerSignalAnimation(
       break;
     case "think":
       spawnFloatingEmoji(anim, def.icon, cx - 16, CANVAS_CENTER_Y - 28);
-      anim.squashTargetX = 0.95;
-      anim.squashTargetY = 1.05;
+      anim.squashTargetX = 0.96;
+      anim.squashTargetY = 1.04;
       break;
     case "absorb":
       spawnOrbitingOrb(anim, def.icon, 4);
       spawnSparks(anim, 6);
-      anim.screenFlash = 0.3;
-      anim.squashTargetX = 0.9;
-      anim.squashTargetY = 1.1;
+      anim.screenFlash = 0.08;
+      anim.squashTargetX = 0.93;
+      anim.squashTargetY = 1.07;
       spawnAfterimage(anim);
       break;
     case "work":
       spawnFloatingEmoji(anim, def.icon, undefined, undefined, 2);
       spawnOrbitingOrb(anim, "⚙️", 3);
       spawnSpeedLines(anim, 3, 0, -0.5);
-      anim.squashTargetX = 1.08;
-      anim.squashTargetY = 0.92;
+      anim.squashTargetX = 1.04;
+      anim.squashTargetY = 0.97;
       break;
     case "perk":
       spawnFloatingEmoji(anim, def.icon, undefined, undefined, 2);
       spawnSparks(anim, 5);
-      anim.squashTargetX = 0.85;
-      anim.squashTargetY = 1.2;
-      anim.screenFlash = 0.15;
+      anim.squashTargetX = 0.92;
+      anim.squashTargetY = 1.08;
+      anim.screenFlash = 0.06;
       spawnGroundEffect(anim, "dust", cx, CANVAS_CENTER_Y + 12);
       spawnAfterimage(anim);
       break;
@@ -440,11 +461,10 @@ export function triggerSignalAnimation(
     spawnFloatingEmoji(anim, "⬆", undefined, CANVAS_CENTER_Y - 20, 4);
     spawnFloatingEmoji(anim, "✨", cx - 20, CANVAS_CENTER_Y - 10, 3);
     spawnFloatingEmoji(anim, "✨", cx + 20, CANVAS_CENTER_Y - 10, 3);
-    anim.squashTargetX = 1.6;
-    anim.squashTargetY = 0.4;
-    anim.screenFlash = 1.0;
-    spawnAfterimage(anim);
-    spawnAfterimage(anim);
+    // Modest squash — big enough to feel impactful, small enough to not look like a sprite swap
+    anim.squashTargetX = 1.12;
+    anim.squashTargetY = 0.9;
+    anim.screenFlash = 0.14;
     spawnAfterimage(anim);
     spawnAfterimage(anim);
     spawnSpeedLines(anim, 20, 0, -1);
@@ -453,8 +473,53 @@ export function triggerSignalAnimation(
     spawnGroundEffect(anim, "dust", cx + 18, CANVAS_CENTER_Y + 10);
     anim.eyeStyle = "star";
     anim.eyeStyleTimer = 600;
-    anim.shakeIntensity = 18;
-    setStatus(anim, "EVOLVED! ✨", 400);
+    anim.shakeIntensity = 10;
+    // No status text — stage name comes from the backend speech / nowPlaying title
+  }
+
+  // Brief natural text for key events (only shows when no backend speech_text/title overrides it)
+  if (signalType === "chat_completed") setStatus(anim, "Done! 🎉", 160);
+  else if (signalType === "task_completed")
+    setStatus(anim, "Task complete! 🎯", 180);
+  else if (signalType === "skill_learned")
+    setStatus(anim, "New skill! ⭐", 200);
+  else if (signalType === "edit_applied") setStatus(anim, "Patched! ✅", 140);
+  else if (signalType === "checkpoint_saved") setStatus(anim, "Saved! 💾", 130);
+  else if (signalType === "connection_restored")
+    setStatus(anim, "Back online! 📡", 140);
+  else if (signalType === "connection_lost")
+    setStatus(anim, "Connection lost…", 220);
+  else if (signalType === "balance_low")
+    setStatus(anim, "Credits getting low!", 220);
+  else if (signalType === "chat_error")
+    setStatus(anim, "Something went wrong…", 200);
+  else if (signalType === "tool_failed")
+    setStatus(anim, "That didn't work…", 180);
+  else if (signalType === "user_message") setStatus(anim, "On it!", 100);
+  else if (signalType === "chat_started") setStatus(anim, "Starting up…", 100);
+
+  // Per-signal enhanced visual reactions
+  if (signalType === "chat_completed" || signalType === "task_completed") {
+    anim.celebrationTimer = Math.max(anim.celebrationTimer, 200);
+    spawnRainbowSparks(anim, 20);
+  }
+  if (signalType === "user_message") {
+    anim.earState = 1;
+    anim.walking = false;
+    anim.walkSpeed = 0;
+  }
+  if (signalType === "skill_learned") {
+    spawnRainbowSparks(anim, 40);
+    anim.celebrationTimer = Math.max(anim.celebrationTimer, 240);
+  }
+  if (signalType === "streaming" || signalType === "generating") {
+    anim.heat = Math.min(100, anim.heat + 15);
+  }
+  if (signalType === "memory_extract" || signalType === "knowledge_update") {
+    spawnOrbitingOrb(anim, "✨", 3);
+  }
+  if (signalType === "connection_lost" || signalType === "balance_low") {
+    anim.shakeIntensity = Math.max(anim.shakeIntensity, 5);
   }
 }
 
@@ -466,26 +531,37 @@ export function updateSceneAnimation(
   switch (scene) {
     case "working":
       anim.heat = Math.min(100, anim.heat + 0.4);
+      // Eyes drift toward "screen" (down-center) — focused posture
+      anim.eyeLookY += (0.28 - anim.eyeLookY) * 0.01;
+      anim.eyeLookX += (0 - anim.eyeLookX) * 0.007;
       if (anim.frame % 20 === 0) {
         if (variant === "typing") {
-          anim.squashTargetX = 1.04 + Math.sin(anim.frame * 0.3) * 0.03;
-          anim.squashTargetY = 0.96 - Math.sin(anim.frame * 0.3) * 0.03;
+          anim.squashTargetX = 1.03 + Math.sin(anim.frame * 0.3) * 0.02;
+          anim.squashTargetY = 0.97 - Math.sin(anim.frame * 0.3) * 0.02;
         } else if (variant === "sorting" || variant === "building") {
-          anim.squashTargetX = 1.06;
-          anim.squashTargetY = 0.94;
+          anim.squashTargetX = 1.03;
+          anim.squashTargetY = 0.97;
         }
       }
       break;
     case "alert":
+      // Nervous eye scan: rapid left-right glances
+      if (anim.frame % 35 === 0) {
+        anim.cursorTargetX = (Math.random() - 0.5) * 2.6;
+        anim.cursorTargetY = (Math.random() - 0.5) * 0.6;
+      }
       if (anim.frame % 40 === 0 && anim.shakeIntensity < 1) {
-        anim.shakeIntensity = 1.5;
-        anim.squashTargetX = 0.92;
-        anim.squashTargetY = 1.08;
+        anim.shakeIntensity = 1.2;
+        anim.squashTargetX = 0.93;
+        anim.squashTargetY = 1.07;
       }
       break;
     case "thinking":
-      anim.squashTargetX = 0.96 + Math.sin(anim.frame * 0.025) * 0.03;
-      anim.squashTargetY = 1.04 - Math.sin(anim.frame * 0.025) * 0.03;
+      // Eyes drift up-right — classic "looking up while thinking" behavior
+      anim.eyeLookY += (-0.28 - anim.eyeLookY) * 0.007;
+      anim.eyeLookX += (0.35 - anim.eyeLookX) * 0.004;
+      anim.squashTargetX = 0.97 + Math.sin(anim.frame * 0.025) * 0.02;
+      anim.squashTargetY = 1.03 - Math.sin(anim.frame * 0.025) * 0.02;
       break;
     case "celebrate":
       if (
@@ -493,20 +569,23 @@ export function updateSceneAnimation(
         anim.frame % 15 === 0 &&
         anim.celebrationTimer > 0
       ) {
-        anim.squashTargetX = 1.1 + Math.sin(anim.frame * 0.4) * 0.08;
-        anim.squashTargetY = 0.9 - Math.sin(anim.frame * 0.4) * 0.08;
+        anim.squashTargetX = 1.06 + Math.sin(anim.frame * 0.4) * 0.04;
+        anim.squashTargetY = 0.95 - Math.sin(anim.frame * 0.4) * 0.04;
       }
       break;
     case "perk":
       if (variant === "ears_up") {
         anim.earState = Math.max(anim.earState, 0.5);
+        // Lean toward whatever triggered the perk
+        anim.eyeLookX += (anim.cursorTargetX * 1.2 - anim.eyeLookX) * 0.04;
       } else if (variant === "curious") {
-        anim.headTilt += (0.4 - anim.headTilt) * 0.05;
+        anim.headTilt += (0.38 - anim.headTilt) * 0.05;
+        anim.eyeLookX += (anim.cursorTargetX - anim.eyeLookX) * 0.04;
       }
       break;
     case "greeting":
-      anim.squashTargetX = 1.05 + Math.sin(anim.frame * 0.15) * 0.04;
-      anim.squashTargetY = 0.95 - Math.sin(anim.frame * 0.15) * 0.04;
+      anim.squashTargetX = 1.04 + Math.sin(anim.frame * 0.15) * 0.03;
+      anim.squashTargetY = 0.96 - Math.sin(anim.frame * 0.15) * 0.03;
       break;
     default:
       break;
@@ -519,6 +598,31 @@ export function stepAnimFrame(
   emit: (e: BuddyEvent) => void,
 ): void {
   anim.frame++;
+
+  // Physics updates (were in render.ts — moved here so renderFrame stays pure)
+  anim.bobPhase += 0.07;
+  anim.squashX += (anim.squashTargetX - anim.squashX) * 0.12;
+  anim.squashY += (anim.squashTargetY - anim.squashY) * 0.12;
+  anim.squashTargetX += (1 - anim.squashTargetX) * 0.04;
+  anim.squashTargetY += (1 - anim.squashTargetY) * 0.04;
+  if (anim.screenFlash > 0.01) anim.screenFlash *= 0.85;
+  else anim.screenFlash = 0;
+  if (anim.screenGlitch > 0.01) anim.screenGlitch *= 0.88;
+  else anim.screenGlitch = 0;
+  // Decay shake here (render.ts is read-only)
+  if (anim.shakeIntensity > 0.3) anim.shakeIntensity *= 0.82;
+  else anim.shakeIntensity = 0;
+  // Combo sparks (moved from render.ts to keep renderer pure)
+  if (anim.combo.displayTimer > 0 && anim.frame % 6 === 0) {
+    anim.sparks.push({
+      x: CANVAS_CENTER_X + anim.walkOffsetX + (Math.random() - 0.5) * 40,
+      y: CANVAS_CENTER_Y + (Math.random() - 0.5) * 20 - 8,
+      velocityX: (Math.random() - 0.5) * 1.2,
+      velocityY: -0.4 - Math.random() * 1.2,
+      life: 1,
+      color: `hsl(${anim.combo.rainbowHue},100%,60%)`,
+    });
+  }
 
   anim.blinkTick++;
   if (anim.blinkTick >= anim.nextBlinkAt && !anim.blinking) {
@@ -554,9 +658,25 @@ export function stepAnimFrame(
 
   anim.heat = Math.max(0, anim.heat - 0.15);
   anim.earAnimProgress += (anim.earState - anim.earAnimProgress) * 0.08;
-  anim.headTilt += (anim.cursorTargetX * 0.6 - anim.headTilt) * 0.08;
+  // Happiness droop: low happiness pulls head down slightly
+  const happinessOffset = semantic.mood.happiness < 35 ? -0.22 : 0;
+  anim.headTilt +=
+    (anim.cursorTargetX * 0.6 + happinessOffset - anim.headTilt) * 0.08;
   anim.hoverGlow += ((anim.mouseOnBuddy ? 1 : 0) - anim.hoverGlow) * 0.1;
-  anim.breathScale = Math.sin(anim.frame * 0.04) * 0.008;
+  // Energy-scaled breathing: tired buddy breathes shallower
+  const breathDepth = 0.003 + (semantic.mood.energy / 100) * 0.009;
+  anim.breathScale = Math.sin(anim.frame * 0.04) * breathDepth;
+  // Anxiety eye-darting: nervous glances when anxiety is high
+  if (
+    semantic.mood.anxiety > 55 &&
+    !anim.mouseOnBuddy &&
+    anim.idleAction !== "doze" &&
+    anim.frame % 80 === 0 &&
+    Math.random() < 0.7
+  ) {
+    anim.cursorTargetX = (Math.random() - 0.5) * 2.8;
+    anim.cursorTargetY = (Math.random() - 0.5) * 0.7;
+  }
   if (anim.statusTimer > 0) {
     anim.statusTimer--;
     if (anim.statusTimer === 0) anim.statusTargetOpacity = 0;
@@ -665,8 +785,8 @@ export function stepAnimFrame(
         Math.abs(anim.nuzzleOffsetX - tx) < 1 &&
         anim.mouseNearTimer % 90 === 0
       ) {
-        anim.squashTargetX = 1.1;
-        anim.squashTargetY = 0.9;
+        anim.squashTargetX = 1.05;
+        anim.squashTargetY = 0.96;
         if (Math.random() < 0.3) spawnSparks(anim, 2, "#F472B6");
         setStatus(anim, "( ˘ ³˘)♥", 90);
         emit({
@@ -715,8 +835,8 @@ export function stepAnimFrame(
   ) {
     anim.idleAction = "startled";
     anim.idleActionTimer = 30;
-    anim.squashTargetX = 0.8;
-    anim.squashTargetY = 1.25;
+    anim.squashTargetX = 0.88;
+    anim.squashTargetY = 1.12;
   }
   if (anim.mouseOnBuddy && anim.idleAction === "none") {
     anim.idleAction = "hover";
@@ -750,8 +870,8 @@ export function stepAnimFrame(
     anim.idleAction === "none"
   ) {
     anim.nuzzleOffsetX += (anim.cursorTargetX > 0 ? -1 : 1) * 3;
-    anim.squashTargetX = 0.82;
-    anim.squashTargetY = 1.2;
+    anim.squashTargetX = 0.9;
+    anim.squashTargetY = 1.1;
     if (Math.random() < 0.12) spawnSparks(anim, 2, "#FF4444");
   }
   if (
@@ -760,14 +880,14 @@ export function stepAnimFrame(
     anim.mouseProximity > 0.5
   ) {
     if (Math.random() < 0.03) {
-      anim.squashTargetX = 0.88;
-      anim.squashTargetY = 1.18;
+      anim.squashTargetX = 0.93;
+      anim.squashTargetY = 1.07;
     }
   }
 
   if (anim.idleAction === "fidget" && anim.frame % 18 === 0) {
-    anim.squashTargetX = 0.88 + Math.random() * 0.24;
-    anim.squashTargetY = 1.12 - Math.random() * 0.24;
+    anim.squashTargetX = 0.93 + Math.random() * 0.12;
+    anim.squashTargetY = 1.07 - Math.random() * 0.12;
   }
   if (anim.idleAction === "wave") {
     const wm = Math.sin(anim.frame * 0.28) * 0.08;
@@ -775,8 +895,8 @@ export function stepAnimFrame(
     anim.squashTargetY = 1.06 - wm;
   }
   if (anim.idleAction === "spin") {
-    anim.squashTargetX = 1.14 + Math.sin(anim.frame * 0.45) * 0.16;
-    anim.squashTargetY = 0.86 - Math.sin(anim.frame * 0.45) * 0.16;
+    anim.squashTargetX = 1.08 + Math.sin(anim.frame * 0.45) * 0.08;
+    anim.squashTargetY = 0.93 - Math.sin(anim.frame * 0.45) * 0.08;
     if (anim.frame % 5 === 0) {
       spawnGroundEffect(
         anim,
@@ -790,6 +910,40 @@ export function stepAnimFrame(
     const tp = Math.abs(Math.sin(anim.frame * 0.38));
     anim.squashTargetX = 1.02 + tp * 0.05;
     anim.squashTargetY = 0.98 - tp * 0.05;
+  }
+  if (anim.idleAction === "scratch") {
+    anim.headTilt = Math.sin(anim.frame * 0.25) * 0.35;
+    if (anim.frame % 8 === 0) {
+      anim.squashTargetX = 0.95 + Math.random() * 0.04;
+      anim.squashTargetY = 1.05 - Math.random() * 0.04;
+    }
+  }
+  if (anim.idleAction === "lookAround") {
+    anim.cursorTargetX = Math.sin(anim.idleActionTimer * 0.15) * 1.5;
+  }
+  if (anim.idleAction === "hover" && anim.frame % 40 === 0) {
+    anim.floatingEmojis.push({
+      emoji: "💕",
+      x: CANVAS_CENTER_X + anim.walkOffsetX,
+      y: CANVAS_CENTER_Y - 18,
+      velocityX: 0,
+      velocityY: -0.3,
+      life: 1,
+    });
+  }
+  if (anim.idleAction === "peekAround") {
+    const t = anim.idleActionTimer;
+    if (t > 60) anim.cursorTargetX = -1.6;
+    else if (t > 30) anim.cursorTargetX = 1.6;
+    else anim.cursorTargetX += (0 - anim.cursorTargetX) * 0.08;
+  }
+  if (anim.idleAction === "sniff") {
+    // Quick head-bob: bob down (sniff) then back up — purely behavioral
+    const elapsed = 32 - anim.idleActionTimer;
+    const phase = Math.sin((elapsed / 32) * Math.PI * 2.5) * 0.5;
+    anim.squashTargetX = 0.97 - phase * 0.03;
+    anim.squashTargetY = 1.03 + phase * 0.05;
+    anim.eyeLookY += (0.5 - anim.eyeLookY) * 0.12; // look down
   }
   if (anim.idleAction === "doze" && anim.frame % 90 === 0) {
     setStatus(
@@ -809,8 +963,8 @@ export function stepAnimFrame(
     anim.idleActionTimer = getIdleActionDuration(action) | 0;
 
     if (action === "stretch") {
-      anim.squashTargetX = 0.85;
-      anim.squashTargetY = 1.15;
+      anim.squashTargetX = 0.92;
+      anim.squashTargetY = 1.08;
     }
     if (action === "yawn") {
       anim.squashTargetX = 1.05;
@@ -851,8 +1005,8 @@ export function stepAnimFrame(
     }
     if (action === "spin") {
       spawnRainbowSparks(anim, 7);
-      anim.squashTargetX = 1.25;
-      anim.squashTargetY = 0.75;
+      anim.squashTargetX = 1.1;
+      anim.squashTargetY = 0.92;
       setStatus(
         anim,
         ["wheee!", "( *°▽°*)❣", "spin!"][Math.floor(Math.random() * 3)],
@@ -862,11 +1016,25 @@ export function stepAnimFrame(
     if (action === "type_code") {
       setStatus(
         anim,
-        ["typing...", "coding...", "hacking...", "print('hi')", "git commit"][
+        ["typing...", "coding...", "thinking...", "working...", "scripting..."][
           Math.floor(Math.random() * 5)
         ],
         150,
       );
+    }
+    if (action === "scratch") {
+      anim.earState = -0.3;
+      setStatus(
+        anim,
+        ["hmm...", "( ° _ °)", "thinking..."][Math.floor(Math.random() * 3)],
+        65,
+      );
+    }
+    if (action === "peekAround") {
+      anim.earState = 0.5;
+    }
+    if (action === "sniff") {
+      anim.earState = 0.3;
     }
   }
 
@@ -886,15 +1054,18 @@ export function handlePet(
   canvasX: number,
   canvasY: number,
   emit: (e: BuddyEvent) => void,
+  stage = 0,
 ): void {
   const buddyX = CANVAS_CENTER_X + anim.walkOffsetX;
+  const [spriteW] = STAGE_SIZES[stage] ?? [28, 18];
+  const hitRadius = spriteW / 2 + 4;
   const dist = Math.sqrt(
     (canvasX - buddyX) ** 2 + (canvasY - CANVAS_CENTER_Y) ** 2,
   );
-  if (dist > 20) return;
+  if (dist > hitRadius) return;
 
-  anim.squashTargetX = 1.2;
-  anim.squashTargetY = 0.8;
+  anim.squashTargetX = 1.08;
+  anim.squashTargetY = 0.94;
   spawnSparks(anim, 4, "#F472B6");
   anim.petCount++;
   anim.successStreak++;

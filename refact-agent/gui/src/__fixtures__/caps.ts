@@ -469,6 +469,7 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
   chat_default_model: "gpt-4o",
   chat_thinking_model: "",
   chat_light_model: "",
+  chat_buddy_model: "",
   caps_version: 0,
   code_chat_default_system_prompt: "default",
   support_metadata: true,
@@ -624,5 +625,6 @@ export const EMPTY_CAPS_RESPONSE: CapsResponse = {
   metadata: { pricing: {} },
   chat_light_model: "",
   chat_thinking_model: "",
+  chat_buddy_model: "",
   telemetry_basic_retrieve_my_own: "",
 };

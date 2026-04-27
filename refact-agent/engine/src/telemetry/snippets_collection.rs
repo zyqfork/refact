@@ -83,21 +83,43 @@ pub async fn snippet_accepted(
     gcx: Arc<ARwLock<global_context::GlobalContext>>,
     snippet_telemetry_id: u64,
 ) -> bool {
-    let tele_storage_arc = gcx.read().await.telemetry.clone();
-    let mut storage_locked = tele_storage_arc.write().unwrap();
-    let snip = storage_locked
-        .tele_snippets
-        .iter_mut()
-        .find(|s| s.snippet_telemetry_id == snippet_telemetry_id);
-    if let Some(snip) = snip {
-        snip.accepted_ts = chrono::Local::now().timestamp();
-        debug!(
-            "snippet_accepted: ID{}: snippet is accepted",
-            snippet_telemetry_id
-        );
-        return true;
+    let first_accept = {
+        let tele_storage_arc = gcx.read().await.telemetry.clone();
+        let mut storage_locked = tele_storage_arc.write().unwrap();
+        match storage_locked
+            .tele_snippets
+            .iter_mut()
+            .find(|s| s.snippet_telemetry_id == snippet_telemetry_id)
+        {
+            Some(snip) if snip.accepted_ts == 0 => {
+                snip.accepted_ts = chrono::Local::now().timestamp();
+                debug!(
+                    "snippet_accepted: ID{}: snippet is accepted",
+                    snippet_telemetry_id
+                );
+                true
+            }
+            _ => false,
+        }
+    };
+    if first_accept {
+        crate::buddy::actor::buddy_apply(
+            gcx,
+            crate::buddy::actor::BuddyMutation {
+                xp: 10,
+                activity: Some(crate::buddy::types::BuddyActivity {
+                    icon: "✨".to_string(),
+                    title: "AI code accepted".to_string(),
+                    description: format!("Snippet ID {} accepted", snippet_telemetry_id),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    activity_type: "snippet_accepted".to_string(),
+                }),
+                ..Default::default()
+            },
+        )
+        .await;
     }
-    false
+    first_accept
 }
 
 pub async fn sources_changed(

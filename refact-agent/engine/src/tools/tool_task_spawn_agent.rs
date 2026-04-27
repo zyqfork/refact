@@ -8,9 +8,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
-use crate::tools::tools_description::{
-    Tool, ToolDesc, ToolSource, ToolSourceType,
-};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, ContextFile};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
@@ -600,7 +598,11 @@ impl Tool for ToolTaskSpawnAgent {
                             });
                         }
                         Err(e) => {
-                            tracing::warn!("task_spawn_agent: could not read file {:?}: {}", resolved, e);
+                            tracing::warn!(
+                                "task_spawn_agent: could not read file {:?}: {}",
+                                resolved,
+                                e
+                            );
                         }
                     }
                 }

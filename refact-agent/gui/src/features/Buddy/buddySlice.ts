@@ -14,11 +14,13 @@ import type {
 interface BuddySignalQueueItem {
   signalType: string;
   timestamp: number;
+  seq: number;
 }
 
 interface BuddySliceState {
   snapshot: BuddySnapshot | null;
-  loading: boolean;
+  /** true once the first snapshot event has been received (even if buddy is disabled) */
+  loaded: boolean;
   conversations: BuddyConversationEntry[];
   recentDiagnostics: DiagnosticContext[];
   signalQueue: BuddySignalQueueItem[];
@@ -29,7 +31,7 @@ interface BuddySliceState {
 
 const initialState: BuddySliceState = {
   snapshot: null,
-  loading: false,
+  loaded: false,
   conversations: [],
   recentDiagnostics: [],
   signalQueue: [],
@@ -38,20 +40,43 @@ const initialState: BuddySliceState = {
   activeSpeech: null,
 };
 
+let nextSignalSeq = 0;
+
 export const buddySlice = createSlice({
   name: "buddy",
   initialState,
   reducers: {
     setBuddySnapshot: (state, action: PayloadAction<BuddySnapshot>) => {
       state.snapshot = action.payload;
-      state.loading = false;
+      state.loaded = true;
       state.activeSpeech = action.payload.active_speech ?? null;
       state.runtimeQueue = action.payload.runtime_queue ?? [];
       state.nowPlaying = action.payload.now_playing ?? null;
     },
+    /** Called when SSE snapshot reports buddy as disabled/not-ready (no state). */
+    setBuddyUnavailable: (state) => {
+      state.loaded = true;
+      state.snapshot = null;
+    },
     updateBuddyState: (state, action: PayloadAction<BuddyState>) => {
       if (state.snapshot) {
         state.snapshot.state = action.payload;
+      } else {
+        // Buddy became active while we had no snapshot (was disabled/not-ready).
+        // Bootstrap a minimal snapshot so the UI recovers without a full reconnect.
+        state.snapshot = {
+          state: action.payload,
+          settings: {
+            enabled: true,
+            auto_diagnostics: true,
+            auto_issue_creation: false,
+            personality_prompt: null,
+          },
+          enabled: true,
+          runtime_queue: state.runtimeQueue,
+          now_playing: state.nowPlaying,
+          active_speech: state.activeSpeech,
+        };
       }
     },
     addBuddyActivity: (state, action: PayloadAction<BuddyActivityEntry>) => {
@@ -77,6 +102,8 @@ export const buddySlice = createSlice({
         state.snapshot.settings = action.payload;
         state.snapshot.enabled = action.payload.enabled;
       }
+      // If snapshot is null but buddy is being re-enabled, wait for the next
+      // StateUpdated event which will bootstrap the full snapshot via updateBuddyState.
     },
     setBuddyConversations: (
       state,
@@ -94,6 +121,7 @@ export const buddySlice = createSlice({
       state.signalQueue.push({
         signalType: action.payload,
         timestamp: Date.now(),
+        seq: nextSignalSeq++,
       });
       if (state.signalQueue.length > 50) state.signalQueue.shift();
     },
@@ -153,6 +181,7 @@ export const buddySlice = createSlice({
   },
   selectors: {
     selectBuddySnapshot: (state) => state.snapshot,
+    selectBuddyLoaded: (state) => state.loaded,
     selectBuddyState: (state) => state.snapshot?.state ?? null,
     selectBuddySettings: (state) => state.snapshot?.settings ?? null,
     selectBuddyActivities: (state) =>
@@ -171,6 +200,7 @@ export const buddySlice = createSlice({
 
 export const {
   setBuddySnapshot,
+  setBuddyUnavailable,
   updateBuddyState,
   addBuddyActivity,
   addBuddySuggestion,
@@ -190,6 +220,7 @@ export const {
 
 export const {
   selectBuddySnapshot,
+  selectBuddyLoaded,
   selectBuddyState,
   selectBuddySettings,
   selectBuddyActivities,

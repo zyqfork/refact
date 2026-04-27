@@ -28,6 +28,29 @@ pub async fn handle_v1_voice_transcribe(
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    if result.duration_ms >= 1000 && result.text.len() >= 5 {
+        let duration_secs = result.duration_ms / 1000;
+        crate::buddy::actor::buddy_apply(
+            gcx.clone(),
+            crate::buddy::actor::BuddyMutation {
+                xp: 2,
+                activity: Some(crate::buddy::types::BuddyActivity {
+                    icon: "🎤".to_string(),
+                    title: "Voice input transcribed".to_string(),
+                    description: format!(
+                        "{}s of audio → {} chars",
+                        duration_secs,
+                        result.text.len()
+                    ),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    activity_type: "voice_transcribed".to_string(),
+                }),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+
     let response = TranscribeResponse {
         text: result.text,
         language: result.language,

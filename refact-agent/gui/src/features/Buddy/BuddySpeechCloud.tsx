@@ -9,19 +9,32 @@ import {
   openChatInModeAndStart,
 } from "../Chat/Thread";
 import { useCreateBuddyConversationMutation } from "../../services/refact/buddy";
+import { isValidSetupMode } from "../Setup/setupModes";
 import type { BuddyControl } from "./types";
 import styles from "./BuddySpeechCloud.module.css";
 
 interface Props {
   variant?: "block" | "overlay";
+  tailSide?: "bottom" | "right";
+  /** Local speech to display, bypasses Redux activeSpeech */
+  speech?: { text: string; controls: BuddyControl[] };
+  /** Called for every button click when speech prop is provided; disables built-in ✕ */
+  onControl?: (ctrl: BuddyControl) => void | Promise<void>;
 }
 
-export const BuddySpeechCloud: React.FC<Props> = ({ variant = "block" }) => {
+export const BuddySpeechCloud: React.FC<Props> = ({
+  variant = "block",
+  tailSide = "bottom",
+  speech: speechProp,
+  onControl,
+}) => {
   const dispatch = useAppDispatch();
-  const speech = useAppSelector(selectActiveSpeech);
+  const activeSpeech = useAppSelector(selectActiveSpeech);
   const [createConversation] = useCreateBuddyConversationMutation();
 
-  const handleControl = useCallback(
+  const speech = speechProp ?? activeSpeech;
+
+  const internalHandleControl = useCallback(
     async (ctrl: BuddyControl) => {
       switch (ctrl.action) {
         case "dismiss":
@@ -31,6 +44,13 @@ export const BuddySpeechCloud: React.FC<Props> = ({ variant = "block" }) => {
           void dispatch(openChatInModeAndStart({ mode: "setup" }));
           dispatch(clearActiveSpeech());
           break;
+        case "open_setup_mode": {
+          const param = ctrl.action_param ?? "";
+          const mode = isValidSetupMode(param) ? param : "setup";
+          void dispatch(openChatInModeAndStart({ mode }));
+          dispatch(clearActiveSpeech());
+          break;
+        }
         case "open_stats":
           dispatch(push({ name: "stats dashboard" }));
           dispatch(clearActiveSpeech());
@@ -59,6 +79,8 @@ export const BuddySpeechCloud: React.FC<Props> = ({ variant = "block" }) => {
     [dispatch, createConversation],
   );
 
+  const handleControl = onControl ?? internalHandleControl;
+
   if (!speech) return null;
 
   const isOverlay = variant === "overlay";
@@ -79,16 +101,24 @@ export const BuddySpeechCloud: React.FC<Props> = ({ variant = "block" }) => {
             {ctrl.label}
           </Button>
         ))}
-        <Button
-          size="1"
-          variant="ghost"
-          color="gray"
-          onClick={() => dispatch(clearActiveSpeech())}
-        >
-          ✕
-        </Button>
+        {!onControl && (
+          <Button
+            size="1"
+            variant="ghost"
+            color="gray"
+            onClick={() => dispatch(clearActiveSpeech())}
+          >
+            ✕
+          </Button>
+        )}
       </div>
-      <div className={isOverlay ? styles.overlayTail : styles.tail} />
+      {tailSide === "right" ? (
+        <div className={styles.tailRight} />
+      ) : isOverlay ? (
+        <div className={styles.overlayTail} />
+      ) : (
+        <div className={styles.tail} />
+      )}
     </div>
   );
 };

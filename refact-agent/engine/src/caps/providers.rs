@@ -76,6 +76,8 @@ pub struct CapsProvider {
     pub chat_thinking_model: String,
     #[serde(default)]
     pub chat_light_model: String,
+    #[serde(default)]
+    pub chat_buddy_model: String,
 
     #[serde(default)]
     pub running_models: Vec<String>,
@@ -90,6 +92,7 @@ impl CapsProvider {
             chat_default_model: self.chat_default_model.clone(),
             chat_thinking_model: self.chat_thinking_model.clone(),
             chat_light_model: self.chat_light_model.clone(),
+            chat_buddy_model: self.chat_buddy_model.clone(),
         }
     }
 
@@ -151,6 +154,9 @@ impl CapsProvider {
                 }
                 if !dm.chat_light_model.is_empty() {
                     self.chat_light_model = dm.chat_light_model;
+                }
+                if !dm.chat_buddy_model.is_empty() {
+                    self.chat_buddy_model = dm.chat_buddy_model;
                 }
             }
             Err(e) => return Err(e.to_string()),
@@ -491,6 +497,7 @@ fn add_running_models(provider: &mut CapsProvider) {
         &provider.chat_default_model,
         &provider.chat_light_model,
         &provider.chat_thinking_model,
+        &provider.chat_buddy_model,
         &provider.completion_default_model,
     ];
 

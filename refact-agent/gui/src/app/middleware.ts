@@ -1,3 +1,10 @@
+// Buddy queue imports — keep at top to avoid circular deps
+import {
+  enqueueRuntimeEvent,
+  clearNowPlaying,
+  setBuddySnapshot,
+  dequeueRuntimeEvent,
+} from "../features/Buddy/buddySlice";
 import type { RootState, AppDispatch } from "./store";
 import {
   createListenerMiddleware,
@@ -1284,5 +1291,18 @@ startListening({
     }
 
     listenerApi.dispatch(closeTask(taskId));
+  },
+});
+
+// ─── Buddy runtime-queue manager ───────────────────────────────────────────
+// Dequeue exactly once (in Redux middleware) so multiple mounted useBuddyState
+// instances never race to dispatch dequeueRuntimeEvent simultaneously.
+listenerMiddleware.startListening({
+  matcher: isAnyOf(enqueueRuntimeEvent, clearNowPlaying, setBuddySnapshot),
+  effect: (_action, { getState, dispatch }) => {
+    const buddy = (getState() as RootState).buddy;
+    if (buddy.nowPlaying === null && buddy.runtimeQueue.length > 0) {
+      dispatch(dequeueRuntimeEvent());
+    }
   },
 });

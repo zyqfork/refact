@@ -317,9 +317,11 @@ async fn get_builtin_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
         Box::new(crate::tools::tool_buddy_open_view::ToolBuddyOpenView {
             config_path: config_path.clone(),
         }),
-        Box::new(crate::tools::tool_buddy_open_setup_flow::ToolBuddyOpenSetupFlow {
-            config_path: config_path.clone(),
-        }),
+        Box::new(
+            crate::tools::tool_buddy_open_setup_flow::ToolBuddyOpenSetupFlow {
+                config_path: config_path.clone(),
+            },
+        ),
     ];
 
     let chat_management_tools: Vec<Box<dyn Tool + Send>> = vec![

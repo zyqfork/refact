@@ -414,7 +414,9 @@ pub fn apply_setparams_patch(
         }
     }
     if let Some(v) = patch.get("buddy_meta") {
-        if let Ok(meta) = serde_json::from_value::<Option<crate::buddy::types::BuddyThreadMeta>>(v.clone()) {
+        if let Ok(meta) =
+            serde_json::from_value::<Option<crate::buddy::types::BuddyThreadMeta>>(v.clone())
+        {
             thread.buddy_meta = meta;
             changed = true;
         }

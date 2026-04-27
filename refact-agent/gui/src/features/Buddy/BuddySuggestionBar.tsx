@@ -48,7 +48,7 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion }) => {
         <BuddyCanvas
           state={buddy.state}
           onEvent={buddy.handleCanvasEvent}
-          style={{ width: 48, height: 48 }}
+          displaySize={48}
         />
       </div>
       <div className={styles.bubble} style={{ borderColor: palette.body }}>

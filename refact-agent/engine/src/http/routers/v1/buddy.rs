@@ -28,9 +28,10 @@ pub async fn handle_v1_buddy_snapshot(
     let buddy_arc = gcx.read().await.buddy.clone();
     let lock = buddy_arc.lock().await;
     match lock.as_ref() {
-        Some(service) => Ok(axum::Json(serde_json::to_value(service.snapshot()).map_err(|e| {
-            ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-        })?)),
+        Some(service) => Ok(axum::Json(
+            serde_json::to_value(service.snapshot())
+                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        )),
         None => Ok(axum::Json(serde_json::json!({"enabled": false}))),
     }
 }
@@ -41,9 +42,10 @@ pub async fn handle_v1_buddy_settings_get(
     let buddy_arc = gcx.read().await.buddy.clone();
     let lock = buddy_arc.lock().await;
     match lock.as_ref() {
-        Some(service) => Ok(axum::Json(serde_json::to_value(&service.settings).map_err(|e| {
-            ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-        })?)),
+        Some(service) => Ok(axum::Json(
+            serde_json::to_value(&service.settings)
+                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        )),
         None => Ok(axum::Json(serde_json::json!({"enabled": false}))),
     }
 }
@@ -63,7 +65,10 @@ pub async fn handle_v1_buddy_settings_update(
 ) -> Result<StatusCode, ScratchError> {
     if let Some(pi) = req.palette_index {
         if pi > MAX_PALETTE_INDEX {
-            return Err(ScratchError::new(StatusCode::BAD_REQUEST, "palette_index must be 0-7".to_string()));
+            return Err(ScratchError::new(
+                StatusCode::BAD_REQUEST,
+                "palette_index must be 0-7".to_string(),
+            ));
         }
     }
 
@@ -71,16 +76,29 @@ pub async fn handle_v1_buddy_settings_update(
         .await
         .into_iter()
         .next()
-        .ok_or_else(|| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "no project root".to_string()))?;
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no project root".to_string(),
+            )
+        })?;
 
     let buddy_arc = gcx.read().await.buddy.clone();
     let events_tx = {
         let mut lock = buddy_arc.lock().await;
         if let Some(service) = lock.as_mut() {
-            if let Some(v) = req.enabled { service.settings.enabled = v; }
-            if let Some(v) = req.auto_diagnostics { service.settings.auto_diagnostics = v; }
-            if let Some(v) = req.auto_issue_creation { service.settings.auto_issue_creation = v; }
-            if req.personality_prompt.is_some() { service.settings.personality_prompt = req.personality_prompt.clone(); }
+            if let Some(v) = req.enabled {
+                service.settings.enabled = v;
+            }
+            if let Some(v) = req.auto_diagnostics {
+                service.settings.auto_diagnostics = v;
+            }
+            if let Some(v) = req.auto_issue_creation {
+                service.settings.auto_issue_creation = v;
+            }
+            if req.personality_prompt.is_some() {
+                service.settings.personality_prompt = req.personality_prompt.clone();
+            }
             if let Some(pi) = req.palette_index {
                 service.state.identity.palette_index = pi;
                 service.dirty = true;
@@ -94,7 +112,9 @@ pub async fn handle_v1_buddy_settings_update(
         crate::buddy::settings::save_settings(&project_root, &new_settings)
             .await
             .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-        let _ = tx.send(BuddyEvent::SettingsChanged { settings: new_settings });
+        let _ = tx.send(BuddyEvent::SettingsChanged {
+            settings: new_settings,
+        });
     }
 
     Ok(StatusCode::OK)
@@ -125,10 +145,21 @@ pub async fn handle_v1_buddy_conversations_list(
         .await
         .into_iter()
         .next()
-        .ok_or_else(|| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "no project root".to_string()))?;
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no project root".to_string(),
+            )
+        })?;
 
-    let kind_filter = query.kind.map(|k| k.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>());
-    let entries = crate::buddy::conversation_ledger::list_all_buddy_conversations(&project_root, kind_filter).await;
+    let kind_filter = query.kind.map(|k| {
+        k.split(',')
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>()
+    });
+    let entries =
+        crate::buddy::conversation_ledger::list_all_buddy_conversations(&project_root, kind_filter)
+            .await;
     Ok(axum::Json(entries))
 }
 
@@ -139,7 +170,12 @@ pub async fn handle_v1_buddy_conversations_create(
         .await
         .into_iter()
         .next()
-        .ok_or_else(|| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "no project root".to_string()))?;
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no project root".to_string(),
+            )
+        })?;
 
     let chat_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -151,7 +187,10 @@ pub async fn handle_v1_buddy_conversations_create(
         "messages": []
     });
 
-    let path = project_root.join(format!(".refact/buddy/chats/conversations/{}.json", chat_id));
+    let path = project_root.join(format!(
+        ".refact/buddy/chats/conversations/{}.json",
+        chat_id
+    ));
     crate::buddy::storage::atomic_write_json(&path, &conv)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -163,7 +202,9 @@ pub async fn handle_v1_buddy_conversations_create(
         last_message_at: None,
         message_count: 0,
     };
-    Ok(axum::Json(serde_json::to_value(meta).map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?))
+    Ok(axum::Json(serde_json::to_value(meta).map_err(|e| {
+        ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,24 +221,37 @@ pub async fn handle_v1_buddy_conversations_create_setup(
         .await
         .into_iter()
         .next()
-        .ok_or_else(|| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "no project root".to_string()))?;
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no project root".to_string(),
+            )
+        })?;
 
-    let valid_flows = ["setup", "setup_mcp", "setup_skills", "setup_commands", "setup_agents_md", "setup_subagents"];
+    let valid_flows = [
+        "setup",
+        "setup_mcp",
+        "setup_skills",
+        "setup_commands",
+        "setup_agents_md",
+        "setup_subagents",
+    ];
     if !valid_flows.contains(&req.flow.as_str()) {
-        return Err(ScratchError::new(StatusCode::BAD_REQUEST, format!("unknown flow: {}", req.flow)));
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("unknown flow: {}", req.flow),
+        ));
     }
 
     let chat_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let title = req.title.unwrap_or_else(|| {
-        match req.flow.as_str() {
-            "setup_mcp" => "MCP Setup".to_string(),
-            "setup_skills" => "Skills Setup".to_string(),
-            "setup_commands" => "Commands Setup".to_string(),
-            "setup_agents_md" => "AGENTS.md Setup".to_string(),
-            "setup_subagents" => "Subagents Setup".to_string(),
-            _ => "Project Setup".to_string(),
-        }
+    let title = req.title.unwrap_or_else(|| match req.flow.as_str() {
+        "setup_mcp" => "MCP Setup".to_string(),
+        "setup_skills" => "Skills Setup".to_string(),
+        "setup_commands" => "Commands Setup".to_string(),
+        "setup_agents_md" => "AGENTS.md Setup".to_string(),
+        "setup_subagents" => "Subagents Setup".to_string(),
+        _ => "Project Setup".to_string(),
     });
     let badge = match req.flow.as_str() {
         "setup_mcp" => "MCP Setup",
@@ -218,7 +272,10 @@ pub async fn handle_v1_buddy_conversations_create_setup(
         "messages": []
     });
 
-    let path = project_root.join(format!(".refact/buddy/chats/conversations/{}.json", chat_id));
+    let path = project_root.join(format!(
+        ".refact/buddy/chats/conversations/{}.json",
+        chat_id
+    ));
     crate::buddy::storage::atomic_write_json(&path, &conv)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -244,7 +301,10 @@ pub async fn handle_v1_buddy_suggestion_dismiss(
             service.dismiss_suggestion(&id);
             Ok(StatusCode::OK)
         }
-        None => Err(ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy service not initialized".to_string())),
+        None => Err(ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy service not initialized".to_string(),
+        )),
     }
 }
 
@@ -299,7 +359,9 @@ pub async fn handle_v1_buddy_issues_create(
 ) -> Result<axum::Json<serde_json::Value>, ScratchError> {
     let pre_diag = if req.diagnostic_index.is_none() {
         match &req.error {
-            Some(err) => Some(crate::buddy::diagnostics::collect_diagnostics(gcx.clone(), err).await),
+            Some(err) => {
+                Some(crate::buddy::diagnostics::collect_diagnostics(gcx.clone(), err).await)
+            }
             None => None,
         }
     } else {
@@ -309,23 +371,48 @@ pub async fn handle_v1_buddy_issues_create(
     let (ctx, auto_enabled, last_issue_at, recent_errors) = {
         let buddy_arc = gcx.read().await.buddy.clone();
         let lock = buddy_arc.lock().await;
-        let svc = lock.as_ref().ok_or_else(|| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy service not initialized".to_string()))?;
+        let svc = lock.as_ref().ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "buddy service not initialized".to_string(),
+            )
+        })?;
 
         let ctx = if let Some(idx) = req.diagnostic_index {
-            svc.recent_diagnostics.get(idx).cloned().ok_or_else(|| ScratchError::new(StatusCode::BAD_REQUEST, "diagnostic index out of range".to_string()))?
+            svc.recent_diagnostics.get(idx).cloned().ok_or_else(|| {
+                ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    "diagnostic index out of range".to_string(),
+                )
+            })?
         } else if let Some(diagnosed) = pre_diag {
             diagnosed
         } else {
-            return Err(ScratchError::new(StatusCode::BAD_REQUEST, "provide diagnostic_index or error".to_string()));
+            return Err(ScratchError::new(
+                StatusCode::BAD_REQUEST,
+                "provide diagnostic_index or error".to_string(),
+            ));
         };
 
-        (ctx, svc.settings.auto_issue_creation, svc.last_issue_at, svc.recent_issue_errors.clone())
+        (
+            ctx,
+            svc.settings.auto_issue_creation,
+            svc.last_issue_at,
+            svc.recent_issue_errors.clone(),
+        )
     };
 
     let manual = req.manual.unwrap_or(false);
     let result = crate::buddy::issues::create_issue(
-        gcx.clone(), &ctx, auto_enabled, manual, last_issue_at, &recent_errors,
-    ).await.map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+        gcx.clone(),
+        &ctx,
+        auto_enabled,
+        manual,
+        last_issue_at,
+        &recent_errors,
+    )
+    .await
+    .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
 
     let (url, activity) = result;
 

@@ -373,6 +373,8 @@ pub struct DefaultModels {
     pub chat_thinking_model: String,
     #[serde(default)]
     pub chat_light_model: String,
+    #[serde(default)]
+    pub chat_buddy_model: String,
 }
 
 impl DefaultModels {
@@ -404,6 +406,9 @@ impl DefaultModels {
         }
         if !other.chat_light_model.is_empty() {
             self.chat_light_model = Self::qualify_model(&other.chat_light_model, provider_name);
+        }
+        if !other.chat_buddy_model.is_empty() {
+            self.chat_buddy_model = Self::qualify_model(&other.chat_buddy_model, provider_name);
         }
     }
 }
@@ -796,6 +801,18 @@ pub async fn populate_chat_models_from_providers(
                 caps.defaults.chat_thinking_model, caps.defaults.chat_default_model
             );
             caps.defaults.chat_thinking_model = caps.defaults.chat_default_model.clone();
+        }
+
+        let need_new_buddy = caps.defaults.chat_buddy_model.is_empty()
+            || !caps
+                .chat_models
+                .contains_key(&caps.defaults.chat_buddy_model);
+        if need_new_buddy && !caps.defaults.chat_light_model.is_empty() {
+            info!(
+                "Buddy model '{}' not available, falling back to light model '{}'",
+                caps.defaults.chat_buddy_model, caps.defaults.chat_light_model
+            );
+            caps.defaults.chat_buddy_model = caps.defaults.chat_light_model.clone();
         }
     }
 
@@ -1192,6 +1209,16 @@ pub async fn load_caps(
                     _ => {}
                 }
             }
+            if let Some(model) = &user_defaults.chat_buddy.model {
+                match resolve_user_model(model, &caps.chat_models) {
+                    Some(resolved) => caps.defaults.chat_buddy_model = resolved,
+                    None if !model.is_empty() => warn!(
+                        "User default buddy model '{}' not found in available models, ignoring",
+                        model
+                    ),
+                    _ => {}
+                }
+            }
             if let Some(model) = &user_defaults.chat_thinking.model {
                 match resolve_user_model(model, &caps.chat_models) {
                     Some(resolved) => caps.defaults.chat_thinking_model = resolved,
@@ -1240,6 +1267,19 @@ fn validate_default_models(caps: &CodeAssistantCaps) -> Result<(), String> {
                 warn!(
                     "Default thinking model '{}' is not in chat_models and not found in model capabilities registry",
                     caps.defaults.chat_thinking_model
+                );
+            }
+        }
+    }
+    if !caps.defaults.chat_buddy_model.is_empty() {
+        if !caps
+            .chat_models
+            .contains_key(&caps.defaults.chat_buddy_model)
+        {
+            if resolve_model_caps(&caps.model_caps, &caps.defaults.chat_buddy_model).is_none() {
+                warn!(
+                    "Default buddy model '{}' is not in chat_models and not found in model capabilities registry",
+                    caps.defaults.chat_buddy_model
                 );
             }
         }

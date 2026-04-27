@@ -158,13 +158,29 @@ impl Tool for ToolChrome {
         };
 
         let session_hashmap_key = get_session_hashmap_key("chrome", &chat_id);
-        let mut tool_log = setup_chrome_session(
+        let mut tool_log = match setup_chrome_session(
             gcx.clone(),
             &self.settings_chrome,
             &session_hashmap_key,
             &chat_id,
         )
-        .await?;
+        .await
+        {
+            Ok(log) => log,
+            Err(e) => {
+                let buddy_arc = gcx.read().await.buddy.clone();
+                let mut lock = buddy_arc.lock().await;
+                if let Some(svc) = lock.as_mut() {
+                    svc.report_error(
+                        "browser_error",
+                        &e,
+                        Some("tools/tool_chrome.rs"),
+                        Some(&chat_id),
+                    );
+                }
+                return Err(e);
+            }
+        };
 
         let command_session = {
             let gcx_locked = gcx.read().await;
@@ -225,7 +241,13 @@ impl Tool for ToolChrome {
                     multimodal_els.extend(command_multimodal_els);
                 }
                 Err(e) => {
-                    tool_log.push(format!("Failed to execute typed browser request: {}.", e));
+                    let err_msg = format!("Failed to execute typed browser request: {}.", e);
+                    tool_log.push(err_msg.clone());
+                    let buddy_arc = gcx.read().await.buddy.clone();
+                    let mut lock = buddy_arc.lock().await;
+                    if let Some(svc) = lock.as_mut() {
+                        svc.report_error("browser_error", &err_msg, Some("tools/tool_chrome.rs"), Some(&chat_id));
+                    }
                 }
             }
         } else {
@@ -262,7 +284,14 @@ impl Tool for ToolChrome {
                         multimodal_els.extend(command_multimodal_els);
                     }
                     Err(e) => {
-                        tool_log.push(format!("Failed to execute command: {}.", e));
+                        let err_msg = format!("Failed to execute command: {}.", e);
+                        tool_log.push(err_msg.clone());
+                        let buddy_arc = gcx.read().await.buddy.clone();
+                        let mut lock = buddy_arc.lock().await;
+                        if let Some(svc) = lock.as_mut() {
+                            svc.report_error("browser_error", &err_msg, Some("tools/tool_chrome.rs"), Some(&chat_id));
+                        }
+                        drop(lock);
                         break;
                     }
                 };

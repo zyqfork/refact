@@ -97,8 +97,8 @@ use crate::http::routers::v1::project_configs::{
 
 mod ast;
 pub mod at_commands;
-pub mod buddy;
 pub mod at_tools;
+pub mod buddy;
 pub mod caps;
 pub mod chat_based_handlers;
 mod chat_modes;
@@ -713,15 +713,39 @@ pub fn make_v1_router() -> Router {
         .route("/mcp/oauth/cancel", post(handle_v1_mcp_oauth_cancel))
         .route("/buddy", get(buddy::handle_v1_buddy_snapshot))
         .route("/buddy/settings", get(buddy::handle_v1_buddy_settings_get))
-        .route("/buddy/settings", post(buddy::handle_v1_buddy_settings_update))
+        .route(
+            "/buddy/settings",
+            post(buddy::handle_v1_buddy_settings_update),
+        )
         .route("/buddy/activities", get(buddy::handle_v1_buddy_activities))
-        .route("/buddy/conversations", get(buddy::handle_v1_buddy_conversations_list))
-        .route("/buddy/conversations", post(buddy::handle_v1_buddy_conversations_create))
-        .route("/buddy/conversations/setup", post(buddy::handle_v1_buddy_conversations_create_setup))
-        .route("/buddy/suggestions/:id/dismiss", post(buddy::handle_v1_buddy_suggestion_dismiss))
-        .route("/buddy/diagnostics", get(buddy::handle_v1_buddy_diagnostics_list))
-        .route("/buddy/diagnostics/collect", post(buddy::handle_v1_buddy_diagnostics_collect))
-        .route("/buddy/issues/create", post(buddy::handle_v1_buddy_issues_create));
+        .route(
+            "/buddy/conversations",
+            get(buddy::handle_v1_buddy_conversations_list),
+        )
+        .route(
+            "/buddy/conversations",
+            post(buddy::handle_v1_buddy_conversations_create),
+        )
+        .route(
+            "/buddy/conversations/setup",
+            post(buddy::handle_v1_buddy_conversations_create_setup),
+        )
+        .route(
+            "/buddy/suggestions/:id/dismiss",
+            post(buddy::handle_v1_buddy_suggestion_dismiss),
+        )
+        .route(
+            "/buddy/diagnostics",
+            get(buddy::handle_v1_buddy_diagnostics_list),
+        )
+        .route(
+            "/buddy/diagnostics/collect",
+            post(buddy::handle_v1_buddy_diagnostics_collect),
+        )
+        .route(
+            "/buddy/issues/create",
+            post(buddy::handle_v1_buddy_issues_create),
+        );
 
     builder.layer(axum::middleware::from_fn(telemetry_middleware))
 }

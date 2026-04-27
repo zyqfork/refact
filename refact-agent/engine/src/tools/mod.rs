@@ -37,11 +37,11 @@ mod tool_web_search;
 
 pub mod file_edit;
 mod tool_ask_questions;
-mod tool_buddy_say;
-mod tool_buddy_get_logs;
 mod tool_buddy_get_context;
-mod tool_buddy_open_view;
+mod tool_buddy_get_logs;
 mod tool_buddy_open_setup_flow;
+mod tool_buddy_open_view;
+mod tool_buddy_say;
 mod tool_create_knowledge;
 mod tool_task_agent;
 mod tool_task_agent_finish;

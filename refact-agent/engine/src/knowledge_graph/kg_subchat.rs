@@ -67,20 +67,19 @@ pub async fn enrich_knowledge_metadata(
         move || async move {
             let subagent_config = get_subagent_config(gcx2.clone(), KG_ENRICH_SUBAGENT_ID, None)
                 .await
-                .ok_or_else(|| {
-                    format!("subagent config '{}' not found", KG_ENRICH_SUBAGENT_ID)
-                })?;
+                .ok_or_else(|| format!("subagent config '{}' not found", KG_ENRICH_SUBAGENT_ID))?;
 
-            let enrichment_template = subagent_config
-                .messages
-                .user_template
-                .as_ref()
-                .ok_or_else(|| {
-                    format!(
-                        "messages.user_template not defined for subagent '{}'",
-                        KG_ENRICH_SUBAGENT_ID
-                    )
-                })?;
+            let enrichment_template =
+                subagent_config
+                    .messages
+                    .user_template
+                    .as_ref()
+                    .ok_or_else(|| {
+                        format!(
+                            "messages.user_template not defined for subagent '{}'",
+                            KG_ENRICH_SUBAGENT_ID
+                        )
+                    })?;
 
             let entities_str = entities.join(", ");
             let files_str = candidate_files
@@ -150,23 +149,23 @@ pub async fn check_deprecation(
         5,
         |_: &DeprecationResult| "Knowledge entry deprecated".to_string(),
         move || async move {
-            let subagent_config =
-                get_subagent_config(gcx2.clone(), KG_DEPRECATE_SUBAGENT_ID, None)
-                    .await
-                    .ok_or_else(|| {
-                        format!("subagent config '{}' not found", KG_DEPRECATE_SUBAGENT_ID)
-                    })?;
-
-            let deprecation_template = subagent_config
-                .messages
-                .user_template
-                .as_ref()
+            let subagent_config = get_subagent_config(gcx2.clone(), KG_DEPRECATE_SUBAGENT_ID, None)
+                .await
                 .ok_or_else(|| {
-                    format!(
-                        "messages.user_template not defined for subagent '{}'",
-                        KG_DEPRECATE_SUBAGENT_ID
-                    )
+                    format!("subagent config '{}' not found", KG_DEPRECATE_SUBAGENT_ID)
                 })?;
+
+            let deprecation_template =
+                subagent_config
+                    .messages
+                    .user_template
+                    .as_ref()
+                    .ok_or_else(|| {
+                        format!(
+                            "messages.user_template not defined for subagent '{}'",
+                            KG_DEPRECATE_SUBAGENT_ID
+                        )
+                    })?;
 
             let candidates_str = candidates
                 .iter()

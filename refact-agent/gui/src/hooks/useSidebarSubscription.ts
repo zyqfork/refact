@@ -24,6 +24,7 @@ import {
 import { tasksApi } from "../services/refact/tasks";
 import {
   setBuddySnapshot,
+  setBuddyUnavailable,
   updateBuddyState,
   addBuddyActivity,
   addBuddySuggestion,
@@ -384,8 +385,13 @@ export function useSidebarSubscription() {
         ),
       );
 
-      if (event.buddy && "state" in event.buddy) {
-        dispatch(setBuddySnapshot(event.buddy));
+      if (event.buddy) {
+        if ("state" in event.buddy) {
+          dispatch(setBuddySnapshot(event.buddy));
+        } else {
+          // Backend reports buddy as disabled or not yet initialised
+          dispatch(setBuddyUnavailable());
+        }
       }
     },
     [dispatch],

@@ -52,12 +52,20 @@ impl Tool for ToolBuddyOpenView {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let view = args.get("view")
+        let view = args
+            .get("view")
             .and_then(|v| v.as_str())
             .ok_or("argument `view` is missing or not a string")?
             .to_string();
 
-        let valid_views = ["buddy_home", "dashboard", "chat", "stats", "setup", "settings"];
+        let valid_views = [
+            "buddy_home",
+            "dashboard",
+            "chat",
+            "stats",
+            "setup",
+            "settings",
+        ];
         if !valid_views.contains(&view.as_str()) {
             return Err(format!(
                 "invalid view '{}'. Valid views: {}",
@@ -75,13 +83,19 @@ impl Tool for ToolBuddyOpenView {
             svc.send_navigation(view.clone(), params);
         }
 
-        Ok((false, vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(format!("Navigation request sent: open '{}'", view)),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })]))
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(format!(
+                    "Navigation request sent: open '{}'",
+                    view
+                )),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {

@@ -3,8 +3,6 @@ export { BuddyChatCompanion } from "./BuddyChatCompanion";
 export { BuddyHome } from "./BuddyHome";
 export { BuddyPanel } from "./BuddyPanel";
 export { BuddyRecentChats } from "./BuddyRecentChats";
-export { BuddySuggestionBar } from "./BuddySuggestionBar";
-export { BuddySpeechCloud } from "./BuddySpeechCloud";
 export { useBuddyState } from "./hooks/useBuddyState";
 export {
   createInitialSemanticState,
@@ -41,6 +39,7 @@ export type {
   ToyDef,
   BuddyControl,
   BuddySpeechItem,
+  BubblePosition,
 } from "./types";
 export type { BuddyStateHandle } from "./hooks/useBuddyState";
 export type { SemanticAction } from "./state";

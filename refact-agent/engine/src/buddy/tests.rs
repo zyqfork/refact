@@ -3,7 +3,10 @@ use tokio::sync::broadcast;
 
 use super::actor::BuddyService;
 use super::diagnostics::{classify_error, DiagnosticContext, DiagnosticSeverity};
-use super::issues::{check_issue_gate, check_manual_issue_gate, redact_diagnostic_text, sanitize_body, sanitize_title, IssueGate};
+use super::issues::{
+    check_issue_gate, check_manual_issue_gate, redact_diagnostic_text, sanitize_body,
+    sanitize_title, IssueGate,
+};
 use super::scheduler::BuddyJobContext;
 use super::settings::{BuddySettings, MAX_PALETTE_INDEX};
 use super::state::{default_buddy_state, grant_xp};
@@ -142,7 +145,10 @@ fn test_palette_valid_range() {
 fn test_palette_single_source() {
     let settings = BuddySettings::default();
     let json = serde_json::to_value(&settings).unwrap();
-    assert!(json.get("palette_index").is_none(), "palette_index must not be in BuddySettings");
+    assert!(
+        json.get("palette_index").is_none(),
+        "palette_index must not be in BuddySettings"
+    );
     let state = default_buddy_state();
     assert!(state.identity.palette_index <= MAX_PALETTE_INDEX);
 }
@@ -158,7 +164,8 @@ fn test_old_state_migration() {
         "recent_activities": [],
         "suggestion_state": []
     }"#;
-    let state: BuddyState = serde_json::from_str(json).expect("should parse old state without onboarding");
+    let state: BuddyState =
+        serde_json::from_str(json).expect("should parse old state without onboarding");
     assert!(!state.onboarding.greeted);
     assert!(!state.onboarding.tour_completed);
     assert!(state.onboarding.first_launch_at.is_empty());
@@ -193,7 +200,10 @@ async fn test_bootstrap_no_overwrite() {
     let name1 = state1.identity.name.clone();
     super::storage::bootstrap_buddy_storage(root).await.unwrap();
     let state2 = super::state::load_state(root).await;
-    assert_eq!(name1, state2.identity.name, "bootstrap must not overwrite existing state.json");
+    assert_eq!(
+        name1, state2.identity.name,
+        "bootstrap must not overwrite existing state.json"
+    );
 }
 
 #[test]
@@ -219,11 +229,19 @@ fn test_classify_generic_fallback() {
 fn test_suggestion_dedupe() {
     let mut svc = make_service();
     let now = chrono::Utc::now().to_rfc3339();
-    let already = svc.state.suggestion_state.iter().any(|s| s.suggestion_type == "setup");
+    let already = svc
+        .state
+        .suggestion_state
+        .iter()
+        .any(|s| s.suggestion_type == "setup");
     if !already {
         svc.add_suggestion(make_suggestion("setup", "setup", &now));
     }
-    let already2 = svc.state.suggestion_state.iter().any(|s| s.suggestion_type == "setup");
+    let already2 = svc
+        .state
+        .suggestion_state
+        .iter()
+        .any(|s| s.suggestion_type == "setup");
     if !already2 {
         svc.add_suggestion(make_suggestion("setup2", "setup", &now));
     }
@@ -234,7 +252,9 @@ fn test_suggestion_dedupe() {
 fn test_suggestion_pruning() {
     let mut svc = make_service();
     let old_time = (chrono::Utc::now() - Duration::seconds(400)).to_rfc3339();
-    svc.state.suggestion_state.push(make_suggestion("old", "test", &old_time));
+    svc.state
+        .suggestion_state
+        .push(make_suggestion("old", "test", &old_time));
     svc.expire_suggestions();
     assert!(svc.state.suggestion_state[0].dismissed);
 }
@@ -342,7 +362,16 @@ fn test_buddy_say_creates_speech() {
 
 #[test]
 fn test_buddy_controls_schema() {
-    let valid_actions = ["open_chat", "open_setup", "open_setup_mcp", "open_setup_skills", "open_stats", "open_buddy", "dismiss", "run_command"];
+    let valid_actions = [
+        "open_chat",
+        "open_setup",
+        "open_setup_mcp",
+        "open_setup_skills",
+        "open_stats",
+        "open_buddy",
+        "dismiss",
+        "run_command",
+    ];
     assert!(valid_actions.contains(&"open_setup"));
     assert!(valid_actions.contains(&"dismiss"));
     assert!(!valid_actions.contains(&"invalid_action"));
@@ -352,7 +381,8 @@ fn test_buddy_controls_schema() {
 fn test_runtime_event_speech_text_preserved() {
     use super::runtime_queue::RuntimeQueue;
     let mut queue = RuntimeQueue::new();
-    let mut ev = super::actor::make_runtime_event("streaming", "Test", "chat", "chat_1", "started", None);
+    let mut ev =
+        super::actor::make_runtime_event("streaming", "Test", "chat", "chat_1", "started", None);
     ev.speech_text = Some("Thinking...".to_string());
     ev.scene = Some("working".to_string());
     ev.persistent = true;
@@ -367,11 +397,13 @@ fn test_runtime_event_speech_text_preserved() {
 fn test_persistent_event_fields_coalesced() {
     use super::runtime_queue::RuntimeQueue;
     let mut queue = RuntimeQueue::new();
-    let mut ev1 = super::actor::make_runtime_event("streaming", "First", "chat", "key_1", "started", None);
+    let mut ev1 =
+        super::actor::make_runtime_event("streaming", "First", "chat", "key_1", "started", None);
     ev1.speech_text = Some("Initial".to_string());
     ev1.persistent = true;
     queue.enqueue(ev1);
-    let mut ev2 = super::actor::make_runtime_event("streaming", "Updated", "chat", "key_1", "progress", None);
+    let mut ev2 =
+        super::actor::make_runtime_event("streaming", "Updated", "chat", "key_1", "progress", None);
     ev2.speech_text = Some("Updated text".to_string());
     ev2.persistent = true;
     queue.enqueue(ev2);
@@ -391,13 +423,17 @@ async fn test_unified_listing_mixed_kinds() {
         "chat_id": "abc123", "title": "Test Chat", "kind": "chat",
         "created_at": "2024-01-02T00:00:00Z", "last_message_at": null, "messages": []
     });
-    super::storage::atomic_write_json(&conv_path, &conv_json).await.unwrap();
+    super::storage::atomic_write_json(&conv_path, &conv_json)
+        .await
+        .unwrap();
 
     let wf_path = root.join(".refact/buddy/chats/workflows/commit_message.json");
     let wf_json = serde_json::json!({
         "entries": [{ "timestamp": "2024-01-01T00:00:00Z", "input_summary": "", "output_summary": "done", "success": true }]
     });
-    super::storage::atomic_write_json(&wf_path, &wf_json).await.unwrap();
+    super::storage::atomic_write_json(&wf_path, &wf_json)
+        .await
+        .unwrap();
 
     let entries = super::conversation_ledger::list_all_buddy_conversations(root, None).await;
     assert_eq!(entries.len(), 2);
@@ -417,7 +453,9 @@ async fn test_setup_kind_stored() {
         "chat_id": "setup1", "title": "MCP Setup", "kind": "setup", "badge": "MCP Setup",
         "created_at": "2024-01-01T00:00:00Z", "last_message_at": null, "messages": []
     });
-    super::storage::atomic_write_json(&path, &json).await.unwrap();
+    super::storage::atomic_write_json(&path, &json)
+        .await
+        .unwrap();
 
     let entries = super::conversation_ledger::list_all_buddy_conversations(root, None).await;
     let setup = entries.iter().find(|e| e.id == "setup1").unwrap();
@@ -436,16 +474,28 @@ async fn test_kind_filter_works() {
     let conv_json = serde_json::json!({
         "chat_id": "c1", "title": "Chat", "created_at": "2024-01-01T00:00:00Z", "messages": []
     });
-    super::storage::atomic_write_json(&conv_path, &conv_json).await.unwrap();
+    super::storage::atomic_write_json(&conv_path, &conv_json)
+        .await
+        .unwrap();
 
     let wf_path = root.join(".refact/buddy/chats/workflows/commit_message.json");
     let wf_json = serde_json::json!({ "entries": [] });
-    super::storage::atomic_write_json(&wf_path, &wf_json).await.unwrap();
+    super::storage::atomic_write_json(&wf_path, &wf_json)
+        .await
+        .unwrap();
 
-    let chat_only = super::conversation_ledger::list_all_buddy_conversations(root, Some(vec!["chat".to_string()])).await;
+    let chat_only = super::conversation_ledger::list_all_buddy_conversations(
+        root,
+        Some(vec!["chat".to_string()]),
+    )
+    .await;
     assert!(chat_only.iter().all(|e| e.kind == "chat"));
 
-    let wf_only = super::conversation_ledger::list_all_buddy_conversations(root, Some(vec!["workflow".to_string()])).await;
+    let wf_only = super::conversation_ledger::list_all_buddy_conversations(
+        root,
+        Some(vec!["workflow".to_string()]),
+    )
+    .await;
     assert!(wf_only.iter().all(|e| e.kind == "workflow"));
 }
 
@@ -456,15 +506,25 @@ async fn test_sorting_by_updated_at() {
     super::storage::bootstrap_buddy_storage(root).await.unwrap();
 
     let p1 = root.join(".refact/buddy/chats/conversations/old.json");
-    super::storage::atomic_write_json(&p1, &serde_json::json!({
-        "chat_id": "old", "title": "Old", "created_at": "2024-01-01T00:00:00Z", "messages": []
-    })).await.unwrap();
+    super::storage::atomic_write_json(
+        &p1,
+        &serde_json::json!({
+            "chat_id": "old", "title": "Old", "created_at": "2024-01-01T00:00:00Z", "messages": []
+        }),
+    )
+    .await
+    .unwrap();
 
     let p2 = root.join(".refact/buddy/chats/conversations/new.json");
-    super::storage::atomic_write_json(&p2, &serde_json::json!({
-        "chat_id": "new", "title": "New", "created_at": "2024-06-01T00:00:00Z",
-        "last_message_at": "2024-06-02T00:00:00Z", "messages": []
-    })).await.unwrap();
+    super::storage::atomic_write_json(
+        &p2,
+        &serde_json::json!({
+            "chat_id": "new", "title": "New", "created_at": "2024-06-01T00:00:00Z",
+            "last_message_at": "2024-06-02T00:00:00Z", "messages": []
+        }),
+    )
+    .await
+    .unwrap();
 
     let entries = super::conversation_ledger::list_all_buddy_conversations(root, None).await;
     assert_eq!(entries[0].id, "new");
@@ -475,7 +535,14 @@ fn test_runtime_event_controls_preserved() {
     use super::runtime_queue::RuntimeQueue;
     use super::types::BuddyControl;
     let mut queue = RuntimeQueue::new();
-    let mut ev = super::actor::make_runtime_event("chat_error", "Error", "chat", "err_1", "info", Some("high"));
+    let mut ev = super::actor::make_runtime_event(
+        "chat_error",
+        "Error",
+        "chat",
+        "err_1",
+        "info",
+        Some("high"),
+    );
     ev.controls = vec![BuddyControl {
         id: "fix".to_string(),
         label: "Fix".to_string(),
@@ -488,7 +555,11 @@ fn test_runtime_event_controls_preserved() {
     assert_eq!(queue.items[0].controls[0].action, "open_chat");
 }
 
-fn make_job_context(onboarding: BuddyOnboarding, diagnostics_count: usize, job_state: BuddyJobState) -> BuddyJobContext {
+fn make_job_context(
+    onboarding: BuddyOnboarding,
+    diagnostics_count: usize,
+    job_state: BuddyJobState,
+) -> BuddyJobContext {
     let mut diags = vec![];
     for _ in 0..diagnostics_count {
         diags.push(DiagnosticContext {
@@ -507,6 +578,7 @@ fn make_job_context(onboarding: BuddyOnboarding, diagnostics_count: usize, job_s
         recent_diagnostics: diags,
         project_root: std::path::PathBuf::from("/tmp/test-project"),
         job_state,
+        total_workflow_runs: 0,
     }
 }
 
@@ -520,9 +592,16 @@ fn test_scheduler_cooldown_enforcement() {
         snoozed_until: None,
         dismissed: false,
     };
-    let elapsed = state.last_run.as_deref()
+    let elapsed = state
+        .last_run
+        .as_deref()
         .and_then(|r| chrono::DateTime::parse_from_rfc3339(r).ok())
-        .map(|t| chrono::Utc::now().signed_duration_since(t).num_seconds().max(0) as u64)
+        .map(|t| {
+            chrono::Utc::now()
+                .signed_duration_since(t)
+                .num_seconds()
+                .max(0) as u64
+        })
         .unwrap_or(u64::MAX);
     let cooldown = 5 * 60u64;
     assert!(elapsed < cooldown, "job should be blocked by cooldown");
@@ -531,13 +610,16 @@ fn test_scheduler_cooldown_enforcement() {
 #[test]
 fn test_job_state_persistence_roundtrip() {
     let mut state = default_buddy_state();
-    state.job_cooldowns.insert("greeting".to_string(), BuddyJobState {
-        last_run: Some("2026-01-01T00:00:00Z".to_string()),
-        run_count: 3,
-        last_result: Some("ok".to_string()),
-        snoozed_until: None,
-        dismissed: false,
-    });
+    state.job_cooldowns.insert(
+        "greeting".to_string(),
+        BuddyJobState {
+            last_run: Some("2026-01-01T00:00:00Z".to_string()),
+            run_count: 3,
+            last_result: Some("ok".to_string()),
+            snoozed_until: None,
+            dismissed: false,
+        },
+    );
     let json = serde_json::to_string(&state).unwrap();
     let loaded: BuddyState = serde_json::from_str(&json).unwrap();
     let job_state = loaded.job_cooldowns.get("greeting").unwrap();
@@ -568,11 +650,21 @@ fn test_greeting_blocked_within_cooldown() {
         snoozed_until: None,
         dismissed: false,
     };
-    let elapsed = job_state.last_run.as_deref()
+    let elapsed = job_state
+        .last_run
+        .as_deref()
         .and_then(|r| chrono::DateTime::parse_from_rfc3339(r).ok())
-        .map(|t| chrono::Utc::now().signed_duration_since(t).num_seconds().max(0) as u64)
+        .map(|t| {
+            chrono::Utc::now()
+                .signed_duration_since(t)
+                .num_seconds()
+                .max(0) as u64
+        })
         .unwrap_or(u64::MAX);
-    assert!(elapsed < job.cooldown_seconds(), "greeting must be blocked within 24h cooldown");
+    assert!(
+        elapsed < job.cooldown_seconds(),
+        "greeting must be blocked within 24h cooldown"
+    );
 }
 
 #[tokio::test]
@@ -584,7 +676,10 @@ async fn test_error_triage_clusters_by_type() {
     let gcx = crate::global_context::tests::make_test_gcx().await;
     assert!(job.should_run(gcx.clone(), &ctx).await);
     let result = job.execute(gcx, ctx).await;
-    assert!(result.suggestion.is_some(), "should produce suggestion for 5 repeated timeouts");
+    assert!(
+        result.suggestion.is_some(),
+        "should produce suggestion for 5 repeated timeouts"
+    );
     let sug = result.suggestion.unwrap();
     assert_eq!(sug.suggestion_type, "error_pattern");
     assert!(sug.title.contains("timeout"));
@@ -600,7 +695,10 @@ async fn test_config_watcher_detects_missing_agents_md() {
     ctx.project_root = dir.path().to_path_buf();
     let gcx = crate::global_context::tests::make_test_gcx().await;
     let result = job.execute(gcx, ctx).await;
-    assert!(result.suggestion.is_some(), "should suggest setup when AGENTS.md missing");
+    assert!(
+        result.suggestion.is_some(),
+        "should suggest setup when AGENTS.md missing"
+    );
     assert_eq!(result.suggestion.unwrap().suggestion_type, "setup");
 }
 
@@ -613,7 +711,12 @@ fn test_suggestion_cap_max_unread() {
         let s = make_suggestion(&format!("s{}", i), &format!("type{}", i), &now);
         let _ = svc.maybe_add_suggestion(s);
     }
-    let unread = svc.state.suggestion_state.iter().filter(|s| !s.dismissed).count();
+    let unread = svc
+        .state
+        .suggestion_state
+        .iter()
+        .filter(|s| !s.dismissed)
+        .count();
     assert!(unread <= 10, "suggestions should be bounded");
 }
 
@@ -630,13 +733,19 @@ fn test_dismissed_job_does_not_retrigger() {
     let elapsed = u64::MAX;
     let cooldown = 0u64;
     let should_skip = state.dismissed || elapsed < cooldown;
-    assert!(should_skip, "dismissed job must be skipped regardless of cooldown");
+    assert!(
+        should_skip,
+        "dismissed job must be skipped regardless of cooldown"
+    );
 }
 
 #[test]
 fn test_proactive_enabled_setting() {
     let settings = BuddySettings::default();
-    assert!(settings.proactive_enabled, "proactive_enabled defaults to true");
+    assert!(
+        settings.proactive_enabled,
+        "proactive_enabled defaults to true"
+    );
     let json = serde_json::to_string(&settings).unwrap();
     let loaded: BuddySettings = serde_json::from_str(&json).unwrap();
     assert!(loaded.proactive_enabled);
@@ -646,7 +755,10 @@ fn test_proactive_enabled_setting() {
 fn test_old_settings_get_proactive_default() {
     let json = r#"{"enabled": true, "auto_diagnostics": true, "auto_issue_creation": false}"#;
     let settings: BuddySettings = serde_json::from_str(json).unwrap();
-    assert!(settings.proactive_enabled, "missing proactive_enabled should default to true");
+    assert!(
+        settings.proactive_enabled,
+        "missing proactive_enabled should default to true"
+    );
 }
 
 #[tokio::test]
@@ -654,10 +766,17 @@ async fn test_tour_job_runs_only_once() {
     use super::jobs::tour::TourJob;
     use super::scheduler::BuddyJob;
     let job = TourJob;
-    let onboarding = BuddyOnboarding { greeted: true, tour_completed: false, ..Default::default() };
+    let onboarding = BuddyOnboarding {
+        greeted: true,
+        tour_completed: false,
+        ..Default::default()
+    };
     let fresh_ctx = make_job_context(onboarding.clone(), 0, BuddyJobState::default());
     let gcx = crate::global_context::tests::make_test_gcx().await;
-    assert!(job.should_run(gcx.clone(), &fresh_ctx).await, "tour must run on first tick");
+    assert!(
+        job.should_run(gcx.clone(), &fresh_ctx).await,
+        "tour must run on first tick"
+    );
     let ran_state = BuddyJobState {
         last_run: Some(chrono::Utc::now().to_rfc3339()),
         run_count: 1,
@@ -666,7 +785,10 @@ async fn test_tour_job_runs_only_once() {
         dismissed: false,
     };
     let ran_ctx = make_job_context(onboarding, 0, ran_state);
-    assert!(!job.should_run(gcx, &ran_ctx).await, "tour must not run after first run");
+    assert!(
+        !job.should_run(gcx, &ran_ctx).await,
+        "tour must not run after first run"
+    );
 }
 
 #[test]
@@ -682,8 +804,14 @@ fn test_scheduler_suggestion_dedup() {
         created_at: now,
         dismissed: false,
     };
-    assert!(svc.maybe_add_suggestion(s1), "first suggestion must be accepted");
-    assert!(!svc.maybe_add_suggestion(s2), "duplicate suggestion must be rejected by dedup");
+    assert!(
+        svc.maybe_add_suggestion(s1),
+        "first suggestion must be accepted"
+    );
+    assert!(
+        !svc.maybe_add_suggestion(s2),
+        "duplicate suggestion must be rejected by dedup"
+    );
     assert_eq!(svc.state.suggestion_state.len(), 1);
 }
 
@@ -692,10 +820,16 @@ async fn test_proactive_disabled_still_allows_greeting() {
     use super::jobs::greeting::GreetingJob;
     use super::scheduler::BuddyJob;
     let job = GreetingJob;
-    assert!(!job.produces_suggestion(), "greeting must not be gated by proactive flag");
+    assert!(
+        !job.produces_suggestion(),
+        "greeting must not be gated by proactive flag"
+    );
     let ctx = make_job_context(BuddyOnboarding::default(), 0, BuddyJobState::default());
     let gcx = crate::global_context::tests::make_test_gcx().await;
-    assert!(job.should_run(gcx, &ctx).await, "greeting must run even when proactive_enabled=false");
+    assert!(
+        job.should_run(gcx, &ctx).await,
+        "greeting must run even when proactive_enabled=false"
+    );
 }
 
 #[test]
@@ -726,7 +860,10 @@ fn test_report_error_unicode_safe() {
 fn test_error_redaction_strips_tokens() {
     let output = super::actor::redact_sensitive("Error: Bearer sk-abc123xyz failed");
     assert!(output.contains("[REDACTED]"), "must contain [REDACTED]");
-    assert!(!output.contains("sk-abc123xyz"), "must not contain raw token");
+    assert!(
+        !output.contains("sk-abc123xyz"),
+        "must not contain raw token"
+    );
 }
 
 #[test]
@@ -735,17 +872,37 @@ fn test_queue_eviction_drops_oldest_low_priority() {
     use super::actor::make_runtime_event;
     let mut queue = RuntimeQueue::new();
     for i in 0..50 {
-        let mut ev = make_runtime_event("signal", &format!("low-{}", i), "src", &format!("low-key-{}", i), "started", None);
+        let mut ev = make_runtime_event(
+            "signal",
+            &format!("low-{}", i),
+            "src",
+            &format!("low-key-{}", i),
+            "started",
+            None,
+        );
         ev.priority = "low".to_string();
         queue.enqueue(ev);
     }
     for i in 0..55 {
-        let ev = make_runtime_event("signal", &format!("normal-{}", i), "src", &format!("normal-key-{}", i), "started", Some("normal"));
+        let ev = make_runtime_event(
+            "signal",
+            &format!("normal-{}", i),
+            "src",
+            &format!("normal-key-{}", i),
+            "started",
+            Some("normal"),
+        );
         queue.enqueue(ev);
     }
     assert!(queue.items.len() <= 100);
-    assert!(!queue.items.iter().any(|e| e.title == "low-0"), "oldest low-priority item must be evicted first");
-    assert!(queue.items.iter().any(|e| e.title == "low-49"), "newest low-priority items should survive");
+    assert!(
+        !queue.items.iter().any(|e| e.title == "low-0"),
+        "oldest low-priority item must be evicted first"
+    );
+    assert!(
+        queue.items.iter().any(|e| e.title == "low-49"),
+        "newest low-priority items should survive"
+    );
 }
 
 #[tokio::test]
@@ -759,14 +916,18 @@ async fn test_ledger_skips_empty_chat_id() {
         "title": "Missing ID", "kind": "chat",
         "created_at": "2024-01-01T00:00:00Z", "messages": []
     });
-    super::storage::atomic_write_json(&bad_path, &bad_json).await.unwrap();
+    super::storage::atomic_write_json(&bad_path, &bad_json)
+        .await
+        .unwrap();
 
     let good_path = root.join(".refact/buddy/chats/conversations/has_id.json");
     let good_json = serde_json::json!({
         "chat_id": "has_id", "title": "Good Chat", "kind": "chat",
         "created_at": "2024-01-02T00:00:00Z", "messages": []
     });
-    super::storage::atomic_write_json(&good_path, &good_json).await.unwrap();
+    super::storage::atomic_write_json(&good_path, &good_json)
+        .await
+        .unwrap();
 
     let entries = super::conversation_ledger::list_all_buddy_conversations(root, None).await;
     assert_eq!(entries.len(), 1);
@@ -775,14 +936,38 @@ async fn test_ledger_skips_empty_chat_id() {
 
 #[test]
 fn test_workflow_label_mapping() {
-    assert_eq!(super::workflows::workflow_label("commit_message"), "commit message generation");
-    assert_eq!(super::workflows::workflow_label("follow_up"), "follow-up suggestions");
-    assert_eq!(super::workflows::workflow_label("compress_trajectory"), "chat compression");
-    assert_eq!(super::workflows::workflow_label("memo_extraction"), "memo extraction");
-    assert_eq!(super::workflows::workflow_label("kg_enrich"), "knowledge graph enrichment");
-    assert_eq!(super::workflows::workflow_label("kg_deprecate"), "knowledge cleanup");
-    assert_eq!(super::workflows::workflow_label("title_generating"), "title generation");
-    assert_eq!(super::workflows::workflow_label("unknown_workflow"), "unknown_workflow");
+    assert_eq!(
+        super::workflows::workflow_label("commit_message"),
+        "commit message generation"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("follow_up"),
+        "follow-up suggestions"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("compress_trajectory"),
+        "chat compression"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("memo_extraction"),
+        "memo extraction"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("kg_enrich"),
+        "knowledge graph enrichment"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("kg_deprecate"),
+        "knowledge cleanup"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("title_generating"),
+        "title generation"
+    );
+    assert_eq!(
+        super::workflows::workflow_label("unknown_workflow"),
+        "unknown_workflow"
+    );
 }
 
 #[test]
@@ -790,44 +975,96 @@ fn test_event_title_length_limit() {
     use super::actor::make_runtime_event;
     let long_title = "A".repeat(200);
     let ev = make_runtime_event("signal", &long_title, "src", "key", "started", None);
-    assert!(ev.title.len() <= 200, "make_runtime_event stores the title as-is");
+    assert!(
+        ev.title.len() <= 200,
+        "make_runtime_event stores the title as-is"
+    );
     let truncated: String = long_title.chars().take(80).collect();
-    assert!(truncated.len() <= 80, "truncated title must be at most 80 chars");
-    let chat_label: String = "Some very long chat title that goes on and on and on and on and on".chars().take(60).collect();
-    let ev2 = make_runtime_event("chat_started", &format!("Started: {}", chat_label), "chat", "chat_123", "started", None);
-    assert!(ev2.title.len() <= 120, "chat started event title must be under 120 chars");
+    assert!(
+        truncated.len() <= 80,
+        "truncated title must be at most 80 chars"
+    );
+    let chat_label: String = "Some very long chat title that goes on and on and on and on and on"
+        .chars()
+        .take(60)
+        .collect();
+    let ev2 = make_runtime_event(
+        "chat_started",
+        &format!("Started: {}", chat_label),
+        "chat",
+        "chat_123",
+        "started",
+        None,
+    );
+    assert!(
+        ev2.title.len() <= 120,
+        "chat started event title must be under 120 chars"
+    );
 }
 
 #[test]
 fn test_runtime_event_chat_id_default_none() {
     use super::actor::make_runtime_event;
-    let ev = make_runtime_event("indexing", "Indexing...", "indexer", "indexing", "started", None);
+    let ev = make_runtime_event(
+        "indexing",
+        "Indexing...",
+        "indexer",
+        "indexing",
+        "started",
+        None,
+    );
     assert!(ev.chat_id.is_none(), "default event must have no chat_id");
 }
 
 #[test]
 fn test_runtime_event_chat_id_serialized_when_set() {
     use super::actor::make_runtime_event;
-    let mut ev = make_runtime_event("chat_error", "Error", "chat", "chat_abc", "failed", Some("high"));
+    let mut ev = make_runtime_event(
+        "chat_error",
+        "Error",
+        "chat",
+        "chat_abc",
+        "failed",
+        Some("high"),
+    );
     ev.chat_id = Some("abc-123".to_string());
     let json = serde_json::to_string(&ev).unwrap();
-    assert!(json.contains("\"chat_id\":\"abc-123\""), "chat_id must be serialized when set");
+    assert!(
+        json.contains("\"chat_id\":\"abc-123\""),
+        "chat_id must be serialized when set"
+    );
 }
 
 #[test]
 fn test_runtime_event_chat_id_skipped_when_none() {
     use super::actor::make_runtime_event;
-    let ev = make_runtime_event("chat_completed", "Done", "chat", "chat_abc", "completed", None);
+    let ev = make_runtime_event(
+        "chat_completed",
+        "Done",
+        "chat",
+        "chat_abc",
+        "completed",
+        None,
+    );
     let json = serde_json::to_string(&ev).unwrap();
-    assert!(!json.contains("chat_id"), "chat_id must be skipped when None");
+    assert!(
+        !json.contains("chat_id"),
+        "chat_id must be skipped when None"
+    );
 }
 
 #[test]
 fn test_chat_error_event_includes_chat_id() {
     use super::actor::make_runtime_event;
     let chat_id = "test-chat-xyz";
-    let mut ev = make_runtime_event("chat_error", "Error in 'Test chat': something failed", "chat",
-        &format!("chat_{}", chat_id), "failed", Some("high"));
+    let mut ev = make_runtime_event(
+        "chat_error",
+        "Error in 'Test chat': something failed",
+        "chat",
+        &format!("chat_{}", chat_id),
+        "failed",
+        Some("high"),
+    );
     ev.chat_id = Some(chat_id.to_string());
     assert_eq!(ev.chat_id.as_deref(), Some(chat_id));
     assert_eq!(ev.status, "failed");

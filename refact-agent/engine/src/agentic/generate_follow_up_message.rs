@@ -92,8 +92,8 @@ pub async fn generate_follow_up_message(
 
             tracing::info!("follow-up model says {:?}", response);
 
-            let response: FollowUpResponse =
-                json_utils::extract_json_object(&response).map_err_with_prefix("Failed to parse json:")?;
+            let response: FollowUpResponse = json_utils::extract_json_object(&response)
+                .map_err_with_prefix("Failed to parse json:")?;
             Ok(response)
         },
     )

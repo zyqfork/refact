@@ -54,4 +54,3 @@ pub async fn bootstrap_buddy_storage(project_root: &Path) -> Result<(), String> 
     }
     Ok(())
 }
-

@@ -63,9 +63,10 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
   const currentChatId = useAppSelector(selectCurrentThreadId);
   const currentPage = useAppSelector(selectCurrentPage);
 
-  const rawModes = data?.modes ?? [];
   const taskId =
     currentPage?.name === "task workspace" ? currentPage.taskId : undefined;
+
+  const rawModes = useMemo(() => data?.modes ?? [], [data]);
 
   const effectiveModes = useMemo(() => {
     const hasTp = rawModes.some((m) => m.id === "task_planner");
@@ -261,7 +262,7 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
       <TaskPlannerDialog
         open={taskPlannerDialogOpen}
         onOpenChange={setTaskPlannerDialogOpen}
-        chatId={currentChatId ?? ""}
+        chatId={currentChatId}
         hasMessages={hasMessages}
         taskId={taskId}
       />

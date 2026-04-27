@@ -244,6 +244,15 @@ function DefaultModelsCard() {
                 explanation="Faster, cheaper model for simple tasks."
               />
             )}
+          {caps.chat_buddy_model &&
+            caps.chat_buddy_model !== caps.chat_default_model &&
+            caps.chat_buddy_model !== caps.chat_light_model && (
+              <ModelRow
+                label="Buddy"
+                model={caps.chat_buddy_model}
+                explanation="Model used by Buddy for background tasks."
+              />
+            )}
           {caps.completion_default_model && (
             <ModelRow
               label="Completion"

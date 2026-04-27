@@ -3,21 +3,11 @@ import { Text } from "@radix-ui/themes";
 import { ChevronDownIcon, ChevronUpIcon } from "@radix-ui/react-icons";
 import { useAppDispatch } from "../../../../hooks";
 import { openChatInModeAndStart } from "../../../Chat/Thread/actions";
+import { SETUP_MODES } from "../../../Setup/setupModes";
 import { CollapsePanel } from "../../../../components/shared/CollapsePanel";
 import styles from "./SetupActionsSection.module.css";
 
-type SetupAction = {
-  label: string;
-  mode: string;
-};
-
-const SETUP_ACTIONS: SetupAction[] = [
-  { label: "Create Skills", mode: "setup_skills" },
-  { label: "Setup AGENTS.md", mode: "setup_agents_md" },
-  { label: "Find MCPs", mode: "setup_mcp" },
-  { label: "Create Commands", mode: "setup_commands" },
-  { label: "Create Subagents", mode: "setup_subagents" },
-];
+const SETUP_ACTIONS = SETUP_MODES.filter((m) => m.mode !== "setup");
 
 type Props = {
   collapsed: boolean;

@@ -11,8 +11,7 @@ import {
   selectChatId,
   selectIsBuddyChat,
 } from "../../features/Chat/Thread";
-import { BuddySuggestionBar, BuddyChatCompanion } from "../../features/Buddy";
-import { selectBuddySuggestions } from "../../features/Buddy/buddySlice";
+import { BuddyChatCompanion } from "../../features/Buddy";
 import { DropzoneProvider } from "../Dropzone";
 import { useCheckpoints } from "../../hooks/useCheckpoints";
 import { Checkpoints } from "../../features/Checkpoints";
@@ -61,11 +60,6 @@ export const Chat: React.FC<ChatProps> = ({
 
   const preventSend = useAppSelector(selectPreventSend);
   const onEnableSend = () => dispatch(enableSend({ id: chatId }));
-
-  const suggestions = useAppSelector(selectBuddySuggestions);
-  const hasActiveSuggestions = suggestions.some(
-    (s) => !s.dismissed && s.suggestion_type !== "error_pattern",
-  );
 
   const handleSubmit = useCallback(
     (value: string, sendPolicy?: "immediate" | "after_flow") => {
@@ -134,15 +128,8 @@ export const Chat: React.FC<ChatProps> = ({
             </Flex>
           )}
 
-          {!isBuddyChat && hasActiveSuggestions && (
-            <Container>
-              <BuddySuggestionBar />
-            </Container>
-          )}
-
-          {!isBuddyChat && <BuddyChatCompanion chatId={chatId} />}
-
-          <Container>
+          <Container style={{ position: "relative" }}>
+            {!isBuddyChat && <BuddyChatCompanion chatId={chatId} />}
             <ChatForm
               key={chatId}
               onSubmit={handleSubmit}

@@ -51,7 +51,12 @@ where
     let label = workflow_label(workflow_id);
     let dedupe_key = format!("workflow_{}", workflow_id);
     let mut started = crate::buddy::actor::make_runtime_event(
-        workflow_id, &format!("Running {}...", label), "system", &dedupe_key, "started", None,
+        workflow_id,
+        &format!("Running {}...", label),
+        "system",
+        &dedupe_key,
+        "started",
+        None,
     );
     started.speech_text = Some(format!("I'm working on {}...", label));
     crate::buddy::actor::buddy_enqueue_event(gcx.clone(), started).await;
@@ -88,7 +93,8 @@ where
                 svc.workflow_failed(&workflow_id_owned, activity);
             }
             if let Some(ref root) = project_root {
-                svc.append_workflow_transcript(root, &workflow_id_owned, &summary, success).await;
+                svc.append_workflow_transcript(root, &workflow_id_owned, &summary, success)
+                    .await;
             }
         }
     });
@@ -117,6 +123,9 @@ pub async fn append_workflow_entry(path: &std::path::Path, output_summary: &str,
     }
 
     if let Err(e) = super::storage::atomic_write_json(path, &transcript).await {
-        warn!("buddy: failed to write workflow transcript {:?}: {}", path, e);
+        warn!(
+            "buddy: failed to write workflow transcript {:?}: {}",
+            path, e
+        );
     }
 }
