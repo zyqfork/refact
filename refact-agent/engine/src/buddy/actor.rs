@@ -188,6 +188,9 @@ impl BuddyService {
             runtime_queue: self.runtime_queue.items.iter().cloned().collect(),
             now_playing: self.runtime_queue.now_playing.clone(),
             active_speech: self.active_speech.clone(),
+            pulse: super::types::BuddyPulse::default(),
+            opportunities: self.state.opportunities.clone(),
+            active_drafts: vec![],
         }
     }
 
@@ -205,10 +208,10 @@ impl BuddyService {
         let _ = self.events_tx.send(BuddyEvent::SpeechUpdated { speech });
     }
 
-    pub fn send_navigation(&self, view: String, params: Option<serde_json::Value>) {
+    pub fn send_navigation(&self, page: super::types::BuddyPage) {
         let _ = self
             .events_tx
-            .send(BuddyEvent::NavigationRequest { view, params });
+            .send(BuddyEvent::NavigationRequest { page });
     }
 
     pub fn enqueue_runtime_event(&mut self, event: BuddyRuntimeEvent) {

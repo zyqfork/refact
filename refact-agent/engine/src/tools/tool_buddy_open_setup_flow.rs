@@ -76,10 +76,7 @@ impl Tool for ToolBuddyOpenSetupFlow {
         let buddy_arc = gcx.read().await.buddy.clone();
         let lock = buddy_arc.lock().await;
         if let Some(svc) = lock.as_ref() {
-            svc.send_navigation(
-                "setup".to_string(),
-                Some(serde_json::json!({ "mode": flow })),
-            );
+            svc.send_navigation(crate::buddy::types::BuddyPage::Customization);
         }
 
         Ok((

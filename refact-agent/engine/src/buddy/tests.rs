@@ -8,9 +8,13 @@ use super::issues::{
     sanitize_title, IssueGate,
 };
 use super::scheduler::BuddyJobContext;
-use super::settings::{BuddySettings, MAX_PALETTE_INDEX};
+use super::settings::{AutonomyLevel, BuddySettings, HumorLevel, MAX_PALETTE_INDEX};
 use super::state::{apply_care_action, apply_pet_tick, default_buddy_state, grant_xp, reroll_personality};
-use super::types::{BuddyCareAction, BuddyJobState, BuddyOnboarding, BuddySuggestion, BuddyState};
+use super::types::{
+    BuddyAction, BuddyCareAction, BuddyJobState, BuddyOnboarding, BuddyPage, BuddyPriority,
+    BuddyPulse, BuddySuggestion, BuddyState, CustomizationKind, DefaultsKind, DraftKind,
+    InvestigationContext, MarketKind, OpportunityStatus, PulseScope,
+};
 
 fn make_service() -> BuddyService {
     let (tx, _rx) = broadcast::channel(16);
@@ -1510,5 +1514,122 @@ fn test_redact_handles_multiple_secrets_and_case() {
         redactions,
         output
     );
+}
+
+#[test]
+fn state_migration_loads_old_state_without_opportunities() {
+    let json = r#"{
+        "identity": {"name": "Pixel", "created_at": "2024-01-01T00:00:00Z", "palette_index": 2},
+        "progression": {"stage": 0, "stage_name": "Egg", "level": 1, "xp": 0, "xp_next": 20},
+        "skills": {"unlocked": [], "locked": []},
+        "workflow_summaries": [],
+        "semantic": {"mood": "Idle", "focus": "", "headline": "", "last_active": "2024-01-01T00:00:00Z"},
+        "recent_activities": [],
+        "suggestion_state": []
+    }"#;
+    let state: BuddyState =
+        serde_json::from_str(json).expect("should parse old state without opportunities");
+    assert!(state.opportunities.is_empty(), "opportunities must default to empty vec");
+}
+
+#[test]
+fn buddy_action_round_trip() {
+    let actions: Vec<BuddyAction> = vec![
+        BuddyAction::OpenPage { page: BuddyPage::Buddy, params: None },
+        BuddyAction::LaunchInvestigationChat {
+            preload: InvestigationContext {
+                fact_keys: vec![],
+                diagnostic_ids: vec![],
+                log_excerpt: String::new(),
+                config_summary: String::new(),
+                initial_user_message: "investigate".to_string(),
+            },
+        },
+        BuddyAction::DraftSkill { draft_id: "d1".to_string(), label: "My Skill".to_string() },
+        BuddyAction::DraftCommand { draft_id: "d2".to_string(), label: "My Command".to_string() },
+        BuddyAction::DraftSubagent { draft_id: "d3".to_string(), label: "My Subagent".to_string() },
+        BuddyAction::DraftMode { draft_id: "d4".to_string(), label: "My Mode".to_string() },
+        BuddyAction::DraftAgentsMdPatch { diff: "--- a\n+++ b".to_string() },
+        BuddyAction::DraftDefaultsChange { defaults_kind: DefaultsKind::ChatModel, patch: serde_json::json!({}) },
+        BuddyAction::DraftCustomizationChange { customization_kind: CustomizationKind::Mode, id: "m1".to_string(), patch: serde_json::json!({}) },
+        BuddyAction::OfferMarketplaceInstall { market_kind: MarketKind::Mcp, item_id: "github-mcp".to_string() },
+        BuddyAction::CreatePulseReport { scope: PulseScope::All },
+        BuddyAction::Dismiss,
+    ];
+    for action in &actions {
+        let json = serde_json::to_string(action).expect("serialize");
+        let back: BuddyAction = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&back).expect("re-serialize");
+        assert_eq!(json, json2, "round-trip mismatch");
+    }
+}
+
+#[test]
+fn buddy_page_round_trip() {
+    let pages: Vec<BuddyPage> = vec![
+        BuddyPage::Buddy,
+        BuddyPage::Stats,
+        BuddyPage::Customization,
+        BuddyPage::Providers,
+        BuddyPage::DefaultModels,
+        BuddyPage::Integrations,
+        BuddyPage::Extensions,
+        BuddyPage::MarketplaceHub,
+        BuddyPage::McpMarketplace,
+        BuddyPage::SkillsMarketplace,
+        BuddyPage::CommandsMarketplace,
+        BuddyPage::SubagentsMarketplace,
+        BuddyPage::TasksList,
+        BuddyPage::TaskWorkspace { task_id: "task-abc".to_string() },
+        BuddyPage::KnowledgeGraph,
+    ];
+    for page in &pages {
+        let json = serde_json::to_string(page).expect("serialize");
+        let back: BuddyPage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(page, &back, "round-trip mismatch for {:?}", page);
+    }
+    let task_json = serde_json::to_string(&BuddyPage::TaskWorkspace { task_id: "task-abc".to_string() }).unwrap();
+    assert!(task_json.contains("task-abc"), "task_id must be serialized");
+}
+
+#[test]
+fn buddy_pulse_default() {
+    let pulse = BuddyPulse::default();
+    let json = serde_json::to_string(&pulse).expect("serialize");
+    let back: BuddyPulse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.tasks.total, 0);
+    assert_eq!(back.git.uncommitted_files, 0);
+    assert!(back.generated_at.is_none());
+}
+
+#[test]
+fn settings_default_observer_toggles() {
+    let settings = BuddySettings::default();
+    assert!(!settings.observers.chat_pattern, "chat_pattern must default to false");
+    assert!(settings.observers.task_health);
+    assert!(settings.observers.trajectory_clutter);
+    assert!(settings.observers.customization_drift);
+    assert!(settings.observers.memory_garden);
+    assert!(settings.observers.mcp_auth);
+    assert!(settings.observers.git_pressure);
+    assert!(settings.observers.diagnostic_cluster);
+    assert!(settings.observers.provider_health);
+}
+
+#[test]
+fn humor_level_and_autonomy_serde() {
+    let hl = HumorLevel::Light;
+    let json = serde_json::to_string(&hl).unwrap();
+    let back: HumorLevel = serde_json::from_str(&json).unwrap();
+    assert_eq!(hl, back);
+
+    let al = AutonomyLevel::Suggest;
+    let json = serde_json::to_string(&al).unwrap();
+    let back: AutonomyLevel = serde_json::from_str(&json).unwrap();
+    assert_eq!(al, back);
+
+    let settings = BuddySettings::default();
+    assert_eq!(settings.humor_level, HumorLevel::Light);
+    assert_eq!(settings.autonomy_level, AutonomyLevel::Suggest);
 }
 

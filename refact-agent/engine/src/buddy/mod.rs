@@ -1,9 +1,16 @@
 pub mod actor;
 pub mod conversation_ledger;
 pub mod diagnostics;
+pub mod drafts;
 pub mod events;
+pub mod facts;
+pub mod humor;
 pub mod issues;
 pub mod jobs;
+pub mod observers;
+pub mod opportunities;
+pub mod policy;
+pub mod pulse;
 pub mod runtime_queue;
 pub mod scheduler;
 pub mod settings;

@@ -291,6 +291,8 @@ pub struct BuddyState {
     pub job_cooldowns: HashMap<String, BuddyJobState>,
     #[serde(default)]
     pub active_quest: Option<BuddyQuest>,
+    #[serde(default)]
+    pub opportunities: Vec<BuddyOpportunity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -359,4 +361,302 @@ pub struct BuddyConversationEntry {
     pub message_count: u32,
     pub icon: String,
     pub badge: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BuddyFact {
+    pub kind: BuddyFactKind,
+    pub key: String,
+    pub source: &'static str,
+    pub payload: serde_json::Value,
+    pub seen_at: chrono::DateTime<chrono::Utc>,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum BuddyFactKind {
+    TaskStuck,
+    TaskAbandoned,
+    TaskClusterDuplicate,
+    TrajectoryClutter,
+    ChatRetryStreak,
+    ChatTopicPivot,
+    MemoryOrphan,
+    MemoryStaleConflict,
+    MemoryRecurringLesson,
+    ModePromptOverlap,
+    SkillUnderused,
+    SkillTriggerWeak,
+    RecurringWorkflowCandidate,
+    AgentsMdGapDetected,
+    DefaultModelMissing,
+    ProviderQuotaPressure,
+    BrokenModelReference,
+    McpAuthExpired,
+    IntegrationFailing,
+    IntegrationSmartlinkMatch,
+    DiagnosticCluster,
+    FrontendErrorBurst,
+    GitDiffWidening,
+    UncommittedPressure,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuddyOpportunity {
+    pub id: String,
+    pub kind: BuddyOpportunityKind,
+    pub summary: String,
+    pub priority: BuddyPriority,
+    pub confidence: f32,
+    pub fact_keys: Vec<String>,
+    pub cooldown_key: String,
+    pub status: OpportunityStatus,
+    pub proposed_actions: Vec<BuddyAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub humor: Option<String>,
+    #[serde(default)]
+    pub humor_allowed: bool,
+    #[serde(default)]
+    pub related: BuddyOpportunityLinks,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum BuddyOpportunityKind {
+    TaskHealth,
+    TrajectoryCleanup,
+    ChatRecap,
+    MemoryGarden,
+    ConfigDrift,
+    WorkflowDistill,
+    AgentsMdGap,
+    ProviderTuning,
+    IntegrationFix,
+    DiagnosticInvestigation,
+    GitHygiene,
+    MarketplaceSuggestion,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum BuddyPriority {
+    Low,
+    Normal,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum OpportunityStatus {
+    New,
+    Shown,
+    Dismissed,
+    Accepted,
+    Completed,
+    Expired,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BuddyOpportunityLinks {
+    #[serde(default)]
+    pub chat_ids: Vec<String>,
+    #[serde(default)]
+    pub task_ids: Vec<String>,
+    #[serde(default)]
+    pub memory_ids: Vec<String>,
+    #[serde(default)]
+    pub config_paths: Vec<String>,
+    #[serde(default)]
+    pub page: Option<BuddyPage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BuddyAction {
+    OpenPage { page: BuddyPage, params: Option<serde_json::Value> },
+    LaunchInvestigationChat { preload: InvestigationContext },
+    DraftSkill { draft_id: String, label: String },
+    DraftCommand { draft_id: String, label: String },
+    DraftSubagent { draft_id: String, label: String },
+    DraftMode { draft_id: String, label: String },
+    DraftAgentsMdPatch { diff: String },
+    DraftDefaultsChange { defaults_kind: DefaultsKind, patch: serde_json::Value },
+    DraftCustomizationChange { customization_kind: CustomizationKind, id: String, patch: serde_json::Value },
+    OfferMarketplaceInstall { market_kind: MarketKind, item_id: String },
+    CreatePulseReport { scope: PulseScope },
+    Dismiss,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultsKind {
+    ChatModel,
+    ChatBuddyModel,
+    ChatThinkingModel,
+    EmbeddingModel,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomizationKind {
+    Mode,
+    Skill,
+    Command,
+    Subagent,
+    Hook,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketKind {
+    Mcp,
+    Skill,
+    Command,
+    Subagent,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PulseScope {
+    All,
+    Tasks,
+    Trajectories,
+    Memory,
+    Providers,
+    Mcp,
+    Customization,
+    Diagnostics,
+    Git,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BuddyPage {
+    Buddy,
+    Stats,
+    Customization,
+    Providers,
+    DefaultModels,
+    Integrations,
+    Extensions,
+    MarketplaceHub,
+    McpMarketplace,
+    SkillsMarketplace,
+    CommandsMarketplace,
+    SubagentsMarketplace,
+    TasksList,
+    TaskWorkspace { task_id: String },
+    KnowledgeGraph,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BuddyPulse {
+    pub generated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub tasks: TaskPulse,
+    pub trajectories: TrajectoryPulse,
+    pub memory: MemoryPulse,
+    pub providers: ProviderPulse,
+    pub mcp: McpPulse,
+    pub customization: CustomizationPulse,
+    pub diagnostics: DiagnosticPulse,
+    pub git: GitPulse,
+    pub humor: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskPulse {
+    pub total: u32,
+    pub stuck: u32,
+    pub abandoned: u32,
+    pub by_status: std::collections::HashMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TrajectoryPulse {
+    pub total: u32,
+    pub untitled: u32,
+    pub oldest_age_days: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryPulse {
+    pub total: u32,
+    pub orphan: u32,
+    pub stale_conflicts: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderPulse {
+    pub defaults_ok: bool,
+    pub broken_refs: u32,
+    pub quota_warnings: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct McpPulse {
+    pub total: u32,
+    pub failing: u32,
+    pub auth_expiring: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CustomizationPulse {
+    pub modes: u32,
+    pub skills: u32,
+    pub commands: u32,
+    pub subagents: u32,
+    pub hooks: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiagnosticPulse {
+    pub last_hour: u32,
+    pub top_error_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitPulse {
+    pub uncommitted_files: u32,
+    pub diff_lines_4h: u32,
+    pub branches: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuddyDraft {
+    pub id: String,
+    pub kind: DraftKind,
+    pub title: String,
+    pub yaml_or_json: String,
+    pub explanation: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DraftKind {
+    Skill,
+    Command,
+    Subagent,
+    Mode,
+    AgentsMd,
+    DefaultsModel,
+    Hook,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvestigationContext {
+    #[serde(default)]
+    pub fact_keys: Vec<String>,
+    #[serde(default)]
+    pub diagnostic_ids: Vec<String>,
+    #[serde(default)]
+    pub log_excerpt: String,
+    #[serde(default)]
+    pub config_summary: String,
+    pub initial_user_message: String,
 }

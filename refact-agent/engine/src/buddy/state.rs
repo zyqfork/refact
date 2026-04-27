@@ -182,6 +182,7 @@ pub fn default_buddy_state() -> BuddyState {
         },
         job_cooldowns: std::collections::HashMap::new(),
         active_quest: None,
+        opportunities: vec![],
     };
     sync_state(&mut state);
     state

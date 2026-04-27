@@ -5,6 +5,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
+use crate::buddy::types::BuddyPage;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 
@@ -31,12 +32,11 @@ impl Tool for ToolBuddyOpenView {
                     "view": {
                         "type": "string",
                         "description": "Which view to open.",
-                        "enum": ["buddy", "stats", "chat", "setup", "settings", "knowledge", "tasks", "integrations"]
+                        "enum": ["buddy", "stats", "customization", "providers", "integrations", "knowledge", "tasks"]
                     },
-                    "params": {
-                        "type": "object",
-                        "description": "Optional parameters for the view (e.g., {\"chat_id\": \"...\"}). Use a flat object with string values.",
-                        "additionalProperties": true
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID when opening task_workspace view."
                     }
                 },
                 "required": ["view"]
@@ -58,31 +58,27 @@ impl Tool for ToolBuddyOpenView {
             .ok_or("argument `view` is missing or not a string")?
             .to_string();
 
-        let valid_views = [
-            "buddy",
-            "stats",
-            "chat",
-            "setup",
-            "settings",
-            "knowledge",
-            "tasks",
-            "integrations",
-        ];
-        if !valid_views.contains(&view.as_str()) {
-            return Err(format!(
-                "invalid view '{}'. Valid views: {}",
-                view,
-                valid_views.join(", ")
-            ));
-        }
+        let task_id = args.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        let params = args.get("params").cloned();
+        let page = match view.as_str() {
+            "buddy" => BuddyPage::Buddy,
+            "stats" => BuddyPage::Stats,
+            "customization" | "setup" | "settings" => BuddyPage::Customization,
+            "providers" => BuddyPage::Providers,
+            "integrations" => BuddyPage::Integrations,
+            "knowledge" => BuddyPage::KnowledgeGraph,
+            "tasks" => BuddyPage::TasksList,
+            "task_workspace" => BuddyPage::TaskWorkspace {
+                task_id: task_id.unwrap_or_default(),
+            },
+            _ => return Err(format!("invalid view '{}'", view)),
+        };
 
         let gcx = ccx.lock().await.global_context.clone();
         let buddy_arc = gcx.read().await.buddy.clone();
         let lock = buddy_arc.lock().await;
         if let Some(svc) = lock.as_ref() {
-            svc.send_navigation(view.clone(), params);
+            svc.send_navigation(page);
         }
 
         Ok((

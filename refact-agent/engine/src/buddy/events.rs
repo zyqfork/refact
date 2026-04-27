@@ -29,7 +29,22 @@ pub enum BuddyEvent {
         speech: super::types::BuddySpeechItem,
     },
     NavigationRequest {
-        view: String,
-        params: Option<serde_json::Value>,
+        page: BuddyPage,
+    },
+    OpportunityProduced {
+        opportunity: BuddyOpportunity,
+    },
+    OpportunityResolved {
+        opportunity_id: String,
+        status: OpportunityStatus,
+    },
+    PulseUpdated {
+        pulse: BuddyPulse,
+    },
+    DraftCreated {
+        draft: BuddyDraft,
+    },
+    DraftConsumed {
+        draft_id: String,
     },
 }
