@@ -1,6 +1,9 @@
+pub mod chat_pattern;
+pub mod customization_drift;
 pub mod diagnostic_cluster;
 pub mod git_pressure;
 pub mod mcp_auth;
+pub mod memory_garden;
 pub mod provider_health;
 pub mod task_health;
 pub mod trajectory_clutter;
@@ -66,5 +69,8 @@ pub fn build_observer_registry() -> Vec<Arc<dyn BuddyObserver>> {
         Arc::new(diagnostic_cluster::DiagnosticClusterObserver),
         Arc::new(provider_health::ProviderHealthObserver),
         Arc::new(mcp_auth::McpAuthObserver),
+        Arc::new(chat_pattern::ChatPatternObserver),
+        Arc::new(customization_drift::CustomizationDriftObserver),
+        Arc::new(memory_garden::MemoryGardenObserver),
     ]
 }

@@ -1928,7 +1928,12 @@ fn policy_drops_when_proactive_disabled() {
     let opp = make_opp_with_priority("opp1", BuddyPriority::Normal);
     let queue = OpportunityQueue::new();
     let result = evaluate(&opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Drop { reason: "proactive_disabled" }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Drop {
+            reason: "proactive_disabled"
+        }
+    ));
 }
 
 #[test]
@@ -1941,7 +1946,12 @@ fn policy_quiet_mode_drops_non_critical() {
 
     let normal_opp = make_opp_with_priority("opp-normal", BuddyPriority::Normal);
     let result = evaluate(&normal_opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Drop { reason: "quiet_mode" }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Drop {
+            reason: "quiet_mode"
+        }
+    ));
 
     let critical_opp = make_opp_with_priority("opp-critical", BuddyPriority::Critical);
     let result = evaluate(&critical_opp, &settings, &queue);
@@ -1955,12 +1965,20 @@ fn policy_unread_cap_drops() {
     let settings = BuddySettings::default();
     let mut queue = OpportunityQueue::new();
     for i in 0..MAX_UNREAD {
-        queue.push(make_opportunity(&format!("pre-{}", i), &format!("ck-pre-{}", i)));
+        queue.push(make_opportunity(
+            &format!("pre-{}", i),
+            &format!("ck-pre-{}", i),
+        ));
     }
     assert_eq!(queue.unread_count(), MAX_UNREAD);
     let opp = make_opp_with_priority("new-opp", BuddyPriority::Normal);
     let result = evaluate(&opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Drop { reason: "unread_cap" }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Drop {
+            reason: "unread_cap"
+        }
+    ));
 }
 
 #[test]
@@ -1974,7 +1992,12 @@ fn policy_dismissed_24h_drops() {
     queue.dismiss("opp-dm");
     let new_opp = make_opportunity("opp-new", "key-dm");
     let result = evaluate(&new_opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Drop { reason: "dismissed_24h" }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Drop {
+            reason: "dismissed_24h"
+        }
+    ));
 }
 
 #[test]
@@ -1987,7 +2010,10 @@ fn policy_cooldown_drops() {
     assert!(queue.cooldown_active("cooldown-key"));
     let new_opp = make_opportunity("opp-cd2", "cooldown-key");
     let result = evaluate(&new_opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Drop { reason: "cooldown" }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Drop { reason: "cooldown" }
+    ));
 }
 
 #[test]
@@ -1999,7 +2025,12 @@ fn policy_humor_blocked_by_keyword() {
     let mut opp = make_opp_with_priority("opp-auth", BuddyPriority::Normal);
     opp.summary = "auth token expired".to_string();
     let result = evaluate(&opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Surface { humor_allowed: false }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Surface {
+            humor_allowed: false
+        }
+    ));
 }
 
 #[test]
@@ -2010,7 +2041,12 @@ fn policy_humor_blocked_by_priority() {
     let queue = OpportunityQueue::new();
     let opp = make_opp_with_priority("opp-high", BuddyPriority::High);
     let result = evaluate(&opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Surface { humor_allowed: false }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Surface {
+            humor_allowed: false
+        }
+    ));
 }
 
 #[test]
@@ -2022,7 +2058,12 @@ fn policy_humor_off_setting() {
     let queue = OpportunityQueue::new();
     let opp = make_opp_with_priority("opp-off", BuddyPriority::Normal);
     let result = evaluate(&opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Surface { humor_allowed: false }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Surface {
+            humor_allowed: false
+        }
+    ));
 }
 
 #[test]
@@ -2033,7 +2074,12 @@ fn policy_default_surfaces() {
     let queue = OpportunityQueue::new();
     let opp = make_opp_with_priority("opp-ok", BuddyPriority::Normal);
     let result = evaluate(&opp, &settings, &queue);
-    assert!(matches!(result, PolicyDecision::Surface { humor_allowed: true }));
+    assert!(matches!(
+        result,
+        PolicyDecision::Surface {
+            humor_allowed: true
+        }
+    ));
 }
 
 // =============================================================================
@@ -2243,7 +2289,12 @@ fn task_health_emits_stuck_fact() {
         schema_version: 1,
         rev: 0,
         columns: vec![],
-        cards: vec![make_board_card("c1", "doing", Some("agent-1"), Some(&started))],
+        cards: vec![make_board_card(
+            "c1",
+            "doing",
+            Some("agent-1"),
+            Some(&started),
+        )],
     };
     let facts = detect_task_health_facts(&[(meta, board)], now);
     assert!(
@@ -2262,7 +2313,12 @@ fn task_health_no_fact_for_completed() {
         schema_version: 1,
         rev: 0,
         columns: vec![],
-        cards: vec![make_board_card("c1", "doing", Some("agent-1"), Some(&started))],
+        cards: vec![make_board_card(
+            "c1",
+            "doing",
+            Some("agent-1"),
+            Some(&started),
+        )],
     };
     let facts = detect_task_health_facts(&[(meta, board)], now);
     assert!(
@@ -2277,7 +2333,9 @@ fn trajectory_clutter_threshold() {
     let now = chrono::Utc::now();
     let facts = detect_trajectory_clutter_facts("hash123", 51, 0, 0, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::TrajectoryClutter),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::TrajectoryClutter),
         "fact must be emitted when total > 50"
     );
     let facts_under = detect_trajectory_clutter_facts("hash123", 50, 0, 0, now);
@@ -2314,7 +2372,9 @@ fn git_pressure_uncommitted() {
     let now = chrono::Utc::now();
     let facts = detect_git_pressure_facts(path, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::UncommittedPressure),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::UncommittedPressure),
         "uncommitted pressure fact must be emitted"
     );
 }
@@ -2337,7 +2397,9 @@ fn diagnostic_cluster_threshold() {
         .collect();
     let facts = detect_diagnostic_cluster_facts(&diags, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::DiagnosticCluster),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::DiagnosticCluster),
         "cluster fact must be emitted for 3 same-type diagnostics"
     );
 }
@@ -2360,7 +2422,9 @@ fn frontend_error_burst() {
         .collect();
     let facts = detect_diagnostic_cluster_facts(&diags, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::FrontendErrorBurst),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::FrontendErrorBurst),
         "frontend burst fact must be emitted for 5 frontend diagnostics"
     );
 }
@@ -2387,7 +2451,9 @@ fn provider_health_default_missing() {
     };
     let facts = detect_provider_health_facts(&defaults, &["openai/gpt-4o".to_string()], now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::DefaultModelMissing),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::DefaultModelMissing),
         "must emit DefaultModelMissing when chat_buddy_model is empty"
     );
 }
@@ -2406,7 +2472,9 @@ fn provider_health_broken_ref() {
     };
     let facts = detect_provider_health_facts(&defaults, &[], now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::BrokenModelReference),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::BrokenModelReference),
         "must emit BrokenModelReference when default model is not in available list"
     );
 }
@@ -2459,7 +2527,9 @@ fn mcp_auth_expiring_within_24h() {
     }];
     let facts = detect_mcp_auth_facts(&snaps, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::McpAuthExpired),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::McpAuthExpired),
         "must emit McpAuthExpired when token expires in 12h"
     );
 }
@@ -2478,7 +2548,9 @@ fn mcp_auth_failure_count() {
     }];
     let facts = detect_mcp_auth_facts(&snaps, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::IntegrationFailing),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::IntegrationFailing),
         "must emit IntegrationFailing when failure_count >= 3"
     );
 }
@@ -2497,7 +2569,85 @@ fn mcp_smartlink_match() {
     }];
     let facts = detect_mcp_auth_facts(&snaps, now);
     assert!(
-        facts.iter().any(|f| f.kind == BuddyFactKind::IntegrationSmartlinkMatch),
+        facts
+            .iter()
+            .any(|f| f.kind == BuddyFactKind::IntegrationSmartlinkMatch),
         "must emit IntegrationSmartlinkMatch when failing integration has a smartlink"
     );
+}
+
+fn chat_msg(role: &str, content: &str) -> crate::call_validation::ChatMessage {
+    crate::call_validation::ChatMessage {
+        role: role.to_string(),
+        content: crate::call_validation::ChatContent::SimpleText(content.to_string()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn chat_pattern_no_secret_leakage() {
+    use super::observers::chat_pattern::run_chat_pattern_observer_sync;
+    let messages = vec![
+        chat_msg("user", "my key is sk-FAKEKEYABCDEFGHIJKL12345"),
+        chat_msg("user", "actually use Bearer abcdef-leak-token instead"),
+        chat_msg("user", "wait try again"),
+        chat_msg("user", "sorry undo"),
+    ];
+    let facts = run_chat_pattern_observer_sync(&messages, "chat-1");
+    let serialized = serde_json::to_string(&facts).unwrap();
+    assert!(!serialized.contains("sk-FAKEKEYABCDEFGHIJKL12345"));
+    assert!(!serialized.contains("Bearer abcdef-leak-token"));
+    assert!(!serialized.contains("actually"));
+    assert!(!serialized.contains("undo"));
+    assert!(facts
+        .iter()
+        .any(|f| matches!(f.kind, BuddyFactKind::ChatRetryStreak)));
+}
+
+#[test]
+fn chat_pattern_retry_streak_count() {
+    use super::observers::chat_pattern::count_retry_streak;
+    let messages = vec![
+        chat_msg("user", "please do X"),
+        chat_msg("assistant", "done"),
+        chat_msg("user", "actually no"),
+        chat_msg("user", "wait try again"),
+        chat_msg("user", "sorry that was wrong"),
+    ];
+    let count = count_retry_streak(&messages);
+    assert!(count >= 3, "expected >= 3 retry streak, got {}", count);
+}
+
+#[test]
+fn chat_pattern_no_streak_for_normal_conversation() {
+    use super::observers::chat_pattern::count_retry_streak;
+    let messages = vec![
+        chat_msg("user", "please implement feature X"),
+        chat_msg("assistant", "done"),
+        chat_msg("user", "great, now do Y"),
+        chat_msg("user", "and also Z"),
+    ];
+    let count = count_retry_streak(&messages);
+    assert_eq!(count, 0, "expected 0 retry streak for normal chat");
+}
+
+#[test]
+fn observer_registry_has_9_entries() {
+    use super::observers::build_observer_registry;
+    let registry = build_observer_registry();
+    assert_eq!(
+        registry.len(),
+        9,
+        "build_observer_registry must return 9 observers"
+    );
+    let ids: Vec<&str> = registry.iter().map(|o| o.id()).collect();
+    assert!(ids.contains(&"task_health"));
+    assert!(ids.contains(&"trajectory_clutter"));
+    assert!(ids.contains(&"git_pressure"));
+    assert!(ids.contains(&"diagnostic_cluster"));
+    assert!(ids.contains(&"chat_pattern"));
+    assert!(ids.contains(&"customization_drift"));
+    assert!(ids.contains(&"memory_garden"));
+    assert!(ids.contains(&"mcp_auth"));
+    assert!(ids.contains(&"provider_health"));
 }

@@ -23,10 +23,14 @@ pub fn evaluate(
         };
     }
     if settings.quiet_mode && opp.priority < BuddyPriority::Critical {
-        return PolicyDecision::Drop { reason: "quiet_mode" };
+        return PolicyDecision::Drop {
+            reason: "quiet_mode",
+        };
     }
     if queue.unread_count() >= crate::buddy::opportunities::MAX_UNREAD {
-        return PolicyDecision::Drop { reason: "unread_cap" };
+        return PolicyDecision::Drop {
+            reason: "unread_cap",
+        };
     }
     if queue.recently_dismissed(
         &opp.cooldown_key,

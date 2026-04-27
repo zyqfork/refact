@@ -133,12 +133,11 @@ impl BuddyObserver for McpAuthObserver {
                 )
             };
             let failed_calls = metrics_arc.lock().await.metrics.failed_calls;
-            let expires_at_ms = crate::integrations::mcp::mcp_auth::load_tokens_from_config(
-                &config_path,
-            )
-            .await
-            .filter(|t| t.expires_at > 0)
-            .map(|t| t.expires_at);
+            let expires_at_ms =
+                crate::integrations::mcp::mcp_auth::load_tokens_from_config(&config_path)
+                    .await
+                    .filter(|t| t.expires_at > 0)
+                    .map(|t| t.expires_at);
             snaps.push(McpSessionSnapshot {
                 id: key,
                 auth_status,

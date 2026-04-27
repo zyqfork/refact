@@ -101,7 +101,11 @@ pub fn detect_task_health_facts(
                 let rep = if a <= b { a } else { b };
                 let key = format!("task_cluster:{}", title_hash(rep));
                 if emitted.insert(key.clone()) {
-                    tracing::debug!("task_health: cluster {} ~ {}", active[i].0.id, active[j].0.id);
+                    tracing::debug!(
+                        "task_health: cluster {} ~ {}",
+                        active[i].0.id,
+                        active[j].0.id
+                    );
                     facts.push(BuddyFact {
                         kind: BuddyFactKind::TaskClusterDuplicate,
                         key,
