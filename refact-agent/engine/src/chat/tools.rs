@@ -1804,7 +1804,10 @@ pub async fn execute_tools(
                 id: uuid::Uuid::new_v4().to_string(),
                 suggestion_type: "tool_failure".to_string(),
                 title: "I noticed a tool failure".to_string(),
-                description: format!("'{}' failed. Want me to help fix it?", first_tool_name),
+                description: format!(
+                    "'{}' failed. Want me to investigate what happened?",
+                    first_tool_name
+                ),
                 created_at: chrono::Utc::now().to_rfc3339(),
                 dismissed: false,
             };

@@ -10,6 +10,7 @@ import classNames from "classnames";
 import { LightningBoltIcon } from "@radix-ui/react-icons";
 
 import { Markdown } from "../../Markdown";
+import { useStreamingMarkdown } from "../../Markdown/useStreamingMarkdown";
 import { useDelayedUnmount } from "../../shared/useDelayedUnmount";
 
 import { useCollapsibleStore } from "../useStoredOpen";
@@ -168,6 +169,10 @@ export const ReasoningContent: React.FC<ReasoningContentProps> = ({
     () => fixReasoningParagraphs(reasoningContent),
     [reasoningContent],
   );
+  const deferredContent = useStreamingMarkdown(
+    formattedContent,
+    isStreaming && isOpen,
+  );
 
   const { shouldRender, isAnimatingOpen } = useDelayedUnmount(isOpen, 200);
 
@@ -209,7 +214,7 @@ export const ReasoningContent: React.FC<ReasoningContentProps> = ({
                   onCopyClick={onCopyClick}
                   isStreaming={isStreaming}
                 >
-                  {formattedContent}
+                  {deferredContent ?? formattedContent}
                 </Markdown>
               </Text>
             </div>

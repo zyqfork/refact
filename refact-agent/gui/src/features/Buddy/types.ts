@@ -141,6 +141,11 @@ export type SignalType =
   | "connection_lost"
   | "connection_restored"
   | "git_changes"
+  | "care_feed"
+  | "care_play"
+  | "care_pet"
+  | "care_sleep"
+  | "care_clean"
   | "idle_timeout"
   | "stage_up";
 
@@ -419,6 +424,53 @@ export interface BuddyProgression {
   xp_next: number;
 }
 
+export interface BuddyNeeds {
+  hunger: number;
+  energy: number;
+  hygiene: number;
+  boredom: number;
+  affection: number;
+}
+
+export interface BuddyCondition {
+  sleeping: boolean;
+  hungry: boolean;
+  sleepy: boolean;
+  dirty: boolean;
+  bored: boolean;
+  lonely: boolean;
+}
+
+export interface BuddyEvolutionState {
+  care_score: number;
+  neglect_score: number;
+  open_seconds: number;
+  last_evolved_at: string | null;
+}
+
+export interface BuddyPetState {
+  needs: BuddyNeeds;
+  condition: BuddyCondition;
+  evolution: BuddyEvolutionState;
+}
+
+export interface BuddyPersonalityTraits {
+  playfulness: number;
+  chaos: number;
+  sociability: number;
+  curiosity: number;
+  resilience: number;
+}
+
+export interface BuddyPersonalityProfile {
+  archetype_id: string;
+  archetype_label: string;
+  vibe: string;
+  summary: string;
+  prompt: string;
+  traits: BuddyPersonalityTraits;
+}
+
 export interface BuddySkillLedger {
   unlocked: string[];
   locked: string[];
@@ -463,6 +515,8 @@ export interface BuddyState {
   semantic: BuddySemanticSnapshot;
   recent_activities: BuddyActivityEntry[];
   suggestion_state: BuddySuggestion[];
+  pet: BuddyPetState;
+  personality: BuddyPersonalityProfile;
 }
 
 export interface BuddySettings {
@@ -470,6 +524,7 @@ export interface BuddySettings {
   auto_diagnostics: boolean;
   auto_issue_creation: boolean;
   personality_prompt: string | null;
+  proactive_enabled: boolean;
 }
 
 export interface BuddySnapshot {
@@ -479,6 +534,22 @@ export interface BuddySnapshot {
   active_speech?: BuddySpeechItem | null;
   runtime_queue?: BuddyRuntimeEvent[];
   now_playing?: BuddyRuntimeEvent | null;
+}
+
+export type BuddyCareAction = "feed" | "play" | "pet" | "sleep" | "clean";
+
+export interface BuddyCareRequest {
+  action: BuddyCareAction;
+  toy?: string;
+}
+
+export interface BuddyCareResponse {
+  message: string;
+  snapshot: BuddySnapshot;
+}
+
+export interface BuddyPersonalityRerollResponse {
+  snapshot: BuddySnapshot;
 }
 
 export interface BuddyConversationMeta {

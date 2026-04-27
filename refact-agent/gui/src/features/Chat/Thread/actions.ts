@@ -31,8 +31,18 @@ import {
   updateChatParams,
 } from "../../../services/refact/chatCommands";
 import { selectLspPort, selectApiKey } from "../../Config/configSlice";
-import { selectCurrentThreadId } from "./selectors";
+import { selectCurrentThreadId, selectMessagesById } from "./selectors";
 import { push } from "../../Pages/pagesSlice";
+import type { DiagnosticContext } from "../../Buddy/types";
+import {
+  buildBuddyInvestigationPrompt,
+  buildBuddyInvestigationTitle,
+  type BuddyInvestigationSource,
+} from "../../Buddy/investigation";
+import {
+  createBuddyConversationRequest,
+  fetchBuddyInvestigationContextRequest,
+} from "../../../services/refact/buddy";
 
 function buildThreadParamsPatch(
   thread: ChatThread,
@@ -551,4 +561,87 @@ export const openBuddyChat = createAction<{ chat_id: string; title?: string }>(
 
 export const newBuddyChatAction = createAction<{ chat_id: string }>(
   "chat/newBuddyChat",
+);
+
+export const startBuddyInvestigation = createAsyncThunk<
+  { chat_id: string; title: string } | undefined,
+  {
+    triggerText: string;
+    triggerSource: BuddyInvestigationSource;
+    sourceChatId?: string;
+    diagnostic?: DiagnosticContext | null;
+  },
+  { dispatch: AppDispatch; state: RootState }
+>(
+  "chat/startBuddyInvestigation",
+  async ({ triggerText, triggerSource, sourceChatId, diagnostic }, api) => {
+    const state = api.getState();
+    const port = selectLspPort(state);
+    if (!port) return undefined;
+
+    const apiKey = selectApiKey(state) ?? undefined;
+    const messages = sourceChatId
+      ? selectMessagesById(state, sourceChatId)
+      : [];
+    const title = buildBuddyInvestigationTitle(triggerText);
+
+    const [meta, context] = await Promise.all([
+      createBuddyConversationRequest(port, apiKey, { title }),
+      fetchBuddyInvestigationContextRequest(port, apiKey, {
+        error: triggerText,
+        source_file: diagnostic?.source_file ?? undefined,
+        tool_name: diagnostic?.tool_name ?? undefined,
+        chat_id: sourceChatId ?? diagnostic?.chat_id ?? undefined,
+      }).catch(() => ({
+        logs: "Investigation logs were unavailable.",
+        internal_context: "Internal setup/config context was unavailable.",
+        repo_owner: "smallcloudai",
+        repo_name: "refact",
+      })),
+    ]);
+
+    api.dispatch(newBuddyChatAction({ chat_id: meta.chat_id }));
+    api.dispatch(openBuddyChat({ chat_id: meta.chat_id, title: meta.title }));
+    api.dispatch(push({ name: "chat" }));
+
+    await updateChatParams(
+      meta.chat_id,
+      {
+        title: meta.title,
+        mode: "buddy",
+        buddy_meta: {
+          is_buddy_chat: true,
+          buddy_chat_kind: "conversation",
+          workflow_id: null,
+        },
+        include_project_info: true,
+      },
+      port,
+      apiKey,
+    );
+
+    const prompt = buildBuddyInvestigationPrompt({
+      triggerSource,
+      triggerText,
+      sourceChatId,
+      messages,
+      diagnostic,
+      logs: context.logs,
+      internalContext: context.internal_context,
+      repoOwner: context.repo_owner,
+      repoName: context.repo_name,
+    });
+
+    await sendUserMessage(
+      meta.chat_id,
+      prompt,
+      port,
+      apiKey,
+      undefined,
+      undefined,
+      true,
+    );
+
+    return { chat_id: meta.chat_id, title: meta.title };
+  },
 );

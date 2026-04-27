@@ -6,6 +6,7 @@ import {
   isToolMessage,
   isUserMessage,
   ChatMessages,
+  DiffMessage,
   ToolResult,
   ToolMessage,
 } from "../../../services/refact/types";
@@ -24,6 +25,9 @@ const EMPTY_MESSAGES: ChatMessages = [];
 const EMPTY_QUEUED: QueuedItem[] = [];
 const EMPTY_PAUSE_REASONS: ThreadConfirmation["pause_reasons"] = [];
 const EMPTY_IMAGES: ImageFile[] = [];
+const EMPTY_TOOL_RESULTS: ToolResult[] = [];
+const EMPTY_DIFF_MESSAGES: DiffMessage[] = [];
+const EMPTY_TASKS: TodoItem[] = [];
 const DEFAULT_NEW_CHAT_SUGGESTED = { wasSuggested: false } as const;
 const DEFAULT_CONFIRMATION: ThreadConfirmation = {
   pause: false,
@@ -34,6 +38,41 @@ const DEFAULT_CONFIRMATION_STATUS = {
   wasInteracted: false,
   confirmationStatus: true,
 } as const;
+
+function sameRefArray<T>(left: T[], right: T[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function sameTodoItems(left: TodoItem[], right: TodoItem[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (left[i] === right[i]) continue;
+    if (
+      left[i].id !== right[i].id ||
+      left[i].content !== right[i].content ||
+      left[i].status !== right[i].status
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+type TaskProgress = { done: number; total: number; activeTitle?: string };
+
+function sameTaskProgress(left: TaskProgress, right: TaskProgress): boolean {
+  return (
+    left.done === right.done &&
+    left.total === right.total &&
+    left.activeTitle === right.activeTitle
+  );
+}
 
 function deriveSessionStateFromRuntime(
   rt: ChatThreadRuntime | undefined,
@@ -253,34 +292,36 @@ export const selectToolResultById = createSelector(
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (m.tool_call_id === id) {
-        return {
-          tool_call_id: m.tool_call_id,
-          content: m.content,
-          tool_failed: m.tool_failed,
-          extra: m.extra,
-        } as ToolResult;
+        return m as unknown as ToolResult;
       }
     }
     return undefined;
   },
 );
-export const selectManyToolResultsByIds = (ids: string[]) =>
-  createSelector(toolMessagesSelector, (messages) => {
-    if (ids.length === 0 || messages.length === 0) return [];
+export const selectManyToolResultsByIds = (ids: string[]) => {
+  let prev = EMPTY_TOOL_RESULTS;
+
+  return createSelector(toolMessagesSelector, (messages) => {
+    if (ids.length === 0 || messages.length === 0) {
+      prev = EMPTY_TOOL_RESULTS;
+      return prev;
+    }
 
     const wanted = new Set(ids);
-    const out: ToolResult[] = [];
+    const next: ToolResult[] = [];
     for (const msg of messages) {
       if (!wanted.has(msg.tool_call_id)) continue;
-      out.push({
-        tool_call_id: msg.tool_call_id,
-        content: msg.content,
-        tool_failed: msg.tool_failed,
-        extra: msg.extra,
-      } as ToolResult);
+      next.push(msg as unknown as ToolResult);
     }
-    return out;
+
+    if (sameRefArray(prev, next)) {
+      return prev;
+    }
+
+    prev = next;
+    return next;
   });
+};
 
 const selectDiffMessages = createSelector(selectMessages, (messages) =>
   messages.filter(isDiffMessage),
@@ -291,12 +332,25 @@ export const selectDiffMessageById = createSelector(
   (messages, id) => messages.find((message) => message.tool_call_id === id),
 );
 
-export const selectManyDiffMessageByIds = (ids: string[]) =>
-  createSelector(selectDiffMessages, (diffs) => {
-    if (ids.length === 0 || diffs.length === 0) return [];
+export const selectManyDiffMessageByIds = (ids: string[]) => {
+  let prev = EMPTY_DIFF_MESSAGES;
+
+  return createSelector(selectDiffMessages, (diffs) => {
+    if (ids.length === 0 || diffs.length === 0) {
+      prev = EMPTY_DIFF_MESSAGES;
+      return prev;
+    }
+
     const wanted = new Set(ids);
-    return diffs.filter((message) => wanted.has(message.tool_call_id));
+    const next = diffs.filter((message) => wanted.has(message.tool_call_id));
+    if (sameRefArray(prev, next)) {
+      return prev;
+    }
+
+    prev = next;
+    return next;
   });
+};
 
 export const getSelectedToolUse = (state: RootState) =>
   state.chat.threads[state.chat.current_thread_id]?.thread.tool_use;
@@ -526,11 +580,22 @@ export function deriveTasksFromMessages(
   return [];
 }
 
-export const selectCurrentTasks = createSelector(
-  [selectMessages, toolMessagesSelector],
-  (messages, toolMessages): TodoItem[] =>
-    deriveTasksFromMessages(messages, toolMessages),
-);
+export const selectCurrentTasks = (() => {
+  let prev = EMPTY_TASKS;
+
+  return createSelector(
+    [selectMessages, toolMessagesSelector],
+    (messages, toolMessages): TodoItem[] => {
+      const next = deriveTasksFromMessages(messages, toolMessages);
+      if (sameTodoItems(prev, next)) {
+        return prev;
+      }
+
+      prev = next;
+      return next;
+    },
+  );
+})();
 
 export const selectCurrentTasksById = (state: RootState, chatId: string) => {
   const messages = selectMessagesById(state, chatId);
@@ -566,18 +631,26 @@ export const selectTasksEverUsed = createSelector(
   },
 );
 
-export const selectTaskProgress = createSelector(
-  [selectCurrentTasks],
-  (tasks): { done: number; total: number; activeTitle?: string } => {
+export const selectTaskProgress = (() => {
+  let prev: TaskProgress = { done: 0, total: 0, activeTitle: undefined };
+
+  return createSelector([selectCurrentTasks], (tasks): TaskProgress => {
     const done = tasks.filter((t) => t.status === "completed").length;
     const active = tasks.find((t) => t.status === "in_progress");
-    return {
+    const next = {
       done,
       total: tasks.length,
       activeTitle: active?.content,
     };
-  },
-);
+
+    if (sameTaskProgress(prev, next)) {
+      return prev;
+    }
+
+    prev = next;
+    return next;
+  });
+})();
 
 export type TaskProgressInfo = {
   done: number;

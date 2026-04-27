@@ -58,7 +58,9 @@ import { MarketplaceHub } from "./MarketplaceHub";
 import { StatsDashboard } from "./StatsDashboard";
 import { Dashboard } from "./Dashboard";
 import { BuddyHome } from "./Buddy/BuddyHome";
+import { BuddyErrorBoundary } from "./Buddy/BuddyErrorBoundary";
 import { ChatLoading } from "../components/ChatContent/ChatLoading";
+import { reportBuddyFrontendError } from "./Buddy/reportBuddyFrontendError";
 
 import styles from "./App.module.css";
 import classNames from "classnames";
@@ -149,6 +151,31 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
       cancelAnimationFrame(rafId);
     };
   }, [checkIdeRootLayout, config.host]);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => {
+      void reportBuddyFrontendError({
+        source: "window_error",
+        error: event.error ?? event.message,
+        sourceFile: event.filename || "frontend/window_error",
+      });
+    };
+
+    const onRejection = (event: PromiseRejectionEvent) => {
+      void reportBuddyFrontendError({
+        source: "unhandledrejection",
+        error: event.reason,
+        sourceFile: "frontend/unhandledrejection",
+      });
+    };
+
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
 
   const desiredPage = pages[pages.length - 1];
   const [renderedPage, setRenderedPage] = useState(desiredPage);
@@ -420,7 +447,9 @@ export const App = () => {
         <PersistGate persistor={persistor}>
           <Theme>
             <AbortControllerProvider>
-              <InnerApp />
+              <BuddyErrorBoundary>
+                <InnerApp />
+              </BuddyErrorBoundary>
             </AbortControllerProvider>
           </Theme>
         </PersistGate>

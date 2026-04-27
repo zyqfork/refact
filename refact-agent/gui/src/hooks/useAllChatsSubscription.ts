@@ -115,6 +115,10 @@ export function useAllChatsSubscription() {
   const pendingStreamDeltaRef = useRef<
     Map<string, Extract<ChatEventEnvelope, { type: "stream_delta" }>>
   >(new Map());
+  const subchatFlushRef = useRef<Map<string, FlushHandle>>(new Map());
+  const pendingSubchatUpdateRef = useRef<
+    Map<string, Extract<ChatEventEnvelope, { type: "subchat_update" }>>
+  >(new Map());
   const streamedBytesRef = useRef<Map<string, number>>(new Map());
   const pendingBytesRef = useRef<Map<string, number>>(new Map());
   const portRef = useRef(port);
@@ -179,12 +183,30 @@ export function useAllChatsSubscription() {
     }
   }, []);
 
+  const clearSubchatFlushForChat = useCallback((chatId: string) => {
+    const handle = subchatFlushRef.current.get(chatId);
+    if (handle != null) {
+      cancelScheduledFlush(handle);
+      subchatFlushRef.current.delete(chatId);
+    }
+  }, []);
+
   const flushPendingStreamDeltaForChat = useCallback(
     (chatId: string) => {
       const pending = pendingStreamDeltaRef.current.get(chatId);
       if (!pending) return;
       pendingStreamDeltaRef.current.delete(chatId);
       pendingBytesRef.current.delete(chatId);
+      dispatch(applyChatEvent(pending));
+    },
+    [dispatch],
+  );
+
+  const flushPendingSubchatUpdateForChat = useCallback(
+    (chatId: string) => {
+      const pending = pendingSubchatUpdateRef.current.get(chatId);
+      if (!pending) return;
+      pendingSubchatUpdateRef.current.delete(chatId);
       dispatch(applyChatEvent(pending));
     },
     [dispatch],
@@ -227,6 +249,29 @@ export function useAllChatsSubscription() {
       });
     },
     [flushPendingStreamDeltaForChat, getFlushDelayMs],
+  );
+
+  const scheduleSubchatFlushForChat = useCallback(
+    (chatId: string) => {
+      if (subchatFlushRef.current.has(chatId)) return;
+
+      const flush = () => {
+        subchatFlushRef.current.delete(chatId);
+        flushPendingSubchatUpdateForChat(chatId);
+      };
+
+      const frameHandle = requestNextFrame(flush);
+      if (frameHandle) {
+        subchatFlushRef.current.set(chatId, frameHandle);
+        return;
+      }
+
+      subchatFlushRef.current.set(chatId, {
+        type: "timeout",
+        id: setTimeout(flush, 16),
+      });
+    },
+    [flushPendingSubchatUpdateForChat],
   );
 
   const enqueueStreamDelta = useCallback(
@@ -288,6 +333,33 @@ export function useAllChatsSubscription() {
       scheduleStreamDeltaFlushForChat,
       clearStreamDeltaFlushForChat,
     ],
+  );
+
+  const enqueueSubchatUpdate = useCallback(
+    (
+      chatId: string,
+      envelope: Extract<ChatEventEnvelope, { type: "subchat_update" }>,
+    ) => {
+      const pending = pendingSubchatUpdateRef.current.get(chatId);
+      if (
+        pending &&
+        pending.tool_call_id === envelope.tool_call_id &&
+        pending.chat_id === envelope.chat_id
+      ) {
+        pendingSubchatUpdateRef.current.set(chatId, {
+          ...pending,
+          seq: envelope.seq,
+          subchat_id: envelope.subchat_id,
+          attached_files: envelope.attached_files ?? pending.attached_files,
+        });
+      } else {
+        flushPendingSubchatUpdateForChat(chatId);
+        pendingSubchatUpdateRef.current.set(chatId, envelope);
+      }
+
+      scheduleSubchatFlushForChat(chatId);
+    },
+    [flushPendingSubchatUpdateForChat, scheduleSubchatFlushForChat],
   );
 
   enqueueStreamDeltaRef.current = enqueueStreamDelta;
@@ -352,7 +424,12 @@ export function useAllChatsSubscription() {
             }
             if (envelope.type === "stream_delta") {
               enqueueStreamDeltaRef.current?.(chatId, envelope);
+            } else if (envelope.type === "subchat_update") {
+              flushPendingStreamDeltaForChatRef.current?.(chatId);
+              enqueueSubchatUpdate(chatId, envelope);
             } else {
+              clearSubchatFlushForChat(chatId);
+              flushPendingSubchatUpdateForChat(chatId);
               flushPendingStreamDeltaForChatRef.current?.(chatId);
               if (envelope.type === "stream_finished") {
                 streamedBytesRef.current.delete(chatId);
@@ -367,6 +444,8 @@ export function useAllChatsSubscription() {
           onError: (error) => {
             clearStreamDeltaFlushForChatRef.current?.(chatId);
             flushPendingStreamDeltaForChatRef.current?.(chatId);
+            clearSubchatFlushForChat(chatId);
+            flushPendingSubchatUpdateForChat(chatId);
             subscriptionsRef.current.delete(chatId);
             clearChatStreamState(chatId);
             const count = (retryCountRef.current.get(chatId) ?? 0) + 1;
@@ -385,6 +464,8 @@ export function useAllChatsSubscription() {
           onDisconnected: () => {
             clearStreamDeltaFlushForChatRef.current?.(chatId);
             flushPendingStreamDeltaForChatRef.current?.(chatId);
+            clearSubchatFlushForChat(chatId);
+            flushPendingSubchatUpdateForChat(chatId);
             subscriptionsRef.current.delete(chatId);
             clearChatStreamState(chatId);
             const count = (retryCountRef.current.get(chatId) ?? 0) + 1;
@@ -410,7 +491,14 @@ export function useAllChatsSubscription() {
 
       subscriptionsRef.current.set(chatId, unsubscribe);
     },
-    [dispatch, scheduleResubscribe, clearChatStreamState],
+    [
+      clearChatStreamState,
+      clearSubchatFlushForChat,
+      dispatch,
+      enqueueSubchatUpdate,
+      flushPendingSubchatUpdateForChat,
+      scheduleResubscribe,
+    ],
   );
 
   subscribeRef.current = subscribeToChat;
@@ -421,7 +509,9 @@ export function useAllChatsSubscription() {
       manualCloseRef.current.add(chatId);
       clearPendingTimeout(chatId);
       clearStreamDeltaFlushForChat(chatId);
+      clearSubchatFlushForChat(chatId);
       pendingStreamDeltaRef.current.delete(chatId);
+      pendingSubchatUpdateRef.current.delete(chatId);
       clearChatStreamState(chatId);
       const unsub = subscriptionsRef.current.get(chatId);
       if (unsub) {
@@ -434,6 +524,7 @@ export function useAllChatsSubscription() {
     [
       dispatch,
       clearPendingTimeout,
+      clearSubchatFlushForChat,
       clearStreamDeltaFlushForChat,
       clearChatStreamState,
     ],
@@ -454,6 +545,9 @@ export function useAllChatsSubscription() {
     for (const flushHandle of streamDeltaFlushRef.current.values()) {
       cancelScheduledFlush(flushHandle);
     }
+    for (const flushHandle of subchatFlushRef.current.values()) {
+      cancelScheduledFlush(flushHandle);
+    }
     subscriptionsRef.current.clear();
     seqMapRef.current.clear();
     manualCloseRef.current.clear();
@@ -464,6 +558,8 @@ export function useAllChatsSubscription() {
     lastActivityAtRef.current.clear();
     streamDeltaFlushRef.current.clear();
     pendingStreamDeltaRef.current.clear();
+    subchatFlushRef.current.clear();
+    pendingSubchatUpdateRef.current.clear();
     streamedBytesRef.current.clear();
     pendingBytesRef.current.clear();
     dispatch(clearAllSseConnections());

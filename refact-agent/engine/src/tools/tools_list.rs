@@ -314,6 +314,9 @@ async fn get_builtin_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
         Box::new(crate::tools::tool_buddy_get_context::ToolBuddyGetContext {
             config_path: config_path.clone(),
         }),
+        Box::new(crate::tools::tool_buddy_create_issue::ToolBuddyCreateIssue {
+            config_path: config_path.clone(),
+        }),
         Box::new(crate::tools::tool_buddy_open_view::ToolBuddyOpenView {
             config_path: config_path.clone(),
         }),

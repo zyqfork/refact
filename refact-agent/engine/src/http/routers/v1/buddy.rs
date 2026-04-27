@@ -9,7 +9,7 @@ use tokio::sync::RwLock as ARwLock;
 use crate::buddy::diagnostics::DiagnosticContext;
 use crate::buddy::events::BuddyEvent;
 use crate::buddy::settings::MAX_PALETTE_INDEX;
-use crate::buddy::types::{BuddyActivity, BuddyConversationEntry};
+use crate::buddy::types::{BuddyActivity, BuddyCareAction, BuddyConversationEntry};
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 
@@ -22,6 +22,11 @@ pub struct BuddyConversationMeta {
     pub message_count: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BuddyConversationCreateRequest {
+    pub title: Option<String>,
+}
+
 pub async fn handle_v1_buddy_snapshot(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
 ) -> Result<axum::Json<serde_json::Value>, ScratchError> {
@@ -32,7 +37,14 @@ pub async fn handle_v1_buddy_snapshot(
             serde_json::to_value(service.snapshot())
                 .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         )),
-        None => Ok(axum::Json(serde_json::json!({"enabled": false}))),
+        None => Ok(axum::Json(serde_json::json!({
+            "enabled": false,
+            "state": crate::buddy::state::default_buddy_state(),
+            "settings": crate::buddy::settings::BuddySettings::default(),
+            "runtime_queue": [],
+            "now_playing": null,
+            "active_speech": null
+        }))),
     }
 }
 
@@ -46,7 +58,11 @@ pub async fn handle_v1_buddy_settings_get(
             serde_json::to_value(&service.settings)
                 .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         )),
-        None => Ok(axum::Json(serde_json::json!({"enabled": false}))),
+        None => Ok(axum::Json(
+            serde_json::to_value(crate::buddy::settings::BuddySettings::default()).map_err(
+                |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            )?,
+        )),
     }
 }
 
@@ -56,13 +72,15 @@ pub struct BuddySettingsRequest {
     pub auto_diagnostics: Option<bool>,
     pub auto_issue_creation: Option<bool>,
     pub personality_prompt: Option<String>,
+    pub clear_personality_prompt: Option<bool>,
+    pub proactive_enabled: Option<bool>,
     pub palette_index: Option<usize>,
 }
 
 pub async fn handle_v1_buddy_settings_update(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     axum::Json(req): axum::Json<BuddySettingsRequest>,
-) -> Result<StatusCode, ScratchError> {
+) -> Result<axum::Json<serde_json::Value>, ScratchError> {
     if let Some(pi) = req.palette_index {
         if pi > MAX_PALETTE_INDEX {
             return Err(ScratchError::new(
@@ -96,12 +114,21 @@ pub async fn handle_v1_buddy_settings_update(
             if let Some(v) = req.auto_issue_creation {
                 service.settings.auto_issue_creation = v;
             }
-            if req.personality_prompt.is_some() {
-                service.settings.personality_prompt = req.personality_prompt.clone();
+            if req.clear_personality_prompt.unwrap_or(false) {
+                service.settings.personality_prompt = None;
+            } else if let Some(prompt) = &req.personality_prompt {
+                service.settings.personality_prompt = Some(prompt.clone());
+            }
+            if let Some(v) = req.proactive_enabled {
+                service.settings.proactive_enabled = v;
             }
             if let Some(pi) = req.palette_index {
                 service.state.identity.palette_index = pi;
+                crate::buddy::state::sync_state(&mut service.state);
                 service.dirty = true;
+                let _ = service.events_tx.send(BuddyEvent::StateUpdated {
+                    state: service.state.clone(),
+                });
             }
             Some((service.settings.clone(), service.events_tx.clone()))
         } else {
@@ -113,11 +140,103 @@ pub async fn handle_v1_buddy_settings_update(
             .await
             .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         let _ = tx.send(BuddyEvent::SettingsChanged {
-            settings: new_settings,
+            settings: new_settings.clone(),
         });
+        return Ok(axum::Json(
+            serde_json::to_value(new_settings).map_err(|e| {
+                ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            })?,
+        ));
     }
 
-    Ok(StatusCode::OK)
+    Ok(axum::Json(
+        serde_json::to_value(crate::buddy::settings::BuddySettings::default()).map_err(|e| {
+            ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuddyCareRequest {
+    pub action: BuddyCareAction,
+    pub toy: Option<String>,
+}
+
+pub async fn handle_v1_buddy_care(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    axum::Json(req): axum::Json<BuddyCareRequest>,
+) -> Result<axum::Json<serde_json::Value>, ScratchError> {
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let mut lock = buddy_arc.lock().await;
+    let svc = lock.as_mut().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy service not initialized".to_string(),
+        )
+    })?;
+
+    let message = svc.apply_care_action(req.action.clone(), req.toy.as_deref());
+    let signal_type = format!("care_{}", req.action.as_str());
+    let dedupe_key = format!("care_{}", req.action.as_str());
+    svc.enqueue_runtime_event(crate::buddy::actor::make_runtime_event(
+        &signal_type,
+        &message,
+        "buddy",
+        &dedupe_key,
+        "info",
+        None,
+    ));
+    svc.update_speech(crate::buddy::types::BuddySpeechItem {
+        id: uuid::Uuid::new_v4().to_string(),
+        text: message.clone(),
+        mood: "neutral".to_string(),
+        scope: "global".to_string(),
+        persistent: false,
+        ttl_seconds: 8,
+        dedupe_key: Some(format!("care_{}", req.action.as_str())),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        controls: vec![],
+        chat_id: None,
+    });
+
+    Ok(axum::Json(serde_json::json!({
+        "message": message,
+        "snapshot": svc.snapshot()
+    })))
+}
+
+pub async fn handle_v1_buddy_personality_reroll(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<axum::Json<serde_json::Value>, ScratchError> {
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let mut lock = buddy_arc.lock().await;
+    let svc = lock.as_mut().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy service not initialized".to_string(),
+        )
+    })?;
+
+    svc.reroll_personality();
+    svc.update_speech(crate::buddy::types::BuddySpeechItem {
+        id: uuid::Uuid::new_v4().to_string(),
+        text: format!(
+            "New vibe loaded: {} — {}",
+            svc.state.personality.archetype_label, svc.state.personality.vibe
+        ),
+        mood: "happy".to_string(),
+        scope: "global".to_string(),
+        persistent: false,
+        ttl_seconds: 10,
+        dedupe_key: Some("personality_reroll".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        controls: vec![],
+        chat_id: None,
+    });
+
+    Ok(axum::Json(serde_json::json!({
+        "snapshot": svc.snapshot()
+    })))
 }
 
 pub async fn handle_v1_buddy_activities(
@@ -165,39 +284,68 @@ pub async fn handle_v1_buddy_conversations_list(
 
 pub async fn handle_v1_buddy_conversations_create(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    body_bytes: axum::body::Bytes,
 ) -> Result<axum::Json<serde_json::Value>, ScratchError> {
-    let project_root = crate::files_correction::get_project_dirs(gcx.clone())
-        .await
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            ScratchError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no project root".to_string(),
-            )
-        })?;
-
     let chat_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let conv = serde_json::json!({
-        "chat_id": chat_id,
-        "title": "New Conversation",
-        "created_at": created_at,
-        "last_message_at": null,
-        "messages": []
-    });
+    let body = if body_bytes.is_empty() {
+        BuddyConversationCreateRequest { title: None }
+    } else {
+        serde_json::from_slice::<BuddyConversationCreateRequest>(&body_bytes).map_err(|e| {
+            ScratchError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("JSON problem: {}", e),
+            )
+        })?
+    };
+    let title = body
+        .title
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "New Conversation".to_string());
 
-    let path = project_root.join(format!(
-        ".refact/buddy/chats/conversations/{}.json",
-        chat_id
-    ));
-    crate::buddy::storage::atomic_write_json(&path, &conv)
+    let snapshot = crate::chat::trajectories::TrajectorySnapshot {
+        chat_id: chat_id.clone(),
+        title: title.clone(),
+        model: String::new(),
+        mode: "buddy".to_string(),
+        tool_use: "agent".to_string(),
+        messages: vec![],
+        created_at: created_at.clone(),
+        boost_reasoning: false,
+        checkpoints_enabled: false,
+        context_tokens_cap: None,
+        include_project_info: true,
+        is_title_generated: false,
+        auto_approve_editing_tools: false,
+        auto_approve_dangerous_commands: false,
+        version: 1,
+        task_meta: None,
+        parent_id: None,
+        link_type: None,
+        root_chat_id: None,
+        reasoning_effort: None,
+        thinking_budget: None,
+        temperature: None,
+        frequency_penalty: None,
+        max_tokens: None,
+        parallel_tool_calls: None,
+        previous_response_id: None,
+        active_skill: None,
+        auto_enrichment_enabled: Some(true),
+        buddy_meta: Some(crate::buddy::types::BuddyThreadMeta {
+            is_buddy_chat: true,
+            buddy_chat_kind: "conversation".to_string(),
+            workflow_id: None,
+        }),
+    };
+
+    crate::chat::trajectories::save_trajectory_snapshot(gcx.clone(), snapshot)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let meta = BuddyConversationMeta {
         chat_id,
-        title: "New Conversation".to_string(),
+        title,
         created_at,
         last_message_at: None,
         message_count: 0,
@@ -205,6 +353,33 @@ pub async fn handle_v1_buddy_conversations_create(
     Ok(axum::Json(serde_json::to_value(meta).map_err(|e| {
         ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
     })?))
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuddyInvestigationContextResponse {
+    pub logs: String,
+    pub internal_context: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+}
+
+pub async fn handle_v1_buddy_investigation_context(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    axum::Json(req): axum::Json<DiagnosticsCollectRequest>,
+) -> Result<axum::Json<BuddyInvestigationContextResponse>, ScratchError> {
+    let log_lines = crate::buddy::issues::investigation_logs(gcx.clone(), &req.error)
+        .await
+        .unwrap_or_else(|e| format!("Investigation logs unavailable: {}", e));
+    let internal = crate::buddy::issues::investigation_internal_context(gcx.clone())
+        .await
+        .unwrap_or_else(|e| format!("Investigation context unavailable: {}", e));
+
+    Ok(axum::Json(BuddyInvestigationContextResponse {
+        logs: log_lines,
+        internal_context: internal,
+        repo_owner: "smallcloudai".to_string(),
+        repo_name: "refact".to_string(),
+    }))
 }
 
 #[derive(Debug, Deserialize)]

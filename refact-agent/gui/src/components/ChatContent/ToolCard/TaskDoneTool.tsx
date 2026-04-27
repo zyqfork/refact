@@ -36,6 +36,7 @@ export const TaskDoneTool: React.FC<TaskDoneToolProps> = ({ toolCall }) => {
       defaultSummary="Task completed"
       variant="taskDone"
       extractReport={extractTaskDoneReport}
+      defaultOpen={false}
     />
   );
 };

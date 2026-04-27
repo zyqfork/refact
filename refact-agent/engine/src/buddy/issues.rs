@@ -1,13 +1,30 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::collections::HashMap;
 use regex::Regex;
 use tokio::process::Command;
 use tokio::sync::RwLock as ARwLock;
 use tracing::info;
+use tokio::sync::Mutex as AMutex;
 
 use crate::global_context::GlobalContext;
 use super::diagnostics::DiagnosticContext;
 use super::types::BuddyActivity;
+use crate::at_commands::at_commands::AtCommandsContext;
+use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
+use crate::tools::tools_description::Tool;
+
+fn extract_tool_text(out: Vec<ContextEnum>, fallback: &str) -> String {
+    out.into_iter()
+        .find_map(|item| match item {
+            ContextEnum::ChatMessage(msg) => match msg.content {
+                ChatContent::SimpleText(text) => Some(text),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
 
 const RATE_LIMIT_SECS: u64 = 3600;
 const DEDUP_SECS: i64 = 86400;
@@ -59,6 +76,12 @@ fn gate_error(gate: &IssueGate, manual: bool) -> String {
 enum IssueProvider {
     GitHub { binary: String, token: String },
     GitLab { binary: String, token: String },
+}
+
+pub struct BuddyIssueCreateResult {
+    pub url: String,
+    pub provider: String,
+    pub repo: String,
 }
 
 fn validate_binary_name(binary: &str, allowed: &[&str]) -> Result<(), String> {
@@ -173,6 +196,205 @@ async fn detect_provider(
         Some("github.com") => gh_provider.or(gl_provider),
         Some("gitlab.com") => gl_provider.or(gh_provider),
         _ => gh_provider.or(gl_provider),
+    })
+}
+
+pub async fn has_github_mcp(gcx: Arc<ARwLock<GlobalContext>>) -> bool {
+    let groups = crate::tools::tools_list::get_integration_tools(gcx).await;
+    groups.into_iter().any(|group| {
+        group.tools.into_iter().any(|tool| {
+            let desc = tool.tool_description();
+            let name = desc.name;
+            let cfg = desc.source.config_path;
+            (name.contains("github") || cfg.contains("github"))
+                && (name.ends_with("_create_issue")
+                    || name.ends_with("_get_file_contents")
+                    || name.ends_with("_search_code"))
+        })
+    })
+}
+
+pub async fn investigation_logs(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    error: &str,
+) -> Result<String, String> {
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx,
+            4000,
+            20,
+            false,
+            vec![ChatMessage::new("user".to_string(), error.to_string())],
+            String::new(),
+            None,
+            String::new(),
+            None,
+        )
+        .await,
+    ));
+    let mut tool = crate::tools::tool_buddy_get_logs::ToolBuddyGetLogs {
+        config_path: String::new(),
+    };
+    let mut args = HashMap::new();
+    args.insert("lines".to_string(), serde_json::json!(80));
+    args.insert("errors_only".to_string(), serde_json::json!(true));
+    let (_, out) = tool.tool_execute(ccx, &"buddy_logs".to_string(), &args).await?;
+    Ok(extract_tool_text(out, "Investigation logs were unavailable."))
+}
+
+pub async fn investigation_internal_context(
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> Result<String, String> {
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx,
+            4000,
+            20,
+            false,
+            vec![],
+            String::new(),
+            None,
+            String::new(),
+            None,
+        )
+        .await,
+    ));
+    let mut tool = crate::tools::tool_buddy_get_context::ToolBuddyGetContext {
+        config_path: String::new(),
+    };
+    let mut args = HashMap::new();
+    args.insert(
+        "sections".to_string(),
+        serde_json::json!([
+            "integrations",
+            "mcp_servers",
+            "setup_status",
+            "project_info"
+        ]),
+    );
+    let (_, out) = tool.tool_execute(ccx, &"buddy_ctx".to_string(), &args).await?;
+    Ok(extract_tool_text(out, "Investigation context was unavailable."))
+}
+
+pub async fn create_issue_via_mcp(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    title: &str,
+    body: &str,
+    labels: Vec<String>,
+) -> Result<BuddyIssueCreateResult, String> {
+    let ccx = Arc::new(AMutex::new(
+        AtCommandsContext::new(
+            gcx.clone(),
+            4000,
+            20,
+            false,
+            vec![],
+            String::new(),
+            None,
+            String::new(),
+            None,
+        )
+        .await,
+    ));
+    let mut tool = crate::tools::tool_mcp_call::ToolMcpCall {};
+    let mut args = HashMap::new();
+    let mcp_tool = {
+        let groups = crate::tools::tools_list::get_integration_tools(gcx.clone()).await;
+        groups
+            .into_iter()
+            .flat_map(|group| group.tools)
+            .find_map(|tool| {
+                let desc = tool.tool_description();
+                let name = desc.name;
+                let cfg = desc.source.config_path;
+                if (name.contains("github") || cfg.contains("github"))
+                    && name.ends_with("_create_issue")
+                {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| "GitHub MCP issue tool not available".to_string())?
+    };
+    args.insert(
+        "tool_name".to_string(),
+        serde_json::json!(mcp_tool),
+    );
+    args.insert(
+        "args".to_string(),
+        serde_json::json!({
+            "owner": "smallcloudai",
+            "repo": "refact",
+            "title": title,
+            "body": body,
+            "labels": labels,
+        }),
+    );
+    let (_, out) = tool.tool_execute(ccx, &"buddy_mcp_issue".to_string(), &args).await?;
+    let text = extract_tool_text(out, "");
+
+    Ok(BuddyIssueCreateResult {
+        url: text,
+        provider: "github_mcp".to_string(),
+        repo: "smallcloudai/refact".to_string(),
+    })
+}
+
+pub async fn create_issue_via_native(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    diagnostic_index: Option<usize>,
+    error: Option<String>,
+) -> Result<BuddyIssueCreateResult, String> {
+    let pre_diag = if diagnostic_index.is_none() {
+        match error.as_ref() {
+            Some(err) => Some(crate::buddy::diagnostics::collect_diagnostics(gcx.clone(), err).await),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let (ctx, auto_enabled, last_issue_at, recent_errors) = {
+        let buddy_arc = gcx.read().await.buddy.clone();
+        let lock = buddy_arc.lock().await;
+        let svc = lock
+            .as_ref()
+            .ok_or_else(|| "buddy service not initialized".to_string())?;
+
+        let ctx = if let Some(idx) = diagnostic_index {
+            svc.recent_diagnostics
+                .get(idx)
+                .cloned()
+                .ok_or_else(|| "diagnostic index out of range".to_string())?
+        } else if let Some(diagnosed) = pre_diag {
+            diagnosed
+        } else {
+            return Err("provide diagnostic_index or error".to_string());
+        };
+
+        (
+            ctx,
+            svc.settings.auto_issue_creation,
+            svc.last_issue_at,
+            svc.recent_issue_errors.clone(),
+        )
+    };
+
+    let (url, _activity) = create_issue(
+        gcx,
+        &ctx,
+        auto_enabled,
+        false,
+        last_issue_at,
+        &recent_errors,
+    )
+    .await?;
+
+    Ok(BuddyIssueCreateResult {
+        url,
+        provider: "native".to_string(),
+        repo: "smallcloudai/refact".to_string(),
     })
 }
 

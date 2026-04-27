@@ -717,6 +717,11 @@ pub fn make_v1_router() -> Router {
             "/buddy/settings",
             post(buddy::handle_v1_buddy_settings_update),
         )
+        .route("/buddy/care", post(buddy::handle_v1_buddy_care))
+        .route(
+            "/buddy/personality/reroll",
+            post(buddy::handle_v1_buddy_personality_reroll),
+        )
         .route("/buddy/activities", get(buddy::handle_v1_buddy_activities))
         .route(
             "/buddy/conversations",
@@ -741,6 +746,10 @@ pub fn make_v1_router() -> Router {
         .route(
             "/buddy/diagnostics/collect",
             post(buddy::handle_v1_buddy_diagnostics_collect),
+        )
+        .route(
+            "/buddy/investigation-context",
+            post(buddy::handle_v1_buddy_investigation_context),
         )
         .route(
             "/buddy/issues/create",

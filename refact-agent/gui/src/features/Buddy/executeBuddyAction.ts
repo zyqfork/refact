@@ -1,14 +1,15 @@
 import type { AppDispatch } from "../../app/store";
 import { push } from "../Pages/pagesSlice";
-import { clearActiveSpeech } from "./buddySlice";
+import { clearActiveSpeech, setBuddySnapshot } from "./buddySlice";
 import {
-  openBuddyChat,
-  newBuddyChatAction,
   openChatInModeAndStart,
   switchToThread,
+  startBuddyInvestigation,
 } from "../Chat/Thread";
 import { isValidSetupMode } from "../Setup/setupModes";
 import type { BuddyControl } from "./types";
+import type { DiagnosticContext } from "./types";
+import { buddyApi } from "../../services/refact/buddy";
 
 /**
  * Central executor for all Buddy control actions.
@@ -20,9 +21,17 @@ import type { BuddyControl } from "./types";
 export async function executeBuddyAction(
   ctrl: BuddyControl,
   dispatch: AppDispatch,
-  createConversation: () => Promise<{
-    data?: { chat_id: string; title: string };
-  }>,
+  investigation?: {
+    triggerText: string;
+    triggerSource:
+      | "thread"
+      | "runtime"
+      | "diagnostic"
+      | "suggestion"
+      | "frontend";
+    sourceChatId?: string;
+    diagnostic?: DiagnosticContext | null;
+  },
 ): Promise<void> {
   switch (ctrl.action) {
     case "dismiss":
@@ -54,13 +63,37 @@ export async function executeBuddyAction(
 
     case "investigate_error": {
       dispatch(clearActiveSpeech());
-      const result = await createConversation();
-      if (result.data) {
-        const meta = result.data;
-        dispatch(newBuddyChatAction({ chat_id: meta.chat_id }));
-        dispatch(openBuddyChat({ chat_id: meta.chat_id, title: meta.title }));
-        dispatch(push({ name: "chat" }));
-      }
+      if (!investigation) break;
+      await dispatch(startBuddyInvestigation(investigation));
+      break;
+    }
+
+    case "care_feed":
+    case "care_play":
+    case "care_pet":
+    case "care_sleep":
+    case "care_clean": {
+      const action = ctrl.action.replace("care_", "") as
+        | "feed"
+        | "play"
+        | "pet"
+        | "sleep"
+        | "clean";
+      const result = await dispatch(
+        buddyApi.endpoints.careBuddy.initiate({
+          action,
+          toy: ctrl.action_param,
+        }),
+      ).unwrap();
+      dispatch(setBuddySnapshot(result.snapshot));
+      break;
+    }
+
+    case "reroll_personality": {
+      const result = await dispatch(
+        buddyApi.endpoints.rerollBuddyPersonality.initiate(undefined),
+      ).unwrap();
+      dispatch(setBuddySnapshot(result.snapshot));
       break;
     }
 

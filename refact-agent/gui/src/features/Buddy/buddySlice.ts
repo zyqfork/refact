@@ -11,6 +11,149 @@ import type {
   BuddySpeechItem,
 } from "./types";
 
+function defaultBuddyState(): BuddyState {
+  return {
+    identity: {
+      name: "Buddy",
+      created_at: "",
+      palette_index: 0,
+    },
+    progression: {
+      stage: 0,
+      stage_name: "Egg",
+      level: 1,
+      xp: 0,
+      xp_next: 20,
+    },
+    skills: {
+      unlocked: [],
+      locked: [],
+    },
+    workflow_summaries: [],
+    semantic: {
+      mood: "Playful",
+      focus: "helping",
+      headline: "",
+      last_active: "",
+    },
+    recent_activities: [],
+    suggestion_state: [],
+    pet: {
+      needs: {
+        hunger: 80,
+        energy: 85,
+        hygiene: 80,
+        boredom: 15,
+        affection: 75,
+      },
+      condition: {
+        sleeping: false,
+        hungry: false,
+        sleepy: false,
+        dirty: false,
+        bored: false,
+        lonely: false,
+      },
+      evolution: {
+        care_score: 0,
+        neglect_score: 0,
+        open_seconds: 0,
+        last_evolved_at: null,
+      },
+    },
+    personality: {
+      archetype_id: "helper_sprite",
+      archetype_label: "Helper Sprite",
+      vibe: "Playful, quirky, helpful",
+      summary: "An energetic helper with gentle mischief and warm humor.",
+      prompt:
+        "Playful, quirky, helpful. Think energetic pet meets curious assistant—gentle mischief, warm humor, celebration of small wins",
+      traits: {
+        playfulness: 70,
+        chaos: 35,
+        sociability: 72,
+        curiosity: 78,
+        resilience: 66,
+      },
+    },
+  };
+}
+
+function defaultBuddySettings() {
+  return {
+    enabled: true,
+    auto_diagnostics: true,
+    auto_issue_creation: false,
+    personality_prompt: null,
+    proactive_enabled: true,
+  };
+}
+
+function normalizeBuddyState(state: Partial<BuddyState>): BuddyState {
+  const base = defaultBuddyState();
+  return {
+    ...base,
+    ...state,
+    identity: {
+      ...base.identity,
+      ...state.identity,
+    },
+    progression: {
+      ...base.progression,
+      ...state.progression,
+    },
+    skills: {
+      ...base.skills,
+      ...state.skills,
+    },
+    semantic: {
+      ...base.semantic,
+      ...state.semantic,
+    },
+    recent_activities: state.recent_activities ?? base.recent_activities,
+    suggestion_state: state.suggestion_state ?? base.suggestion_state,
+    workflow_summaries: state.workflow_summaries ?? base.workflow_summaries,
+    pet: {
+      ...base.pet,
+      ...state.pet,
+      needs: {
+        ...base.pet.needs,
+        ...state.pet?.needs,
+      },
+      condition: {
+        ...base.pet.condition,
+        ...state.pet?.condition,
+      },
+      evolution: {
+        ...base.pet.evolution,
+        ...state.pet?.evolution,
+      },
+    },
+    personality: {
+      ...base.personality,
+      ...state.personality,
+      traits: {
+        ...base.personality.traits,
+        ...state.personality?.traits,
+      },
+    },
+  };
+}
+
+function normalizeBuddySnapshot(snapshot: BuddySnapshot): BuddySnapshot {
+  return {
+    ...snapshot,
+    settings: {
+      ...defaultBuddySettings(),
+      ...snapshot.settings,
+    },
+    state: normalizeBuddyState(snapshot.state),
+    runtime_queue: snapshot.runtime_queue ?? [],
+    now_playing: snapshot.now_playing ?? null,
+    active_speech: snapshot.active_speech ?? null,
+  };
+}
+
 export interface BuddySliceState {
   snapshot: BuddySnapshot | null;
   /** true once the first snapshot event has been received (even if buddy is disabled) */
@@ -37,11 +180,12 @@ export const buddySlice = createSlice({
   initialState,
   reducers: {
     setBuddySnapshot: (state, action: PayloadAction<BuddySnapshot>) => {
-      state.snapshot = action.payload;
+      const snapshot = normalizeBuddySnapshot(action.payload);
+      state.snapshot = snapshot;
       state.loaded = true;
-      state.activeSpeech = action.payload.active_speech ?? null;
-      state.runtimeQueue = action.payload.runtime_queue ?? [];
-      state.nowPlaying = action.payload.now_playing ?? null;
+      state.activeSpeech = snapshot.active_speech ?? null;
+      state.runtimeQueue = snapshot.runtime_queue ?? [];
+      state.nowPlaying = snapshot.now_playing ?? null;
     },
     /** Called when SSE snapshot reports buddy as disabled/not-ready (no state). */
     setBuddyUnavailable: (state) => {
@@ -52,19 +196,15 @@ export const buddySlice = createSlice({
       state.activeSpeech = null;
     },
     updateBuddyState: (state, action: PayloadAction<BuddyState>) => {
+      state.loaded = true;
       if (state.snapshot) {
-        state.snapshot.state = action.payload;
+        state.snapshot.state = normalizeBuddyState(action.payload);
       } else {
         // Buddy became active while we had no snapshot (was disabled/not-ready).
         // Bootstrap a minimal snapshot so the UI recovers without a full reconnect.
         state.snapshot = {
-          state: action.payload,
-          settings: {
-            enabled: true,
-            auto_diagnostics: true,
-            auto_issue_creation: false,
-            personality_prompt: null,
-          },
+          state: normalizeBuddyState(action.payload),
+          settings: defaultBuddySettings(),
           enabled: true,
           runtime_queue: state.runtimeQueue,
           now_playing: state.nowPlaying,
@@ -92,7 +232,10 @@ export const buddySlice = createSlice({
     },
     updateBuddySettings: (state, action: PayloadAction<BuddySettings>) => {
       if (state.snapshot) {
-        state.snapshot.settings = action.payload;
+        state.snapshot.settings = {
+          ...defaultBuddySettings(),
+          ...action.payload,
+        };
         state.snapshot.enabled = action.payload.enabled;
       }
       // If snapshot is null but buddy is being re-enabled, wait for the next

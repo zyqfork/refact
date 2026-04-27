@@ -106,6 +106,11 @@ export function useChatSubscription(
     ChatEventEnvelope,
     { type: "stream_delta" }
   > | null>(null);
+  const subchatFlushRef = useRef<FlushHandle | null>(null);
+  const pendingSubchatUpdateRef = useRef<Extract<
+    ChatEventEnvelope,
+    { type: "subchat_update" }
+  > | null>(null);
   const streamedBytesRef = useRef(0);
   const pendingBytesRef = useRef(0);
   const connectingRef = useRef(false);
@@ -131,11 +136,27 @@ export function useChatSubscription(
     }
   }, []);
 
+  const clearSubchatFlush = useCallback(() => {
+    const handle = subchatFlushRef.current;
+    if (handle != null) {
+      cancelScheduledFlush(handle);
+      subchatFlushRef.current = null;
+    }
+  }, []);
+
   const flushPendingStreamDelta = useCallback(() => {
     const pending = pendingStreamDeltaRef.current;
     if (!pending) return;
     pendingStreamDeltaRef.current = null;
     pendingBytesRef.current = 0;
+    dispatch(applyChatEvent(pending));
+    callbacksRef.current.onEvent?.(pending);
+  }, [dispatch]);
+
+  const flushPendingSubchatUpdate = useCallback(() => {
+    const pending = pendingSubchatUpdateRef.current;
+    if (!pending) return;
+    pendingSubchatUpdateRef.current = null;
     dispatch(applyChatEvent(pending));
     callbacksRef.current.onEvent?.(pending);
   }, [dispatch]);
@@ -171,6 +192,26 @@ export function useChatSubscription(
       id: setTimeout(flush, Math.max(delayMs, 0)),
     };
   }, [flushPendingStreamDelta]);
+
+  const scheduleSubchatFlush = useCallback(() => {
+    if (subchatFlushRef.current != null) return;
+
+    const flush = () => {
+      subchatFlushRef.current = null;
+      flushPendingSubchatUpdate();
+    };
+
+    const frameHandle = requestNextFrame(flush);
+    if (frameHandle) {
+      subchatFlushRef.current = frameHandle;
+      return;
+    }
+
+    subchatFlushRef.current = {
+      type: "timeout",
+      id: setTimeout(flush, 16),
+    };
+  }, [flushPendingSubchatUpdate]);
 
   const enqueueStreamDelta = useCallback(
     (envelope: Extract<ChatEventEnvelope, { type: "stream_delta" }>) => {
@@ -219,13 +260,39 @@ export function useChatSubscription(
     [flushPendingStreamDelta, scheduleStreamDeltaFlush, clearStreamDeltaFlush],
   );
 
+  const enqueueSubchatUpdate = useCallback(
+    (envelope: Extract<ChatEventEnvelope, { type: "subchat_update" }>) => {
+      const pending = pendingSubchatUpdateRef.current;
+      if (
+        pending &&
+        pending.tool_call_id === envelope.tool_call_id &&
+        pending.chat_id === envelope.chat_id
+      ) {
+        pendingSubchatUpdateRef.current = {
+          ...pending,
+          seq: envelope.seq,
+          subchat_id: envelope.subchat_id,
+          attached_files: envelope.attached_files ?? pending.attached_files,
+        };
+      } else {
+        flushPendingSubchatUpdate();
+        pendingSubchatUpdateRef.current = envelope;
+      }
+
+      scheduleSubchatFlush();
+    },
+    [flushPendingSubchatUpdate, scheduleSubchatFlush],
+  );
+
   const cleanup = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
     clearStreamDeltaFlush();
+    clearSubchatFlush();
     pendingStreamDeltaRef.current = null;
+    pendingSubchatUpdateRef.current = null;
     streamedBytesRef.current = 0;
     pendingBytesRef.current = 0;
     if (unsubscribeRef.current) {
@@ -233,7 +300,7 @@ export function useChatSubscription(
       unsubscribeRef.current = null;
     }
     connectingRef.current = false;
-  }, [clearStreamDeltaFlush]);
+  }, [clearStreamDeltaFlush, clearSubchatFlush]);
 
   const scheduleReconnect = useCallback(
     (delayMs: number) => {
@@ -296,6 +363,7 @@ export function useChatSubscription(
                   );
                 }
                 flushPendingStreamDelta();
+                flushPendingSubchatUpdate();
                 cleanup();
                 setStatus("disconnected");
                 scheduleReconnect(0);
@@ -306,7 +374,12 @@ export function useChatSubscription(
             lastActivityAtRef.current = Date.now();
             if (envelope.type === "stream_delta") {
               enqueueStreamDelta(envelope);
+            } else if (envelope.type === "subchat_update") {
+              flushPendingStreamDelta();
+              enqueueSubchatUpdate(envelope);
             } else {
+              clearSubchatFlush();
+              flushPendingSubchatUpdate();
               flushPendingStreamDelta();
               if (envelope.type === "stream_finished") {
                 streamedBytesRef.current = 0;
@@ -330,6 +403,8 @@ export function useChatSubscription(
         },
         onDisconnected: () => {
           flushPendingStreamDelta();
+          clearSubchatFlush();
+          flushPendingSubchatUpdate();
           connectingRef.current = false;
           setStatus("disconnected");
           callbacksRef.current.onDisconnected?.();
@@ -337,6 +412,8 @@ export function useChatSubscription(
         },
         onError: (err) => {
           flushPendingStreamDelta();
+          clearSubchatFlush();
+          flushPendingSubchatUpdate();
           connectingRef.current = false;
           setStatus("disconnected");
           setError(err);
@@ -353,7 +430,10 @@ export function useChatSubscription(
     apiKey,
     enabled,
     cleanup,
+    clearSubchatFlush,
+    enqueueSubchatUpdate,
     enqueueStreamDelta,
+    flushPendingSubchatUpdate,
     flushPendingStreamDelta,
     dispatch,
     scheduleReconnect,

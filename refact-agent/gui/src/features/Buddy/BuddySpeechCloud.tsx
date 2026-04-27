@@ -1,8 +1,11 @@
 import React, { useCallback } from "react";
 import { Button } from "@radix-ui/themes";
 import { useAppDispatch, useAppSelector } from "../../hooks";
-import { clearActiveSpeech, selectActiveSpeech } from "./buddySlice";
-import { useCreateBuddyConversationMutation } from "../../services/refact/buddy";
+import {
+  clearActiveSpeech,
+  selectActiveSpeech,
+  selectBuddyDiagnostics,
+} from "./buddySlice";
 import { executeBuddyAction } from "./executeBuddyAction";
 import type { BuddyControl } from "./types";
 import styles from "./BuddySpeechCloud.module.css";
@@ -11,7 +14,7 @@ interface Props {
   variant?: "block" | "overlay";
   tailSide?: "bottom" | "right";
   /** Local speech to display, bypasses Redux activeSpeech */
-  speech?: { text: string; controls: BuddyControl[] };
+  speech?: { text: string; controls: BuddyControl[]; chat_id?: string };
   /** Called for every button click when speech prop is provided; disables built-in ✕ */
   onControl?: (ctrl: BuddyControl) => void | Promise<void>;
 }
@@ -24,21 +27,24 @@ export const BuddySpeechCloud: React.FC<Props> = ({
 }) => {
   const dispatch = useAppDispatch();
   const activeSpeech = useAppSelector(selectActiveSpeech);
-  const [createConversation] = useCreateBuddyConversationMutation();
+  const diagnostics = useAppSelector(selectBuddyDiagnostics);
 
   const speech = speechProp ?? activeSpeech;
+  const speechDiagnostic = speech?.chat_id
+    ? diagnostics.find((diag) => diag.chat_id === speech.chat_id)
+    : undefined;
 
   const internalHandleControl = useCallback(
     async (ctrl: BuddyControl) => {
-      await executeBuddyAction(ctrl, dispatch, async () => {
-        const result = await createConversation(undefined);
-        if ("data" in result && result.data) {
-          return { data: result.data };
-        }
-        return {};
+      if (!speech) return;
+      await executeBuddyAction(ctrl, dispatch, {
+        triggerText: speech.text,
+        triggerSource: "runtime",
+        sourceChatId: speech.chat_id,
+        diagnostic: speechDiagnostic,
       });
     },
-    [dispatch, createConversation],
+    [dispatch, speech, speechDiagnostic],
   );
 
   const handleControl = onControl ?? internalHandleControl;

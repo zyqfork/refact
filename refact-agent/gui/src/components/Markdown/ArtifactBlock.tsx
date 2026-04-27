@@ -17,6 +17,7 @@ import {
 import { ToolCard, type ToolStatus } from "../ChatContent/ToolCard";
 import { PreTag } from "./Pre";
 import { useAppearance } from "../../hooks/useAppearance";
+import { reportBuddyFrontendError } from "../../features/Buddy/reportBuddyFrontendError";
 import styles from "./ArtifactBlock.module.css";
 import markdownStyles from "./Markdown.module.css";
 import classNames from "classnames";
@@ -170,6 +171,12 @@ const _ArtifactBlock: React.FC<ArtifactBlockProps> = ({
       if (data.type === "refact-artifact-error") {
         const msg = String(data.message).slice(0, MAX_ERROR_MESSAGE_LENGTH);
         setError(msg);
+        void reportBuddyFrontendError({
+          source: "artifact_iframe",
+          error: msg,
+          sourceFile: "frontend/artifact_iframe",
+          toolName: "artifact_iframe",
+        });
       }
     };
     window.addEventListener("message", handler);

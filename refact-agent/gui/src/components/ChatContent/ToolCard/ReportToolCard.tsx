@@ -19,6 +19,7 @@ import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
 import { useEventsBusForIDE } from "../../../hooks";
 import { isIdeHost } from "../../../utils/isIdeHost";
 import { basename } from "./utils";
+import { useStreamingMarkdown } from "../../Markdown/useStreamingMarkdown";
 import styles from "./ReportToolCard.module.css";
 
 const MAX_MD_RENDER_CHARS = 50_000;
@@ -52,6 +53,7 @@ interface ReportToolCardProps {
   variant?: ReportVariant;
   meta?: string | null;
   extractReport?: (content: string) => ReportData | null;
+  defaultOpen?: boolean;
 }
 
 export const ReportToolCard: React.FC<ReportToolCardProps> = ({
@@ -61,6 +63,7 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
   variant = "report",
   meta,
   extractReport,
+  defaultOpen = true,
 }) => {
   const copyToClipboard = useCopyToClipboard();
   const { newFile, queryPathThenOpenFile } = useEventsBusForIDE();
@@ -91,8 +94,9 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
   }, [content, extractReport]);
 
   const storeKey = toolCall.id ? `tc:${toolCall.id}` : undefined;
-  const [isOpen, handleToggle] = useStoredOpen(storeKey, true);
+  const [isOpen, handleToggle] = useStoredOpen(storeKey, defaultOpen);
   const [animateContent, setAnimateContent] = useState(false);
+  const [bodyReady, setBodyReady] = useState(variant !== "taskDone");
 
   const handleAnimatedToggle = useCallback(() => {
     setAnimateContent(true);
@@ -141,6 +145,47 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
     if (!log || log.length === 0) return null;
     return log.join("\n\n");
   }, [status, toolCall.subchat_log]);
+  const deferredEntertainmentText = useStreamingMarkdown(
+    entertainmentText,
+    status === "running",
+  );
+  const deferredReportMarkdown = useStreamingMarkdown(
+    reportData?.markdown ?? null,
+    status === "running",
+  );
+
+  useEffect(() => {
+    if (bodyReady) return;
+    if (!reportData?.markdown) return;
+    let cancelled = false;
+
+    const arm = () => {
+      if (!cancelled) {
+        setBodyReady(true);
+      }
+    };
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let frameId: number | null = null;
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      frameId = globalThis.requestAnimationFrame(arm);
+    } else {
+      timeoutId = setTimeout(arm, 16);
+    }
+
+    return () => {
+      cancelled = true;
+      if (
+        frameId != null &&
+        typeof globalThis.cancelAnimationFrame === "function"
+      ) {
+        globalThis.cancelAnimationFrame(frameId);
+      }
+      if (timeoutId != null) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [bodyReady, reportData?.markdown]);
 
   const entertainmentRef = useRef<HTMLDivElement | null>(null);
   const userScrolledRef = useRef(false);
@@ -160,15 +205,15 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
     if (el.scrollTop + el.clientHeight + 20 < el.scrollHeight) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [status, entertainmentText]);
+  }, [status, deferredEntertainmentText]);
 
   const { shouldRender, isAnimatingOpen } = useDelayedUnmount(
-    isOpen && !!reportData?.markdown,
+    isOpen && !!deferredReportMarkdown && bodyReady,
     200,
     animateContent,
   );
 
-  const showActions = status === "success" && !!reportData?.markdown;
+  const showActions = status === "success" && !!deferredReportMarkdown;
   const showSaveButton = isIdeHost();
 
   const header = (
@@ -239,7 +284,7 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
     >
       <ToolCallTooltip toolCall={toolCall}>{header}</ToolCallTooltip>
 
-      {entertainmentText && (
+      {deferredEntertainmentText && (
         <div
           className={styles.entertainmentContent}
           ref={entertainmentRef}
@@ -247,13 +292,13 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
         >
           <div className={styles.entertainmentMarkdown}>
             <Markdown canHaveInteractiveElements={false} isStreaming={true}>
-              {entertainmentText}
+              {deferredEntertainmentText}
             </Markdown>
           </div>
         </div>
       )}
 
-      {shouldRender && reportData?.markdown && (
+      {shouldRender && reportData && deferredReportMarkdown && (
         <div
           className={classNames(
             styles.contentWrapper,
@@ -263,14 +308,14 @@ export const ReportToolCard: React.FC<ReportToolCardProps> = ({
         >
           <div className={styles.contentInner}>
             <Box className={styles.content}>
-              {reportData.markdown.length <= MAX_MD_RENDER_CHARS &&
-              looksLikeMarkdown(reportData.markdown) ? (
+              {deferredReportMarkdown.length <= MAX_MD_RENDER_CHARS &&
+              looksLikeMarkdown(deferredReportMarkdown) ? (
                 <Text size="2">
-                  <Markdown>{reportData.markdown}</Markdown>
+                  <Markdown>{deferredReportMarkdown}</Markdown>
                 </Text>
               ) : (
                 <ShikiCodeBlock showLineNumbers={false}>
-                  {reportData.markdown}
+                  {deferredReportMarkdown}
                 </ShikiCodeBlock>
               )}
             </Box>

@@ -13,17 +13,43 @@ import {
   selectBuddyActivities,
   selectNowPlaying,
   selectActiveSpeech,
+  selectBuddyDiagnostics,
 } from "./buddySlice";
 import { openChatInModeAndStart } from "../Chat/Thread";
-import { useCreateBuddyConversationMutation } from "../../services/refact/buddy";
 import { executeBuddyAction } from "./executeBuddyAction";
-import type { BuddyControl } from "./types";
+import type { BuddyControl, BuddyCareAction, BuddyNeeds } from "./types";
 import { PALETTES, STAGES, SKILLS, SIGNALS } from "./constants";
 import { computeXpFill } from "./buddyUtils";
 import { useGetStatsSummaryQuery } from "../../services/refact/stats";
 import { useGetSetupStatusQuery } from "../../services/refact/setupStatus";
 import { SETUP_MODES } from "../Setup/setupModes";
+import { useUpdateBuddySettingsMutation } from "../../services/refact/buddy";
 import styles from "./BuddyHome.module.css";
+
+const NEED_ROWS: Array<{
+  key: keyof BuddyNeeds;
+  label: string;
+  invert?: boolean;
+}> = [
+  { key: "hunger", label: "Hunger" },
+  { key: "energy", label: "Energy" },
+  { key: "hygiene", label: "Hygiene" },
+  { key: "boredom", label: "Boredom", invert: true },
+  { key: "affection", label: "Affection" },
+];
+
+const CARE_ACTIONS: Array<{
+  action: BuddyCareAction;
+  label: string;
+  emoji: string;
+  toy?: string;
+}> = [
+  { action: "feed", label: "Feed", emoji: "🍜" },
+  { action: "play", label: "Play", emoji: "🎾", toy: "bug" },
+  { action: "pet", label: "Pet", emoji: "💕" },
+  { action: "sleep", label: "Sleep", emoji: "😴" },
+  { action: "clean", label: "Clean", emoji: "🧼" },
+];
 
 export const BuddyHome: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -33,10 +59,12 @@ export const BuddyHome: React.FC = () => {
   const activities = useAppSelector(selectBuddyActivities);
   const nowPlaying = useAppSelector(selectNowPlaying);
   const activeSpeech = useAppSelector(selectActiveSpeech);
+  const diagnostics = useAppSelector(selectBuddyDiagnostics);
   const buddy = useBuddyState();
   const { state } = buddy;
-  const [createConversation] = useCreateBuddyConversationMutation();
   const [setupDismissed, setSetupDismissed] = useState(false);
+  const [updateSettings, { isLoading: isSavingSettings }] =
+    useUpdateBuddySettingsMutation();
 
   const { data: statsData } = useGetStatsSummaryQuery({});
   const { data: setupData } = useGetSetupStatusQuery(undefined, {
@@ -52,6 +80,9 @@ export const BuddyHome: React.FC = () => {
   const identity = snapshot?.state.identity;
   const skills = snapshot?.state.skills;
   const semantic = snapshot?.state.semantic;
+  const pet = snapshot?.state.pet;
+  const personality = snapshot?.state.personality;
+  const settings = snapshot?.settings;
 
   const stage = STAGES[progression?.stage ?? state.progress.stage] ?? STAGES[0];
   const nextStage = STAGES[(progression?.stage ?? state.progress.stage) + 1];
@@ -65,14 +96,27 @@ export const BuddyHome: React.FC = () => {
 
   const name = identity?.name ?? state.name;
   const statusText = semantic?.headline ?? "";
+  const needRows = useMemo(
+    () =>
+      NEED_ROWS.map((item) => {
+        const value = pet?.needs[item.key] ?? 0;
+        const fill = item.invert ? 100 - value : value;
+        return {
+          ...item,
+          value,
+          fill: Math.max(0, Math.min(100, fill)),
+        };
+      }),
+    [pet],
+  );
 
   const handleBack = useCallback(() => {
     dispatch(pop());
   }, [dispatch]);
 
   const handleSettings = useCallback(() => {
-    dispatch(push({ name: "customization" }));
-  }, [dispatch]);
+    void updateSettings({ proactive_enabled: !settings?.proactive_enabled });
+  }, [settings?.proactive_enabled, updateSettings]);
 
   const handleViewStats = useCallback(() => {
     dispatch(push({ name: "stats dashboard" }));
@@ -89,17 +133,60 @@ export const BuddyHome: React.FC = () => {
     setSetupDismissed(true);
   }, []);
 
+  const handleCare = useCallback(
+    async (action: BuddyCareAction, toy?: string) => {
+      await executeBuddyAction(
+        {
+          id: `care-${action}`,
+          label: action,
+          action: `care_${action}`,
+          action_param: toy,
+          style: "primary",
+        },
+        dispatch,
+      );
+    },
+    [dispatch],
+  );
+
+  const handlePromptChange = useCallback(
+    async (prompt: string | null) => {
+      if (prompt === null) {
+        await updateSettings({ clear_personality_prompt: true });
+        return;
+      }
+      await updateSettings({ personality_prompt: prompt });
+    },
+    [updateSettings],
+  );
+
+  const handleReroll = useCallback(async () => {
+    await executeBuddyAction(
+      {
+        id: "reroll-personality",
+        label: "Reroll",
+        action: "reroll_personality",
+        style: "primary",
+      },
+      dispatch,
+    );
+  }, [dispatch]);
+
+  const activeDiagnostic = activeSpeech?.chat_id
+    ? diagnostics.find((diag) => diag.chat_id === activeSpeech.chat_id)
+    : undefined;
+
   const handleSpeechControl = useCallback(
     async (ctrl: BuddyControl) => {
-      await executeBuddyAction(ctrl, dispatch, async () => {
-        const result = await createConversation(undefined);
-        if ("data" in result && result.data) {
-          return { data: result.data };
-        }
-        return {};
+      if (!activeSpeech) return;
+      await executeBuddyAction(ctrl, dispatch, {
+        triggerText: activeSpeech.text,
+        triggerSource: "runtime",
+        sourceChatId: activeSpeech.chat_id,
+        diagnostic: activeDiagnostic,
       });
     },
-    [dispatch, createConversation],
+    [dispatch, activeSpeech, activeDiagnostic],
   );
 
   const unlockedSkills = skills?.unlocked ?? state.skills;
@@ -224,6 +311,109 @@ export const BuddyHome: React.FC = () => {
             </Button>
           </div>
         )}
+
+        <div className={styles.careBar}>
+          {CARE_ACTIONS.map((item) => (
+            <button
+              key={item.action}
+              type="button"
+              className={styles.careButton}
+              onClick={() => void handleCare(item.action, item.toy)}
+            >
+              <span>{item.emoji}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.needsCard}>
+        <Text
+          size="1"
+          weight="bold"
+          color="gray"
+          className={styles.sectionLabel}
+        >
+          CARE LOOP
+        </Text>
+        <div className={styles.needsGrid}>
+          {needRows.map((item) => (
+            <div key={item.key} className={styles.needRow}>
+              <div className={styles.needHeader}>
+                <span>{item.label}</span>
+                <span>{item.value}</span>
+              </div>
+              <div className={styles.needBar}>
+                <div
+                  className={styles.needFill}
+                  style={{ width: `${item.fill}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.personalityCard}>
+        <div className={styles.personalityHeader}>
+          <div>
+            <Text
+              size="1"
+              weight="bold"
+              color="gray"
+              className={styles.sectionLabel}
+            >
+              PERSONALITY
+            </Text>
+            <Text size="2" weight="bold">
+              {personality?.archetype_label ?? "Buddy"}
+            </Text>
+            <Text size="1" color="gray">
+              {personality?.vibe ?? "Playful, quirky, helpful"}
+            </Text>
+          </div>
+          <Button size="1" variant="soft" onClick={() => void handleReroll()}>
+            Reroll
+          </Button>
+        </div>
+
+        <Text size="1" className={styles.personalitySummary}>
+          {personality?.summary}
+        </Text>
+
+        <div className={styles.traitsGrid}>
+          {Object.entries(personality?.traits ?? {}).map(([key, value]) => (
+            <div key={key} className={styles.traitRow}>
+              <span className={styles.traitName}>{key}</span>
+              <span className={styles.traitValue}>{value}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className={styles.settingsRow}>
+          <Button
+            size="1"
+            variant={settings?.proactive_enabled ? "soft" : "outline"}
+            onClick={handleSettings}
+            disabled={isSavingSettings}
+          >
+            {settings?.proactive_enabled ? "Proactive On" : "Proactive Off"}
+          </Button>
+          <Button
+            size="1"
+            variant="outline"
+            onClick={() =>
+              void handlePromptChange(
+                settings?.personality_prompt
+                  ? null
+                  : personality?.prompt ?? null,
+              )
+            }
+            disabled={isSavingSettings}
+          >
+            {settings?.personality_prompt ? "Use Random Vibe" : "Use Current Vibe"}
+          </Button>
+        </div>
       </div>
 
       {statsData && (
@@ -309,12 +499,32 @@ export const BuddyHome: React.FC = () => {
             </Flex>
             <Flex justify="between">
               <Text size="1" color="gray">
-                XP
+                Growth
               </Text>
               <Text size="1" weight="bold">
                 {xp} {xpNext ? `/ ${xpNext}` : "(max)"}
               </Text>
             </Flex>
+            {pet && (
+              <Flex justify="between">
+                <Text size="1" color="gray">
+                  Care score
+                </Text>
+                <Text size="1" weight="bold">
+                  {pet.evolution.care_score}
+                </Text>
+              </Flex>
+            )}
+            {pet && (
+              <Flex justify="between">
+                <Text size="1" color="gray">
+                  Neglect
+                </Text>
+                <Text size="1" weight="bold">
+                  {pet.evolution.neglect_score}
+                </Text>
+              </Flex>
+            )}
           </Flex>
           <div className={styles.xpBar}>
             <div className={styles.xpFill} style={{ width: `${xpFill}%` }} />

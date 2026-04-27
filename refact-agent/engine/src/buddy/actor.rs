@@ -11,10 +11,14 @@ use super::events::BuddyEvent;
 use super::runtime_queue::RuntimeQueue;
 use super::settings::BuddySettings;
 use super::snapshot::BuddySnapshot;
-use super::types::{BuddyActivity, BuddyRuntimeEvent, BuddySpeechItem, BuddyState, BuddySuggestion};
+use super::types::{
+    BuddyActivity, BuddyCareAction, BuddyRuntimeEvent, BuddySpeechItem, BuddyState,
+    BuddySuggestion,
+};
 
 const SUGGESTION_RATE_LIMIT_SECS: u64 = 300;
 const SUGGESTION_EXPIRY_SECS: i64 = 300;
+const PET_DECAY_INTERVAL_SECS: u64 = 15;
 
 pub(crate) fn validate_workflow_id(id: &str) -> bool {
     !id.is_empty()
@@ -157,6 +161,36 @@ impl BuddyService {
 
     pub fn grant_xp(&mut self, amount: u64) {
         super::state::grant_xp(&mut self.state, amount);
+        self.dirty = true;
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
+    }
+
+    pub fn apply_care_action(&mut self, action: BuddyCareAction, toy: Option<&str>) -> String {
+        let (_, message) = super::state::apply_care_action(&mut self.state, action.clone(), toy);
+        self.dirty = true;
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
+        message
+    }
+
+    pub fn reroll_personality(&mut self) {
+        super::state::reroll_personality(&mut self.state);
+        self.dirty = true;
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
+    }
+
+    pub fn apply_pet_tick(&mut self, elapsed_seconds: u64) {
+        if !self.settings.enabled {
+            return;
+        }
+        if !super::state::apply_pet_tick(&mut self.state, elapsed_seconds) {
+            return;
+        }
         self.dirty = true;
         let _ = self.events_tx.send(BuddyEvent::StateUpdated {
             state: self.state.clone(),
@@ -538,6 +572,12 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         }
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         expiry_tick += 1;
+        if expiry_tick % PET_DECAY_INTERVAL_SECS == 0 {
+            let mut buddy = buddy_arc.lock().await;
+            if let Some(svc) = buddy.as_mut() {
+                svc.apply_pet_tick(PET_DECAY_INTERVAL_SECS);
+            }
+        }
         if expiry_tick % 60 == 0 {
             let mut buddy = buddy_arc.lock().await;
             if let Some(svc) = buddy.as_mut() {

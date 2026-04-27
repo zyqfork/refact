@@ -1,13 +1,9 @@
 import React, { useCallback } from "react";
 import { Flex, Text, Button } from "@radix-ui/themes";
 import { useAppDispatch, useAppSelector } from "../../hooks";
-import {
-  useDismissBuddySuggestionMutation,
-  useCreateBuddyConversationMutation,
-} from "../../services/refact/buddy";
+import { useDismissBuddySuggestionMutation } from "../../services/refact/buddy";
 import { selectBuddySuggestions, dismissBuddySuggestion } from "./buddySlice";
-import { openBuddyChat, newBuddyChatAction } from "../Chat/Thread";
-import { push } from "../Pages/pagesSlice";
+import { startBuddyInvestigation } from "../Chat/Thread";
 import { useBuddyState } from "./hooks/useBuddyState";
 import { BuddyCanvas } from "./BuddyCanvas";
 import { PALETTES } from "./constants";
@@ -21,7 +17,6 @@ interface SuggestionCardProps {
 const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion }) => {
   const dispatch = useAppDispatch();
   const [dismissMutation] = useDismissBuddySuggestionMutation();
-  const [createConversation] = useCreateBuddyConversationMutation();
   const buddy = useBuddyState();
   const palette = PALETTES[buddy.state.paletteIndex] ?? PALETTES[0];
 
@@ -30,17 +25,22 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion }) => {
     dispatch(dismissBuddySuggestion(suggestion.id));
   }, [dismissMutation, dispatch, suggestion.id]);
 
-  const handleFixIt = useCallback(async () => {
+  const handleInvestigate = useCallback(async () => {
     await dismissMutation(suggestion.id);
     dispatch(dismissBuddySuggestion(suggestion.id));
-    const result = await createConversation(undefined);
-    if ("data" in result && result.data) {
-      const meta = result.data;
-      dispatch(newBuddyChatAction({ chat_id: meta.chat_id }));
-      dispatch(openBuddyChat({ chat_id: meta.chat_id, title: meta.title }));
-      dispatch(push({ name: "chat" }));
-    }
-  }, [dismissMutation, createConversation, dispatch, suggestion.id]);
+    await dispatch(
+      startBuddyInvestigation({
+        triggerText: `${suggestion.title}: ${suggestion.description}`,
+        triggerSource: "suggestion",
+      }),
+    );
+  }, [
+    dismissMutation,
+    dispatch,
+    suggestion.description,
+    suggestion.id,
+    suggestion.title,
+  ]);
 
   return (
     <div className={styles.card} style={{ borderColor: palette.body }}>
@@ -60,8 +60,8 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion }) => {
         </Text>
       </div>
       <Flex gap="1" align="center" className={styles.actions}>
-        <Button size="1" variant="soft" onClick={handleFixIt}>
-          Fix it →
+        <Button size="1" variant="soft" onClick={handleInvestigate}>
+          Investigate
         </Button>
         <Button size="1" variant="ghost" color="gray" onClick={handleDismiss}>
           Ignore

@@ -9,8 +9,8 @@ use super::issues::{
 };
 use super::scheduler::BuddyJobContext;
 use super::settings::{BuddySettings, MAX_PALETTE_INDEX};
-use super::state::{default_buddy_state, grant_xp};
-use super::types::{BuddyJobState, BuddyOnboarding, BuddySuggestion, BuddyState};
+use super::state::{apply_care_action, apply_pet_tick, default_buddy_state, grant_xp, reroll_personality};
+use super::types::{BuddyCareAction, BuddyJobState, BuddyOnboarding, BuddySuggestion, BuddyState};
 
 fn make_service() -> BuddyService {
     let (tx, _rx) = broadcast::channel(16);
@@ -83,28 +83,42 @@ fn test_default_state_starts_egg() {
     assert_eq!(state.progression.stage_name, "Egg");
     assert_eq!(state.progression.xp, 0);
     assert_eq!(state.progression.level, 1);
+    assert_eq!(state.pet.needs.hunger, 80);
+    assert_eq!(state.pet.needs.energy, 85);
+    assert_eq!(state.pet.needs.hygiene, 80);
+    assert_eq!(state.pet.needs.boredom, 15);
+    assert_eq!(state.pet.needs.affection, 75);
 }
 
 #[test]
-fn test_grant_xp_levels_up() {
+fn test_growth_points_do_not_level_without_care_gate() {
     let mut state = default_buddy_state();
     grant_xp(&mut state, 100);
-    assert_eq!(state.progression.level, 2);
-    assert_eq!(state.progression.xp, 0);
+    assert_eq!(state.progression.level, 1);
+    assert_eq!(state.progression.stage, 0);
+    assert_eq!(state.progression.xp, 100);
 }
 
 #[test]
-fn test_grant_xp_updates_stage() {
+fn test_grant_xp_updates_stage_when_care_gate_met() {
     let mut state = default_buddy_state();
+    state.pet.evolution.open_seconds = 10 * 60;
+    state.pet.evolution.care_score = 20;
     grant_xp(&mut state, 30);
     assert_eq!(state.progression.stage, 1);
     assert_eq!(state.progression.stage_name, "Hatch");
+    assert_eq!(state.progression.level, 2);
+    assert_eq!(state.progression.xp, 10);
 }
 
 #[test]
-fn test_stage_transitions_at_thresholds() {
+fn test_stage_transitions_require_runtime_and_care() {
     let mut state = default_buddy_state();
     grant_xp(&mut state, 100);
+    assert_eq!(state.progression.stage_name, "Egg");
+    state.pet.evolution.open_seconds = 20 * 60;
+    state.pet.evolution.care_score = 40;
+    grant_xp(&mut state, 0);
     assert_eq!(state.progression.stage_name, "Sprite");
     assert_eq!(state.progression.stage, 2);
 }
@@ -119,9 +133,13 @@ fn test_xp_bar_never_negative() {
 #[test]
 fn test_max_stage_behavior() {
     let mut state = default_buddy_state();
+    state.pet.evolution.open_seconds = 400 * 60;
+    state.pet.evolution.care_score = 500;
     grant_xp(&mut state, 3000);
     assert_eq!(state.progression.stage_name, "Archon");
     assert_eq!(state.progression.stage, 6);
+    assert_eq!(state.progression.level, 7);
+    assert_eq!(state.progression.xp_next, 0);
 }
 
 #[test]
@@ -169,6 +187,10 @@ fn test_old_state_migration() {
     assert!(!state.onboarding.greeted);
     assert!(!state.onboarding.tour_completed);
     assert!(state.onboarding.first_launch_at.is_empty());
+    assert_eq!(state.pet.needs.hunger, 80);
+    assert_eq!(state.pet.needs.energy, 85);
+    assert_eq!(state.pet.evolution.open_seconds, 0);
+    assert!(!state.personality.archetype_label.is_empty());
 }
 
 #[test]
@@ -188,7 +210,122 @@ async fn test_save_on_mutate_writes_file() {
     svc.grant_xp(25);
     super::state::save_state(root, &svc.state).await.unwrap();
     let loaded = super::state::load_state(root).await;
-    assert!(loaded.progression.xp > 0 || loaded.progression.level > 1);
+    assert_eq!(loaded.progression.xp, 25);
+    assert_eq!(loaded.pet.needs.hunger, 80);
+}
+
+#[test]
+fn test_pet_tick_decays_needs_while_awake() {
+    let mut state = default_buddy_state();
+    let changed = apply_pet_tick(&mut state, 15);
+    assert!(changed);
+    assert_eq!(state.pet.needs.hunger, 78);
+    assert_eq!(state.pet.needs.energy, 84);
+    assert_eq!(state.pet.needs.hygiene, 79);
+    assert_eq!(state.pet.needs.boredom, 17);
+    assert_eq!(state.pet.needs.affection, 74);
+    assert_eq!(state.pet.evolution.open_seconds, 15);
+}
+
+#[test]
+fn test_pet_tick_restores_energy_while_sleeping() {
+    let mut state = default_buddy_state();
+    state.pet.condition.sleeping = true;
+    state.pet.needs.energy = 20;
+    let changed = apply_pet_tick(&mut state, 15);
+    assert!(changed);
+    assert_eq!(state.pet.needs.energy, 23);
+    assert_eq!(state.pet.needs.boredom, 16);
+}
+
+#[test]
+fn test_pet_tick_updates_need_flags() {
+    let mut state = default_buddy_state();
+    state.pet.needs.hunger = 10;
+    state.pet.needs.energy = 10;
+    state.pet.needs.hygiene = 10;
+    state.pet.needs.boredom = 95;
+    state.pet.needs.affection = 10;
+    let _ = apply_pet_tick(&mut state, 15);
+    assert!(state.pet.condition.hungry);
+    assert!(state.pet.condition.sleepy);
+    assert!(state.pet.condition.dirty);
+    assert!(state.pet.condition.bored);
+    assert!(state.pet.condition.lonely);
+}
+
+#[test]
+fn test_pet_tick_sets_dirty_on_service() {
+    let mut svc = make_service();
+    assert!(!svc.dirty);
+    svc.apply_pet_tick(15);
+    assert!(svc.dirty);
+}
+
+#[test]
+fn test_reroll_personality_preserves_progress() {
+    let mut state = default_buddy_state();
+    state.progression.stage = 2;
+    state.progression.xp = 17;
+    let before = state.personality.archetype_label.clone();
+    reroll_personality(&mut state);
+    assert_eq!(state.progression.stage, 2);
+    assert_eq!(state.progression.xp, 17);
+    assert!(!state.personality.archetype_label.is_empty());
+    assert!(!state.personality.prompt.is_empty());
+    if before == state.personality.archetype_label {
+        assert_ne!(state.personality.traits.playfulness, 0);
+    }
+}
+
+#[test]
+fn test_feed_care_action_restores_hunger() {
+    let mut state = default_buddy_state();
+    state.pet.needs.hunger = 10;
+    let (changed, message) = apply_care_action(&mut state, BuddyCareAction::Feed, None);
+    assert!(changed);
+    assert!(message.contains("Snack"));
+    assert!(state.pet.needs.hunger > 10);
+    assert_eq!(state.recent_activities[0].activity_type, "care_feed");
+}
+
+#[test]
+fn test_play_care_action_uses_toy_hint() {
+    let mut state = default_buddy_state();
+    state.pet.needs.boredom = 90;
+    let (_, message) = apply_care_action(&mut state, BuddyCareAction::Play, Some("bug"));
+    assert!(message.contains("bug"));
+    assert!(state.pet.needs.boredom < 90);
+}
+
+#[test]
+fn test_sleep_care_action_sets_sleeping() {
+    let mut state = default_buddy_state();
+    state.pet.needs.energy = 20;
+    let (_, message) = apply_care_action(&mut state, BuddyCareAction::Sleep, None);
+    assert!(message.contains("Sleep mode"));
+    assert!(state.pet.condition.sleeping);
+    assert!(state.pet.needs.energy > 20);
+}
+
+#[test]
+fn test_sleep_care_action_stays_sleeping_near_threshold() {
+    let mut state = default_buddy_state();
+    state.pet.needs.energy = 80;
+    let _ = apply_care_action(&mut state, BuddyCareAction::Sleep, None);
+    assert!(state.pet.condition.sleeping);
+}
+
+#[test]
+fn test_settings_null_prompt_clears_value() {
+    let json = r#"{
+        "enabled": true,
+        "clear_personality_prompt": true
+    }"#;
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest =
+        serde_json::from_str(json).unwrap();
+    assert_eq!(req.clear_personality_prompt, Some(true));
+    assert!(req.personality_prompt.is_none());
 }
 
 #[tokio::test]

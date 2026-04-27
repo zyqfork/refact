@@ -43,13 +43,148 @@ pub struct BuddyIdentity {
     pub palette_index: usize,
 }
 
+fn default_first_growth_goal() -> u64 {
+    20
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuddyCareAction {
+    Feed,
+    Play,
+    Pet,
+    Sleep,
+    Clean,
+}
+
+impl BuddyCareAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Feed => "feed",
+            Self::Play => "play",
+            Self::Pet => "pet",
+            Self::Sleep => "sleep",
+            Self::Clean => "clean",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BuddyProgression {
     pub stage: u32,
     pub stage_name: String,
     pub level: u32,
     pub xp: u64,
     pub xp_next: u64,
+}
+
+impl Default for BuddyProgression {
+    fn default() -> Self {
+        Self {
+            stage: 0,
+            stage_name: "Egg".to_string(),
+            level: 1,
+            xp: 0,
+            xp_next: default_first_growth_goal(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuddyNeeds {
+    pub hunger: u8,
+    pub energy: u8,
+    pub hygiene: u8,
+    pub boredom: u8,
+    pub affection: u8,
+}
+
+impl Default for BuddyNeeds {
+    fn default() -> Self {
+        Self {
+            hunger: 80,
+            energy: 85,
+            hygiene: 80,
+            boredom: 15,
+            affection: 75,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BuddyCondition {
+    pub sleeping: bool,
+    pub hungry: bool,
+    pub sleepy: bool,
+    pub dirty: bool,
+    pub bored: bool,
+    pub lonely: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BuddyEvolutionState {
+    pub care_score: u64,
+    pub neglect_score: u64,
+    pub open_seconds: u64,
+    pub last_evolved_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BuddyPetState {
+    pub needs: BuddyNeeds,
+    pub condition: BuddyCondition,
+    pub evolution: BuddyEvolutionState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuddyPersonalityTraits {
+    pub playfulness: u8,
+    pub chaos: u8,
+    pub sociability: u8,
+    pub curiosity: u8,
+    pub resilience: u8,
+}
+
+impl Default for BuddyPersonalityTraits {
+    fn default() -> Self {
+        Self {
+            playfulness: 50,
+            chaos: 50,
+            sociability: 50,
+            curiosity: 50,
+            resilience: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuddyPersonalityProfile {
+    pub archetype_id: String,
+    pub archetype_label: String,
+    pub vibe: String,
+    pub summary: String,
+    pub prompt: String,
+    pub traits: BuddyPersonalityTraits,
+}
+
+impl Default for BuddyPersonalityProfile {
+    fn default() -> Self {
+        Self {
+            archetype_id: "helper_sprite".to_string(),
+            archetype_label: "Helper Sprite".to_string(),
+            vibe: "Playful, quirky, helpful".to_string(),
+            summary: "An energetic helper with gentle mischief and warm humor.".to_string(),
+            prompt: "Playful, quirky, helpful. Think energetic pet meets curious assistant—gentle mischief, warm humor, celebration of small wins".to_string(),
+            traits: BuddyPersonalityTraits::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +246,10 @@ pub struct BuddyState {
     pub semantic: BuddySemanticSnapshot,
     pub recent_activities: Vec<BuddyActivity>,
     pub suggestion_state: Vec<BuddySuggestion>,
+    #[serde(default)]
+    pub pet: BuddyPetState,
+    #[serde(default)]
+    pub personality: BuddyPersonalityProfile,
     #[serde(default)]
     pub onboarding: BuddyOnboarding,
     #[serde(default)]
