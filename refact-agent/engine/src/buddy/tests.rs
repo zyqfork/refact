@@ -2960,8 +2960,198 @@ async fn pulse_returns_current_state() {
     };
     svc.set_pulse(new_pulse);
     assert_eq!(svc.pulse.tasks.total, 7, "pulse tasks.total must be 7");
-    assert!(svc.pulse.generated_at.is_some(), "pulse generated_at must be set");
+    assert!(
+        svc.pulse.generated_at.is_some(),
+        "pulse generated_at must be set"
+    );
     let json = serde_json::to_value(&svc.pulse).expect("must serialize");
-    assert!(json.get("tasks").is_some(), "pulse JSON must have tasks sub-pulse");
-    assert!(json.get("generated_at").is_some(), "pulse JSON must have generated_at");
+    assert!(
+        json.get("tasks").is_some(),
+        "pulse JSON must have tasks sub-pulse"
+    );
+    assert!(
+        json.get("generated_at").is_some(),
+        "pulse JSON must have generated_at"
+    );
+}
+
+// =============================================================================
+// T-10: Tool tests — open_view, create_draft, launch_investigation, buddy_yaml
+// =============================================================================
+
+#[test]
+fn tool_buddy_open_view_each_page() {
+    use super::events::BuddyEvent;
+
+    let pages: Vec<BuddyPage> = vec![
+        BuddyPage::Buddy,
+        BuddyPage::Stats,
+        BuddyPage::Customization,
+        BuddyPage::Providers,
+        BuddyPage::DefaultModels,
+        BuddyPage::Integrations,
+        BuddyPage::Extensions,
+        BuddyPage::MarketplaceHub,
+        BuddyPage::McpMarketplace,
+        BuddyPage::SkillsMarketplace,
+        BuddyPage::CommandsMarketplace,
+        BuddyPage::SubagentsMarketplace,
+        BuddyPage::TasksList,
+        BuddyPage::TaskWorkspace {
+            task_id: "task-xyz".to_string(),
+        },
+        BuddyPage::KnowledgeGraph,
+    ];
+
+    let mut svc = make_service();
+    let mut rx = svc.events_tx.subscribe();
+
+    for page in &pages {
+        svc.send_navigation(page.clone());
+        let event = rx.try_recv().expect("must receive NavigationRequest");
+        match event {
+            BuddyEvent::NavigationRequest { page: emitted } => {
+                assert_eq!(&emitted, page, "emitted page must match sent page");
+            }
+            other => panic!("expected NavigationRequest, got {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn tool_buddy_create_draft_persists() {
+    let mut svc = make_service();
+    let mut rx = svc.events_tx.subscribe();
+
+    let draft = svc.draft_store.create(
+        DraftKind::Skill,
+        "My Skill".to_string(),
+        "yaml: {}".to_string(),
+        "A test skill draft".to_string(),
+    );
+    let _ = svc.events_tx.send(super::events::BuddyEvent::DraftCreated {
+        draft: draft.clone(),
+    });
+
+    let draft_id = draft.id.clone();
+    assert!(
+        svc.draft_store.get(&draft_id).is_some(),
+        "draft must be stored"
+    );
+    assert_eq!(
+        svc.draft_store.get(&draft_id).unwrap().kind,
+        DraftKind::Skill
+    );
+
+    let event = rx.try_recv().expect("must receive DraftCreated event");
+    assert!(
+        matches!(event, super::events::BuddyEvent::DraftCreated { .. }),
+        "event must be DraftCreated"
+    );
+
+    let _ = svc.draft_store.consume(&draft_id);
+    assert!(
+        svc.draft_store.get(&draft_id).is_none(),
+        "consumed draft must be removed"
+    );
+}
+
+#[tokio::test]
+async fn tool_buddy_launch_investigation_creates_chat() {
+    use crate::chat::trajectories::save_trajectory_snapshot;
+    use crate::chat::trajectories::TrajectorySnapshot;
+    use crate::buddy::types::BuddyThreadMeta;
+    use crate::call_validation::{ChatContent, ChatMessage};
+
+    let dir = tempfile::tempdir().unwrap();
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    {
+        let gcx_lock = gcx.read().await;
+        *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+            vec![dir.path().to_path_buf()];
+    }
+
+    let chat_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+
+    let snapshot = TrajectorySnapshot {
+        chat_id: chat_id.clone(),
+        title: "Investigation".to_string(),
+        model: String::new(),
+        mode: "buddy".to_string(),
+        tool_use: "agent".to_string(),
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::SimpleText("investigate this issue".to_string()),
+            ..Default::default()
+        }],
+        created_at,
+        boost_reasoning: false,
+        checkpoints_enabled: false,
+        context_tokens_cap: None,
+        include_project_info: true,
+        is_title_generated: false,
+        auto_approve_editing_tools: false,
+        auto_approve_dangerous_commands: false,
+        version: 1,
+        task_meta: None,
+        parent_id: None,
+        link_type: None,
+        root_chat_id: None,
+        reasoning_effort: None,
+        thinking_budget: None,
+        temperature: None,
+        frequency_penalty: None,
+        max_tokens: None,
+        parallel_tool_calls: None,
+        previous_response_id: None,
+        active_skill: None,
+        auto_enrichment_enabled: Some(true),
+        buddy_meta: Some(BuddyThreadMeta {
+            is_buddy_chat: true,
+            buddy_chat_kind: "investigation".to_string(),
+            workflow_id: None,
+        }),
+    };
+
+    let result = save_trajectory_snapshot(gcx, snapshot).await;
+    assert!(
+        result.is_ok(),
+        "investigation chat must be created: {:?}",
+        result.err()
+    );
+    let chat_file = dir
+        .path()
+        .join(".refact")
+        .join("buddy")
+        .join("chats")
+        .join("conversations")
+        .join(format!("{}.json", chat_id));
+    assert!(
+        chat_file.exists(),
+        "investigation chat file must be written to disk"
+    );
+}
+
+#[test]
+fn buddy_yaml_parses() {
+    let yaml_src = include_str!("../yaml_configs/defaults/modes/buddy.yaml");
+    let parsed: serde_yaml::Value = serde_yaml::from_str(yaml_src).expect("buddy.yaml must parse");
+    let tools = parsed
+        .get("tools")
+        .and_then(|t| t.as_sequence())
+        .expect("buddy.yaml must have tools list");
+    let tool_names: Vec<&str> = tools.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        tool_names.contains(&"buddy_open_view"),
+        "buddy.yaml must list buddy_open_view"
+    );
+    assert!(
+        tool_names.contains(&"buddy_create_draft"),
+        "buddy.yaml must list buddy_create_draft"
+    );
+    assert!(
+        tool_names.contains(&"buddy_launch_investigation"),
+        "buddy.yaml must list buddy_launch_investigation"
+    );
 }

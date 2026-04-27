@@ -327,6 +327,16 @@ async fn get_builtin_tools(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<ToolGroup> {
                 config_path: config_path.clone(),
             },
         ),
+        Box::new(
+            crate::tools::tool_buddy_create_draft::ToolBuddyCreateDraft {
+                config_path: config_path.clone(),
+            },
+        ),
+        Box::new(
+            crate::tools::tool_buddy_launch_investigation::ToolBuddyLaunchInvestigation {
+                config_path: config_path.clone(),
+            },
+        ),
     ];
 
     let chat_management_tools: Vec<Box<dyn Tool + Send>> = vec![

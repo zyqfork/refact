@@ -68,9 +68,14 @@ async fn create_draft(
     let buddy_arc = gcx.read().await.buddy.clone();
     let mut lock = buddy_arc.lock().await;
     let svc = lock.as_mut().ok_or_else(|| {
-        ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy not initialized".into())
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".into(),
+        )
     })?;
-    let draft = svc.draft_store.create(kind, req.title, req.yaml_or_json, req.explanation);
+    let draft = svc
+        .draft_store
+        .create(kind, req.title, req.yaml_or_json, req.explanation);
     svc.add_draft(draft.clone());
     Ok(axum::Json(draft))
 }
@@ -82,13 +87,14 @@ pub async fn handle_v1_buddy_draft_get(
     let buddy_arc = gcx.read().await.buddy.clone();
     let lock = buddy_arc.lock().await;
     let svc = lock.as_ref().ok_or_else(|| {
-        ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy not initialized".into())
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".into(),
+        )
     })?;
-    let draft = svc
-        .draft_store
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| ScratchError::new(StatusCode::NOT_FOUND, format!("draft not found: {}", id)))?;
+    let draft = svc.draft_store.get(&id).cloned().ok_or_else(|| {
+        ScratchError::new(StatusCode::NOT_FOUND, format!("draft not found: {}", id))
+    })?;
     Ok(axum::Json(draft))
 }
 
@@ -99,7 +105,10 @@ pub async fn handle_v1_buddy_draft_delete(
     let buddy_arc = gcx.read().await.buddy.clone();
     let mut lock = buddy_arc.lock().await;
     let svc = lock.as_mut().ok_or_else(|| {
-        ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy not initialized".into())
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".into(),
+        )
     })?;
     svc.draft_store.delete(&id);
     Ok(axum::Json(serde_json::json!({ "ok": true })))

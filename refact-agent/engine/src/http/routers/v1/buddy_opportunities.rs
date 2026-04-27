@@ -9,9 +9,7 @@ use tokio::sync::RwLock as ARwLock;
 use uuid::Uuid;
 
 use crate::buddy::events::BuddyEvent;
-use crate::buddy::types::{
-    BuddyAction, InvestigationContext, OpportunityStatus,
-};
+use crate::buddy::types::{BuddyAction, InvestigationContext, OpportunityStatus};
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 
@@ -58,24 +56,39 @@ pub async fn handle_v1_buddy_opportunity_accept(
         let buddy_arc = gcx.read().await.buddy.clone();
         let lock = buddy_arc.lock().await;
         let svc = lock.as_ref().ok_or_else(|| {
-            ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy not initialized".into())
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "buddy not initialized".into(),
+            )
         })?;
-        svc.opportunity_queue
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| ScratchError::new(StatusCode::NOT_FOUND, format!("opportunity not found: {}", id)))?
+        svc.opportunity_queue.get(&id).cloned().ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::NOT_FOUND,
+                format!("opportunity not found: {}", id),
+            )
+        })?
     };
 
-    let action = opp.proposed_actions.get(req.action_index).ok_or_else(|| {
-        ScratchError::new(StatusCode::BAD_REQUEST, format!("action_index {} out of range", req.action_index))
-    })?.clone();
+    let action = opp
+        .proposed_actions
+        .get(req.action_index)
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::BAD_REQUEST,
+                format!("action_index {} out of range", req.action_index),
+            )
+        })?
+        .clone();
 
     let action_result = dispatch_action(gcx.clone(), &id, &action).await?;
 
     let buddy_arc = gcx.read().await.buddy.clone();
     let mut lock = buddy_arc.lock().await;
     let svc = lock.as_mut().ok_or_else(|| {
-        ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy not initialized".into())
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".into(),
+        )
     })?;
     svc.resolve_opportunity(&id, OpportunityStatus::Accepted);
     let snap = serde_json::to_value(svc.snapshot())
@@ -113,16 +126,14 @@ async fn dispatch_action(
                 "chat_id": chat_id
             }))
         }
-        BuddyAction::DraftSkill { draft_id, label } |
-        BuddyAction::DraftCommand { draft_id, label } |
-        BuddyAction::DraftSubagent { draft_id, label } |
-        BuddyAction::DraftMode { draft_id, label } => {
-            Ok(serde_json::json!({
-                "kind": "draft",
-                "draft_id": draft_id,
-                "label": label
-            }))
-        }
+        BuddyAction::DraftSkill { draft_id, label }
+        | BuddyAction::DraftCommand { draft_id, label }
+        | BuddyAction::DraftSubagent { draft_id, label }
+        | BuddyAction::DraftMode { draft_id, label } => Ok(serde_json::json!({
+            "kind": "draft",
+            "draft_id": draft_id,
+            "label": label
+        })),
         BuddyAction::Dismiss => {
             let buddy_arc = gcx.read().await.buddy.clone();
             let mut lock = buddy_arc.lock().await;
@@ -200,7 +211,8 @@ async fn create_investigation_chat(
 }
 
 fn build_investigation_system_message(ctx: &InvestigationContext) -> String {
-    let mut parts = vec!["You are investigating a technical issue. Here is the context:\n".to_string()];
+    let mut parts =
+        vec!["You are investigating a technical issue. Here is the context:\n".to_string()];
     if !ctx.fact_keys.is_empty() {
         parts.push(format!("Fact keys: {}", ctx.fact_keys.join(", ")));
     }
@@ -223,10 +235,16 @@ pub async fn handle_v1_buddy_opportunity_dismiss(
     let buddy_arc = gcx.read().await.buddy.clone();
     let mut lock = buddy_arc.lock().await;
     let svc = lock.as_mut().ok_or_else(|| {
-        ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, "buddy not initialized".into())
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".into(),
+        )
     })?;
     if svc.opportunity_queue.get(&id).is_none() {
-        return Err(ScratchError::new(StatusCode::NOT_FOUND, format!("opportunity not found: {}", id)));
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            format!("opportunity not found: {}", id),
+        ));
     }
     svc.opportunity_queue.dismiss(&id);
     let _ = svc.events_tx.send(BuddyEvent::OpportunityResolved {

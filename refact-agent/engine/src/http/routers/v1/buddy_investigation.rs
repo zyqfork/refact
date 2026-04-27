@@ -82,7 +82,8 @@ async fn create_investigation_chat(
 }
 
 fn build_system_message(ctx: &InvestigationContext) -> String {
-    let mut parts = vec!["You are investigating a technical issue. Here is the context:\n".to_string()];
+    let mut parts =
+        vec!["You are investigating a technical issue. Here is the context:\n".to_string()];
     if !ctx.fact_keys.is_empty() {
         parts.push(format!("Fact keys: {}", ctx.fact_keys.join(", ")));
     }

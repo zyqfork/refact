@@ -25,21 +25,34 @@ impl Tool for ToolBuddyOpenView {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Navigate the frontend to a specific view. The GUI will switch to the requested page.".to_string(),
+            description: "Navigate the user's GUI to a specific Refact page (Buddy home, Stats, Customization, Providers, Default Models, Integrations, Extensions, Marketplace Hub & sub-marketplaces, Tasks list/workspace, Knowledge Graph).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "view": {
-                        "type": "string",
-                        "description": "Which view to open.",
-                        "enum": ["buddy", "stats", "customization", "providers", "integrations", "knowledge", "tasks"]
-                    },
-                    "task_id": {
-                        "type": "string",
-                        "description": "Task ID when opening task_workspace view."
+                    "page": {
+                        "type": "object",
+                        "description": "The page to navigate to.",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "description": "Page type identifier.",
+                                "enum": [
+                                    "buddy", "stats", "customization", "providers",
+                                    "default_models", "integrations", "extensions",
+                                    "marketplace_hub", "mcp_marketplace", "skills_marketplace",
+                                    "commands_marketplace", "subagents_marketplace",
+                                    "tasks_list", "task_workspace", "knowledge_graph"
+                                ]
+                            },
+                            "task_id": {
+                                "type": "string",
+                                "description": "Required when type=task_workspace."
+                            }
+                        },
+                        "required": ["type"]
                     }
                 },
-                "required": ["view"]
+                "required": ["page"]
             }),
             output_schema: None,
             annotations: None,
@@ -52,30 +65,16 @@ impl Tool for ToolBuddyOpenView {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let view = args
-            .get("view")
-            .and_then(|v| v.as_str())
-            .ok_or("argument `view` is missing or not a string")?
-            .to_string();
-
-        let task_id = args
-            .get("task_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let page = match view.as_str() {
-            "buddy" => BuddyPage::Buddy,
-            "stats" => BuddyPage::Stats,
-            "customization" | "setup" | "settings" => BuddyPage::Customization,
-            "providers" => BuddyPage::Providers,
-            "integrations" => BuddyPage::Integrations,
-            "knowledge" => BuddyPage::KnowledgeGraph,
-            "tasks" => BuddyPage::TasksList,
-            "task_workspace" => BuddyPage::TaskWorkspace {
-                task_id: task_id.unwrap_or_default(),
-            },
-            _ => return Err(format!("invalid view '{}'", view)),
-        };
+        let page_val = args.get("page").ok_or("argument `page` is missing")?;
+        let page: BuddyPage =
+            serde_json::from_value(page_val.clone()).map_err(|e| format!("invalid page: {}", e))?;
+        let page_type = serde_json::to_value(&page)
+            .ok()
+            .and_then(|v| {
+                v.get("type")
+                    .and_then(|t| t.as_str().map(|s| s.to_string()))
+            })
+            .unwrap_or_default();
 
         let gcx = ccx.lock().await.global_context.clone();
         let buddy_arc = gcx.read().await.buddy.clone();
@@ -90,7 +89,7 @@ impl Tool for ToolBuddyOpenView {
                 role: "tool".to_string(),
                 content: ChatContent::SimpleText(format!(
                     "Navigation request sent: open '{}'",
-                    view
+                    page_type
                 )),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
