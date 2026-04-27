@@ -46,3 +46,53 @@
   border-right: 8px solid transparent;
   border-top: 8px solid var(--gray-a4);
 }
+
+.cloudOverlay {
+  position: absolute;
+  bottom: calc(100% - 20px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(280px, 90%);
+  width: max-content;
+  z-index: 10;
+  padding: var(--space-2);
+  background: var(--color-panel-solid, var(--gray-2));
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  animation: fadeInUp 0.2s ease;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.overlayText {
+  font-size: 12px;
+  color: var(--gray-12);
+  line-height: 1.4;
+  margin: 0 0 var(--space-1) 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.overlayTail {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid var(--gray-a4);
+}

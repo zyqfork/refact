@@ -103,19 +103,20 @@ export const BuddyHome: React.FC = () => {
       </div>
 
       <div className={styles.hero}>
-        <div className={styles.glowWrap}>
-          <div
-            className={styles.glow}
-            style={{ backgroundColor: palette.body }}
-          />
-          <BuddyCanvas
-            state={state}
-            onEvent={buddy.handleCanvasEvent}
-            displaySize={320}
-          />
+        <div className={styles.scene}>
+          <div className={styles.glowWrap}>
+            <div
+              className={styles.glow}
+              style={{ backgroundColor: palette.body }}
+            />
+            <BuddyCanvas
+              state={state}
+              onEvent={buddy.handleCanvasEvent}
+              displaySize={320}
+            />
+          </div>
+          <BuddySpeechCloud variant="overlay" />
         </div>
-
-        <BuddySpeechCloud />
 
         <div
           className={styles.stageBadge}

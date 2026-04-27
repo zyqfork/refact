@@ -13,6 +13,13 @@
   padding: var(--space-1) 0;
 }
 
+.scene {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .glowWrap {
   position: relative;
   display: inline-flex;
@@ -83,12 +90,6 @@
   flex-shrink: 0;
 }
 
-.actions {
-  display: flex;
-  gap: var(--space-1);
-  justify-content: center;
-}
-
 .statusBubble {
   display: flex;
   align-items: center;
@@ -131,10 +132,4 @@
   border-radius: 2px;
   background: var(--accent-9);
   transition: width 0.3s ease;
-}
-
-.recentChats {
-  padding: 0 var(--space-2) var(--space-2);
-  border-top: 1px solid var(--gray-a3);
-  padding-top: var(--space-2);
 }

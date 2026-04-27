@@ -7,7 +7,11 @@ import { openChatInModeAndStart } from "../Chat/Thread/actions";
 import type { BuddyControl } from "./types";
 import styles from "./BuddySpeechCloud.module.css";
 
-export const BuddySpeechCloud: React.FC = () => {
+interface Props {
+  variant?: "block" | "overlay";
+}
+
+export const BuddySpeechCloud: React.FC<Props> = ({ variant = "block" }) => {
   const dispatch = useAppDispatch();
   const speech = useAppSelector(selectActiveSpeech);
 
@@ -38,9 +42,11 @@ export const BuddySpeechCloud: React.FC = () => {
 
   if (!speech) return null;
 
+  const isOverlay = variant === "overlay";
+
   return (
-    <div className={styles.cloud}>
-      <p className={styles.text}>{speech.text}</p>
+    <div className={isOverlay ? styles.cloudOverlay : styles.cloud}>
+      <p className={isOverlay ? styles.overlayText : styles.text}>{speech.text}</p>
       <div className={styles.controls}>
         {speech.controls.map((ctrl) => (
           <Button
@@ -61,7 +67,7 @@ export const BuddySpeechCloud: React.FC = () => {
           ✕
         </Button>
       </div>
-      <div className={styles.tail} />
+      <div className={isOverlay ? styles.overlayTail : styles.tail} />
     </div>
   );
 };

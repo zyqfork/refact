@@ -1,4 +1,6 @@
 import { describe, test, expect } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
 import {
   buddySlice,
   setBuddySnapshot,
@@ -541,5 +543,20 @@ describe("conversation ledger", () => {
     state = reducer(state, setBuddyConversations(updated));
     expect(state.conversations).toHaveLength(2);
     expect(state.conversations[0].id).toBe("new1");
+  });
+});
+
+describe("BuddyPanel hero layout", () => {
+  const buddyDir = path.join(__dirname, "../features/Buddy");
+
+  test("BuddyPanel does not render BuddyRecentChats", () => {
+    const src = fs.readFileSync(path.join(buddyDir, "BuddyPanel.tsx"), "utf8");
+    expect(src).not.toContain("BuddyRecentChats");
+  });
+
+  test("BuddySpeechCloud accepts variant overlay prop", () => {
+    const src = fs.readFileSync(path.join(buddyDir, "BuddySpeechCloud.tsx"), "utf8");
+    expect(src).toContain("variant");
+    expect(src).toContain("overlay");
   });
 });

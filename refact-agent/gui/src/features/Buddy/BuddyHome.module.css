@@ -29,6 +29,13 @@
   flex-shrink: 0;
 }
 
+.scene {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .glowWrap {
   position: relative;
   display: inline-flex;
