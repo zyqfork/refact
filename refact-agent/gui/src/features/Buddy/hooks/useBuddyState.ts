@@ -7,7 +7,6 @@ import {
 } from "../state";
 import {
   selectBuddySnapshot,
-  selectBuddySignalQueue,
   selectNowPlaying,
   clearNowPlaying,
 } from "../buddySlice";
@@ -37,12 +36,9 @@ export function useBuddyState(
 
   const reduxDispatch = useAppDispatch();
   const reduxSnapshot = useAppSelector(selectBuddySnapshot);
-  const signalQueue = useAppSelector(selectBuddySignalQueue);
 
   const nowPlaying = useAppSelector(selectNowPlaying);
   const prevSnapshotStageRef = useRef<number | null>(null);
-  // Track by seq number (rollover-safe) instead of array-length index
-  const lastProcessedSeq = useRef<number | null>(null);
   const prevNowPlayingIdRef = useRef<string | null>(null);
   // null = not yet initialized; prevents fake milestone events on first hydration
   const prevLocalStageRef = useRef<number | null>(null);
@@ -136,29 +132,8 @@ export function useBuddyState(
     }
   }, [state.skills]);
 
-  useEffect(() => {
-    if (lastProcessedSeq.current === null) {
-      // On mount: mark all existing signals as already processed (skip history)
-      const maxSeq =
-        signalQueue.length > 0
-          ? Math.max(...signalQueue.map((s) => s.seq))
-          : -1;
-      lastProcessedSeq.current = maxSeq;
-      return;
-    }
-    // Process only signals with seq strictly greater than last processed.
-    // This is safe even when the queue rolls over and drops old items.
-    const newSigs = signalQueue
-      .filter((s) => s.seq > lastProcessedSeq.current!)
-      .sort((a, b) => a.seq - b.seq);
-    for (const sig of newSigs) {
-      dispatch({ kind: "signal", signalType: sig.signalType });
-      lastProcessedSeq.current = sig.seq;
-    }
-  }, [signalQueue]);
-
-  // Queue dequeue is handled centrally by the Redux listener in app/middleware.ts
-  // to prevent multiple mounted useBuddyState instances from racing.
+  // Animation is driven solely by nowPlaying RuntimeEvents.
+  // No signalQueue — RuntimeEvent is the single source of live Buddy UX.
 
   useEffect(() => {
     if (!nowPlaying) {

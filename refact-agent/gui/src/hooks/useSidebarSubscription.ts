@@ -31,25 +31,10 @@ import {
   dismissBuddySuggestion,
   updateBuddySettings,
   addBuddyDiagnostic,
-  enqueueBuddySignal,
   enqueueRuntimeEvent,
   setActiveSpeech,
 } from "../features/Buddy/buddySlice";
-import { push } from "../features/Pages/pagesSlice";
-import type { BuddySSEEvent } from "../features/Buddy/types";
-
-function mapBuddyEventToSignal(event: BuddySSEEvent): string | null {
-  if (event.event_type === "ActivityAdded") {
-    const { activity_type } = event.activity;
-    if (activity_type === "workflow") return "tool_used";
-    if (activity_type === "error") return "chat_error";
-    if (activity_type === "issue_created") return "edit_applied";
-    return "generating";
-  }
-  if (event.event_type === "StateUpdated") return "generating";
-  if (event.event_type === "DiagnosticAdded") return "chat_error";
-  return null;
-}
+import { executeBuddyNavigation } from "../features/Buddy/executeBuddyAction";
 
 import {
   trajectoriesApi,
@@ -426,13 +411,13 @@ export function useSidebarSubscription() {
           dispatch(setActiveSpeech(buddy_event.speech));
           break;
         case "NavigationRequest":
-          if (buddy_event.view === "buddy") dispatch(push({ name: "buddy" }));
-          else if (buddy_event.view === "stats")
-            dispatch(push({ name: "stats dashboard" }));
+          executeBuddyNavigation(
+            buddy_event.view,
+            buddy_event.params as Record<string, unknown> | undefined,
+            dispatch,
+          );
           break;
       }
-      const signal = mapBuddyEventToSignal(buddy_event);
-      if (signal !== null) dispatch(enqueueBuddySignal(signal));
     },
     [dispatch],
   );

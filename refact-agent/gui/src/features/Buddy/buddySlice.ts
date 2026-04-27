@@ -11,19 +11,12 @@ import type {
   BuddySpeechItem,
 } from "./types";
 
-interface BuddySignalQueueItem {
-  signalType: string;
-  timestamp: number;
-  seq: number;
-}
-
-interface BuddySliceState {
+export interface BuddySliceState {
   snapshot: BuddySnapshot | null;
   /** true once the first snapshot event has been received (even if buddy is disabled) */
   loaded: boolean;
   conversations: BuddyConversationEntry[];
   recentDiagnostics: DiagnosticContext[];
-  signalQueue: BuddySignalQueueItem[];
   runtimeQueue: BuddyRuntimeEvent[];
   nowPlaying: BuddyRuntimeEvent | null;
   activeSpeech: BuddySpeechItem | null;
@@ -34,13 +27,10 @@ const initialState: BuddySliceState = {
   loaded: false,
   conversations: [],
   recentDiagnostics: [],
-  signalQueue: [],
   runtimeQueue: [],
   nowPlaying: null,
   activeSpeech: null,
 };
-
-let nextSignalSeq = 0;
 
 export const buddySlice = createSlice({
   name: "buddy",
@@ -57,6 +47,9 @@ export const buddySlice = createSlice({
     setBuddyUnavailable: (state) => {
       state.loaded = true;
       state.snapshot = null;
+      state.runtimeQueue = [];
+      state.nowPlaying = null;
+      state.activeSpeech = null;
     },
     updateBuddyState: (state, action: PayloadAction<BuddyState>) => {
       if (state.snapshot) {
@@ -117,17 +110,7 @@ export const buddySlice = createSlice({
         state.recentDiagnostics.splice(100);
       }
     },
-    enqueueBuddySignal: (state, action: PayloadAction<string>) => {
-      state.signalQueue.push({
-        signalType: action.payload,
-        timestamp: Date.now(),
-        seq: nextSignalSeq++,
-      });
-      if (state.signalQueue.length > 50) state.signalQueue.shift();
-    },
-    consumeBuddySignal: (state) => {
-      state.signalQueue.shift();
-    },
+
     enqueueRuntimeEvent: (state, action: PayloadAction<BuddyRuntimeEvent>) => {
       const event = action.payload;
       if (event.dedupe_key) {
@@ -191,7 +174,7 @@ export const buddySlice = createSlice({
     selectBuddyConversations: (state) => state.conversations,
     selectIsBuddyEnabled: (state) => state.snapshot?.enabled ?? false,
     selectBuddyDiagnostics: (state) => state.recentDiagnostics,
-    selectBuddySignalQueue: (state) => state.signalQueue,
+
     selectRuntimeQueue: (state) => state.runtimeQueue,
     selectNowPlaying: (state) => state.nowPlaying,
     selectActiveSpeech: (state) => state.activeSpeech,
@@ -208,8 +191,6 @@ export const {
   updateBuddySettings,
   setBuddyConversations,
   addBuddyDiagnostic,
-  enqueueBuddySignal,
-  consumeBuddySignal,
   enqueueRuntimeEvent,
   dequeueRuntimeEvent,
   clearNowPlaying,
@@ -228,7 +209,6 @@ export const {
   selectBuddyConversations,
   selectIsBuddyEnabled,
   selectBuddyDiagnostics,
-  selectBuddySignalQueue,
   selectRuntimeQueue,
   selectNowPlaying,
   selectActiveSpeech,

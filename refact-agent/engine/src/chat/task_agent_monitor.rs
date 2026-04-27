@@ -68,7 +68,9 @@ async fn mark_agent_as_failed(
     let reason_clone = reason.to_string();
     let expected_agent_id_owned = expected_agent_id.map(|s| s.to_string());
 
-    let (board, (_card_title, all_finished)) =
+    // The closure returns (card_title, actually_failed, all_finished).
+    // actually_failed is true only when the card transitioned from "doing" to "failed".
+    let (board, (card_title, actually_failed, all_finished)) =
         storage::update_board_atomic(gcx.clone(), task_id, move |board| {
             let card = board
                 .get_card_mut(&card_id_owned)
@@ -76,12 +78,12 @@ async fn mark_agent_as_failed(
 
             if card.column == "done" || card.column == "failed" {
                 let card_title = card.title.clone();
-                return Ok((card_title, false));
+                return Ok((card_title, false, false));
             }
 
             if card.column != "doing" {
                 let card_title = card.title.clone();
-                return Ok((card_title, false));
+                return Ok((card_title, false, false));
             }
 
             if let Some(ref expected_id) = expected_agent_id_owned {
@@ -93,7 +95,7 @@ async fn mark_agent_as_failed(
                         card.assignee
                     );
                     let card_title = card.title.clone();
-                    return Ok((card_title, false));
+                    return Ok((card_title, false, false));
                 }
             }
 
@@ -116,13 +118,29 @@ async fn mark_agent_as_failed(
                 .count();
             let all_finished = agents_active_after == 0;
 
-            Ok((card_title, all_finished))
+            Ok((card_title, true, all_finished))
         })
         .await?;
+
+    if !actually_failed {
+        return Ok(());
+    }
 
     storage::update_task_stats(gcx.clone(), task_id).await?;
 
     tracing::info!("Marked agent for card {} as failed: {}", card_id, reason);
+
+    {
+        let ev = crate::buddy::actor::make_runtime_event(
+            "task_failed",
+            &format!("Agent failed: {}", card_title),
+            "task_agent",
+            &format!("task_agent_{}", card_id),
+            "failed",
+            Some("high"),
+        );
+        crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
+    }
 
     if let Some(card) = board.get_card(card_id) {
         if let (Some(ref wt), Some(ref branch)) = (&card.agent_worktree, &card.agent_branch) {

@@ -778,14 +778,15 @@ pub fn start_generation(
                 }
                 ToolStepOutcome::Paused => {
                     let mut ev = crate::buddy::actor::make_runtime_event(
-                        "chat_completed",
-                        &format!("Paused: {}", chat_label),
+                        "tool_confirmation",
+                        &format!("Waiting for approval: {}", chat_label),
                         "chat",
                         &format!("chat_{}", chat_id),
-                        "completed",
+                        "paused",
                         None,
                     );
                     ev.chat_id = Some(chat_id.to_string());
+                    ev.persistent = true;
                     crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
                     break;
                 }

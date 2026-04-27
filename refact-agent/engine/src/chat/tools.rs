@@ -1742,7 +1742,7 @@ pub async fn execute_tools(
         .map(|tc| {
             (
                 tc.id.clone(),
-                format!("tool_{}_{}", chat_id, tc.function.name),
+                format!("tool_{}", tc.id),
             )
         })
         .collect();
@@ -1773,12 +1773,27 @@ pub async fn execute_tools(
         let failed = result_msgs
             .iter()
             .any(|m| &m.tool_call_id == tool_call_id && m.tool_failed == Some(true));
-        crate::buddy::actor::buddy_complete_event(
-            gcx2.clone(),
-            dedupe_key,
-            if failed { "failed" } else { "completed" },
-        )
-        .await;
+        if failed {
+            // Emit an explicit tool_failed runtime event so the GUI
+            // can distinguish failure from normal tool completion.
+            let mut ev = crate::buddy::actor::make_runtime_event(
+                "tool_failed",
+                &format!("Tool failed in '{}'", chat_label),
+                "tool",
+                dedupe_key,
+                "failed",
+                None,
+            );
+            ev.chat_id = Some(chat_id.to_string());
+            crate::buddy::actor::buddy_enqueue_event(gcx2.clone(), ev).await;
+        } else {
+            crate::buddy::actor::buddy_complete_event(
+                gcx2.clone(),
+                dedupe_key,
+                "completed",
+            )
+            .await;
+        }
     }
 
     if !is_buddy && result_msgs.iter().any(|m| m.tool_failed == Some(true)) {

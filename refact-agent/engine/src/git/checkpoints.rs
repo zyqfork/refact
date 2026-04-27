@@ -229,6 +229,19 @@ pub async fn create_workspace_checkpoint(
 
     tracing::info!("Checkpoint created in {:.2}s", t0.elapsed().as_secs_f64());
 
+    {
+        let mut ev = crate::buddy::actor::make_runtime_event(
+            "checkpoint_saved",
+            &format!("Checkpoint saved for chat {}", chat_id),
+            "git",
+            &format!("checkpoint_{}", chat_id),
+            "completed",
+            None,
+        );
+        ev.chat_id = Some(chat_id.to_string());
+        crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
+    }
+
     Ok((checkpoint, repo))
 }
 

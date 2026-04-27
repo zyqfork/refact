@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock as ARwLock;
 
 use crate::global_context::GlobalContext;
@@ -6,6 +7,9 @@ use crate::providers::create_provider;
 
 const REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const REFRESH_BEFORE_EXPIRY_MS: i64 = 5 * 60 * 1000; // 5 minutes before expiry
+
+static CLAUDE_CODE_OAUTH_FAILED: AtomicBool = AtomicBool::new(false);
+static OPENAI_CODEX_OAUTH_FAILED: AtomicBool = AtomicBool::new(false);
 
 pub async fn oauth_token_refresh_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
     let _ = try_refresh_all_providers(&gcx).await;
@@ -92,9 +96,30 @@ async fn try_refresh_claude_code(
             {
                 tracing::warn!("Claude Code: failed to save refreshed tokens: {}", e);
             }
+            if CLAUDE_CODE_OAUTH_FAILED.swap(false, Ordering::SeqCst) {
+                let ev = crate::buddy::actor::make_runtime_event(
+                    "connection_restored",
+                    "Claude Code: OAuth token refreshed",
+                    "provider",
+                    "oauth_claude_code",
+                    "completed",
+                    None,
+                );
+                crate::buddy::actor::buddy_enqueue_event((*gcx).clone(), ev).await;
+            }
         }
         Err(e) => {
             tracing::warn!("Claude Code: OAuth token refresh failed: {}", e);
+            CLAUDE_CODE_OAUTH_FAILED.store(true, Ordering::SeqCst);
+            let ev = crate::buddy::actor::make_runtime_event(
+                "connection_lost",
+                "Claude Code: OAuth refresh failed",
+                "provider",
+                "oauth_claude_code",
+                "failed",
+                Some("high"),
+            );
+            crate::buddy::actor::buddy_enqueue_event((*gcx).clone(), ev).await;
         }
     }
 }
@@ -152,9 +177,30 @@ async fn try_refresh_openai_codex(
             {
                 tracing::warn!("OpenAI Codex: failed to save refreshed tokens: {}", e);
             }
+            if OPENAI_CODEX_OAUTH_FAILED.swap(false, Ordering::SeqCst) {
+                let ev = crate::buddy::actor::make_runtime_event(
+                    "connection_restored",
+                    "OpenAI Codex: OAuth token refreshed",
+                    "provider",
+                    "oauth_openai_codex",
+                    "completed",
+                    None,
+                );
+                crate::buddy::actor::buddy_enqueue_event((*gcx).clone(), ev).await;
+            }
         }
         Err(e) => {
             tracing::warn!("OpenAI Codex: OAuth token refresh failed: {}", e);
+            OPENAI_CODEX_OAUTH_FAILED.store(true, Ordering::SeqCst);
+            let ev = crate::buddy::actor::make_runtime_event(
+                "connection_lost",
+                "OpenAI Codex: OAuth refresh failed",
+                "provider",
+                "oauth_openai_codex",
+                "failed",
+                Some("high"),
+            );
+            crate::buddy::actor::buddy_enqueue_event((*gcx).clone(), ev).await;
         }
     }
 }

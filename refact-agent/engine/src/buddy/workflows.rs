@@ -10,14 +10,33 @@ use super::types::BuddyActivity;
 
 pub fn workflow_label(workflow_id: &str) -> &str {
     match workflow_id {
-        "commit_message" => "commit message generation",
+        "commit_msg" => "commit message generation",
         "follow_up" => "follow-up suggestions",
+        "compression" => "chat compression",
+        "memory_extract" => "memo extraction",
+        "knowledge_update" => "knowledge graph update",
+        "title_generating" => "title generation",
+        // Legacy IDs still map to labels for backwards-compat transcripts
+        "commit_message" => "commit message generation",
         "compress_trajectory" => "chat compression",
         "memo_extraction" => "memo extraction",
-        "kg_enrich" => "knowledge graph enrichment",
+        "kg_enrich" => "knowledge graph update",
         "kg_deprecate" => "knowledge cleanup",
-        "title_generating" => "title generation",
         _ => workflow_id,
+    }
+}
+
+/// Maps internal workflow IDs to canonical Buddy signal_type names.
+/// The GUI uses these names in its signal catalog.
+pub fn canonical_signal_type(workflow_id: &str) -> &str {
+    match workflow_id {
+        "commit_message" | "commit_msg" => "commit_msg",
+        "compress_trajectory" | "compression" => "compression",
+        "memo_extraction" | "memory_extract" => "memory_extract",
+        "kg_enrich" | "kg_deprecate" | "knowledge_update" => "knowledge_update",
+        "title_generating" | "title_generation" => "title_generating",
+        "follow_up" => "generating",
+        other => other,
     }
 }
 
@@ -49,9 +68,10 @@ where
     Fut: Future<Output = Result<T, String>>,
 {
     let label = workflow_label(workflow_id);
+    let signal_type = canonical_signal_type(workflow_id);
     let dedupe_key = format!("workflow_{}", workflow_id);
     let mut started = crate::buddy::actor::make_runtime_event(
-        workflow_id,
+        signal_type,
         &format!("Running {}...", label),
         "system",
         &dedupe_key,

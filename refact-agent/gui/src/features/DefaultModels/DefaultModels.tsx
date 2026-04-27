@@ -149,9 +149,9 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
   useEffect(() => {
     if (defaults) {
       setLocalDefaults({
-        chat: defaults.chat ?? {},
-        chat_light: defaults.chat_light ?? {},
-        chat_thinking: defaults.chat_thinking ?? {},
+        chat: defaults.chat,
+        chat_light: defaults.chat_light,
+        chat_thinking: defaults.chat_thinking,
         chat_buddy: defaults.chat_buddy ?? {},
         completion_model: defaults.completion_model,
         embedding_model: defaults.embedding_model,

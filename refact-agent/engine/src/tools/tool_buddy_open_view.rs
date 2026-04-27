@@ -31,7 +31,7 @@ impl Tool for ToolBuddyOpenView {
                     "view": {
                         "type": "string",
                         "description": "Which view to open.",
-                        "enum": ["buddy_home", "dashboard", "chat", "stats", "setup", "settings"]
+                        "enum": ["buddy", "stats", "chat", "setup", "settings", "knowledge", "tasks", "integrations"]
                     },
                     "params": {
                         "type": "object",
@@ -59,12 +59,14 @@ impl Tool for ToolBuddyOpenView {
             .to_string();
 
         let valid_views = [
-            "buddy_home",
-            "dashboard",
-            "chat",
+            "buddy",
             "stats",
+            "chat",
             "setup",
             "settings",
+            "knowledge",
+            "tasks",
+            "integrations",
         ];
         if !valid_views.contains(&view.as_str()) {
             return Err(format!(

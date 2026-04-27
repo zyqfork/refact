@@ -13,15 +13,10 @@ import {
   selectBuddyActivities,
   selectNowPlaying,
   selectActiveSpeech,
-  clearActiveSpeech,
 } from "./buddySlice";
-import {
-  openBuddyChat,
-  newBuddyChatAction,
-  openChatInModeAndStart,
-} from "../Chat/Thread";
+import { openChatInModeAndStart } from "../Chat/Thread";
 import { useCreateBuddyConversationMutation } from "../../services/refact/buddy";
-import { isValidSetupMode } from "../Setup/setupModes";
+import { executeBuddyAction } from "./executeBuddyAction";
 import type { BuddyControl } from "./types";
 import { PALETTES, STAGES, SKILLS, SIGNALS } from "./constants";
 import { computeXpFill } from "./buddyUtils";
@@ -96,45 +91,13 @@ export const BuddyHome: React.FC = () => {
 
   const handleSpeechControl = useCallback(
     async (ctrl: BuddyControl) => {
-      switch (ctrl.action) {
-        case "dismiss":
-          dispatch(clearActiveSpeech());
-          break;
-        case "open_setup":
-          void dispatch(openChatInModeAndStart({ mode: "setup" }));
-          dispatch(clearActiveSpeech());
-          break;
-        case "open_setup_mode": {
-          const param = ctrl.action_param ?? "";
-          const mode = isValidSetupMode(param) ? param : "setup";
-          void dispatch(openChatInModeAndStart({ mode }));
-          dispatch(clearActiveSpeech());
-          break;
+      await executeBuddyAction(ctrl, dispatch, async () => {
+        const result = await createConversation(undefined);
+        if ("data" in result && result.data) {
+          return { data: result.data };
         }
-        case "open_stats":
-          dispatch(push({ name: "stats dashboard" }));
-          dispatch(clearActiveSpeech());
-          break;
-        case "open_buddy":
-          dispatch(push({ name: "buddy" }));
-          dispatch(clearActiveSpeech());
-          break;
-        case "investigate_error": {
-          dispatch(clearActiveSpeech());
-          const result = await createConversation(undefined);
-          if ("data" in result && result.data) {
-            const meta = result.data;
-            dispatch(newBuddyChatAction({ chat_id: meta.chat_id }));
-            dispatch(
-              openBuddyChat({ chat_id: meta.chat_id, title: meta.title }),
-            );
-            dispatch(push({ name: "chat" }));
-          }
-          break;
-        }
-        default:
-          dispatch(clearActiveSpeech());
-      }
+        return {};
+      });
     },
     [dispatch, createConversation],
   );

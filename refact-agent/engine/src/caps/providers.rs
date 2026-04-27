@@ -1430,6 +1430,7 @@ mod tests {
             chat_default_model: "gpt-4.1".to_string(),
             chat_thinking_model: "refact/o3-mini".to_string(),
             chat_light_model: "".to_string(),
+            ..Default::default()
         };
 
         defaults.apply_override(&other, Some("refact"));
