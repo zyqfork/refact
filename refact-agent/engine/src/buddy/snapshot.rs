@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use super::diagnostics::DiagnosticContext;
 use super::settings::BuddySettings;
-use super::types::{BuddyDraft, BuddyOpportunity, BuddyPulse, BuddyRuntimeEvent, BuddySpeechItem, BuddyState};
+use super::types::{
+    BuddyDraft, BuddyOpportunity, BuddyPulse, BuddyRuntimeEvent, BuddySpeechItem, BuddyState,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuddySnapshot {

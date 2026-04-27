@@ -1739,12 +1739,7 @@ pub async fn execute_tools(
     };
     let tool_meta: Vec<(String, String)> = tool_calls
         .iter()
-        .map(|tc| {
-            (
-                tc.id.clone(),
-                format!("tool_{}", tc.id),
-            )
-        })
+        .map(|tc| (tc.id.clone(), format!("tool_{}", tc.id)))
         .collect();
     for (tc, (_, dedupe_key)) in tool_calls.iter().zip(tool_meta.iter()) {
         let mut ev = crate::buddy::actor::make_runtime_event(
@@ -1787,12 +1782,7 @@ pub async fn execute_tools(
             ev.chat_id = Some(chat_id.to_string());
             crate::buddy::actor::buddy_enqueue_event(gcx2.clone(), ev).await;
         } else {
-            crate::buddy::actor::buddy_complete_event(
-                gcx2.clone(),
-                dedupe_key,
-                "completed",
-            )
-            .await;
+            crate::buddy::actor::buddy_complete_event(gcx2.clone(), dedupe_key, "completed").await;
         }
     }
 

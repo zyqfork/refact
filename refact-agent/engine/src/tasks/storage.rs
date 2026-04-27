@@ -442,7 +442,10 @@ pub async fn next_planner_chat_id(
     let prefix = format!("planner-{}-", task_id);
     let max_num = existing
         .iter()
-        .filter_map(|t| t.id.strip_prefix(&prefix).and_then(|s| s.parse::<u32>().ok()))
+        .filter_map(|t| {
+            t.id.strip_prefix(&prefix)
+                .and_then(|s| s.parse::<u32>().ok())
+        })
         .max()
         .unwrap_or(0);
     Ok(format!("planner-{}-{}", task_id, max_num + 1))

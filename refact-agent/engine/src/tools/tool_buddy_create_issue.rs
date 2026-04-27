@@ -83,13 +83,17 @@ impl Tool for ToolBuddyCreateIssue {
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| "buddy_create_issue: missing required string argument 'title'".to_string())?;
+            .ok_or_else(|| {
+                "buddy_create_issue: missing required string argument 'title'".to_string()
+            })?;
         let body = args
             .get("body")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| "buddy_create_issue: missing required string argument 'body'".to_string())?;
+            .ok_or_else(|| {
+                "buddy_create_issue: missing required string argument 'body'".to_string()
+            })?;
         let confidence = args
             .get("confidence")
             .and_then(|v| v.as_str())
@@ -132,13 +136,7 @@ impl Tool for ToolBuddyCreateIssue {
 
         let has_mcp = crate::buddy::issues::has_github_mcp(gcx.clone()).await;
         let result = if has_mcp {
-            crate::buddy::issues::create_issue_via_mcp(
-                gcx.clone(),
-                title,
-                body,
-                labels,
-            )
-            .await
+            crate::buddy::issues::create_issue_via_mcp(gcx.clone(), title, body, labels).await
         } else {
             crate::buddy::issues::create_issue_via_native(
                 gcx.clone(),

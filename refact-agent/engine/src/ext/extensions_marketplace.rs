@@ -1439,10 +1439,14 @@ pub async fn resolve_marketplace_item(
         .ok_or_else(|| format!("source '{}' not found", source_id))?;
     let repo_dir = ensure_source_ready(&cache_dir, &source).await?;
     let items = load_items_for_source(&repo_dir, &source, kind).await?;
-    let item = items
-        .into_iter()
-        .find(|i| i.id == item_id)
-        .ok_or_else(|| format!("{} '{}' not found in source '{}'", kind.as_str(), item_id, source_id))?;
+    let item = items.into_iter().find(|i| i.id == item_id).ok_or_else(|| {
+        format!(
+            "{} '{}' not found in source '{}'",
+            kind.as_str(),
+            item_id,
+            source_id
+        )
+    })?;
     let abs_path = resolve_repo_path(&repo_dir, &item.path)?;
     Ok(ResolvedMarketplaceItem { item, abs_path })
 }

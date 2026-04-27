@@ -9,7 +9,9 @@ use super::issues::{
 };
 use super::scheduler::BuddyJobContext;
 use super::settings::{AutonomyLevel, BuddySettings, HumorLevel, MAX_PALETTE_INDEX};
-use super::state::{apply_care_action, apply_pet_tick, default_buddy_state, grant_xp, reroll_personality};
+use super::state::{
+    apply_care_action, apply_pet_tick, default_buddy_state, grant_xp, reroll_personality,
+};
 use super::types::{
     BuddyAction, BuddyCareAction, BuddyJobState, BuddyOnboarding, BuddyPage, BuddyPriority,
     BuddyPulse, BuddySuggestion, BuddyState, CustomizationKind, DefaultsKind, DraftKind,
@@ -494,8 +496,12 @@ async fn test_diagnostic_history_persists_and_loads() {
         severity: DiagnosticSeverity::Low,
     };
 
-    super::storage::append_diagnostic(root, &ctx1).await.unwrap();
-    super::storage::append_diagnostic(root, &ctx2).await.unwrap();
+    super::storage::append_diagnostic(root, &ctx1)
+        .await
+        .unwrap();
+    super::storage::append_diagnostic(root, &ctx2)
+        .await
+        .unwrap();
 
     let loaded = super::storage::load_diagnostics(root).await.unwrap();
     assert_eq!(loaded.len(), 2);
@@ -1309,7 +1315,11 @@ async fn test_runtime_queue_dismissal_survives_restart() {
         .unwrap();
 
     let queue = load_runtime_queue(root).await;
-    let restored = queue.items.iter().find(|e| e.id == id).expect("event missing");
+    let restored = queue
+        .items
+        .iter()
+        .find(|e| e.id == id)
+        .expect("event missing");
     assert!(restored.dismissed, "dismissal must survive replay");
 }
 
@@ -1333,9 +1343,14 @@ async fn test_runtime_queue_eviction_tombstones_replay() {
     );
     victim.priority = "low".to_string();
     let victim_id = victim.id.clone();
-    append_runtime_record(root, &RuntimeQueueRecord::Event { event: victim.clone() })
-        .await
-        .unwrap();
+    append_runtime_record(
+        root,
+        &RuntimeQueueRecord::Event {
+            event: victim.clone(),
+        },
+    )
+    .await
+    .unwrap();
 
     let survivor = make_runtime_event(
         "signal",
@@ -1346,9 +1361,14 @@ async fn test_runtime_queue_eviction_tombstones_replay() {
         Some("normal"),
     );
     let survivor_id = survivor.id.clone();
-    append_runtime_record(root, &RuntimeQueueRecord::Event { event: survivor.clone() })
-        .await
-        .unwrap();
+    append_runtime_record(
+        root,
+        &RuntimeQueueRecord::Event {
+            event: survivor.clone(),
+        },
+    )
+    .await
+    .unwrap();
 
     // Eviction tombstone for the victim.
     append_runtime_record(
@@ -1446,7 +1466,10 @@ async fn test_runtime_queue_now_playing_persists() {
         .await
         .unwrap();
     let queue = load_runtime_queue(root).await;
-    assert!(queue.now_playing.is_none(), "clearing now_playing must persist");
+    assert!(
+        queue.now_playing.is_none(),
+        "clearing now_playing must persist"
+    );
 }
 
 /// Backward-compat: legacy logs that contain bare `BuddyRuntimeEvent` JSON
@@ -1529,13 +1552,19 @@ fn state_migration_loads_old_state_without_opportunities() {
     }"#;
     let state: BuddyState =
         serde_json::from_str(json).expect("should parse old state without opportunities");
-    assert!(state.opportunities.is_empty(), "opportunities must default to empty vec");
+    assert!(
+        state.opportunities.is_empty(),
+        "opportunities must default to empty vec"
+    );
 }
 
 #[test]
 fn buddy_action_round_trip() {
     let actions: Vec<BuddyAction> = vec![
-        BuddyAction::OpenPage { page: BuddyPage::Buddy, params: None },
+        BuddyAction::OpenPage {
+            page: BuddyPage::Buddy,
+            params: None,
+        },
         BuddyAction::LaunchInvestigationChat {
             preload: InvestigationContext {
                 fact_keys: vec![],
@@ -1545,15 +1574,41 @@ fn buddy_action_round_trip() {
                 initial_user_message: "investigate".to_string(),
             },
         },
-        BuddyAction::DraftSkill { draft_id: "d1".to_string(), label: "My Skill".to_string() },
-        BuddyAction::DraftCommand { draft_id: "d2".to_string(), label: "My Command".to_string() },
-        BuddyAction::DraftSubagent { draft_id: "d3".to_string(), label: "My Subagent".to_string() },
-        BuddyAction::DraftMode { draft_id: "d4".to_string(), label: "My Mode".to_string() },
-        BuddyAction::DraftAgentsMdPatch { diff: "--- a\n+++ b".to_string() },
-        BuddyAction::DraftDefaultsChange { defaults_kind: DefaultsKind::ChatModel, patch: serde_json::json!({}) },
-        BuddyAction::DraftCustomizationChange { customization_kind: CustomizationKind::Mode, id: "m1".to_string(), patch: serde_json::json!({}) },
-        BuddyAction::OfferMarketplaceInstall { market_kind: MarketKind::Mcp, item_id: "github-mcp".to_string() },
-        BuddyAction::CreatePulseReport { scope: PulseScope::All },
+        BuddyAction::DraftSkill {
+            draft_id: "d1".to_string(),
+            label: "My Skill".to_string(),
+        },
+        BuddyAction::DraftCommand {
+            draft_id: "d2".to_string(),
+            label: "My Command".to_string(),
+        },
+        BuddyAction::DraftSubagent {
+            draft_id: "d3".to_string(),
+            label: "My Subagent".to_string(),
+        },
+        BuddyAction::DraftMode {
+            draft_id: "d4".to_string(),
+            label: "My Mode".to_string(),
+        },
+        BuddyAction::DraftAgentsMdPatch {
+            diff: "--- a\n+++ b".to_string(),
+        },
+        BuddyAction::DraftDefaultsChange {
+            defaults_kind: DefaultsKind::ChatModel,
+            patch: serde_json::json!({}),
+        },
+        BuddyAction::DraftCustomizationChange {
+            customization_kind: CustomizationKind::Mode,
+            id: "m1".to_string(),
+            patch: serde_json::json!({}),
+        },
+        BuddyAction::OfferMarketplaceInstall {
+            market_kind: MarketKind::Mcp,
+            item_id: "github-mcp".to_string(),
+        },
+        BuddyAction::CreatePulseReport {
+            scope: PulseScope::All,
+        },
         BuddyAction::Dismiss,
     ];
     for action in &actions {
@@ -1580,7 +1635,9 @@ fn buddy_page_round_trip() {
         BuddyPage::CommandsMarketplace,
         BuddyPage::SubagentsMarketplace,
         BuddyPage::TasksList,
-        BuddyPage::TaskWorkspace { task_id: "task-abc".to_string() },
+        BuddyPage::TaskWorkspace {
+            task_id: "task-abc".to_string(),
+        },
         BuddyPage::KnowledgeGraph,
     ];
     for page in &pages {
@@ -1588,7 +1645,10 @@ fn buddy_page_round_trip() {
         let back: BuddyPage = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(page, &back, "round-trip mismatch for {:?}", page);
     }
-    let task_json = serde_json::to_string(&BuddyPage::TaskWorkspace { task_id: "task-abc".to_string() }).unwrap();
+    let task_json = serde_json::to_string(&BuddyPage::TaskWorkspace {
+        task_id: "task-abc".to_string(),
+    })
+    .unwrap();
     assert!(task_json.contains("task-abc"), "task_id must be serialized");
 }
 
@@ -1605,7 +1665,10 @@ fn buddy_pulse_default() {
 #[test]
 fn settings_default_observer_toggles() {
     let settings = BuddySettings::default();
-    assert!(!settings.observers.chat_pattern, "chat_pattern must default to false");
+    assert!(
+        !settings.observers.chat_pattern,
+        "chat_pattern must default to false"
+    );
     assert!(settings.observers.task_health);
     assert!(settings.observers.trajectory_clutter);
     assert!(settings.observers.customization_drift);
@@ -1632,4 +1695,3 @@ fn humor_level_and_autonomy_serde() {
     assert_eq!(settings.humor_level, HumorLevel::Light);
     assert_eq!(settings.autonomy_level, AutonomyLevel::Suggest);
 }
-

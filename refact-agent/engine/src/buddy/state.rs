@@ -9,8 +9,8 @@ use crate::buddy::settings::MAX_PALETTE_INDEX;
 
 use super::types::{
     BuddyActivity, BuddyCareAction, BuddyControl, BuddyIdentity, BuddyOnboarding,
-    BuddyPersonalityProfile, BuddyPersonalityTraits, BuddyPetState, BuddyProgression,
-    BuddyQuest, BuddySemanticSnapshot, BuddySkillLedger, BuddyState,
+    BuddyPersonalityProfile, BuddyPersonalityTraits, BuddyPetState, BuddyProgression, BuddyQuest,
+    BuddySemanticSnapshot, BuddySkillLedger, BuddyState,
 };
 
 const BUDDY_NAMES: &[&str] = &[
@@ -278,7 +278,9 @@ fn dec_stat(value: &mut u8, amount: u64) {
 }
 
 fn inc_stat(value: &mut u8, amount: u64) {
-    *value = value.saturating_add(amount.min(u8::MAX as u64) as u8).min(100);
+    *value = value
+        .saturating_add(amount.min(u8::MAX as u64) as u8)
+        .min(100);
 }
 
 fn wellbeing(state: &BuddyState) -> u64 {
@@ -369,25 +371,37 @@ fn sync_semantic(state: &mut BuddyState) {
         (
             "Hungry",
             "snack time",
-            format!("{} Snack reserves are running low — I could use a nibble", vibe),
+            format!(
+                "{} Snack reserves are running low — I could use a nibble",
+                vibe
+            ),
         )
     } else if condition.sleepy {
         (
             "Sleepy",
             "resting",
-            format!("{} Battery paws are dipping — a quick rest would help", vibe),
+            format!(
+                "{} Battery paws are dipping — a quick rest would help",
+                vibe
+            ),
         )
     } else if condition.dirty {
         (
             "Grimy",
             "cleaning up",
-            format!("{} I’m still helpful, but I could use a cleanup first", vibe),
+            format!(
+                "{} I’m still helpful, but I could use a cleanup first",
+                vibe
+            ),
         )
     } else if condition.bored {
         (
             "Restless",
             "play time",
-            format!("{} Gentle mischief levels rising — play with me a bit?", vibe),
+            format!(
+                "{} Gentle mischief levels rising — play with me a bit?",
+                vibe
+            ),
         )
     } else if condition.lonely {
         (
@@ -537,7 +551,11 @@ pub fn refresh_active_quest_progress(state: &mut BuddyState) -> bool {
     }
 
     let progress = match quest_type.as_str() {
-        "run_workflow" => state.workflow_summaries.iter().map(|w| w.run_count).sum::<u64>() as u32,
+        "run_workflow" => state
+            .workflow_summaries
+            .iter()
+            .map(|w| w.run_count)
+            .sum::<u64>() as u32,
         "start_setup" => u32::from(state.onboarding.tour_completed),
         "care_buddy" => state.pet.evolution.care_score.min(u64::from(u32::MAX)) as u32,
         _ => current,
@@ -647,7 +665,9 @@ pub fn apply_care_action(
     toy: Option<&str>,
 ) -> (bool, String) {
     let before = serde_json::to_string(state).unwrap_or_default();
-    let toy_note = toy.filter(|value| !value.trim().is_empty()).unwrap_or("toy");
+    let toy_note = toy
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("toy");
     let (message, activity_type, activity_icon) = match action {
         BuddyCareAction::Feed => {
             inc_stat(&mut state.pet.needs.hunger, 24);
@@ -665,7 +685,10 @@ pub fn apply_care_action(
             dec_stat(&mut state.pet.needs.energy, 8);
             state.pet.evolution.care_score = state.pet.evolution.care_score.saturating_add(5);
             (
-                format!("Played together with {}. Mischief pressure reduced.", toy_note),
+                format!(
+                    "Played together with {}. Mischief pressure reduced.",
+                    toy_note
+                ),
                 "care_play",
                 "🎾",
             )
@@ -728,5 +751,8 @@ pub fn apply_care_action(
         },
     );
 
-    (serde_json::to_string(state).unwrap_or_default() != before, message)
+    (
+        serde_json::to_string(state).unwrap_or_default() != before,
+        message,
+    )
 }

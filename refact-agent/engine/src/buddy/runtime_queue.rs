@@ -62,9 +62,7 @@ impl RuntimeQueue {
         // Cap queue size, drop oldest low-priority first
         let mut evicted = Vec::new();
         while self.items.len() > MAX_QUEUE_SIZE {
-            let dropped = if let Some(pos) =
-                self.items.iter().position(|e| e.priority == "low")
-            {
+            let dropped = if let Some(pos) = self.items.iter().position(|e| e.priority == "low") {
                 self.items.remove(pos)
             } else {
                 self.items.pop_back()

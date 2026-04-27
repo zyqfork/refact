@@ -434,7 +434,9 @@ fn validate_chat_history_slice(messages: &[ChatMessage]) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn validate_chat_history(messages: &Vec<ChatMessage>) -> Result<Vec<ChatMessage>, String> {
+pub(crate) fn validate_chat_history(
+    messages: &Vec<ChatMessage>,
+) -> Result<Vec<ChatMessage>, String> {
     validate_chat_history_slice(messages)?;
     Ok(messages.to_vec())
 }

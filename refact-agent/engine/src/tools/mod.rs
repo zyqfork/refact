@@ -36,14 +36,14 @@ mod tool_web_search;
 
 pub mod file_edit;
 mod tool_ask_questions;
-pub(crate) mod tool_buddy_get_context;
 mod tool_buddy_create_issue;
+pub(crate) mod tool_buddy_get_context;
 pub(crate) mod tool_buddy_get_logs;
-pub(crate) mod tool_mcp_call;
 mod tool_buddy_open_setup_flow;
 mod tool_buddy_open_view;
 mod tool_buddy_say;
 mod tool_create_knowledge;
+pub(crate) mod tool_mcp_call;
 mod tool_task_agent;
 mod tool_task_agent_finish;
 mod tool_task_board;

@@ -239,7 +239,9 @@ pub async fn investigation_logs(
     let mut args = HashMap::new();
     args.insert("lines".to_string(), serde_json::json!(80));
     args.insert("errors_only".to_string(), serde_json::json!(true));
-    let (_, out) = tool.tool_execute(ccx, &"buddy_logs".to_string(), &args).await?;
+    let (_, out) = tool
+        .tool_execute(ccx, &"buddy_logs".to_string(), &args)
+        .await?;
     let text = extract_tool_text(out, "Investigation logs were unavailable.");
     let Some(collected_at) = collected_at else {
         return Ok(text);
@@ -292,8 +294,13 @@ pub async fn investigation_internal_context(
             "project_info"
         ]),
     );
-    let (_, out) = tool.tool_execute(ccx, &"buddy_ctx".to_string(), &args).await?;
-    Ok(extract_tool_text(out, "Investigation context was unavailable."))
+    let (_, out) = tool
+        .tool_execute(ccx, &"buddy_ctx".to_string(), &args)
+        .await?;
+    Ok(extract_tool_text(
+        out,
+        "Investigation context was unavailable.",
+    ))
 }
 
 pub async fn create_issue_via_mcp(
@@ -337,10 +344,7 @@ pub async fn create_issue_via_mcp(
             })
             .ok_or_else(|| "GitHub MCP issue tool not available".to_string())?
     };
-    args.insert(
-        "tool_name".to_string(),
-        serde_json::json!(mcp_tool),
-    );
+    args.insert("tool_name".to_string(), serde_json::json!(mcp_tool));
     args.insert(
         "args".to_string(),
         serde_json::json!({
@@ -351,7 +355,9 @@ pub async fn create_issue_via_mcp(
             "labels": labels,
         }),
     );
-    let (_, out) = tool.tool_execute(ccx, &"buddy_mcp_issue".to_string(), &args).await?;
+    let (_, out) = tool
+        .tool_execute(ccx, &"buddy_mcp_issue".to_string(), &args)
+        .await?;
     let text = extract_tool_text(out, "");
 
     Ok(BuddyIssueCreateResult {
@@ -370,7 +376,9 @@ pub async fn create_issue_via_native(
 ) -> Result<BuddyIssueCreateResult, String> {
     let pre_diag = if diagnostic_index.is_none() {
         match error.as_ref() {
-            Some(err) => Some(crate::buddy::diagnostics::collect_diagnostics(gcx.clone(), err).await),
+            Some(err) => {
+                Some(crate::buddy::diagnostics::collect_diagnostics(gcx.clone(), err).await)
+            }
             None => None,
         }
     } else {

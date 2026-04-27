@@ -14,8 +14,8 @@ use super::settings::BuddySettings;
 use super::snapshot::BuddySnapshot;
 use super::storage::RuntimeQueueRecord;
 use super::types::{
-    BuddyActivity, BuddyCareAction, BuddyQuest, BuddyRuntimeEvent, BuddySpeechItem,
-    BuddyState, BuddySuggestion,
+    BuddyActivity, BuddyCareAction, BuddyQuest, BuddyRuntimeEvent, BuddySpeechItem, BuddyState,
+    BuddySuggestion,
 };
 
 const SUGGESTION_RATE_LIMIT_SECS: u64 = 300;
@@ -103,8 +103,7 @@ pub async fn run_runtime_queue_writer(
                 }
             }
             RuntimeQueueWriteOp::Compact(queue) => {
-                if let Err(err) =
-                    super::storage::compact_runtime_queue(&project_root, &queue).await
+                if let Err(err) = super::storage::compact_runtime_queue(&project_root, &queue).await
                 {
                     warn!("buddy: failed to compact runtime queue: {}", err);
                 }
@@ -209,9 +208,7 @@ impl BuddyService {
     }
 
     pub fn send_navigation(&self, page: super::types::BuddyPage) {
-        let _ = self
-            .events_tx
-            .send(BuddyEvent::NavigationRequest { page });
+        let _ = self.events_tx.send(BuddyEvent::NavigationRequest { page });
     }
 
     pub fn enqueue_runtime_event(&mut self, event: BuddyRuntimeEvent) {
@@ -321,9 +318,9 @@ impl BuddyService {
         }
         if let Some(event) = updated_event {
             self.dirty = true;
-            let _ = self
-                .events_tx
-                .send(BuddyEvent::RuntimeEvent { event: event.clone() });
+            let _ = self.events_tx.send(BuddyEvent::RuntimeEvent {
+                event: event.clone(),
+            });
             self.persist_event(event);
             // The dismiss path may also have flipped the `dismissed` flag on
             // now_playing; record the slot's current state so replay sees it.
@@ -603,7 +600,8 @@ impl BuddyService {
         let project_root = self.project_root.clone();
         let ctx_for_disk = ctx.clone();
         tokio::spawn(async move {
-            if let Err(err) = super::storage::append_diagnostic(&project_root, &ctx_for_disk).await {
+            if let Err(err) = super::storage::append_diagnostic(&project_root, &ctx_for_disk).await
+            {
                 warn!("buddy: failed to persist diagnostic history: {}", err);
             }
         });
@@ -619,10 +617,7 @@ impl BuddyService {
         self.enqueue_diagnostic_runtime_event(&ctx);
     }
 
-    fn enqueue_diagnostic_runtime_event(
-        &mut self,
-        ctx: &super::diagnostics::DiagnosticContext,
-    ) {
+    fn enqueue_diagnostic_runtime_event(&mut self, ctx: &super::diagnostics::DiagnosticContext) {
         use super::diagnostics::DiagnosticSeverity;
         let priority = match ctx.severity {
             DiagnosticSeverity::Critical => "critical",
@@ -666,10 +661,7 @@ impl BuddyService {
             .cloned()
     }
 
-    pub fn diagnostic_by_id(
-        &self,
-        id: &str,
-    ) -> Option<super::diagnostics::DiagnosticContext> {
+    pub fn diagnostic_by_id(&self, id: &str) -> Option<super::diagnostics::DiagnosticContext> {
         self.recent_diagnostics
             .iter()
             .find(|diag| super::diagnostics::diagnostic_id(diag) == id)
@@ -938,7 +930,6 @@ pub fn same_day_log_filter(line: &str, collected_at: &str) -> bool {
     let diff = target.signed_duration_since(candidate).num_seconds();
     diff >= 0 && diff <= 24 * 3600
 }
-
 
 pub struct BuddyMutation {
     pub runtime_event: Option<BuddyRuntimeEvent>,

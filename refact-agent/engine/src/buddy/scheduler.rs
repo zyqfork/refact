@@ -81,7 +81,8 @@ impl BuddyScheduler {
             .push(Box::new(super::jobs::stats_watcher::StatsWatcherJob));
         s.jobs
             .push(Box::new(super::jobs::health_watcher::HealthWatcherJob));
-        s.jobs.push(Box::new(super::jobs::quest_prompt::QuestPromptJob));
+        s.jobs
+            .push(Box::new(super::jobs::quest_prompt::QuestPromptJob));
         s.jobs.push(Box::new(
             super::jobs::proactive_suggestions::ProactiveSuggestionsJob,
         ));

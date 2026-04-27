@@ -477,17 +477,48 @@ pub struct BuddyOpportunityLinks {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BuddyAction {
-    OpenPage { page: BuddyPage, params: Option<serde_json::Value> },
-    LaunchInvestigationChat { preload: InvestigationContext },
-    DraftSkill { draft_id: String, label: String },
-    DraftCommand { draft_id: String, label: String },
-    DraftSubagent { draft_id: String, label: String },
-    DraftMode { draft_id: String, label: String },
-    DraftAgentsMdPatch { diff: String },
-    DraftDefaultsChange { defaults_kind: DefaultsKind, patch: serde_json::Value },
-    DraftCustomizationChange { customization_kind: CustomizationKind, id: String, patch: serde_json::Value },
-    OfferMarketplaceInstall { market_kind: MarketKind, item_id: String },
-    CreatePulseReport { scope: PulseScope },
+    OpenPage {
+        page: BuddyPage,
+        params: Option<serde_json::Value>,
+    },
+    LaunchInvestigationChat {
+        preload: InvestigationContext,
+    },
+    DraftSkill {
+        draft_id: String,
+        label: String,
+    },
+    DraftCommand {
+        draft_id: String,
+        label: String,
+    },
+    DraftSubagent {
+        draft_id: String,
+        label: String,
+    },
+    DraftMode {
+        draft_id: String,
+        label: String,
+    },
+    DraftAgentsMdPatch {
+        diff: String,
+    },
+    DraftDefaultsChange {
+        defaults_kind: DefaultsKind,
+        patch: serde_json::Value,
+    },
+    DraftCustomizationChange {
+        customization_kind: CustomizationKind,
+        id: String,
+        patch: serde_json::Value,
+    },
+    OfferMarketplaceInstall {
+        market_kind: MarketKind,
+        item_id: String,
+    },
+    CreatePulseReport {
+        scope: PulseScope,
+    },
     Dismiss,
 }
 

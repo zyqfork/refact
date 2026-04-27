@@ -80,7 +80,10 @@ impl Tool for ToolMCP {
             )
         };
         if session_maybe.is_none() {
-            let msg = format!("No session for {:?}, MCP server may not be running", session_key);
+            let msg = format!(
+                "No session for {:?}, MCP server may not be running",
+                session_key
+            );
             tracing::error!("{}", msg);
             crate::buddy::actor::report_error_persisted(
                 gcx.clone(),

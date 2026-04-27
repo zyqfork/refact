@@ -58,7 +58,10 @@ impl Tool for ToolBuddyOpenView {
             .ok_or("argument `view` is missing or not a string")?
             .to_string();
 
-        let task_id = args.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let task_id = args
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let page = match view.as_str() {
             "buddy" => BuddyPage::Buddy,

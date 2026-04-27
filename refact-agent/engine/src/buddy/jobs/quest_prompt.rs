@@ -64,7 +64,9 @@ fn make_quest(ctx: &BuddyJobContext, kind: &str) -> Option<BuddyQuest> {
         _ => return None,
     };
     let description = match kind {
-        "start_setup" => "Kick off setup so I can learn this repo and unlock smarter help.".to_string(),
+        "start_setup" => {
+            "Kick off setup so I can learn this repo and unlock smarter help.".to_string()
+        }
         "care_buddy" => {
             if traits.condition.bored || traits.condition.lonely {
                 "I’m getting restless. One playful check-in should lift the vibe.".to_string()
@@ -172,7 +174,11 @@ impl BuddyJob for QuestPromptJob {
             return BuddyJobResult::default();
         };
 
-        let suggestion_id = format!("quest-suggestion-{}-{}", kind, chrono::Utc::now().timestamp());
+        let suggestion_id = format!(
+            "quest-suggestion-{}-{}",
+            kind,
+            chrono::Utc::now().timestamp()
+        );
 
         BuddyJobResult {
             suggestion: Some(BuddySuggestion {

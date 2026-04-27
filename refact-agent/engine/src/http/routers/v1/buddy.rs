@@ -60,9 +60,8 @@ pub async fn handle_v1_buddy_settings_get(
                 .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         )),
         None => Ok(axum::Json(
-            serde_json::to_value(crate::buddy::settings::BuddySettings::default()).map_err(
-                |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            )?,
+            serde_json::to_value(crate::buddy::settings::BuddySettings::default())
+                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         )),
     }
 }
@@ -143,17 +142,14 @@ pub async fn handle_v1_buddy_settings_update(
         let _ = tx.send(BuddyEvent::SettingsChanged {
             settings: new_settings.clone(),
         });
-        return Ok(axum::Json(
-            serde_json::to_value(new_settings).map_err(|e| {
-                ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            })?,
-        ));
+        return Ok(axum::Json(serde_json::to_value(new_settings).map_err(
+            |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        )?));
     }
 
     Ok(axum::Json(
-        serde_json::to_value(crate::buddy::settings::BuddySettings::default()).map_err(|e| {
-            ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-        })?,
+        serde_json::to_value(crate::buddy::settings::BuddySettings::default())
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
     ))
 }
 
@@ -438,8 +434,8 @@ pub async fn handle_v1_buddy_investigation_context(
         &req.error,
         req.collected_at.as_deref(),
     )
-        .await
-        .unwrap_or_else(|e| format!("Investigation logs unavailable: {}", e));
+    .await
+    .unwrap_or_else(|e| format!("Investigation logs unavailable: {}", e));
     let internal = crate::buddy::issues::investigation_internal_context(gcx.clone())
         .await
         .unwrap_or_else(|e| format!("Investigation context unavailable: {}", e));

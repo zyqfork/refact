@@ -251,7 +251,10 @@ pub async fn append_diagnostic(project_root: &Path, ctx: &DiagnosticContext) -> 
 }
 
 pub async fn load_diagnostics(project_root: &Path) -> Result<Vec<DiagnosticContext>, String> {
-    Ok(load_diagnostics_inner(project_root, None).await?.into_iter().collect())
+    Ok(load_diagnostics_inner(project_root, None)
+        .await?
+        .into_iter()
+        .collect())
 }
 
 pub async fn load_recent_diagnostics(

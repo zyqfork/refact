@@ -83,10 +83,7 @@ impl Tool for ToolBuddyOpenSetupFlow {
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
                 role: "tool".to_string(),
-                content: ChatContent::SimpleText(format!(
-                    "Setup flow '{}' launched.",
-                    flow
-                )),
+                content: ChatContent::SimpleText(format!("Setup flow '{}' launched.", flow)),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
                 ..Default::default()
