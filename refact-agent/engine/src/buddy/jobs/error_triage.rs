@@ -10,6 +10,7 @@ impl BuddyJob for ErrorTriageJob {
     fn id(&self) -> &str { "error_triage" }
     fn cooldown_seconds(&self) -> u64 { 300 }
     fn priority(&self) -> u32 { 2 }
+    fn produces_suggestion(&self) -> bool { true }
 
     async fn should_run(&self, _gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>, ctx: &BuddyJobContext) -> bool {
         ctx.recent_diagnostics.len() >= 3

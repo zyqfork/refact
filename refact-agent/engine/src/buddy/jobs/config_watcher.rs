@@ -9,6 +9,7 @@ impl BuddyJob for ConfigWatcherJob {
     fn id(&self) -> &str { "config_watcher" }
     fn cooldown_seconds(&self) -> u64 { 600 }
     fn priority(&self) -> u32 { 3 }
+    fn produces_suggestion(&self) -> bool { true }
 
     async fn should_run(&self, _gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>, _ctx: &BuddyJobContext) -> bool {
         true

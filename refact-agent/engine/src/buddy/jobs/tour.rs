@@ -7,14 +7,14 @@ pub struct TourJob;
 #[async_trait::async_trait]
 impl BuddyJob for TourJob {
     fn id(&self) -> &str { "tour" }
-    fn cooldown_seconds(&self) -> u64 { 0 }
+    fn cooldown_seconds(&self) -> u64 { 86400 }
     fn priority(&self) -> u32 { 1 }
 
     async fn should_run(&self, _gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>, ctx: &BuddyJobContext) -> bool {
-        ctx.onboarding.greeted && !ctx.onboarding.tour_completed
+        ctx.onboarding.greeted && !ctx.onboarding.tour_completed && ctx.job_state.last_run.is_none()
     }
 
-    async fn execute(&self, _gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>, ctx: BuddyJobContext) -> BuddyJobResult {
+    async fn execute(&self, _gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>, _ctx: BuddyJobContext) -> BuddyJobResult {
         BuddyJobResult {
             speech: Some(BuddySpeechItem {
                 id: format!("tour-{}", chrono::Utc::now().timestamp()),

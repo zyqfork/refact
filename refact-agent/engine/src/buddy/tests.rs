@@ -647,3 +647,52 @@ fn test_old_settings_get_proactive_default() {
     let settings: BuddySettings = serde_json::from_str(json).unwrap();
     assert!(settings.proactive_enabled, "missing proactive_enabled should default to true");
 }
+
+#[tokio::test]
+async fn test_tour_job_runs_only_once() {
+    use super::jobs::tour::TourJob;
+    use super::scheduler::BuddyJob;
+    let job = TourJob;
+    let onboarding = BuddyOnboarding { greeted: true, tour_completed: false, ..Default::default() };
+    let fresh_ctx = make_job_context(onboarding.clone(), 0, BuddyJobState::default());
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    assert!(job.should_run(gcx.clone(), &fresh_ctx).await, "tour must run on first tick");
+    let ran_state = BuddyJobState {
+        last_run: Some(chrono::Utc::now().to_rfc3339()),
+        run_count: 1,
+        last_result: Some("ok".to_string()),
+        snoozed_until: None,
+        dismissed: false,
+    };
+    let ran_ctx = make_job_context(onboarding, 0, ran_state);
+    assert!(!job.should_run(gcx, &ran_ctx).await, "tour must not run after first run");
+}
+
+#[test]
+fn test_scheduler_suggestion_dedup() {
+    let mut svc = make_service();
+    let now = chrono::Utc::now().to_rfc3339();
+    let s1 = make_suggestion("dup-1", "error_pattern", &now);
+    let s2 = BuddySuggestion {
+        id: "dup-2".to_string(),
+        suggestion_type: "error_pattern".to_string(),
+        title: "t".to_string(),
+        description: "d".to_string(),
+        created_at: now,
+        dismissed: false,
+    };
+    assert!(svc.maybe_add_suggestion(s1), "first suggestion must be accepted");
+    assert!(!svc.maybe_add_suggestion(s2), "duplicate suggestion must be rejected by dedup");
+    assert_eq!(svc.state.suggestion_state.len(), 1);
+}
+
+#[tokio::test]
+async fn test_proactive_disabled_still_allows_greeting() {
+    use super::jobs::greeting::GreetingJob;
+    use super::scheduler::BuddyJob;
+    let job = GreetingJob;
+    assert!(!job.produces_suggestion(), "greeting must not be gated by proactive flag");
+    let ctx = make_job_context(BuddyOnboarding::default(), 0, BuddyJobState::default());
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    assert!(job.should_run(gcx, &ctx).await, "greeting must run even when proactive_enabled=false");
+}

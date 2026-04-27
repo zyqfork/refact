@@ -14,7 +14,7 @@ use super::snapshot::BuddySnapshot;
 use super::types::{BuddyActivity, BuddyRuntimeEvent, BuddySpeechItem, BuddyState, BuddySuggestion};
 
 const SAVE_INTERVAL_SECS: u64 = 60;
-const SUGGESTION_RATE_LIMIT_SECS: u64 = 30;
+const SUGGESTION_RATE_LIMIT_SECS: u64 = 300;
 const SUGGESTION_EXPIRY_SECS: i64 = 300;
 
 pub struct BuddyService {

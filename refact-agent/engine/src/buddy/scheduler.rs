@@ -1,11 +1,8 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{info, warn};
 use tokio::sync::Mutex as AMutex;
 
 use crate::global_context::GlobalContext;
-use crate::custom_error::ScratchError;
 use super::actor::BuddyService;
 use super::types::{BuddyJobState, BuddySpeechItem, BuddySuggestion, BuddyActivity, BuddyRuntimeEvent, BuddyOnboarding};
 use super::diagnostics::DiagnosticContext;
@@ -37,6 +34,7 @@ pub trait BuddyJob: Send + Sync {
     fn id(&self) -> &str;
     fn cooldown_seconds(&self) -> u64;
     fn priority(&self) -> u32;
+    fn produces_suggestion(&self) -> bool { false }
     async fn should_run(&self, gcx: Arc<tokio::sync::RwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool;
     async fn execute(&self, gcx: Arc<tokio::sync::RwLock<GlobalContext>>, ctx: BuddyJobContext) -> BuddyJobResult;
 }
@@ -69,19 +67,20 @@ impl BuddyScheduler {
         let ctx_opt = {
             let buddy = buddy_arc.lock().await;
             buddy.as_ref().map(|svc| {
-                let unread = svc.state.suggestion_state.iter().filter(|s| !s.dismissed).count();
-                if !svc.settings.proactive_enabled || unread >= MAX_UNREAD_SUGGESTIONS {
-                    return None;
-                }
-                Some((svc.state.clone(), svc.recent_diagnostics.clone()))
+                Some((svc.state.clone(), svc.recent_diagnostics.clone(), svc.settings.proactive_enabled))
             }).flatten()
         };
-        let (state, diags) = match ctx_opt {
+        let (state, diags, proactive_enabled) = match ctx_opt {
             Some(x) => x,
             None => return,
         };
 
+        let unread = state.suggestion_state.iter().filter(|s| !s.dismissed).count();
+
         for job in &self.jobs {
+            if job.produces_suggestion() && (!proactive_enabled || unread >= MAX_UNREAD_SUGGESTIONS) {
+                continue;
+            }
             let job_state = state.job_cooldowns.get(job.id()).cloned().unwrap_or_default();
             if job_state.dismissed {
                 continue;
@@ -97,7 +96,7 @@ impl BuddyScheduler {
                 identity_name: state.identity.name.clone(),
                 onboarding: state.onboarding.clone(),
                 recent_diagnostics: diags.clone(),
-                suggestion_unread_count: state.suggestion_state.iter().filter(|s| !s.dismissed).count(),
+                suggestion_unread_count: unread,
                 project_root: project_root.to_path_buf(),
                 job_state: job_state.clone(),
             };
@@ -114,7 +113,7 @@ impl BuddyScheduler {
                 svc.state.job_cooldowns.insert(job.id().to_string(), js);
                 svc.dirty = true;
                 if let Some(suggestion) = result.suggestion {
-                    svc.add_suggestion(suggestion);
+                    svc.maybe_add_suggestion(suggestion);
                 }
                 if let Some(activity) = result.activity {
                     svc.add_activity(activity);
