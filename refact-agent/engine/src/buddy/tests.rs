@@ -1,5 +1,6 @@
 use chrono::Duration;
 use tokio::sync::broadcast;
+use crate::tasks::types::{BoardCard, TaskBoard, TaskMeta, TaskStatus};
 
 use super::actor::BuddyService;
 use super::diagnostics::{classify_error, DiagnosticContext, DiagnosticSeverity};
@@ -2179,4 +2180,195 @@ async fn humor_cache_expiry() {
         2,
         "cache expiry must trigger a fresh generation"
     );
+}
+
+// =============================================================================
+// Observer tests
+// =============================================================================
+
+fn make_task_meta(id: &str, name: &str, status: TaskStatus, created_at: &str) -> TaskMeta {
+    TaskMeta {
+        schema_version: 1,
+        id: id.to_string(),
+        name: name.to_string(),
+        status,
+        created_at: created_at.to_string(),
+        updated_at: created_at.to_string(),
+        cards_total: 0,
+        cards_done: 0,
+        cards_failed: 0,
+        agents_active: 0,
+        base_branch: None,
+        base_commit: None,
+        default_agent_model: None,
+        is_name_generated: false,
+        last_agents_summary_at: None,
+        planner_session_state: None,
+    }
+}
+
+fn make_board_card(
+    id: &str,
+    column: &str,
+    assignee: Option<&str>,
+    started_at: Option<&str>,
+) -> BoardCard {
+    BoardCard {
+        id: id.to_string(),
+        title: "T".to_string(),
+        column: column.to_string(),
+        priority: "P1".to_string(),
+        depends_on: vec![],
+        instructions: String::new(),
+        assignee: assignee.map(|s| s.to_string()),
+        agent_chat_id: None,
+        status_updates: vec![],
+        final_report: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        started_at: started_at.map(|s| s.to_string()),
+        completed_at: None,
+        agent_branch: None,
+        agent_worktree: None,
+        agent_worktree_name: None,
+    }
+}
+
+#[test]
+fn task_health_emits_stuck_fact() {
+    use super::observers::task_health::detect_task_health_facts;
+    let now = chrono::Utc::now();
+    let started = (now - Duration::minutes(20)).to_rfc3339();
+    let meta = make_task_meta("t1", "Fix bug", TaskStatus::Active, &now.to_rfc3339());
+    let board = TaskBoard {
+        schema_version: 1,
+        rev: 0,
+        columns: vec![],
+        cards: vec![make_board_card("c1", "doing", Some("agent-1"), Some(&started))],
+    };
+    let facts = detect_task_health_facts(&[(meta, board)], now);
+    assert!(
+        facts.iter().any(|f| f.kind == BuddyFactKind::TaskStuck),
+        "stuck fact must be emitted"
+    );
+}
+
+#[test]
+fn task_health_no_fact_for_completed() {
+    use super::observers::task_health::detect_task_health_facts;
+    let now = chrono::Utc::now();
+    let started = (now - Duration::minutes(20)).to_rfc3339();
+    let meta = make_task_meta("t1", "Done task", TaskStatus::Completed, &now.to_rfc3339());
+    let board = TaskBoard {
+        schema_version: 1,
+        rev: 0,
+        columns: vec![],
+        cards: vec![make_board_card("c1", "doing", Some("agent-1"), Some(&started))],
+    };
+    let facts = detect_task_health_facts(&[(meta, board)], now);
+    assert!(
+        facts.iter().all(|f| f.kind != BuddyFactKind::TaskStuck),
+        "completed task must not emit stuck fact"
+    );
+}
+
+#[test]
+fn trajectory_clutter_threshold() {
+    use super::observers::trajectory_clutter::detect_trajectory_clutter_facts;
+    let now = chrono::Utc::now();
+    let facts = detect_trajectory_clutter_facts("hash123", 51, 0, 0, now);
+    assert!(
+        facts.iter().any(|f| f.kind == BuddyFactKind::TrajectoryClutter),
+        "fact must be emitted when total > 50"
+    );
+    let facts_under = detect_trajectory_clutter_facts("hash123", 50, 0, 0, now);
+    assert!(
+        facts_under.is_empty(),
+        "no fact when total <= 50 and untitled <= 15"
+    );
+}
+
+#[test]
+fn git_pressure_uncommitted() {
+    use super::observers::git_pressure::{count_uncommitted, detect_git_pressure_facts};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    let repo = git2::Repository::init(path).unwrap();
+    {
+        let sig = git2::Signature::now("test", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+    }
+    drop(repo);
+
+    for i in 0..30 {
+        std::fs::write(path.join(format!("file_{}.rs", i)), b"fn foo() {}").unwrap();
+    }
+
+    let count = count_uncommitted(path).unwrap_or(0);
+    assert!(count > 25, "expected >25 uncommitted, got {}", count);
+
+    let now = chrono::Utc::now();
+    let facts = detect_git_pressure_facts(path, now);
+    assert!(
+        facts.iter().any(|f| f.kind == BuddyFactKind::UncommittedPressure),
+        "uncommitted pressure fact must be emitted"
+    );
+}
+
+#[test]
+fn diagnostic_cluster_threshold() {
+    use super::observers::diagnostic_cluster::detect_diagnostic_cluster_facts;
+    let now = chrono::Utc::now();
+    let ts = (now - Duration::minutes(5)).to_rfc3339();
+    let diags: Vec<DiagnosticContext> = (0..3)
+        .map(|i| DiagnosticContext {
+            error_type: "timeout".to_string(),
+            error_message: format!("timeout error {}", i),
+            source_file: None,
+            tool_name: None,
+            chat_id: None,
+            collected_at: ts.clone(),
+            severity: DiagnosticSeverity::High,
+        })
+        .collect();
+    let facts = detect_diagnostic_cluster_facts(&diags, now);
+    assert!(
+        facts.iter().any(|f| f.kind == BuddyFactKind::DiagnosticCluster),
+        "cluster fact must be emitted for 3 same-type diagnostics"
+    );
+}
+
+#[test]
+fn frontend_error_burst() {
+    use super::observers::diagnostic_cluster::detect_diagnostic_cluster_facts;
+    let now = chrono::Utc::now();
+    let ts = (now - Duration::minutes(2)).to_rfc3339();
+    let diags: Vec<DiagnosticContext> = (0..5)
+        .map(|i| DiagnosticContext {
+            error_type: "js_error".to_string(),
+            error_message: format!("uncaught {}", i),
+            source_file: None,
+            tool_name: Some("frontend".to_string()),
+            chat_id: None,
+            collected_at: ts.clone(),
+            severity: DiagnosticSeverity::Medium,
+        })
+        .collect();
+    let facts = detect_diagnostic_cluster_facts(&diags, now);
+    assert!(
+        facts.iter().any(|f| f.kind == BuddyFactKind::FrontendErrorBurst),
+        "frontend burst fact must be emitted for 5 frontend diagnostics"
+    );
+}
+
+#[test]
+fn ephemeral_debug_renders_placeholder() {
+    use super::observers::Ephemeral;
+    let e = Ephemeral::new("secret".to_string());
+    assert_eq!(format!("{:?}", e), "<ephemeral>");
+    assert_eq!(e.as_ref(), "secret");
 }
