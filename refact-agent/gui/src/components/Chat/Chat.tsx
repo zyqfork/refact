@@ -138,7 +138,7 @@ export const Chat: React.FC<ChatProps> = ({
             </Container>
           )}
 
-          {!isBuddyChat && <BuddyChatCompanion />}
+          {!isBuddyChat && <BuddyChatCompanion chatId={chatId} />}
 
           <Container>
             <ChatForm

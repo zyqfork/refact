@@ -310,6 +310,7 @@ fn test_buddy_say_creates_speech() {
         dedupe_key: Some("greeting".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
         controls: vec![],
+        chat_id: None,
     };
     svc.update_speech(speech.clone());
     assert!(svc.active_speech.is_some());
@@ -325,6 +326,7 @@ fn test_buddy_say_creates_speech() {
         dedupe_key: Some("greeting".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
         controls: vec![],
+        chat_id: None,
     };
     svc.update_speech(speech2);
     assert_eq!(svc.active_speech.as_ref().unwrap().text, "Updated!");
@@ -794,4 +796,39 @@ fn test_event_title_length_limit() {
     let chat_label: String = "Some very long chat title that goes on and on and on and on and on".chars().take(60).collect();
     let ev2 = make_runtime_event("chat_started", &format!("Started: {}", chat_label), "chat", "chat_123", "started", None);
     assert!(ev2.title.len() <= 120, "chat started event title must be under 120 chars");
+}
+
+#[test]
+fn test_runtime_event_chat_id_default_none() {
+    use super::actor::make_runtime_event;
+    let ev = make_runtime_event("indexing", "Indexing...", "indexer", "indexing", "started", None);
+    assert!(ev.chat_id.is_none(), "default event must have no chat_id");
+}
+
+#[test]
+fn test_runtime_event_chat_id_serialized_when_set() {
+    use super::actor::make_runtime_event;
+    let mut ev = make_runtime_event("chat_error", "Error", "chat", "chat_abc", "failed", Some("high"));
+    ev.chat_id = Some("abc-123".to_string());
+    let json = serde_json::to_string(&ev).unwrap();
+    assert!(json.contains("\"chat_id\":\"abc-123\""), "chat_id must be serialized when set");
+}
+
+#[test]
+fn test_runtime_event_chat_id_skipped_when_none() {
+    use super::actor::make_runtime_event;
+    let ev = make_runtime_event("chat_completed", "Done", "chat", "chat_abc", "completed", None);
+    let json = serde_json::to_string(&ev).unwrap();
+    assert!(!json.contains("chat_id"), "chat_id must be skipped when None");
+}
+
+#[test]
+fn test_chat_error_event_includes_chat_id() {
+    use super::actor::make_runtime_event;
+    let chat_id = "test-chat-xyz";
+    let mut ev = make_runtime_event("chat_error", "Error in 'Test chat': something failed", "chat",
+        &format!("chat_{}", chat_id), "failed", Some("high"));
+    ev.chat_id = Some(chat_id.to_string());
+    assert_eq!(ev.chat_id.as_deref(), Some(chat_id));
+    assert_eq!(ev.status, "failed");
 }

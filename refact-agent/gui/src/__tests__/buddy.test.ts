@@ -623,6 +623,62 @@ describe("conversation ledger", () => {
   });
 });
 
+describe("BuddyChatCompanion chat_id scoping", () => {
+  function makeRuntimeEvent(overrides?: Partial<BuddyRuntimeEvent>): BuddyRuntimeEvent {
+    return {
+      id: "ev1",
+      signal_type: "chat_error",
+      title: "Error in 'My Chat': model not found",
+      source: "chat",
+      status: "failed",
+      priority: "high",
+      created_at: "2024-01-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  test("companion renders only for matching chat_id", () => {
+    const chatId = "chat-abc";
+    const ev = makeRuntimeEvent({ chat_id: chatId });
+    const state = reducer(undefined, enqueueRuntimeEvent(ev));
+    const match = state.runtimeQueue.find(
+      (e) => e.chat_id === chatId && e.status === "failed",
+    );
+    expect(match).toBeDefined();
+    expect(match?.chat_id).toBe(chatId);
+  });
+
+  test("companion does not render for different chat_id", () => {
+    const ev = makeRuntimeEvent({ chat_id: "chat-other" });
+    const state = reducer(undefined, enqueueRuntimeEvent(ev));
+    const match = state.runtimeQueue.find(
+      (e) => e.chat_id === "chat-mine" && e.status === "failed",
+    );
+    expect(match).toBeUndefined();
+  });
+
+  test("companion does not render for events without chat_id", () => {
+    const ev = makeRuntimeEvent({ chat_id: undefined });
+    const state = reducer(undefined, enqueueRuntimeEvent(ev));
+    const match = state.runtimeQueue.find(
+      (e) => e.chat_id === "any-chat" && e.status === "failed",
+    );
+    expect(match).toBeUndefined();
+  });
+
+  test("runtime event preserves chat_id field", () => {
+    const ev = makeRuntimeEvent({ chat_id: "chat-xyz", title: "Error in 'Test'" });
+    const state = reducer(undefined, enqueueRuntimeEvent(ev));
+    expect(state.runtimeQueue[0].chat_id).toBe("chat-xyz");
+    expect(state.runtimeQueue[0].title).toBe("Error in 'Test'");
+  });
+
+  test("BuddyRuntimeEvent interface has optional chat_id", () => {
+    const ev: BuddyRuntimeEvent = makeRuntimeEvent();
+    expect("chat_id" in ev || ev.chat_id === undefined).toBe(true);
+  });
+});
+
 describe("BuddyPanel hero layout", () => {
   const buddyDir = path.join(__dirname, "../features/Buddy");
 

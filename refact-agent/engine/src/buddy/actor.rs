@@ -316,6 +316,7 @@ pub fn make_runtime_event(
         duration_hint: None,
         persistent: false,
         controls: Vec::new(),
+        chat_id: None,
     }
 }
 

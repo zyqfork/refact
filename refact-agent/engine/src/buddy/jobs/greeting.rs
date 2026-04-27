@@ -39,6 +39,7 @@ impl BuddyJob for GreetingJob {
                 dedupe_key: Some("greeting".to_string()),
                 created_at: chrono::Utc::now().to_rfc3339(),
                 controls,
+                chat_id: None,
             }),
             ..Default::default()
         }

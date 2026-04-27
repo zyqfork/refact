@@ -1736,6 +1736,7 @@ pub async fn execute_tools(
         );
         ev.speech_text = Some(format!("Using {} to help with '{}'...", tc.function.name, chat_label));
         ev.scene = Some("working".to_string());
+        ev.chat_id = Some(chat_id.to_string());
         crate::buddy::actor::buddy_enqueue_event(gcx.clone(), ev).await;
     }
 

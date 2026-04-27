@@ -26,6 +26,7 @@ impl BuddyJob for TourJob {
                 dedupe_key: Some("tour".to_string()),
                 created_at: chrono::Utc::now().to_rfc3339(),
                 controls: vec![],
+                chat_id: None,
             }),
             ..Default::default()
         }

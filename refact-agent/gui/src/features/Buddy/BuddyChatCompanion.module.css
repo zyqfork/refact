@@ -3,30 +3,52 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--gray-a2);
   border-top: 1px solid var(--gray-a4);
+  background: var(--gray-a2);
 }
 
-.face {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
+.miniScene {
+  position: relative;
   flex-shrink: 0;
+  width: 48px;
+  height: 48px;
 }
 
-.text {
-  flex: 1;
-  min-width: 0;
+.bubble {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 240px;
+  min-width: 120px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-panel-solid);
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-2);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  white-space: normal;
+  z-index: 10;
+}
+
+.bubbleText {
   font-size: 11px;
-  color: var(--gray-11);
-  overflow: hidden;
+  line-height: 1.4;
+  color: var(--gray-12);
+  margin: 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bubbleTail {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid var(--gray-a4);
 }
 
 .actions {

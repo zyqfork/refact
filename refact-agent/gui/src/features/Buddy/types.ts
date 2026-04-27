@@ -279,6 +279,7 @@ export interface BuddySpeechItem {
   dedupe_key?: string;
   created_at: string;
   controls: BuddyControl[];
+  chat_id?: string;
 }
 
 export interface BuddyAnimState {
@@ -518,6 +519,7 @@ export interface BuddyRuntimeEvent {
   duration_hint?: number;
   persistent?: boolean;
   controls?: BuddyControl[];
+  chat_id?: string;
 }
 
 export type BuddySSEEvent =

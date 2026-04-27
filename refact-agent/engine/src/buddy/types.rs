@@ -32,6 +32,8 @@ pub struct BuddyRuntimeEvent {
     pub persistent: bool,
     #[serde(default)]
     pub controls: Vec<BuddyControl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +156,8 @@ pub struct BuddySpeechItem {
     pub created_at: String,
     #[serde(default)]
     pub controls: Vec<BuddyControl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
 }
 
 fn default_mood() -> String {

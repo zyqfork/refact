@@ -95,6 +95,7 @@ impl Tool for ToolBuddySay {
             dedupe_key,
             created_at: chrono::Utc::now().to_rfc3339(),
             controls: vec![],
+            chat_id: None,
         };
 
         let gcx = ccx.lock().await.global_context.clone();
@@ -230,6 +231,7 @@ impl Tool for ToolBuddyRenderControls {
             dedupe_key,
             created_at: chrono::Utc::now().to_rfc3339(),
             controls,
+            chat_id: None,
         };
 
         let gcx = ccx.lock().await.global_context.clone();
