@@ -429,10 +429,15 @@ mod rules {
                     .unwrap_or("chat_model");
                 let (defaults_kind, patch_key) = match field {
                     "chat_buddy_model" => (DefaultsKind::ChatBuddyModel, "chat_buddy_model"),
-                    "chat_thinking_model" => (DefaultsKind::ChatThinkingModel, "chat_thinking_model"),
+                    "chat_thinking_model" => {
+                        (DefaultsKind::ChatThinkingModel, "chat_thinking_model")
+                    }
                     "chat_model" => (DefaultsKind::ChatModel, "chat_default_model"),
                     other => {
-                        tracing::warn!("provider_tuning_missing: unknown field {}, falling back to ChatModel", other);
+                        tracing::warn!(
+                            "provider_tuning_missing: unknown field {}, falling back to ChatModel",
+                            other
+                        );
                         (DefaultsKind::ChatModel, "chat_default_model")
                     }
                 };

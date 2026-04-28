@@ -4226,7 +4226,11 @@ fn provider_tuning_uses_field_specific_defaults_kind() {
     let cases: &[(&str, &str, &str)] = &[
         ("chat_model", "chat_default_model", "chat_model"),
         ("chat_buddy_model", "chat_buddy_model", "chat_buddy_model"),
-        ("chat_thinking_model", "chat_thinking_model", "chat_thinking_model"),
+        (
+            "chat_thinking_model",
+            "chat_thinking_model",
+            "chat_thinking_model",
+        ),
     ];
 
     for (field, patch_key, expected_kind_str) in cases {
@@ -4255,7 +4259,11 @@ fn provider_tuning_uses_field_specific_defaults_kind() {
             .find(|a| matches!(a, BuddyAction::DraftDefaultsChange { .. }))
             .unwrap_or_else(|| panic!("must have DraftDefaultsChange for field={}", field));
 
-        if let BuddyAction::DraftDefaultsChange { defaults_kind, patch } = draft_action {
+        if let BuddyAction::DraftDefaultsChange {
+            defaults_kind,
+            patch,
+        } = draft_action
+        {
             let kind_json = serde_json::to_string(defaults_kind).unwrap();
             let kind_str = kind_json.trim_matches('"');
             assert_eq!(
@@ -4312,4 +4320,3 @@ fn provider_tuning_unknown_field_falls_back_to_chat_model() {
         );
     }
 }
-
