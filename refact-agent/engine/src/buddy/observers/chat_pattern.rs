@@ -167,7 +167,11 @@ impl BuddyObserver for ChatPatternObserver {
         for (chat_id, session_arc) in sessions_read.iter() {
             if let Ok(session) = session_arc.try_lock() {
                 // Run detection on borrowed slice — messages never leave this scope
-                facts.extend(detect_chat_pattern_facts(&session.messages, chat_id, ctx.now));
+                facts.extend(detect_chat_pattern_facts(
+                    &session.messages,
+                    chat_id,
+                    ctx.now,
+                ));
             }
         }
         facts

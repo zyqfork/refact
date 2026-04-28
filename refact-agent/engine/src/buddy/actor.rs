@@ -238,11 +238,15 @@ impl BuddyService {
     }
 
     pub fn add_opportunity(&mut self, opp: BuddyOpportunity) {
-        self.add_opportunity_with_cooldown(opp, super::opportunities::DEFAULT_COOLDOWN.num_seconds() as u64);
+        self.add_opportunity_with_cooldown(
+            opp,
+            super::opportunities::DEFAULT_COOLDOWN.num_seconds() as u64,
+        );
     }
 
     pub fn add_opportunity_with_cooldown(&mut self, opp: BuddyOpportunity, cooldown_secs: u64) {
-        self.opportunity_queue.push_with_cooldown(opp.clone(), cooldown_secs);
+        self.opportunity_queue
+            .push_with_cooldown(opp.clone(), cooldown_secs);
         self.state.opportunities = self.opportunity_queue.snapshot();
         self.state.dismissed_history = self.opportunity_queue.dismissed_history_snapshot();
         self.dirty = true;

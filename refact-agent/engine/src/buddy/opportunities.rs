@@ -33,7 +33,8 @@ impl OpportunityQueue {
         let mut q = Self::new();
         let now = Utc::now();
         for entry in dismissed {
-            q.dismissed_history.insert(entry.cooldown_key, entry.dismissed_at);
+            q.dismissed_history
+                .insert(entry.cooldown_key, entry.dismissed_at);
         }
         for opp in opps {
             let expires = opp.created_at + DEFAULT_COOLDOWN;

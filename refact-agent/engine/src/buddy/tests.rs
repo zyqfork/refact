@@ -2857,7 +2857,10 @@ async fn actor_persistence_round_trip() {
     super::state::save_state(root, &state).await.unwrap();
     let loaded = super::state::load_state(root).await;
     assert_eq!(loaded.opportunities.len(), 2, "opportunities must persist");
-    let queue = super::opportunities::OpportunityQueue::from_state(loaded.opportunities, loaded.dismissed_history);
+    let queue = super::opportunities::OpportunityQueue::from_state(
+        loaded.opportunities,
+        loaded.dismissed_history,
+    );
     assert_eq!(
         queue.iter().count(),
         2,
@@ -3309,9 +3312,17 @@ fn chat_pattern_no_message_clone_in_observe() {
     let ptr_after = messages.as_ptr();
     assert_eq!(ptr_before, ptr_after, "caller slice must not be moved");
     let json = serde_json::to_string(&facts).unwrap();
-    assert!(!json.contains("VERY_SECRET_KEY"), "secret must not appear in facts");
-    assert!(!json.contains("Bearer"), "Bearer token must not appear in facts");
-    assert!(facts.iter().any(|f| matches!(f.kind, BuddyFactKind::ChatRetryStreak)));
+    assert!(
+        !json.contains("VERY_SECRET_KEY"),
+        "secret must not appear in facts"
+    );
+    assert!(
+        !json.contains("Bearer"),
+        "Bearer token must not appear in facts"
+    );
+    assert!(facts
+        .iter()
+        .any(|f| matches!(f.kind, BuddyFactKind::ChatRetryStreak)));
 }
 
 #[tokio::test]
@@ -3329,13 +3340,25 @@ async fn diagnostic_persisted_jsonl_is_redacted() {
         tx,
         None,
     );
-    svc.report_error("test", "connection failed: Bearer sk-LEAK_THIS_TOKEN", None, None);
+    svc.report_error(
+        "test",
+        "connection failed: Bearer sk-LEAK_THIS_TOKEN",
+        None,
+        None,
+    );
     tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
     let content = tokio::fs::read_to_string(root.join(".refact/buddy/diagnostics.jsonl"))
         .await
         .unwrap_or_default();
-    assert!(!content.contains("sk-LEAK_THIS_TOKEN"), "secret must not be in jsonl: {}", content);
-    assert!(content.contains("[REDACTED"), "redaction marker must be in jsonl");
+    assert!(
+        !content.contains("sk-LEAK_THIS_TOKEN"),
+        "secret must not be in jsonl: {}",
+        content
+    );
+    assert!(
+        content.contains("[REDACTED"),
+        "redaction marker must be in jsonl"
+    );
 }
 
 #[tokio::test]
@@ -3348,7 +3371,8 @@ async fn dismissed_history_survives_round_trip() {
     svc.add_opportunity(opp);
     svc.resolve_opportunity("opp-dm-rt", OpportunityStatus::Dismissed);
     assert!(
-        svc.opportunity_queue.recently_dismissed("ck-dm-rt", Duration::hours(24)),
+        svc.opportunity_queue
+            .recently_dismissed("ck-dm-rt", Duration::hours(24)),
         "must be recently dismissed before save"
     );
     let state = svc.state.clone();
@@ -3383,11 +3407,17 @@ fn per_rule_cooldown_honored() {
     let results = OpportunityDetector::new().detect(&store, &pulse, &queue);
     assert!(!results.is_empty(), "must produce at least one opportunity");
     let (_, cooldown_secs) = &results[0];
-    assert_eq!(*cooldown_secs, 3600, "task_stuck rule must use 3600s cooldown");
+    assert_eq!(
+        *cooldown_secs, 3600,
+        "task_stuck rule must use 3600s cooldown"
+    );
 
     let mut q = OpportunityQueue::new();
     q.push_with_cooldown(make_opportunity("opp-zero", "ck-zero-cd"), 0);
-    assert!(!q.cooldown_active("ck-zero-cd"), "0s cooldown must not block");
+    assert!(
+        !q.cooldown_active("ck-zero-cd"),
+        "0s cooldown must not block"
+    );
 
     let mut q2 = OpportunityQueue::new();
     q2.push_with_cooldown(make_opportunity("opp-long", "ck-long-cd"), 3600);
@@ -3409,7 +3439,10 @@ fn terminal_opp_retention_uses_resolved_at() {
     let mut q1 = OpportunityQueue::new();
     q1.items.push(opp1);
     q1.expire_old(now + Duration::minutes(23 * 60 + 59));
-    assert!(q1.get("opp-rt1").is_some(), "opp resolved now must survive at now+23h59m");
+    assert!(
+        q1.get("opp-rt1").is_some(),
+        "opp resolved now must survive at now+23h59m"
+    );
 
     // Same opp — must be evicted at now+24h01m
     let mut opp2 = make_opportunity("opp-rt2", "ck-rt2");
@@ -3421,5 +3454,8 @@ fn terminal_opp_retention_uses_resolved_at() {
     let mut q2 = OpportunityQueue::new();
     q2.items.push(opp2);
     q2.expire_old(now + Duration::minutes(24 * 60 + 1));
-    assert!(q2.get("opp-rt2").is_none(), "opp resolved now must be evicted at now+24h01m");
+    assert!(
+        q2.get("opp-rt2").is_none(),
+        "opp resolved now must be evicted at now+24h01m"
+    );
 }
