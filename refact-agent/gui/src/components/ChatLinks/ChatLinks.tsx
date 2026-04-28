@@ -6,7 +6,6 @@ import { Spinner } from "@radix-ui/themes";
 import { TruncateRight } from "../Text/TruncateRight";
 
 import styles from "./ChatLinks.module.css";
-import { useCoinBallance } from "../../hooks/useCoinBalance";
 import { selectAreFollowUpsEnabled } from "../../features/Chat";
 
 function maybeConcatActionAndGoToStrings(link: ChatLink): string | undefined {
@@ -21,7 +20,6 @@ function maybeConcatActionAndGoToStrings(link: ChatLink): string | undefined {
 
 export const ChatLinks: React.FC = () => {
   const { linksResult, handleLinkAction, streaming } = useLinksFromLsp();
-  const balance = useCoinBallance();
   const areFollowUpsEnabled = useAppSelector(selectAreFollowUpsEnabled);
   if (streaming || !areFollowUpsEnabled) return null;
 
@@ -40,12 +38,7 @@ export const ChatLinks: React.FC = () => {
     return linksResult.data.links.map((link, index) => {
       const key = `chat-link-${index}`;
       return (
-        <ChatLinkButton
-          key={key}
-          link={link}
-          onClick={handleLinkAction}
-          disabled={balance <= 0}
-        />
+        <ChatLinkButton key={key} link={link} onClick={handleLinkAction} />
       );
     });
   }
@@ -56,8 +49,7 @@ export const ChatLinks: React.FC = () => {
 export const ChatLinkButton: React.FC<{
   link: ChatLink;
   onClick: (link: ChatLink) => void;
-  disabled?: boolean;
-}> = ({ link, onClick, disabled = false }) => {
+}> = ({ link, onClick }) => {
   const title = link.link_tooltip ?? maybeConcatActionAndGoToStrings(link);
 
   const handleClick = React.useCallback(() => onClick(link), [link, onClick]);
@@ -70,14 +62,9 @@ export const ChatLinkButton: React.FC<{
       // variant="ghost"
 
       variant="surface"
-      title={
-        disabled
-          ? "You have no coins left to use Refact's AI features. Please top up your balance"
-          : title
-      }
+      title={title}
       onClick={handleClick}
       className={styles.chat_link_button}
-      disabled={disabled}
     >
       <TruncateRight>{link.link_text}</TruncateRight>
     </Button>

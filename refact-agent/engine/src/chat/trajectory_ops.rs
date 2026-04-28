@@ -270,8 +270,7 @@ pub fn compress_in_place(
     if opts.strip_metering {
         for msg in messages.iter_mut() {
             msg.usage = None;
-            msg.extra
-                .retain(|key, _| !key.starts_with("metering_coins_"));
+            msg.extra.clear();
         }
     }
 

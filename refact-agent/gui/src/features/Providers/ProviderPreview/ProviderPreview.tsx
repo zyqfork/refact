@@ -12,8 +12,6 @@ import { useAppDispatch } from "../../../hooks";
 import { setInformation } from "../../Errors/informationSlice";
 import { providersApi } from "../../../services/refact";
 
-const UNDELETABLE_PROVIDERS = ["refact", "refact_self_hosted"];
-
 export type ProviderPreviewProps = {
   configuredProviders: ProviderListItem[];
   currentProvider: ProviderListItem;
@@ -27,8 +25,6 @@ export const ProviderPreview: React.FC<ProviderPreviewProps> = ({
   const dispatch = useAppDispatch();
   const [deleteProvider, { isLoading: isDeletingProvider }] =
     useDeleteProviderMutation();
-
-  const showDelete = !UNDELETABLE_PROVIDERS.includes(currentProvider.name);
 
   const handleDeleteProvider = async (providerName: string) => {
     const response = await deleteProvider(providerName);
@@ -50,17 +46,15 @@ export const ProviderPreview: React.FC<ProviderPreviewProps> = ({
         <Heading as="h2" size="3">
           {getProviderName(currentProvider)} Configuration
         </Heading>
-        {showDelete && (
-          <DeletePopover
-            itemName={getProviderName(currentProvider)}
-            isDisabled={currentProvider.readonly}
-            isDeleting={isDeletingProvider}
-            deleteBy={currentProvider.name}
-            handleDelete={(providerName: string) =>
-              void handleDeleteProvider(providerName)
-            }
-          />
-        )}
+        <DeletePopover
+          itemName={getProviderName(currentProvider)}
+          isDisabled={currentProvider.readonly}
+          isDeleting={isDeletingProvider}
+          deleteBy={currentProvider.name}
+          handleDelete={(providerName: string) =>
+            void handleDeleteProvider(providerName)
+          }
+        />
       </Flex>
       <ProviderForm currentProvider={currentProvider} />
     </Flex>

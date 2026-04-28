@@ -34,13 +34,9 @@ function get7DaysAgo(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function formatCost(usd: number | null, coins: number | null): string {
-  const parts: string[] = [];
-  if (usd != null && usd > 0) parts.push(`$${usd.toFixed(2)}`);
-  if (coins != null && coins > 0)
-    parts.push(`${formatTokenCount(coins)} coins`);
-  if (parts.length === 0) return "free";
-  return parts.join(" / ");
+function formatCost(usd: number | null): string {
+  if (usd != null && usd > 0) return `$${usd.toFixed(2)}`;
+  return "free";
 }
 
 function formatRate(perDay: number): string {
@@ -451,7 +447,7 @@ export const StatsStrip: React.FC<StatsStripProps> = ({
       : 0;
   const successColor =
     successRate >= 95 ? "green" : successRate >= 80 ? "amber" : "red";
-  const costStr = formatCost(totals.total_cost_usd, totals.total_cost_coins);
+  const costStr = formatCost(totals.total_cost_usd);
   const failedCalls = totals.failed_calls;
   const cacheHitRate =
     totals.total_tokens > 0
@@ -460,8 +456,6 @@ export const StatsStrip: React.FC<StatsStripProps> = ({
 
   const dailyCostUsd =
     totals.total_cost_usd != null ? totals.total_cost_usd / 7 : 0;
-  const dailyCostCoins =
-    totals.total_cost_coins != null ? totals.total_cost_coins / 7 : 0;
   const hasUsageTracking = totals.total_calls > 0;
 
   if (compact) {
@@ -827,12 +821,6 @@ export const StatsStrip: React.FC<StatsStripProps> = ({
               {totals.total_cost_usd != null && totals.total_cost_usd > 0 && (
                 <Text size="1">USD: ${totals.total_cost_usd.toFixed(4)}</Text>
               )}
-              {totals.total_cost_coins != null &&
-                totals.total_cost_coins > 0 && (
-                  <Text size="1">
-                    Coins: {totals.total_cost_coins.toFixed(1)}
-                  </Text>
-                )}
               <Text size="1" color="gray">
                 Cost is calculated per LLM API call based on token usage. Not
                 all conversations may have tracked cost data.
@@ -841,11 +829,7 @@ export const StatsStrip: React.FC<StatsStripProps> = ({
           </HoverStat>
           <HoverStat
             label={`Rate: ${
-              dailyCostUsd > 0
-                ? formatRate(dailyCostUsd)
-                : dailyCostCoins > 0
-                  ? `~${Math.round(dailyCostCoins)} coins/day`
-                  : "free"
+              dailyCostUsd > 0 ? formatRate(dailyCostUsd) : "free"
             }`}
           >
             <Flex direction="column" gap="1">
@@ -868,10 +852,7 @@ export const StatsStrip: React.FC<StatsStripProps> = ({
               Top spenders:
             </Text>
             {top_conversations.slice(0, 3).map((conv: ConversationStats) => {
-              const convCost = formatCost(
-                conv.total_cost_usd,
-                conv.total_cost_coins,
-              );
+              const convCost = formatCost(conv.total_cost_usd);
               const shortModel =
                 conv.model_id.split("/").pop() ?? conv.model_id;
               return (

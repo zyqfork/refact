@@ -1,33 +1,32 @@
 ---
 title: Quickstart
-description: Learn how to get started with Refact
+description: Get started with Refact as a BYOK/local-only coding assistant.
 ---
 
-## Available Versions
+Refact runs locally in your IDE and connects only to providers you configure. There is no hosted account, managed Refact inference runtime, team workspace, or app-level balance.
 
-Refact is available in several versions designed for different needs:
+## 1. Install Refact
 
-- **Cloud Version**: For individual developers who prefer not to manage infrastructure. Just sign up, install, and start using. Navigate to the [Installation Hub](https://docs.refact.ai/installation/installation-hub/) to get started.
-- **Cloud for Teams**: Offers team-specific features for the **Cloud Version**:
-   - Stats Dashboard
-   - Access Control
-   
-   Read more in the [Refact.ai Teams Guide](https://docs.refact.ai/guides/version-specific/teams/)
-- **Self-Hosted Version**: For individual developers that need to keep their data localized for security or privacy reasons. Additionally, following features are available: 
-   - using your own GPU 
-   - fine-tuning LLMs
-   
-   Read more in the [Self-hosted Guide](https://docs.refact.ai/guides/version-specific/self-hosted/)
-- **Enterprise**: For large organizations needing advanced security, compliance, and scalability options. Includes premium support and customization. Read more in the [Refact.ai Enterprise Guide](https://docs.refact.ai/guides/version-specific/enterprise/getting-started/)
+- [VS Code](/installation/vs-code/)
+- [JetBrains IDEs](/installation/jetbrains/)
 
-## Key Features
+## 2. Configure A Provider
 
-### Code Completion
-Get accurate code suggestions as you type, tailored to both the syntax and context of your project. Read more in the [Code Completion Section](https://docs.refact.ai/features/code-completion/).
+Open **Provider Setup** in the Refact UI and add at least one provider:
 
-### AI Chat
-Use AI Chat within your IDE to get coding assistance, explanations, and documentation lookup without leaving your coding environment.
+- BYOK providers such as OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, Groq, xAI, or custom OpenAI-compatible endpoints.
+- Local providers such as Ollama, LM Studio, or vLLM.
 
-### AI Toolbox
-Access a suite of pre-built AI commands, such as `/gen` and `/naming`. You can find the full list of available commands and customization options in the [AI Toolbox Section](https://docs.refact.ai/features/ai-toolbox/) 
+Refact uses your provider credentials directly from your local configuration. Provider billing, quotas, and availability are controlled by that provider.
 
+## 3. Choose Defaults
+
+After adding a provider, open **Default Models** and select models for chat, light chat, thinking, buddy, and code completion as needed.
+
+## 4. Start Coding
+
+Use chat, agent modes, code completion, integrations, and local knowledge features from your IDE. Usage statistics are local token/provider-cost summaries only.
+
+## Privacy
+
+Requests are sent only to the model providers or local runtimes you configure.

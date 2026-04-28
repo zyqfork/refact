@@ -1,6 +1,4 @@
 export const BEAUTIFUL_PROVIDER_NAMES: Record<string, string> = {
-  refact: "Refact Cloud",
-  refact_self_hosted: "Refact Self-Hosted",
   openai: "OpenAI",
   openai_responses: "OpenAI (Responses API)",
   openai_codex: "OpenAI Codex",

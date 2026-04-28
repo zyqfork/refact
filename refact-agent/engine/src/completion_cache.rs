@@ -16,7 +16,6 @@ pub struct CompletionSaveToCache {
     pub cache_key: (String, String),
     pub completion0_text: String,
     pub completion0_finish_reason: String,
-    pub completion0_snippet_telemetry_id: Option<u64>,
     pub model: String,
 }
 
@@ -27,7 +26,6 @@ impl CompletionSaveToCache {
             cache_key: cache_key_from_post(post),
             completion0_text: String::new(),
             completion0_finish_reason: String::new(),
-            completion0_snippet_telemetry_id: None,
             model: post.model.clone(),
         }
     }
@@ -192,7 +190,6 @@ impl Drop for CompletionSaveToCache {
                         }],
                         "model": self.model,
                         "cached": true,
-                        "snippet_telemetry_id": self.completion0_snippet_telemetry_id,
                     }
                 ),
             );

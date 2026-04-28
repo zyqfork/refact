@@ -16,7 +16,6 @@ use crate::caps::CompletionModelRecord;
 use crate::global_context::GlobalContext;
 use crate::scratchpad_abstract::ScratchpadAbstract;
 use crate::completion_cache;
-use crate::telemetry::telemetry_structs;
 
 fn verify_has_send<T: Send>(_x: &T) {}
 
@@ -25,7 +24,6 @@ pub async fn create_code_completion_scratchpad(
     model_rec: &CompletionModelRecord,
     post: &CodeCompletionPost,
     cache_arc: Arc<StdRwLock<completion_cache::CompletionCache>>,
-    tele_storage: Arc<StdRwLock<telemetry_structs::Storage>>,
     ast_module: Option<Arc<AMutex<AstIndexService>>>,
 ) -> Result<Box<dyn ScratchpadAbstract>, String> {
     let tokenizer_arc =
@@ -36,7 +34,6 @@ pub async fn create_code_completion_scratchpad(
             &post,
             "PSM".to_string(),
             cache_arc,
-            tele_storage,
             ast_module,
             global_context.clone(),
         ))
@@ -46,7 +43,6 @@ pub async fn create_code_completion_scratchpad(
             &post,
             "SPM".to_string(),
             cache_arc,
-            tele_storage,
             ast_module,
             global_context.clone(),
         ))

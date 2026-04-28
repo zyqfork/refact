@@ -1,7 +1,7 @@
 import os, json, requests, termcolor
 
 # To test, run in a second console:
-# target/debug/refact-lsp --address-url Refact --api-key SMALLCLOUD_API_KEY --http-port 8001 --workspace-folder tests/emergency_frog_situation --ast --logs-stderr
+# target/debug/refact-lsp --http-port 8001 --workspace-folder tests/emergency_frog_situation --ast --logs-stderr
 # and wait for AST COMPLETE
 
 TEST_THESE_FILES = [

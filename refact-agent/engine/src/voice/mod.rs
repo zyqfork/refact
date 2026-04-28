@@ -1,8 +1,9 @@
-pub mod models;
 pub mod types;
 
 #[cfg(feature = "voice")]
 pub mod audio_decode;
+#[cfg(feature = "voice")]
+pub mod models;
 #[cfg(feature = "voice")]
 pub mod transcribe;
 
@@ -11,11 +12,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch, RwLock as ARwLock, Mutex as AMutex, mpsc, oneshot};
+#[cfg(feature = "voice")]
 use tracing::info;
 
 use crate::voice::types::{
     TranscribeRequest, TranscribeResult, VoiceStreamEvent, StreamingTranscriptEvent,
 };
+#[cfg(feature = "voice")]
 use crate::voice::models::WhisperModel;
 
 const DEBOUNCE_MS: u64 = 300;
@@ -303,7 +306,8 @@ impl VoiceService {
     }
 
     #[cfg(not(feature = "voice"))]
-    async fn do_transcribe(&self, _request: TranscribeRequest) -> Result<TranscribeResult, String> {
+    async fn do_transcribe(&self, request: TranscribeRequest) -> Result<TranscribeResult, String> {
+        let _ = (&request.audio_data, &request.mime_type, &request.language);
         Err("Voice feature not enabled. Rebuild with --features voice".to_string())
     }
 
@@ -336,11 +340,6 @@ impl VoiceService {
             }
             Err(e) => Err(e),
         }
-    }
-
-    #[cfg(not(feature = "voice"))]
-    pub async fn download_model(&self, _model_name: &str) -> Result<(), String> {
-        Err("Voice feature not enabled".to_string())
     }
 
     pub fn is_downloading(&self) -> bool {

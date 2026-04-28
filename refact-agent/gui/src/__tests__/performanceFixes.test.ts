@@ -52,7 +52,6 @@ function createThreadState(messages: ChatMessages) {
     themeProps: { appearance: "dark" },
     features: {},
     apiKey: "test",
-    addressURL: "http://127.0.0.1:8001",
   };
 
   return {

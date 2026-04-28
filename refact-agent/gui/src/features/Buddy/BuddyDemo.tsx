@@ -60,7 +60,6 @@ const SIGNAL_GROUPS: {
   {
     label: "System",
     signals: [
-      { key: "balance_low", label: "💰 Low$", variant: "warning" },
       { key: "connection_lost", label: "📡 Down", variant: "error" },
       { key: "connection_restored", label: "📡 Up", variant: "success" },
       { key: "git_changes", label: "🔀 Git", variant: "warning" },

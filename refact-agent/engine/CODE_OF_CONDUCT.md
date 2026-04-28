@@ -25,5 +25,4 @@ Maintainers are responsible for ensuring compliance with this Code of Conduct an
 
 ## 4. Contact
 
-If you have any questions or concerns, please contact the project maintainers on Discord:
-https://www.smallcloud.ai/discord
+If you have any questions or concerns, please contact the project maintainers through GitHub issues or discussions.

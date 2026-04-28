@@ -1,12 +1,20 @@
-/* Opportunity cards live inside the OPPORTUNITIES panel which already
- * provides the panel chrome (background, border, padding). Adding a
- * second card-shaped frame here produced a "card-in-card" look. Strip
- * the chrome and let the parent .list gap separate sibling cards. */
 .card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0;
+  gap: 6px;
+  padding: var(--space-2);
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-2);
+  background: var(--gray-a1);
+  min-width: 0;
+  transition:
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease;
+}
+
+.card:hover {
+  background: var(--gray-a3);
+  border-color: var(--gray-a6);
 }
 
 .header {

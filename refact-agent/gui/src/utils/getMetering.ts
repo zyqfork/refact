@@ -32,16 +32,6 @@ function getMeteringValue(
   return undefined;
 }
 
-function hasCoinMetering(message: ChatMessage): boolean {
-  const m = message as MessageWithExtra;
-  return (
-    getMeteringValue(m, "metering_coins_prompt") !== undefined ||
-    getMeteringValue(m, "metering_coins_generated") !== undefined ||
-    getMeteringValue(m, "metering_coins_cache_creation") !== undefined ||
-    getMeteringValue(m, "metering_coins_cache_read") !== undefined
-  );
-}
-
 function hasTokenMetering(message: ChatMessage): boolean {
   const m = message as MessageWithExtra;
   return (
@@ -49,41 +39,6 @@ function hasTokenMetering(message: ChatMessage): boolean {
     getMeteringValue(m, "metering_generated_tokens_n") !== undefined ||
     getMeteringValue(m, "metering_cache_creation_tokens_n") !== undefined ||
     getMeteringValue(m, "metering_cache_read_tokens_n") !== undefined
-  );
-}
-
-export function getTotalCostMeteringForMessages(messages: ChatMessages) {
-  const meteringMessages = messages.filter(hasCoinMetering);
-  if (meteringMessages.length === 0) return null;
-
-  return meteringMessages.reduce<{
-    metering_coins_prompt: number;
-    metering_coins_generated: number;
-    metering_coins_cache_creation: number;
-    metering_coins_cache_read: number;
-  }>(
-    (acc, message) => {
-      return {
-        metering_coins_prompt:
-          acc.metering_coins_prompt +
-          (getMeteringValue(message, "metering_coins_prompt") ?? 0),
-        metering_coins_generated:
-          acc.metering_coins_generated +
-          (getMeteringValue(message, "metering_coins_generated") ?? 0),
-        metering_coins_cache_creation:
-          acc.metering_coins_cache_creation +
-          (getMeteringValue(message, "metering_coins_cache_creation") ?? 0),
-        metering_coins_cache_read:
-          acc.metering_coins_cache_read +
-          (getMeteringValue(message, "metering_coins_cache_read") ?? 0),
-      };
-    },
-    {
-      metering_coins_prompt: 0,
-      metering_coins_generated: 0,
-      metering_coins_cache_creation: 0,
-      metering_coins_cache_read: 0,
-    },
   );
 }
 

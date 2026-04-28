@@ -20,7 +20,6 @@ import type { TipOfTheDayState } from "../features/TipOfTheDay";
 import type { PageSliceState } from "../features/Pages/pagesSlice";
 import type { FIMDebugState } from "../hooks";
 import { CurrentProjectInfo } from "../features/Chat/currentProject";
-import { TeamsSliceState } from "../features/Teams";
 
 export { updateConfig, type Config } from "../features/Config/configSlice";
 export { type FileInfo, setFileInfo } from "../features/Chat/activeFile";
@@ -49,7 +48,6 @@ export type {
 
 // TODO: re-exporting from redux seems to break things :/
 export type InitialState = {
-  teams: TeamsSliceState;
   fim: FIMDebugState;
   tipOfTheDay: TipOfTheDayState;
   config: Config;
@@ -80,8 +78,6 @@ export {
   ideToolCallResponse,
   ideSetCodeCompletionModel,
   ideSetLoginMessage,
-  ideSetActiveTeamsGroup,
-  ideClearActiveTeamsGroup,
   ideTaskDone,
   ideAskQuestions,
   ideSwitchToThread,
@@ -112,7 +108,6 @@ export {
   isDiffResponse,
   isPlainTextMessage,
   isPlainTextResponse,
-  isStatisticDataResponse,
   isSystemPrompts,
   isToolCallDelta,
   isToolCallMessage,
@@ -120,8 +115,6 @@ export {
   isToolResponse,
   isUserMessage,
 } from "../services/refact";
-
-export { type TeamsGroup } from "../services/smallcloud/types";
 
 // export type * from "../services/refact";
 

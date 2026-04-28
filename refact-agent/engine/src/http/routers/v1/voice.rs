@@ -9,8 +9,9 @@ use tokio::sync::{broadcast, RwLock as ARwLock};
 
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
-use crate::voice::types::*;
+#[cfg(feature = "voice")]
 use crate::voice::models::WhisperModel;
+use crate::voice::types::*;
 
 pub async fn handle_v1_voice_transcribe(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
@@ -72,29 +73,44 @@ pub async fn handle_v1_voice_download(
         model: "base.en".to_string(),
     });
 
-    WhisperModel::from_name(&req.model)
-        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+    #[cfg(not(feature = "voice"))]
+    {
+        let _ = gcx;
+        Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Voice feature not enabled. Cannot download model: {}",
+                req.model
+            ),
+        ))
+    }
 
-    let gcx_locked = gcx.read().await;
-    let voice_service = gcx_locked.voice_service.clone();
-    drop(gcx_locked);
+    #[cfg(feature = "voice")]
+    {
+        WhisperModel::from_name(&req.model)
+            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
 
-    let voice_service_clone = voice_service.clone();
-    let model_name = req.model.clone();
-    tokio::spawn(async move {
-        let _ = voice_service_clone.download_model(&model_name).await;
-    });
+        let gcx_locked = gcx.read().await;
+        let voice_service = gcx_locked.voice_service.clone();
+        drop(gcx_locked);
 
-    let response = DownloadModelResponse {
-        success: true,
-        message: format!("Download started for model: {}", req.model),
-    };
+        let voice_service_clone = voice_service.clone();
+        let model_name = req.model.clone();
+        tokio::spawn(async move {
+            let _ = voice_service_clone.download_model(&model_name).await;
+        });
 
-    Ok(Response::builder()
-        .status(StatusCode::ACCEPTED)
-        .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&response).unwrap()))
-        .unwrap())
+        let response = DownloadModelResponse {
+            success: true,
+            message: format!("Download started for model: {}", req.model),
+        };
+
+        Ok(Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_string(&response).unwrap()))
+            .unwrap())
+    }
 }
 
 pub async fn handle_v1_voice_status(

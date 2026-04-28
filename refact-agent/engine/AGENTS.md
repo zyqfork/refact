@@ -18,7 +18,7 @@ Release profile: `opt-level = "z"`, `lto = true`, `strip = true`, `codegen-units
 
 ## Architecture
 
-`GlobalContext` (`Arc<ARwLock<GlobalContext>>`) is the central shared state. HTTP server (Axum) and LSP server (tower-lsp) both hold a reference. Background tasks (AST indexer, VecDB, git shadow cleanup, telemetry, knowledge graph, trajectory memos, agent monitor, OAuth refresh) are spawned via `start_background_tasks()` (~12 tokio tasks).
+`GlobalContext` (`Arc<ARwLock<GlobalContext>>`) is the central shared state. HTTP server (Axum) and LSP server (tower-lsp) both hold a reference. Background tasks (AST indexer, VecDB, git shadow cleanup, knowledge graph, trajectory memos, agent monitor, OAuth refresh) are spawned via `start_background_tasks()` (~12 tokio tasks).
 
 ### Source Layout
 
@@ -33,15 +33,14 @@ src/
   tools/               — 50+ tools (file_edit/, search, web, shell, subagent, knowledge, tasks)
   ast/                 — tree-sitter indexing, 7 parsers (C/C++, Python, Java, Kotlin, JS, Rust, TS)
   vecdb/               — SQLite vec0 semantic search
-  providers/           — 15+ LLM providers (Anthropic, OpenAI, Codex, Refact, DeepSeek, Gemini, Groq, LM Studio, Ollama, OpenRouter, vLLM, xAI, Claude Code, custom)
+  providers/           — 15+ LLM providers (Anthropic, OpenAI, Codex, DeepSeek, Gemini, Groq, LM Studio, Ollama, OpenRouter, vLLM, xAI, Claude Code, custom)
   integrations/        — GitHub, GitLab, Bitbucket, Chrome, PostgreSQL, MySQL, Docker, PDB, cmdline, services, MCP (stdio+SSE)
   knowledge_graph/     — petgraph DiGraph, builder/cleanup/staleness/query
   scratchpads/         — FIM code completion (PSM/SPM), RAG, multimodality
   tasks/               — Kanban task board (planning/active/paused/completed/abandoned)
-  caps/                — model capabilities resolution, cloud/local detection
+  caps/                — model capabilities resolution
   git/                 — shadow repos, checkpoints
   voice/               — Whisper transcription, streaming sessions
-  telemetry/           — usage tracking
   yaml_configs/        — defaults for modes, providers, toolbox commands, prompts
   postprocessing/      — token-aware truncation, AST prioritization
   agentic/             — commit messages, agentic edit flows
@@ -111,9 +110,9 @@ Tool trait: `tool_execute(&mut self, ccx, tool_call_id, args) -> Result<(bool, V
 
 ## HTTP API
 
-Base: `http://127.0.0.1:{port}/v1/`. Middleware: permissive CORS, 15MB body limit, telemetry logging.
+Base: `http://127.0.0.1:{port}/v1/`. Middleware: permissive CORS, 15MB body limit.
 
-Key endpoints: `/ping`, `/caps`, `/graceful-shutdown`, `/chats/{id}/commands`, `/chats/subscribe`, `/chat` (legacy), `/code-completion`, `/code-lens`, `/tools`, `/tools-check-if-confirmation-needed`, `/ast-file-symbols`, `/ast-status`, `/rag-status`, `/vecdb-search`, `/git-commit`, `/checkpoints-preview`, `/checkpoints-restore`, `/integrations`, `/integration-get`, `/integration-save`, `/knowledge/update-memory`, `/knowledge/delete-memory`, `/knowledge-graph`, `/voice/transcribe`, `/voice/stream/{id}`, `/voice/stream/{id}/chunk`, `/telemetry-network`, `/snippet-accepted`.
+Key endpoints: `/ping`, `/caps`, `/graceful-shutdown`, `/chats/{id}/commands`, `/chats/subscribe`, `/chat` (legacy), `/code-completion`, `/code-lens`, `/tools`, `/tools-check-if-confirmation-needed`, `/ast-file-symbols`, `/ast-status`, `/rag-status`, `/vecdb-search`, `/git-commit`, `/checkpoints-preview`, `/checkpoints-restore`, `/integrations`, `/integration-get`, `/integration-save`, `/knowledge/update-memory`, `/knowledge/delete-memory`, `/knowledge-graph`, `/voice/transcribe`, `/voice/stream/{id}`, `/voice/stream/{id}/chunk`.
 
 ## AST
 
@@ -125,7 +124,7 @@ SQLite + vec0 extension. File splitters: trajectory JSON (4 msgs/chunk), Markdow
 
 ## Providers
 
-15+ providers in `src/providers/`: Anthropic, Claude Code, OpenAI, Codex, Refact, DeepSeek, Google Gemini, Groq, LM Studio, Ollama, OpenRouter, vLLM, xAI, custom. Each defines ProviderDefaults (chat/completion/embedding models). OAuth support for Codex/Claude Code. YAML configs in `yaml_configs/default_providers/`.
+15+ providers in `src/providers/`: Anthropic, Claude Code, OpenAI, Codex, DeepSeek, Google Gemini, Groq, LM Studio, Ollama, OpenRouter, vLLM, xAI, custom. Each defines ProviderDefaults (chat/completion/embedding models). OAuth support for Codex/Claude Code. YAML configs in `yaml_configs/default_providers/`.
 
 ## Integrations
 
@@ -140,6 +139,6 @@ GitHub, GitLab, Bitbucket, Chrome (headless), PostgreSQL, MySQL, Docker, PDB, sh
 ## Config
 
 - **User**: `~/.config/refact/` (default_privacy.yaml, providers.d/*.yaml)
-- **Cache**: `~/.cache/refact/` (shadow repos, logs, telemetry, integrations)
+- **Cache**: `~/.cache/refact/` (shadow repos, logs, integrations)
 - **Project**: `.refact/` (trajectories/, knowledge/, tasks/, integrations/)
 - **System prompts**: `yaml_configs/defaults/` — modes, subagents, toolbox commands. Magic vars: `%ARGS%`, `%CODE_SELECTION%`, `%WORKSPACE_INFO%`, `%PROJECT_TREE%`.

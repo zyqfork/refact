@@ -15,7 +15,6 @@ pub struct DraftCreateRequest {
     pub title: String,
     pub yaml_or_json: String,
     pub explanation: String,
-    pub source_opportunity_id: Option<String>,
 }
 
 pub async fn handle_v1_buddy_draft_create_skill(

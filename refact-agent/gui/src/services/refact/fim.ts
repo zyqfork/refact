@@ -38,7 +38,6 @@ export type FIMContext = {
 
 export type FimDebugData = {
   choices: FimChoices;
-  snippet_telemetry_id: number;
   model: string;
   context?: FIMContext;
   created?: number;

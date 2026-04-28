@@ -16,7 +16,6 @@ check out the [Text UI](#cli) below, you can talk about your project in the comm
 
 - [Installation](#installation)
 - [Things to Try](#things-to-try)
-- [Telemetry](#telemetry)
 - [Caps File](#caps-file)
 - [AST](#ast)
 - [CLI](#cli)
@@ -76,9 +75,6 @@ Installable by the end user:
 
  * Neovim https://github.com/smallcloudai/refact-neovim
 
- * Refact Self-Hosting Server https://github.com/smallcloudai/refact/
-
-
 ### Other Important Repos
 
 * [Documentation](https://github.com/smallcloudai/web_docs_refact_ai)
@@ -115,13 +111,11 @@ Installable by the end user:
 
 ### Compiling and Running
 
-It will automatically pick up OPENAI_API_KEY, or maybe you have Refact cloud key or Refact Self-Hosting Server:
+It uses BYOK or local providers configured in `providers.d`:
 
 ```
 cargo build
 target/debug/refact-lsp --http-port 8001 --logs-stderr
-target/debug/refact-lsp --address-url Refact --api-key $REFACT_API_KEY --http-port 8001 --logs-stderr
-target/debug/refact-lsp --address-url http://my-refact-self-hosting/ --api-key $REFACT_API_KEY --http-port 8001 --logs-stderr
 ```
 
 Try `--help` for more options.
@@ -177,28 +171,9 @@ curl http://127.0.0.1:8001/v1/chat -k \
 
 
 
-## Telemetry
-
-The flag `--basic-telemetry` means send counters and error messages. It is "compressed"
-into `.cache/refact/telemetry/compressed` folder, then from time to time it's sent and moved
-to `.cache/refact/telemetry/sent` folder.
-
-To be clear: without these flags, no telemetry is sent. At no point it sends your code.
-
-"Compressed" means similar records are joined together, increasing the counter. "Sent" means the rust binary
-communicates with a HTTP endpoint specified in caps (see Caps section below) and sends .json file exactly how
-you see it in `.cache/refact/telemetry`. The files are human-readable.
-
-When using Refact self-hosted server, telemetry goes to the self-hosted server, not to the cloud.
-
-
-
 ## Caps File
 
-The capabilities file stores the same things as [bring-your-own-key.yaml](bring_your_own_key), the file describes how to access AI models.
-The `--address-url` parameter controls where to get this file, it defaults to `~/.config/refact/bring-your-own-key.yaml`.
-If it's a URL, the executable fetches `$URL/refact-caps` to know what to do. This is especially useful to connect to Refact Self-Hosting Server,
-because the configuration does not need to be copy-pasted among engineers who use the server.
+Configure providers in `providers.d`; the engine builds capabilities from local provider configuration and the bundled model registry.
 
 
 ## AST
@@ -243,7 +218,6 @@ If you wish to contribute to this project, feel free to explore our [current iss
 - [Refact Docs](https://docs.refact.ai/)
 - [GitHub Issues](https://github.com/smallcloudai/refact/issues) for bugs and errors
 - [Community Forum](https://github.com/smallcloudai/refact/discussions) for community support and discussions
-- [Discord](https://www.smallcloud.ai/discord) for chatting with community members
 - [Twitter](https://twitter.com/refact_ai) for product news and updates
 
 

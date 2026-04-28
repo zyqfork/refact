@@ -28,7 +28,6 @@ import { useGoToLink } from "./useGoToLink";
 import { setError } from "../features/Errors/errorsSlice";
 import { setInformation } from "../features/Errors/informationSlice";
 import { debugIntegrations, debugRefact } from "../debugConfig";
-import { telemetryApi } from "../services/refact/telemetry";
 import { isAbsolutePath } from "../utils";
 
 export function useGetLinksFromLsp() {
@@ -111,9 +110,6 @@ export function useLinksFromLsp() {
 
   const [applyCommit, _applyCommitResult] = linksApi.useSendCommitMutation();
 
-  const [sendTelemetryEvent] =
-    telemetryApi.useLazySendTelemetryChatEventQuery();
-
   const isStreaming = useAppSelector(selectIsStreaming);
   const isWaiting = useAppSelector(selectIsWaiting);
   const messages = useAppSelector(selectMessages);
@@ -147,12 +143,6 @@ export function useLinksFromLsp() {
   const handleLinkAction = useCallback(
     (link: ChatLink) => {
       if (!("link_action" in link)) return;
-      void sendTelemetryEvent({
-        scope: `handleLinkAction/${link.link_action}`,
-        success: true,
-        error_message: "",
-      });
-
       if (
         link.link_action === "goto" &&
         "link_goto" in link &&
@@ -265,7 +255,7 @@ export function useLinksFromLsp() {
       // eslint-disable-next-line no-console
       console.warn(`unknown action: ${JSON.stringify(link)}`);
     },
-    [applyCommit, dispatch, handleGoTo, sendTelemetryEvent, submit, setParams],
+    [applyCommit, dispatch, handleGoTo, submit, setParams],
   );
 
   const linksResult = useGetLinksFromLsp();

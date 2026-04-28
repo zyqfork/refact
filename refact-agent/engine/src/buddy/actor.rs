@@ -22,8 +22,8 @@ use super::snapshot::BuddySnapshot;
 use super::storage::RuntimeQueueRecord;
 use super::types::{
     BuddyActivity, BuddyCareAction, BuddyDraft, BuddyFact, BuddyFactKind, BuddyOpportunity,
-    BuddyPage, BuddyPulse, BuddyQuest, BuddyRuntimeEvent, BuddySpeechItem, BuddyState,
-    BuddySuggestion, OpportunityStatus,
+    BuddyPulse, BuddyQuest, BuddyRuntimeEvent, BuddySpeechItem, BuddyState, BuddySuggestion,
+    OpportunityStatus,
 };
 
 const SUGGESTION_RATE_LIMIT_SECS: u64 = 300;
@@ -238,6 +238,7 @@ impl BuddyService {
         self.state.dismissed_history = self.opportunity_queue.dismissed_history_snapshot();
     }
 
+    #[cfg(test)]
     pub fn add_opportunity(&mut self, opp: BuddyOpportunity) {
         self.add_opportunity_with_cooldown(
             opp,
@@ -289,6 +290,7 @@ impl BuddyService {
         Some(draft)
     }
 
+    #[cfg(test)]
     pub fn detect_and_surface(&mut self) {
         let candidates = OpportunityDetector::new().detect(
             &self.fact_store,
@@ -1218,12 +1220,11 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         // Observer ticking — each observer respects its own cadence
         {
             let now = Utc::now();
-            let (due_observers, pulse_snap, last_ticks_snap) = {
+            let due_observers = {
                 let buddy = buddy_arc.lock().await;
                 match buddy.as_ref() {
                     Some(svc) => {
                         let s = svc.settings.clone();
-                        let p = svc.pulse.clone();
                         let lt = svc.last_observer_tick.clone();
                         let due: Vec<Arc<dyn BuddyObserver>> = svc
                             .observers
@@ -1241,9 +1242,9 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
                             })
                             .cloned()
                             .collect();
-                        (due, p, lt)
+                        due
                     }
-                    None => (vec![], BuddyPulse::default(), HashMap::new()),
+                    None => vec![],
                 }
             };
             if !due_observers.is_empty() {
@@ -1253,9 +1254,7 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
                 for obs in &due_observers {
                     let ctx = ObserverContext {
                         project_root: project_root.clone(),
-                        last_tick: last_ticks_snap.get(obs.id()).copied(),
                         now,
-                        current_pulse: pulse_snap.clone(),
                     };
                     let facts = tokio::time::timeout(
                         tokio::time::Duration::from_secs(5),

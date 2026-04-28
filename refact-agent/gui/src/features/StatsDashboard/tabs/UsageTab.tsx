@@ -264,9 +264,7 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
     );
   }
 
-  const hasCostData = days.some(
-    (d) => d.total_cost_usd > 0 || (d.total_cost_coins ?? 0) > 0,
-  );
+  const hasCostData = days.some((d) => d.total_cost_usd > 0);
 
   const hasCacheData = days.some(
     (d) => d.total_cache_read_tokens > 0 || d.total_cache_creation_tokens > 0,
@@ -338,7 +336,7 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
       borderColor: theme.tooltip.border,
     },
     legend: {
-      data: ["USD Cost", "Coins Cost"],
+      data: ["USD Cost"],
       textStyle: { color: theme.text },
     },
     grid: {
@@ -373,13 +371,6 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
         stack: "cost",
         data: days.map((d) => d.total_cost_usd),
         itemStyle: { color: theme.palette[2] },
-      },
-      {
-        name: "Coins Cost",
-        type: "bar",
-        stack: "cost",
-        data: days.map((d) => d.total_cost_coins ?? 0),
-        itemStyle: { color: theme.palette[3] },
       },
     ],
   };
@@ -573,7 +564,7 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
                     {formatTokenCount(p.total_cache_creation_tokens)}
                   </td>
                   <td className={styles.td}>
-                    {formatCostDisplay(p.total_cost_usd, p.total_cost_coins)}
+                    {formatCostDisplay(p.total_cost_usd)}
                   </td>
                 </tr>
               ))}
@@ -663,7 +654,7 @@ export const UsageTab: React.FC<Props> = ({ dateRange }) => {
                     {formatTokenCount(m.total_cache_creation_tokens)}
                   </td>
                   <td className={styles.td}>
-                    {formatCostDisplay(m.total_cost_usd, m.total_cost_coins)}
+                    {formatCostDisplay(m.total_cost_usd)}
                   </td>
                   <td className={styles.td}>
                     {formatDuration(m.avg_duration_ms)}

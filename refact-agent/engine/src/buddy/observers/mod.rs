@@ -13,28 +13,18 @@ use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
 use crate::buddy::settings::BuddySettings;
-use crate::buddy::types::{BuddyFact, BuddyPulse};
+use crate::buddy::types::BuddyFact;
 use crate::global_context::GlobalContext;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObserverCost {
-    Cheap,
-    Io,
-    Network,
-}
 
 pub struct ObserverContext {
     pub project_root: std::path::PathBuf,
-    pub last_tick: Option<DateTime<Utc>>,
     pub now: DateTime<Utc>,
-    pub current_pulse: BuddyPulse,
 }
 
 #[async_trait::async_trait]
 pub trait BuddyObserver: Send + Sync {
     fn id(&self) -> &'static str;
     fn cadence_seconds(&self) -> u64;
-    fn cost_class(&self) -> ObserverCost;
     fn requires_setting(&self, settings: &BuddySettings) -> bool;
     async fn observe(
         &self,

@@ -4,7 +4,6 @@ import { SYSTEM_PROMPTS } from "./prompts";
 import { STUB_LINKS_FOR_CHAT_RESPONSE } from "./chat_links_response";
 import { TOOLS, CHAT_LINKS_URL } from "../services/refact/consts";
 import { STUB_TOOL_RESPONSE } from "./tools_response";
-import { GoodPollingResponse } from "../services/smallcloud/types";
 import type { LinksForChatResponse } from "../services/refact/links";
 import { ToolConfirmationResponse } from "../services/refact";
 
@@ -74,35 +73,8 @@ export const noCommandPreview: HttpHandler = http.post(
 );
 
 export const goodUser: HttpHandler = http.get(
-  "https://www.smallcloud.ai/v1/login",
-  () => {
-    return HttpResponse.json({
-      retcode: "OK",
-      account: "party@refact.ai",
-      inference_url: "https://www.smallcloud.ai/v1",
-      inference: "PRO",
-      metering_balance: 100000,
-      questionnaire: {},
-      refact_agent_max_request_num: 20,
-      refact_agent_request_available: 20,
-      workspaces: [],
-    });
-  },
-);
-
-export const nonProUser: HttpHandler = http.get(
-  "https://www.smallcloud.ai/v1/login",
-  () => {
-    return HttpResponse.json({
-      retcode: "OK",
-      account: "party@refact.ai",
-      inference_url: "https://www.smallcloud.ai/v1",
-      inference: "FREE",
-      metering_balance: -100000,
-      questionnaire: {},
-      workspaces: [],
-    });
-  },
+  "http://127.0.0.1:8001/v1/providers",
+  () => HttpResponse.json({ providers: [] }),
 );
 
 export const chatLinks: HttpHandler = http.post(
@@ -128,83 +100,6 @@ export const goodTools: HttpHandler = http.get(
   `http://127.0.0.1:8001${TOOLS}`,
   () => {
     return HttpResponse.json(STUB_TOOL_RESPONSE);
-  },
-);
-
-export const loginPollingGood: HttpHandler = http.get(
-  "https://www.smallcloud.ai/v1/streamlined-login-recall-ticket",
-  () => {
-    const result: GoodPollingResponse = {
-      retcode: "OK",
-      account: "party@refact.ai",
-      inference_url: "https://www.smallcloud.ai/v1",
-      inference: "PRO",
-      metering_balance: -100000,
-      // workspaces: [],
-      questionnaire: {},
-      secret_key: "shhhhhhhhh",
-      tooltip_message: "",
-      login_message: "",
-      "longthink-filters": [],
-      "longthink-functions-today": {},
-      "longthink-functions-today-v2": {},
-    };
-    return HttpResponse.json(result);
-  },
-);
-
-export const loginPollingWaiting: HttpHandler = http.get(
-  "https://www.smallcloud.ai/v1/streamlined-login-recall-ticket",
-  () => {
-    const result = { human_readable_message: "", retcode: "FAILED" };
-    return HttpResponse.json(result);
-  },
-);
-
-export const emailLogin: HttpHandler = http.get(
-  "https://www.smallcloud.ai/plugin-magic-link/*",
-  async function* () {
-    let count = 0;
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    yield HttpResponse.json({
-      retcode: "OK",
-      status: "sent",
-    });
-
-    while (count < 5) {
-      count++;
-      yield HttpResponse.json({
-        retcode: "OK",
-        status: "not_logged_in",
-      });
-    }
-
-    yield HttpResponse.json({
-      retcode: "OK",
-      status: "user_logged_in",
-      key: "1234567890",
-    });
-  },
-);
-
-export const telemetryChat = http.post(
-  `http://127.0.0.1:8001/v1/telemetry-chat`,
-  () => {
-    return HttpResponse.json({
-      retcode: "OK",
-      status: "sent",
-    });
-  },
-);
-
-export const telemetryNetwork = http.post(
-  `http://127.0.0.1:8001/v1/telemetry-network`,
-  () => {
-    return HttpResponse.json({
-      retcode: "OK",
-      status: "sent",
-    });
   },
 );
 

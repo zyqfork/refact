@@ -46,7 +46,6 @@ import {
   buildThreadParamsPatch,
 } from "../features/Chat/Thread";
 import { saveLastThreadParams } from "../utils/threadStorage";
-import { statisticsApi } from "../services/refact/statistics";
 import { integrationsApi } from "../services/refact/integrations";
 import { capsApi, isCapsErrorResponse } from "../services/refact/caps";
 import { promptsApi } from "../services/refact/prompts";
@@ -62,7 +61,6 @@ import {
 import { reportBuddyFrontendError } from "../features/Buddy/reportBuddyFrontendError";
 import { setThemeMode, updateConfig } from "../features/Config/configSlice";
 import { nextTip } from "../features/TipOfTheDay";
-import { telemetryApi } from "../services/refact/telemetry";
 import { tasksApi } from "../services/refact/tasks";
 import {
   closeTask,
@@ -76,7 +74,6 @@ import {
   requestSseRefresh,
 } from "../features/Chat/Thread/actions";
 import { push, selectCurrentPage } from "../features/Pages/pagesSlice";
-import { CONFIG_PATH_URL, FULL_PATH_URL } from "../services/refact/consts";
 import {
   ideToolCallResponse,
   ideTaskDone,
@@ -116,11 +113,9 @@ startListening({
     const state = listenerApi.getState();
     const chatId = state.chat.current_thread_id;
 
-    [
-      statisticsApi.util.resetApiState(),
-      toolsApi.util.resetApiState(),
-      commandsApi.util.resetApiState(),
-    ].forEach((api) => listenerApi.dispatch(api));
+    [toolsApi.util.resetApiState(), commandsApi.util.resetApiState()].forEach(
+      (api) => listenerApi.dispatch(api),
+    );
 
     listenerApi.dispatch(resetThreadImages({ id: chatId }));
     listenerApi.dispatch(clearThreadPauseReasons({ id: chatId }));
@@ -171,11 +166,9 @@ startListening({
     const state = listenerApi.getState();
     const chatId = state.chat.current_thread_id;
 
-    [
-      statisticsApi.util.resetApiState(),
-      toolsApi.util.resetApiState(),
-      commandsApi.util.resetApiState(),
-    ].forEach((api) => listenerApi.dispatch(api));
+    [toolsApi.util.resetApiState(), commandsApi.util.resetApiState()].forEach(
+      (api) => listenerApi.dispatch(api),
+    );
 
     listenerApi.dispatch(resetThreadImages({ id: chatId }));
     listenerApi.dispatch(clearError());
@@ -378,8 +371,12 @@ startListening({
 
 startListening({
   actionCreator: updateConfig,
-  effect: (_action, listenerApi) => {
+  effect: (action, listenerApi) => {
     listenerApi.dispatch(pingApi.util.resetApiState());
+    if (action.payload.lspPort !== undefined) {
+      listenerApi.dispatch(providersApi.util.resetApiState());
+      listenerApi.dispatch(modelsApi.util.resetApiState());
+    }
   },
 });
 
@@ -402,73 +399,6 @@ startListening({
         completeManual,
       }),
     );
-  },
-});
-
-// Telemetry for path API
-startListening({
-  matcher: isAnyOf(
-    pathApi.endpoints.getFullPath.matchFulfilled,
-    pathApi.endpoints.getFullPath.matchRejected,
-    pathApi.endpoints.customizationPath.matchFulfilled,
-    pathApi.endpoints.customizationPath.matchRejected,
-    pathApi.endpoints.privacyPath.matchFulfilled,
-    pathApi.endpoints.privacyPath.matchRejected,
-    pathApi.endpoints.integrationsPath.matchFulfilled,
-    pathApi.endpoints.integrationsPath.matchRejected,
-  ),
-  effect: (action, listenerApi) => {
-    if (pathApi.endpoints.getFullPath.matchFulfilled(action)) {
-      const thunk = telemetryApi.endpoints.sendTelemetryNetEvent.initiate({
-        url: FULL_PATH_URL,
-        scope: "getFullPath",
-        success: true,
-        error_message: "",
-      });
-      void listenerApi.dispatch(thunk);
-    }
-
-    if (
-      pathApi.endpoints.getFullPath.matchRejected(action) &&
-      !action.meta.condition
-    ) {
-      const thunk = telemetryApi.endpoints.sendTelemetryNetEvent.initiate({
-        url: FULL_PATH_URL,
-        scope: "getFullPath",
-        success: false,
-        error_message: action.error.message ?? JSON.stringify(action.error),
-      });
-      void listenerApi.dispatch(thunk);
-    }
-
-    if (
-      pathApi.endpoints.customizationPath.matchFulfilled(action) ||
-      pathApi.endpoints.privacyPath.matchFulfilled(action) ||
-      pathApi.endpoints.integrationsPath.matchFulfilled(action)
-    ) {
-      const thunk = telemetryApi.endpoints.sendTelemetryNetEvent.initiate({
-        url: CONFIG_PATH_URL,
-        scope: action.meta.arg.endpointName,
-        success: true,
-        error_message: "",
-      });
-      void listenerApi.dispatch(thunk);
-    }
-
-    if (
-      (pathApi.endpoints.customizationPath.matchRejected(action) ||
-        pathApi.endpoints.privacyPath.matchRejected(action) ||
-        pathApi.endpoints.integrationsPath.matchRejected(action)) &&
-      !action.meta.condition
-    ) {
-      const thunk = telemetryApi.endpoints.sendTelemetryNetEvent.initiate({
-        url: CONFIG_PATH_URL,
-        scope: action.meta.arg.endpointName,
-        success: false,
-        error_message: action.error.message ?? JSON.stringify(action.error),
-      });
-      void listenerApi.dispatch(thunk);
-    }
   },
 });
 

@@ -15,7 +15,6 @@ const CONFIG_STATE = {
     lspPort: 8001,
     themeProps: {},
     host: "vscode" as const,
-    addressURL: "Refact",
   },
 };
 

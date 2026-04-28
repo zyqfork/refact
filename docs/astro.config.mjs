@@ -18,8 +18,7 @@ export default defineConfig({
         replacesTitle: true,
       },
       social: {
-        github: 'https://github.com/smallcloudai',
-        discord: 'https://smallcloud.ai/discord'
+        github: 'https://github.com/smallcloudai'
       },
       head: [
         {
@@ -29,25 +28,6 @@ export default defineConfig({
         {
           tag: 'meta',
           attrs: { property: 'twitter:image', content: site + 'og.jpg' }
-        },
-        {
-          tag: 'script',
-          attrs: {
-            async: true,
-            src: 'https://www.googletagmanager.com/gtag/js?id=G-76LB6JQLMK',
-          },
-        },
-        {
-          tag: 'script',
-          content: `
-						window.dataLayer = window.dataLayer || [];
-						function gtag() {
-							dataLayer.push(arguments);
-						}
-						gtag('js', new Date());
-
-						gtag('config', 'G-76LB6JQLMK');
-					`,
         }
       ],
       sidebar: [
@@ -60,13 +40,6 @@ export default defineConfig({
               link: '/introduction/quickstart/',
               attrs: {
                 'aria-label': 'Get started with Refact'
-              }
-            },
-            {
-              label: 'Usage Based Pricing',
-              link: '/introduction/usage-based-pricing/',
-              attrs: {
-                'aria-label': 'Learn about Usage Based Pricing'
               }
             },
             {
@@ -128,13 +101,6 @@ export default defineConfig({
                     'aria-label': 'Understanding Context Features'
                   }
                 },
-                { 
-                  label: 'Fine-tuning', 
-                  link: '/features/finetuning/',
-                  attrs: {
-                    'aria-label': 'Learn about Model Fine-tuning'
-                  }
-                },
               ]
             },
           ],
@@ -188,53 +154,6 @@ export default defineConfig({
           label: 'Guides',
           collapsed: true,
           items: [
-            { 
-              label: 'Deployment',
-              collapsed: true,
-              items: [
-                { 
-                  label: 'Runpod Deployment', 
-                  link: '/guides/deployment/runpod/',
-                  attrs: {
-                    'aria-label': 'Learn about Runpod Deployment'
-                  }
-                },
-                { 
-                  label: 'AWS Deployment', 
-                  collapsed: true,
-                  items: [
-                    { 
-                      label: 'Getting Started', 
-                      link: '/guides/deployment/aws/getting-started/',
-                      attrs: {
-                        'aria-label': 'Getting Started with AWS Deployment'
-                      }
-                    },
-                    { 
-                      label: 'Launch from EC2', 
-                      link: '/guides/deployment/aws/ec2/',
-                      attrs: {
-                        'aria-label': 'Launch Refact from EC2'
-                      }
-                    },
-                    { 
-                      label: 'Launch from Website', 
-                      link: '/guides/deployment/aws/marketplace/',
-                      attrs: {
-                        'aria-label': 'Launch Refact from AWS Marketplace'
-                      }
-                    },
-                    { 
-                      label: 'Usage', 
-                      link: '/guides/deployment/aws/usage/',
-                      attrs: {
-                        'aria-label': 'AWS Deployment Usage Guide'
-                      }
-                    },
-                  ] 
-                },
-              ] 
-            },
             {
               label: 'Plugins',
               collapsed: true,
@@ -253,93 +172,6 @@ export default defineConfig({
                   ]
                 },
               ]
-            },
-            { 
-              label: 'Authentication', 
-              collapsed: true,
-              items: [
-                { 
-                  label: 'Keycloak Integration', 
-                  link: '/guides/authentication/keycloak/',
-                  attrs: {
-                    'aria-label': 'Learn about Keycloak Integration'
-                  }
-                },
-              ]
-            },
-            { 
-              label: 'Version-specific Usage',
-              collapsed: true,
-              items: [
-                { 
-                  label: 'Self-hosted Refact',
-                  collapsed: true,
-                  items: [
-                    { 
-                      label: 'Self-hosted Refact', 
-                      link: '/guides/version-specific/self-hosted/',
-                      attrs: {
-                        'aria-label': 'Self-hosted Refact Guide'
-                      }
-                    }
-                  ]
-                },
-                { 
-                  label: 'Enterprise Refact', 
-                  collapsed: true,
-                  items: [
-                    { 
-                      label: 'Getting Started', 
-                      link: '/guides/version-specific/enterprise/getting-started/',
-                      attrs: {
-                        'aria-label': 'Getting Started with Enterprise Refact'
-                      }
-                    },
-                    { 
-                      label: 'License', 
-                      link: '/guides/version-specific/enterprise/license/',
-                      attrs: {
-                        'aria-label': 'Enterprise Refact License Information'
-                      }
-                    },
-                    { 
-                      label: 'Users', 
-                      link: '/guides/version-specific/enterprise/users/',
-                      attrs: {
-                        'aria-label': 'Enterprise Refact User Management'
-                      }
-                    },
-                    { 
-                      label: 'Model Hosting', 
-                      link: '/guides/version-specific/enterprise/model-hosting/',
-                      attrs: {
-                        'aria-label': 'Enterprise Refact Model Hosting Guide'
-                      }
-                    },
-                    { 
-                      label: 'Plugins', 
-                      link: '/guides/version-specific/enterprise/plugins/',
-                      attrs: {
-                        'aria-label': 'Enterprise Refact Plugins Guide'
-                      }
-                    },
-                  ] 
-                },
-                { 
-                  label: 'Refact Teams', 
-                  link: '/guides/version-specific/teams/',
-                  attrs: {
-                    'aria-label': 'Learn about Refact Teams'
-                  }
-                },
-              ]
-            },
-            { 
-              label: 'Reverse Proxy', 
-              link: '/guides/reverse-proxy/',
-              attrs: {
-                'aria-label': 'Learn about Reverse Proxy Setup'
-              }
             },
           ]
         },

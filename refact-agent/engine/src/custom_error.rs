@@ -10,7 +10,6 @@ use axum::response::IntoResponse;
 pub struct ScratchError {
     pub status_code: StatusCode,
     pub message: String,
-    pub telemetry_skip: bool, // because already posted a better description directly
 }
 
 impl IntoResponse for ScratchError {
@@ -19,8 +18,7 @@ impl IntoResponse for ScratchError {
             "detail": self.message,
         });
         let mut response = (self.status_code, Json(payload)).into_response();
-        // This extension is used to let us know that this response used to be a ScratchError.
-        // Usage can be seen in telemetry_middleware.
+        // This extension preserves structured errors through Axum middleware.
         response.extensions_mut().insert(self);
         response
     }
@@ -40,15 +38,6 @@ impl ScratchError {
         ScratchError {
             status_code,
             message,
-            telemetry_skip: false,
-        }
-    }
-
-    pub fn new_but_skip_telemetry(status_code: StatusCode, message: String) -> Self {
-        ScratchError {
-            status_code,
-            message,
-            telemetry_skip: true,
         }
     }
 }

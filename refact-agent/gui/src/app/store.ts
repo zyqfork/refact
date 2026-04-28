@@ -11,7 +11,6 @@ import {
   persistReducer,
   persistStore,
 } from "redux-persist";
-import { statisticsApi } from "../services/refact/statistics";
 import { statsApi } from "../services/refact/stats";
 import {
   capsApi,
@@ -21,12 +20,10 @@ import {
   pathApi,
   pingApi,
   integrationsApi,
-  telemetryApi,
   knowledgeApi,
   knowledgeGraphApi,
   providersApi,
   modelsApi,
-  teamsApi,
   trajectoriesApi,
   trajectoryApi,
   tasksApi,
@@ -38,7 +35,6 @@ import { projectInformationApi } from "../services/refact/projectInformation";
 import { setupStatusApi } from "../services/refact/setupStatus";
 import { extensionsApi } from "../services/refact/extensions";
 import { pluginsApi } from "../services/refact/plugins";
-import { smallCloudApi } from "../services/smallcloud";
 import { reducer as fimReducer } from "../features/FIM/reducer";
 import { tipOfTheDaySlice } from "../features/TipOfTheDay";
 import { reducer as configReducer } from "../features/Config/configSlice";
@@ -55,15 +51,12 @@ import { pagesSlice } from "../features/Pages/pagesSlice";
 import mergeInitialState from "redux-persist/lib/stateReconciler/autoMergeLevel2";
 import { listenerMiddleware } from "./middleware";
 import { informationSlice } from "../features/Errors/informationSlice";
-import { teamsSlice } from "../features/Teams";
-import { userSurveySlice } from "../features/UserSurvey/userSurveySlice";
 import { linksApi } from "../services/refact/links";
 import { integrationsSlice } from "../features/Integrations";
 import { currentProjectInfoReducer } from "../features/Chat/currentProject";
 import { checkpointsSlice } from "../features/Checkpoints/checkpointsSlice";
 import { checkpointsApi } from "../services/refact/checkpoints";
 import { patchesAndDiffsTrackerSlice } from "../features/PatchesAndDiffsTracker/patchesAndDiffsTrackerSlice";
-import { coinBallanceSlice } from "../features/CoinBalance";
 import { tasksSlice } from "../features/Tasks";
 import { connectionSlice } from "../features/Connection";
 import { browserSlice } from "../features/Browser";
@@ -98,21 +91,17 @@ const rootReducer = combineSlices(
     current_project: currentProjectInfoReducer,
     selected_snippet: selectedSnippetReducer,
     chat: chatReducer,
-    [statisticsApi.reducerPath]: statisticsApi.reducer,
     [statsApi.reducerPath]: statsApi.reducer,
     [capsApi.reducerPath]: capsApi.reducer,
     [promptsApi.reducerPath]: promptsApi.reducer,
     [toolsApi.reducerPath]: toolsApi.reducer,
     [commandsApi.reducerPath]: commandsApi.reducer,
-    [smallCloudApi.reducerPath]: smallCloudApi.reducer,
     [pathApi.reducerPath]: pathApi.reducer,
     [pingApi.reducerPath]: pingApi.reducer,
     [linksApi.reducerPath]: linksApi.reducer,
     [checkpointsApi.reducerPath]: checkpointsApi.reducer,
-    [telemetryApi.reducerPath]: telemetryApi.reducer,
     [knowledgeApi.reducerPath]: knowledgeApi.reducer,
     [knowledgeGraphApi.reducerPath]: knowledgeGraphApi.reducer,
-    [teamsApi.reducerPath]: teamsApi.reducer,
     [providersApi.reducerPath]: providersApi.reducer,
     [modelsApi.reducerPath]: modelsApi.reducer,
     [trajectoriesApi.reducerPath]: trajectoriesApi.reducer,
@@ -138,12 +127,9 @@ const rootReducer = combineSlices(
   informationSlice,
   pagesSlice,
   integrationsApi,
-  userSurveySlice,
-  teamsSlice,
   integrationsSlice,
   checkpointsSlice,
   patchesAndDiffsTrackerSlice,
-  coinBallanceSlice,
   tasksSlice,
   connectionSlice,
   browserSlice,
@@ -152,7 +138,7 @@ const rootReducer = combineSlices(
 const rootPersistConfig = {
   key: "root",
   storage: storage(),
-  whitelist: [userSurveySlice.reducerPath],
+  whitelist: [],
   stateReconciler: mergeInitialState,
 };
 
@@ -199,23 +185,19 @@ export function setUpStore(preloadedState?: Partial<RootState>) {
       return middleware
         .prepend(
           pingApi.middleware,
-          statisticsApi.middleware,
           statsApi.middleware,
           capsApi.middleware,
           promptsApi.middleware,
           toolsApi.middleware,
           commandsApi.middleware,
-          smallCloudApi.middleware,
           pathApi.middleware,
           linksApi.middleware,
           integrationsApi.middleware,
           checkpointsApi.middleware,
-          telemetryApi.middleware,
           knowledgeApi.middleware,
           knowledgeGraphApi.middleware,
           providersApi.middleware,
           modelsApi.middleware,
-          teamsApi.middleware,
           trajectoriesApi.middleware,
           trajectoryApi.middleware,
           tasksApi.middleware,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
-use crate::buddy::observers::{BuddyObserver, ObserverContext, ObserverCost};
+use crate::buddy::observers::{BuddyObserver, ObserverContext};
 use crate::buddy::settings::BuddySettings;
 use crate::buddy::types::{BuddyFact, BuddyFactKind};
 use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
@@ -283,10 +283,6 @@ impl BuddyObserver for MemoryGardenObserver {
 
     fn cadence_seconds(&self) -> u64 {
         600
-    }
-
-    fn cost_class(&self) -> ObserverCost {
-        ObserverCost::Io
     }
 
     fn requires_setting(&self, settings: &BuddySettings) -> bool {

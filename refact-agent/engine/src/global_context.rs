@@ -1,6 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::Hasher;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,7 +22,6 @@ use crate::files_in_workspace::DocumentsState;
 use crate::integrations::browser_runtime::BrowserRuntime;
 use crate::integrations::sessions::IntegrationSession;
 use crate::privacy::PrivacySettings;
-use crate::telemetry::telemetry_structs;
 use crate::background_tasks::BackgroundTasksHolder;
 use crate::voice::SharedVoiceService;
 use crate::yaml_configs::customization_registry::RegistryCacheManager;
@@ -45,21 +42,6 @@ pub struct CommandLine {
     pub logs_stderr: bool,
     #[structopt(long, default_value = "", help = "Send logs to a file.")]
     pub logs_to_file: String,
-    #[structopt(
-        long,
-        short = "u",
-        default_value = "",
-        help = "URL to use: \"Refact\" for Cloud, or your Server URL. Leave empty for BYOK mode (configure providers via UI)."
-    )]
-    /// Inference server URL, or "Refact" for cloud
-    pub address_url: String,
-    #[structopt(
-        long,
-        short = "k",
-        default_value = "",
-        help = "The API key to authenticate your requests, will appear in HTTP requests this binary makes."
-    )]
-    pub api_key: String,
     #[structopt(
         long,
         help = "Trust self-signed SSL certificates, when connecting to an inference server."
@@ -86,18 +68,6 @@ pub struct CommandLine {
     )]
     pub lsp_stdin_stdout: u16,
 
-    #[structopt(
-        long,
-        default_value = "",
-        help = "End-user client version, such as version of VS Code plugin."
-    )]
-    pub enduser_client_version: String,
-    #[structopt(
-        long,
-        short = "b",
-        help = "Send basic telemetry (counters and errors)."
-    )]
-    pub basic_telemetry: bool,
     #[structopt(
         long,
         short = "v",
@@ -210,26 +180,6 @@ pub struct CommandLine {
     )]
     pub privacy_yaml: String,
 
-    #[structopt(long, help = "An pre-setup active group id")]
-    pub active_group_id: Option<String>,
-}
-
-impl CommandLine {
-    fn create_hash(msg: String) -> String {
-        let mut hasher = DefaultHasher::new();
-        hasher.write(msg.as_bytes());
-        format!("{:x}", hasher.finish())
-    }
-
-    pub fn get_prefix(&self) -> String {
-        // This helps several self-hosting or cloud accounts to not mix
-        Self::create_hash(format!(
-            "{}:{}",
-            self.address_url.clone(),
-            self.api_key.clone()
-        ))[..6]
-            .to_string()
-    }
 }
 
 pub struct AtCommandsPreviewCache {
@@ -275,7 +225,6 @@ pub struct GlobalContext {
     pub tokenizer_map: HashMap<String, Option<Arc<Tokenizer>>>,
     pub tokenizer_download_lock: Arc<AMutex<bool>>,
     pub completions_cache: Arc<StdRwLock<CompletionCache>>,
-    pub telemetry: Arc<StdRwLock<telemetry_structs::Storage>>,
     pub vec_db: Arc<AMutex<Option<crate::vecdb::vdb_highlev::VecDb>>>,
     pub vec_db_error: String,
     pub ast_service: Option<Arc<AMutex<AstIndexService>>>,
@@ -287,7 +236,6 @@ pub struct GlobalContext {
     pub integration_sessions: HashMap<String, Arc<AMutex<Box<dyn IntegrationSession>>>>,
     pub browser_runtimes: HashMap<String, Arc<AMutex<BrowserRuntime>>>,
     pub codelens_cache: Arc<AMutex<crate::http::routers::v1::code_lens::CodeLensCache>>,
-    pub active_group_id: Option<String>,
     pub init_shadow_repos_background_task_holder: BackgroundTasksHolder,
     pub init_shadow_repos_lock: Arc<AMutex<bool>>,
     pub git_operations_abort_flag: Arc<AtomicBool>,
@@ -534,7 +482,7 @@ pub async fn block_until_signal(
             let _ = ask_shutdown_receiver.recv();
             shutdown_flag.store(true, Ordering::SeqCst);
         }) => {
-            info!("graceful shutdown to store telemetry");
+            info!("graceful shutdown requested");
         }
     }
 }
@@ -574,7 +522,6 @@ pub async fn create_global_context(
         tokenizer_map: HashMap::new(),
         tokenizer_download_lock: Arc::new(AMutex::<bool>::new(false)),
         completions_cache: Arc::new(StdRwLock::new(CompletionCache::new())),
-        telemetry: Arc::new(StdRwLock::new(telemetry_structs::Storage::new())),
         vec_db: Arc::new(AMutex::new(None)),
         vec_db_error: String::new(),
         ast_service: None,
@@ -588,7 +535,6 @@ pub async fn create_global_context(
         codelens_cache: Arc::new(AMutex::new(
             crate::http::routers::v1::code_lens::CodeLensCache::default(),
         )),
-        active_group_id: cmdline.active_group_id.clone(),
         init_shadow_repos_background_task_holder: BackgroundTasksHolder::new(vec![]),
         init_shadow_repos_lock: Arc::new(AMutex::new(false)),
         git_operations_abort_flag: Arc::new(AtomicBool::new(false)),
@@ -602,12 +548,7 @@ pub async fn create_global_context(
         voice_service: crate::voice::VoiceService::new(),
         project_registry_cache: Arc::new(StdRwLock::new(RegistryCacheManager::new())),
         providers: Arc::new(ARwLock::new(
-            load_providers_from_config(
-                &config_dir,
-                &cmdline.address_url,
-                &cmdline.api_key,
-                &http_client,
-            )
+            load_providers_from_config(&config_dir, &http_client)
             .await
             .unwrap_or_default(),
         )),
@@ -640,14 +581,10 @@ pub mod tests {
             ping_message: "pong".to_string(),
             logs_stderr: true,
             logs_to_file: String::new(),
-            address_url: "Refact".to_string(),
-            api_key: String::new(),
             insecure: true,
             http_port: 0,
             lsp_port: 0,
             lsp_stdin_stdout: 0,
-            enduser_client_version: String::new(),
-            basic_telemetry: false,
             verbose: false,
             ast: false,
             ast_max_files: 0,
@@ -668,7 +605,6 @@ pub mod tests {
             secrets_yaml: String::new(),
             indexing_yaml: String::new(),
             privacy_yaml: String::new(),
-            active_group_id: None,
         };
 
         let http_client = reqwest::Client::builder()
@@ -690,7 +626,6 @@ pub mod tests {
             tokenizer_map: HashMap::new(),
             tokenizer_download_lock: Arc::new(AMutex::<bool>::new(false)),
             completions_cache: Arc::new(StdRwLock::new(CompletionCache::new())),
-            telemetry: Arc::new(StdRwLock::new(telemetry_structs::Storage::new())),
             vec_db: Arc::new(AMutex::new(None)),
             vec_db_error: String::new(),
             ast_service: None,
@@ -704,7 +639,6 @@ pub mod tests {
             codelens_cache: Arc::new(AMutex::new(
                 crate::http::routers::v1::code_lens::CodeLensCache::default(),
             )),
-            active_group_id: None,
             init_shadow_repos_background_task_holder: BackgroundTasksHolder::new(vec![]),
             init_shadow_repos_lock: Arc::new(AMutex::new(false)),
             git_operations_abort_flag: Arc::new(AtomicBool::new(false)),

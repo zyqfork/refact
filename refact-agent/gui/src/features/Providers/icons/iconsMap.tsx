@@ -7,13 +7,10 @@ import { LMStudioIcon } from "./LMStudio";
 import { OllamaIcon } from "./Ollama";
 import { OpenAIIcon } from "./OpenAI";
 import { OpenRouterIcon } from "./OpenRouter";
-import { RefactIcon } from "./Refact";
 import { VllmIcon } from "./Vllm";
 import { XaiIcon } from "./Xai";
 
 export const iconsMap: Record<string, JSX.Element> = {
-  refact: <RefactIcon />,
-  refact_self_hosted: <RefactIcon />,
   openai: <OpenAIIcon />,
   openai_responses: <OpenAIIcon />,
   openai_codex: <OpenAIIcon />,

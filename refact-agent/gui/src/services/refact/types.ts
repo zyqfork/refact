@@ -593,13 +593,6 @@ type CostInfo = {
   metering_cache_creation_tokens_n?: number;
   metering_cache_read_tokens_n?: number;
 
-  metering_balance?: number;
-
-  metering_coins_prompt?: number;
-  metering_coins_generated?: number;
-  metering_coins_cache_creation?: number;
-  metering_coins_cache_read?: number;
-
   metering_usd?: MeteringUsd;
 };
 

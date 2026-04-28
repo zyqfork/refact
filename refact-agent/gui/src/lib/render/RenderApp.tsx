@@ -1,19 +1,16 @@
 import { StrictMode } from "react";
-import { type Config } from "../../features/Config/configSlice";
+import { type Config, updateConfig } from "../../features/Config/configSlice";
 import { App } from "../../features/App";
 import { reportBuddyFrontendError } from "../../features/Buddy/reportBuddyFrontendError";
 import { withBuddyErrorReport } from "../../features/Buddy/BuddyErrorBoundary";
 import ReactDOM from "react-dom/client";
+import { store } from "../../app/store";
 import "./web.css";
 
-export function renderApp(element: HTMLElement, config: Config) {
-  const AppWrapped: React.FC<Config> = () => {
-    return (
-      <StrictMode>
-        <App />
-      </StrictMode>
-    );
-  };
+export function renderApp(element: HTMLElement, config?: Partial<Config>) {
+  if (config) {
+    store.dispatch(updateConfig(config));
+  }
 
   const root = withBuddyErrorReport(
     () =>
@@ -34,9 +31,17 @@ export function renderApp(element: HTMLElement, config: Config) {
     },
   );
 
-  withBuddyErrorReport(() => root.render(<AppWrapped {...config} />), {
-    source: "react_root_render",
-    sourceFile: "frontend/react_root_render",
-    toolName: "react_root_render",
-  });
+  withBuddyErrorReport(
+    () =>
+      root.render(
+        <StrictMode>
+          <App />
+        </StrictMode>,
+      ),
+    {
+      source: "react_root_render",
+      sourceFile: "frontend/react_root_render",
+      toolName: "react_root_render",
+    },
+  );
 }

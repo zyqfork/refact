@@ -20,7 +20,6 @@ export type Config = {
     completeManual?: string;
   };
   apiKey?: string | null;
-  addressURL?: string;
   shiftEnterToSubmit?: boolean;
   currentWorkspaceName?: string;
 };
@@ -47,7 +46,6 @@ export const setThemeMode = createAction<"light" | "dark" | "inherit">(
   "config/setThemeMode",
 );
 export const setApiKey = createAction<string | null>("config/setApiKey");
-export const setAddressURL = createAction<string>("config/setAddressURL");
 
 export const changeFeature = createAction<{
   feature: string;
@@ -66,9 +64,10 @@ export const reducer = createReducer<Config>(initialState, (builder) => {
     state.host = action.payload.host ?? state.host;
     state.lspUrl = action.payload.lspUrl ?? state.lspUrl;
     state.tabbed = action.payload.tabbed ?? state.tabbed;
-    state.themeProps = action.payload.themeProps ?? state.themeProps;
+    state.themeProps = action.payload.themeProps
+      ? { ...state.themeProps, ...action.payload.themeProps }
+      : state.themeProps;
     state.apiKey = action.payload.apiKey ?? state.apiKey;
-    state.addressURL = action.payload.addressURL ?? state.addressURL;
     state.lspPort = action.payload.lspPort ?? state.lspPort;
     state.keyBindings = action.payload.keyBindings ?? state.keyBindings;
     state.shiftEnterToSubmit =
@@ -89,10 +88,6 @@ export const reducer = createReducer<Config>(initialState, (builder) => {
       [action.payload.feature]: action.payload.value,
     };
   });
-
-  builder.addCase(setAddressURL, (state, action) => {
-    state.addressURL = action.payload;
-  });
 });
 
 export const selectThemeMode = (state: RootState) =>
@@ -112,7 +107,6 @@ export const selectAst = createSelector(
 );
 
 export const selectApiKey = (state: RootState) => state.config.apiKey;
-export const selectAddressURL = (state: RootState) => state.config.addressURL;
 export const selectHost = (state: RootState) => state.config.host;
 export const selectSubmitOption = (state: RootState) =>
   state.config.shiftEnterToSubmit ?? false;

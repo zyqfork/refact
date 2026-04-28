@@ -1,10 +1,8 @@
 use std::path::Path;
 
-use serde_yaml::Value;
-
 use crate::providers::traits::ProviderTrait;
 use crate::providers::{
-    refact::RefactProvider, anthropic::AnthropicProvider, openai::OpenAIProvider,
+    anthropic::AnthropicProvider, openai::OpenAIProvider,
     openai_responses::OpenAIResponsesProvider, openai_codex::OpenAICodexProvider,
     openrouter::OpenRouterProvider, ollama::OllamaProvider, lmstudio::LMStudioProvider,
     vllm::VLLMProvider, groq::GroqProvider, deepseek::DeepseekProvider, xai::XAIProvider,
@@ -13,7 +11,6 @@ use crate::providers::{
 };
 
 pub const PROVIDER_NAMES: &[&str] = &[
-    "refact",
     "anthropic",
     "openai",
     "openai_responses",
@@ -33,7 +30,6 @@ pub const PROVIDER_NAMES: &[&str] = &[
 
 pub fn create_provider(name: &str) -> Option<Box<dyn ProviderTrait>> {
     match name {
-        "refact" => Some(Box::new(RefactProvider::default())),
         "anthropic" => Some(Box::new(AnthropicProvider::default())),
         "openai" => Some(Box::new(OpenAIProvider::default())),
         "openai_responses" => Some(Box::new(OpenAIResponsesProvider::default())),
@@ -94,15 +90,9 @@ impl Default for ProviderRegistry {
 
 pub async fn load_providers_from_config(
     config_dir: &Path,
-    refact_address_url: &str,
-    refact_api_key: &str,
     http_client: &reqwest::Client,
 ) -> Result<ProviderRegistry, String> {
     let mut registry = ProviderRegistry::new();
-
-    let refact_provider =
-        RefactProvider::from_cli(refact_address_url.to_string(), refact_api_key.to_string());
-    registry.add(Box::new(refact_provider));
 
     let providers_dir = config_dir.join("providers.d");
     if !providers_dir.exists() {
@@ -132,36 +122,10 @@ pub async fn load_providers_from_config(
         }
 
         if name == "refact" {
-            let content = match tokio::fs::read_to_string(&path).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Failed to read provider config {}: {}", path.display(), e);
-                    continue;
-                }
-            };
-
-            let mut yaml: Value = match serde_yaml::from_str(&content) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("Failed to parse provider config {}: {}", path.display(), e);
-                    continue;
-                }
-            };
-
-            if let Some(map) = yaml.as_mapping_mut() {
-                map.remove(Value::String("api_key".to_string()));
-                map.remove(Value::String("address_url".to_string()));
-            }
-
-            if let Some(provider) = registry.get_mut("refact") {
-                if let Err(e) = provider.provider_settings_apply(yaml) {
-                    tracing::warn!(
-                        "Failed to apply provider config {} to refact provider: {}",
-                        path.display(),
-                        e
-                    );
-                }
-            }
+            tracing::warn!(
+                "Ignoring deprecated Refact provider config at {}; configure BYOK/local providers instead",
+                path.display()
+            );
             continue;
         }
 

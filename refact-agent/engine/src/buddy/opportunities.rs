@@ -75,10 +75,6 @@ impl OpportunityQueue {
         self.cap_items();
     }
 
-    pub fn push(&mut self, opp: BuddyOpportunity) {
-        self.push_with_cooldown(opp, DEFAULT_COOLDOWN.num_seconds() as u64);
-    }
-
     pub fn unread_count(&self) -> usize {
         self.items
             .iter()
@@ -162,10 +158,6 @@ impl OpportunityQueue {
         self.items.iter().find(|o| o.id == id)
     }
 
-    pub fn get_mut(&mut self, id: &str) -> Option<&mut BuddyOpportunity> {
-        self.items.iter_mut().find(|o| o.id == id)
-    }
-
     pub fn dismissed_history_snapshot(&self) -> Vec<DismissEntry> {
         self.dismissed_history
             .iter()
@@ -184,7 +176,6 @@ impl Default for OpportunityQueue {
 }
 
 struct Rule {
-    name: &'static str,
     cooldown_secs: u64,
     build: fn(
         &crate::buddy::facts::FactStore,
@@ -196,82 +187,66 @@ struct Rule {
 
 const RULES: &[Rule] = &[
     Rule {
-        name: "task_stuck",
         cooldown_secs: 3600,
         build: rules::task_stuck,
     },
     Rule {
-        name: "task_abandoned",
         cooldown_secs: 21600,
         build: rules::task_abandoned,
     },
     Rule {
-        name: "trajectory_clutter",
         cooldown_secs: 43200,
         build: rules::trajectory_cleanup,
     },
     Rule {
-        name: "default_model_missing",
         cooldown_secs: 7200,
         build: rules::provider_tuning_missing,
     },
     Rule {
-        name: "broken_model_ref",
         cooldown_secs: 7200,
         build: rules::provider_tuning_broken_ref,
     },
     Rule {
-        name: "memory_garden",
         cooldown_secs: 43200,
         build: rules::memory_garden,
     },
     Rule {
-        name: "diagnostic_cluster",
         cooldown_secs: 1800,
         build: rules::diagnostic_investigation,
     },
     Rule {
-        name: "frontend_error_burst",
         cooldown_secs: 900,
         build: rules::diagnostic_investigation_frontend,
     },
     Rule {
-        name: "git_pressure",
         cooldown_secs: 14400,
         build: rules::git_hygiene,
     },
     Rule {
-        name: "git_widening",
         cooldown_secs: 7200,
         build: rules::git_hygiene_widening,
     },
     Rule {
-        name: "mode_prompt_overlap",
         cooldown_secs: 86400,
         build: rules::config_drift_mode_overlap,
     },
     Rule {
-        name: "skill_trigger_weak",
         cooldown_secs: 172800,
         build: rules::config_drift_skill_trigger,
     },
     Rule {
-        name: "agents_md_gap",
         cooldown_secs: 259200,
         build: rules::agents_md_gap,
     },
     Rule {
-        name: "mcp_auth_expired",
         cooldown_secs: 7200,
         build: rules::integration_mcp_auth,
     },
     Rule {
-        name: "integration_failing",
         cooldown_secs: 7200,
         build: rules::integration_failing,
     },
     Rule {
-        name: "chat_recap",
         cooldown_secs: 14400,
         build: rules::chat_recap_retry_streak,
     },

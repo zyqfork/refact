@@ -66,8 +66,6 @@ pub struct TrajectoryEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_coins: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_lines_added: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_lines_removed: Option<i64>,
@@ -127,8 +125,6 @@ pub struct TrajectoryMeta {
     pub session_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_chat_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_coins: Option<f64>,
     #[serde(default)]
     pub total_lines_added: i64,
     #[serde(default)]
@@ -838,7 +834,6 @@ pub async fn save_trajectory_snapshot(
         let sessions = gcx.read().await.chat_sessions.clone();
         let (session_state, session_error) =
             get_session_state_for_chat(&sessions, &snapshot.chat_id).await;
-        let total_coins = calculate_total_coins_from_chat_messages(&snapshot.messages);
         let (total_lines_added, total_lines_removed) =
             calculate_line_changes_from_chat_messages(&snapshot.messages);
         let (tasks_total, tasks_done, tasks_failed) =
@@ -859,7 +854,6 @@ pub async fn save_trajectory_snapshot(
                 root_chat_id: Some(effective_root),
                 model: Some(snapshot.model.clone()),
                 mode: Some(snapshot.mode.clone()),
-                total_coins,
                 total_lines_added: Some(total_lines_added),
                 total_lines_removed: Some(total_lines_removed),
                 tasks_total: Some(tasks_total),
@@ -991,7 +985,6 @@ async fn process_trajectory_change(
                 root_chat_id: None,
                 model: None,
                 mode: None,
-                total_coins: None,
                 total_lines_added: None,
                 total_lines_removed: None,
                 tasks_total: None,
@@ -1017,7 +1010,6 @@ async fn process_trajectory_change(
             root_chat_id,
             model,
             mode,
-            total_coins,
             total_lines_added,
             total_lines_removed,
             tasks_total,
@@ -1030,7 +1022,6 @@ async fn process_trajectory_change(
                 .root_chat_id
                 .clone()
                 .unwrap_or_else(|| t.thread.id.clone());
-            let coins = calculate_total_coins_from_chat_messages(&t.messages);
             let (lines_added, lines_removed) =
                 calculate_line_changes_from_chat_messages(&t.messages);
             let (t_total, t_done, t_failed) =
@@ -1046,7 +1037,6 @@ async fn process_trajectory_change(
                 Some(effective_root),
                 Some(t.thread.model),
                 Some(t.thread.mode),
-                coins,
                 Some(lines_added),
                 Some(lines_removed),
                 Some(t_total),
@@ -1057,7 +1047,7 @@ async fn process_trajectory_change(
         } else {
             (
                 None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None,
+                None,
             )
         };
         let (session_state, session_error) = get_session_state_for_chat(&sessions, chat_id).await;
@@ -1076,7 +1066,6 @@ async fn process_trajectory_change(
                 root_chat_id,
                 model,
                 mode,
-                total_coins,
                 total_lines_added,
                 total_lines_removed,
                 tasks_total,
@@ -1570,7 +1559,6 @@ fn spawn_title_generation_task(
             root_chat_id: None,
             model: None,
             mode: None,
-            total_coins: None,
             total_lines_added: None,
             total_lines_removed: None,
             tasks_total: None,
@@ -1670,47 +1658,6 @@ fn calculate_line_changes_from_messages(messages: &[serde_json::Value]) -> (i64,
     }
 
     (total_added, total_removed)
-}
-
-fn calculate_total_coins_from_messages(messages: &[serde_json::Value]) -> Option<f64> {
-    let mut total: f64 = 0.0;
-    let mut found_any = false;
-
-    for msg in messages {
-        let mut found_in_extra = false;
-        if let Some(extra_obj) = msg.get("extra").and_then(|e| e.as_object()) {
-            for (key, value) in extra_obj {
-                if key.starts_with("metering_coins_") {
-                    if let Some(coins) = value.as_f64() {
-                        total += coins;
-                        found_any = true;
-                        found_in_extra = true;
-                    }
-                }
-            }
-        }
-        if !found_in_extra {
-            if let Some(obj) = msg.as_object() {
-                for (key, value) in obj {
-                    if key == "extra" {
-                        continue;
-                    }
-                    if key.starts_with("metering_coins_") {
-                        if let Some(coins) = value.as_f64() {
-                            total += coins;
-                            found_any = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if found_any {
-        Some(total)
-    } else {
-        None
-    }
 }
 
 fn calculate_task_progress_from_messages(messages: &[serde_json::Value]) -> (i32, i32, i32) {
@@ -1823,28 +1770,6 @@ fn calculate_line_changes_from_chat_messages(messages: &[ChatMessage]) -> (i64, 
     }
 
     (total_added, total_removed)
-}
-
-fn calculate_total_coins_from_chat_messages(messages: &[ChatMessage]) -> Option<f64> {
-    let mut total: f64 = 0.0;
-    let mut found_any = false;
-
-    for msg in messages {
-        for (key, value) in &msg.extra {
-            if key.starts_with("metering_coins_") {
-                if let Some(coins) = value.as_f64() {
-                    total += coins;
-                    found_any = true;
-                }
-            }
-        }
-    }
-
-    if found_any {
-        Some(total)
-    } else {
-        None
-    }
 }
 
 fn calculate_task_progress_from_chat_messages(messages: &[ChatMessage]) -> (i32, i32, i32) {
@@ -2042,7 +1967,6 @@ fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let total_coins = calculate_total_coins_from_messages(&data.messages);
     let (total_lines_added, total_lines_removed) =
         calculate_line_changes_from_messages(&data.messages);
     let (tasks_total, tasks_done, tasks_failed) =
@@ -2065,7 +1989,6 @@ fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
         card_id,
         session_state: None,
         root_chat_id,
-        total_coins,
         total_lines_added,
         total_lines_removed,
         tasks_total,
@@ -2450,7 +2373,6 @@ pub async fn handle_v1_trajectories_save(
         .unwrap_or_else(|| id.clone());
     let sessions = gcx.read().await.chat_sessions.clone();
     let (session_state, session_error) = get_session_state_for_chat(&sessions, &id).await;
-    let total_coins = calculate_total_coins_from_messages(&data.messages);
     let (total_lines_added, total_lines_removed) =
         calculate_line_changes_from_messages(&data.messages);
     let (tasks_total, tasks_done, tasks_failed) =
@@ -2474,7 +2396,6 @@ pub async fn handle_v1_trajectories_save(
         root_chat_id: Some(effective_root),
         model: Some(data.model.clone()),
         mode: Some(data.mode.clone()),
-        total_coins,
         total_lines_added: Some(total_lines_added),
         total_lines_removed: Some(total_lines_removed),
         tasks_total: Some(tasks_total),
@@ -2532,7 +2453,6 @@ pub async fn handle_v1_trajectories_delete(
         root_chat_id: None,
         model: None,
         mode: None,
-        total_coins: None,
         total_lines_added: None,
         total_lines_removed: None,
         tasks_total: None,
@@ -3044,7 +2964,6 @@ mod tests {
             root_chat_id: Some("root-123".to_string()),
             model: Some("gpt-4".to_string()),
             mode: Some("AGENT".to_string()),
-            total_coins: Some(1.5),
             total_lines_added: Some(100),
             total_lines_removed: Some(50),
             tasks_total: Some(5),
@@ -3065,7 +2984,6 @@ mod tests {
         assert_eq!(json["message_count"], 5);
         assert_eq!(json["parent_id"], "parent-123");
         assert_eq!(json["link_type"], "subagent");
-        assert_eq!(json["total_coins"], 1.5);
         assert_eq!(json["total_lines_added"], 100);
         assert_eq!(json["total_lines_removed"], 50);
         assert_eq!(json["tasks_total"], 5);

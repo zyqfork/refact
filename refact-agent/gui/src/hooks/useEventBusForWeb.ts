@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useLocalStorage } from "usehooks-ts";
-import { isLogOut, isOpenExternalUrl, isSetupHost } from "../events/setup";
+import { isOpenExternalUrl } from "../events/setup";
 import { useAppDispatch } from "./useAppDispatch";
 import { useConfig } from "./useConfig";
 import { updateConfig } from "../features/Config/configSlice";
@@ -9,13 +9,9 @@ import { updateConfig } from "../features/Config/configSlice";
 // are handled here for the web version.
 export function useEventBusForWeb() {
   const config = useConfig();
-  const [addressURL, setAddressURL] = useLocalStorage("lspUrl", "");
-  const [apiKey, setApiKey] = useLocalStorage("apiKey", "");
+  const [lspUrl] = useLocalStorage("lspUrl", "");
+  const [apiKey] = useLocalStorage("apiKey", "");
   const dispatch = useAppDispatch();
-  const addressURLRef = useRef(addressURL);
-  const apiKeyRef = useRef(apiKey);
-  addressURLRef.current = addressURL;
-  apiKeyRef.current = apiKey;
 
   useEffect(() => {
     if (config.host !== "web") {
@@ -31,29 +27,6 @@ export function useEventBusForWeb() {
         const { url } = event.data.payload;
         window.open(url, "_blank")?.focus();
       }
-
-      if (isSetupHost(event.data)) {
-        const { host } = event.data.payload;
-        setAddressURL("Refact");
-        setApiKey(host.apiKey);
-        dispatch(
-          updateConfig({
-            addressURL: addressURLRef.current,
-            apiKey: apiKeyRef.current,
-          }),
-        );
-      }
-
-      if (isLogOut(event.data)) {
-        setAddressURL("");
-        setApiKey("");
-        dispatch(
-          updateConfig({
-            addressURL: addressURLRef.current,
-            apiKey: apiKeyRef.current,
-          }),
-        );
-      }
     };
 
     window.addEventListener("message", listener);
@@ -61,12 +34,12 @@ export function useEventBusForWeb() {
     return () => {
       window.removeEventListener("message", listener);
     };
-  }, [setApiKey, setAddressURL, config.host, dispatch]);
+  }, [config.host]);
 
   useEffect(() => {
     if (config.host !== "web") {
       return;
     }
-    dispatch(updateConfig({ addressURL, apiKey }));
-  }, [apiKey, addressURL, dispatch, config.host]);
+    dispatch(updateConfig({ lspUrl, apiKey }));
+  }, [apiKey, lspUrl, dispatch, config.host]);
 }

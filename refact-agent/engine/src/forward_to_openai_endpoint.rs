@@ -1,12 +1,11 @@
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
-use reqwest::header::USER_AGENT;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use serde_json::json;
 use tracing::info;
 
-use crate::call_validation::{ChatMeta, SamplingParameters};
+use crate::call_validation::SamplingParameters;
 use crate::caps::BaseModelRecord;
 use crate::custom_error::MapErrToString;
 use crate::scratchpads::chat_utils_limit_history::CompressionStrength;
@@ -16,7 +15,6 @@ pub async fn forward_to_openai_style_endpoint(
     prompt: &str,
     client: &reqwest::Client,
     sampling_parameters: &SamplingParameters,
-    meta: Option<ChatMeta>,
 ) -> Result<serde_json::Value, String> {
     if model_rec.endpoint.is_empty() {
         return Err(format!("No endpoint configured for {}", model_rec.id));
@@ -33,16 +31,6 @@ pub async fn forward_to_openai_style_endpoint(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", model_rec.api_key))
                 .map_err(|e| format!("invalid api_key for authorization header: {}", e))?,
-        );
-    }
-    if model_rec.support_metadata {
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_str(&format!(
-                "refact-lsp {}",
-                crate::version::build::PKG_VERSION
-            ))
-            .map_err(|e| format!("invalid user-agent header: {}", e))?,
         );
     }
     let mut data = json!({
@@ -87,10 +75,6 @@ pub async fn forward_to_openai_style_endpoint(
             .map(|x| x.to_string())
             .unwrap_or("none".to_string())
     );
-    if let Some(meta) = meta {
-        data["meta"] = json!(meta);
-    }
-
     let req = client
         .post(&model_rec.endpoint)
         .headers(headers)
@@ -134,7 +118,6 @@ pub async fn forward_to_openai_style_endpoint_streaming(
     prompt: &str,
     client: &reqwest::Client,
     sampling_parameters: &SamplingParameters,
-    meta: Option<ChatMeta>,
 ) -> Result<reqwest::Response, String> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -147,16 +130,6 @@ pub async fn forward_to_openai_style_endpoint_streaming(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", model_rec.api_key))
                 .map_err(|e| format!("invalid api_key for authorization header: {}", e))?,
-        );
-    }
-    if model_rec.support_metadata {
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_str(&format!(
-                "refact-lsp {}",
-                crate::version::build::PKG_VERSION
-            ))
-            .map_err(|e| format!("invalid user-agent header: {}", e))?,
         );
     }
 
@@ -205,10 +178,6 @@ pub async fn forward_to_openai_style_endpoint_streaming(
             .map(|x| x.to_string())
             .unwrap_or("none".to_string())
     );
-
-    if let Some(meta) = meta {
-        data["meta"] = json!(meta);
-    }
 
     if model_rec.endpoint.is_empty() {
         return Err(format!("No endpoint configured for {}", model_rec.id));

@@ -1,13 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import {
-  Flex,
-  Callout as RadixCallout,
-  Card,
-  Text,
-  Button,
-  Strong,
-  Link,
-} from "@radix-ui/themes";
+import React, { useEffect, useState } from "react";
+import { Callout as RadixCallout, Card, Text, Flex } from "@radix-ui/themes";
 import {
   ExclamationTriangleIcon,
   InfoCircledIcon,
@@ -15,16 +7,8 @@ import {
 import { useTimeout } from "usehooks-ts";
 import styles from "./Callout.module.css";
 import classNames from "classnames";
-import {
-  useAppDispatch,
-  useAppSelector,
-  useConfig,
-  useLogout,
-  useOpenUrl,
-} from "../../hooks";
+import { useAppSelector } from "../../hooks";
 import { getIsAuthError } from "../../features/Errors/errorsSlice";
-import { selectBalance } from "../../features/CoinBalance";
-import { dismissBalanceLowCallout } from "../../features/Errors/informationSlice";
 
 type RadixCalloutProps = React.ComponentProps<typeof RadixCallout.Root>;
 
@@ -110,7 +94,6 @@ export const ErrorCallout: React.FC<Omit<CalloutProps, "type">> = ({
   className,
   ...props
 }) => {
-  const logout = useLogout();
   const isAuthError = useAppSelector(getIsAuthError);
 
   return (
@@ -132,18 +115,7 @@ export const ErrorCallout: React.FC<Omit<CalloutProps, "type">> = ({
       )}
       {isAuthError && (
         <Flex as="span" gap="2" mt="3">
-          <Button variant="surface" onClick={() => logout()}>
-            Logout
-          </Button>
-          <Button asChild variant="surface" color="brown">
-            <a
-              href="https://discord.gg/Kts7CYg99R"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Get help
-            </a>
-          </Button>
+          Check your provider configuration, API key, and network access.
         </Flex>
       )}
     </Callout>
@@ -218,107 +190,5 @@ export const CalloutFromTop: React.FC<
         </Flex>
       </RadixCallout.Root>
     </Card>
-  );
-};
-
-export const BallanceCallOut: React.FC<
-  Omit<CalloutProps, "type"> & { onClick: () => void }
-> = ({ onClick, ...props }) => {
-  const openUrl = useOpenUrl();
-  const { host } = useConfig();
-  const handleLinkClick = useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      event.stopPropagation();
-      if (host === "web") return;
-      event.preventDefault();
-      openUrl(event.currentTarget.href);
-    },
-    [openUrl, host],
-  );
-  return (
-    <Callout
-      mt="2"
-      type="error"
-      color="red"
-      timeout={null}
-      onClick={onClick}
-      {...props}
-    >
-      💸 <Strong>Your balance is exhausted!</Strong>
-      <br />
-      You have no coins left to use Refact&apos;s AI features.
-      <br />
-      Please{" "}
-      <Link
-        href="https://refact.smallcloud.ai/?topup"
-        target="_blank"
-        rel="noreferrer"
-        onClick={handleLinkClick}
-      >
-        top up your balance
-      </Link>{" "}
-      or contact support if you believe this is a mistake.{" "}
-      <Link
-        href="https://docs.refact.ai/introduction/usage-based-pricing/"
-        target="_blank"
-        rel="noreferrer"
-        onClick={handleLinkClick}
-      >
-        Read more about usage balance.
-      </Link>
-    </Callout>
-  );
-};
-
-export const BallanceLowInformation: React.FC<Omit<CalloutProps, "type">> = (
-  props,
-) => {
-  const balance = useAppSelector(selectBalance);
-  const dispatch = useAppDispatch();
-  const handleClose = useCallback(() => {
-    dispatch(dismissBalanceLowCallout());
-  }, [dispatch]);
-  const openUrl = useOpenUrl();
-  const { host } = useConfig();
-  const handleLinkClick = useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      event.stopPropagation();
-      if (host === "web") return;
-      event.preventDefault();
-      openUrl(event.currentTarget.href);
-    },
-    [openUrl, host],
-  );
-
-  return (
-    <Callout
-      type="info"
-      color="blue"
-      mt="2"
-      timeout={null}
-      onClick={handleClose}
-      {...props}
-    >
-      💸 <Strong>Your balance is {balance}</Strong>
-      <br />
-      Please{" "}
-      <Link
-        href="https://refact.smallcloud.ai/?topup"
-        target="_blank"
-        rel="noreferrer"
-        onClick={handleLinkClick}
-      >
-        top up your balance
-      </Link>{" "}
-      soon or contact support if you believe this is a mistake.{" "}
-      <Link
-        href="https://docs.refact.ai/introduction/usage-based-pricing/"
-        target="_blank"
-        rel="noreferrer"
-        onClick={handleLinkClick}
-      >
-        Read more about usage balance.
-      </Link>
-    </Callout>
   );
 };

@@ -454,18 +454,6 @@ export const SIGNALS: Record<string, SignalDef> = {
     duration: 6000,
     animVariant: "confetti",
   },
-  balance_low: {
-    mood: "concerned",
-    animationType: "shake",
-    xp: 0,
-    icon: "💰",
-    isError: true,
-    isWin: false,
-    scene: "alert",
-    category: "speech",
-    duration: 8000,
-    animVariant: "shake_worried",
-  },
   connection_lost: {
     mood: "concerned",
     animationType: "shake",

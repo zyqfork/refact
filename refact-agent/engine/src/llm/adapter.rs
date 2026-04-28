@@ -12,7 +12,6 @@ pub enum WireFormat {
     OpenaiChatCompletions,
     OpenaiResponses,
     AnthropicMessages,
-    Refact,
 }
 
 impl Default for WireFormat {
@@ -27,7 +26,6 @@ impl std::fmt::Display for WireFormat {
             Self::OpenaiChatCompletions => write!(f, "openai_chat_completions"),
             Self::OpenaiResponses => write!(f, "openai_responses"),
             Self::AnthropicMessages => write!(f, "anthropic_messages"),
-            Self::Refact => write!(f, "refact"),
         }
     }
 }
@@ -49,7 +47,6 @@ pub struct AdapterSettings {
     pub reasoning_type: Option<String>,
     pub supports_temperature: bool,
     pub supports_max_completion_tokens: bool,
-    pub support_metadata: bool,
     pub eof_is_done: bool,
     pub supports_web_search: bool,
     pub supports_cache_control: bool,
@@ -78,7 +75,6 @@ static OPENAI_RESPONSES_ADAPTER: OnceLock<
 > = OnceLock::new();
 static ANTHROPIC_ADAPTER: OnceLock<crate::llm::adapters::anthropic::AnthropicAdapter> =
     OnceLock::new();
-static REFACT_ADAPTER: OnceLock<crate::llm::adapters::refact::RefactAdapter> = OnceLock::new();
 
 pub fn get_adapter(format: WireFormat) -> &'static dyn LlmWireAdapter {
     match format {
@@ -89,9 +85,6 @@ pub fn get_adapter(format: WireFormat) -> &'static dyn LlmWireAdapter {
             .get_or_init(|| crate::llm::adapters::openai_responses::OpenAiResponsesAdapter),
         WireFormat::AnthropicMessages => {
             ANTHROPIC_ADAPTER.get_or_init(|| crate::llm::adapters::anthropic::AnthropicAdapter)
-        }
-        WireFormat::Refact => {
-            REFACT_ADAPTER.get_or_init(|| crate::llm::adapters::refact::RefactAdapter)
         }
     }
 }
@@ -129,8 +122,8 @@ pub fn insert_extra_headers(headers: &mut HeaderMap, extra_headers: &HashMap<Str
     }
 }
 
-/// Extract Refact-specific extra fields from streaming response chunks.
-/// These include metering, billing, cost, cache fields and provider-specific data.
+/// Extract provider-specific extra fields from streaming response chunks.
+/// These include billing, cost, cache fields and provider-specific data.
 /// Handles both top-level fields and nested fields under "response" wrapper.
 pub fn extract_extra_fields(json: &Value) -> Map<String, Value> {
     let mut result = Map::new();
@@ -140,8 +133,7 @@ pub fn extract_extra_fields(json: &Value) -> Map<String, Value> {
             if val.is_null() {
                 continue;
             }
-            let is_extra = key.starts_with("metering_")
-                || key.starts_with("billing_")
+            let is_extra = key.starts_with("billing_")
                 || key.starts_with("cost_")
                 || key.starts_with("cache_")
                 || key == "system_fingerprint";
@@ -185,7 +177,6 @@ mod tests {
             WireFormat::AnthropicMessages.to_string(),
             "anthropic_messages"
         );
-        assert_eq!(WireFormat::Refact.to_string(), "refact");
     }
 
     #[test]
@@ -200,8 +191,6 @@ mod tests {
     fn test_extract_extra_fields_top_level() {
         let json = json!({
             "id": "chatcmpl-123",
-            "metering_balance": 5000,
-            "metering_prompt_tokens_n": 100,
             "billing_amount": 0.01,
             "cost_total": 0.02,
             "cache_status": "hit",
@@ -210,8 +199,6 @@ mod tests {
 
         let extra = extract_extra_fields(&json);
 
-        assert_eq!(extra.get("metering_balance"), Some(&json!(5000)));
-        assert_eq!(extra.get("metering_prompt_tokens_n"), Some(&json!(100)));
         assert_eq!(extra.get("billing_amount"), Some(&json!(0.01)));
         assert_eq!(extra.get("cost_total"), Some(&json!(0.02)));
         assert_eq!(extra.get("cache_status"), Some(&json!("hit")));
@@ -227,30 +214,26 @@ mod tests {
             "type": "response.completed",
             "response": {
                 "id": "resp_123",
-                "metering_balance": 3000,
-                "metering_generated_tokens_n": 50,
                 "system_fingerprint": "fp_nested"
             }
         });
 
         let extra = extract_extra_fields(&json);
 
-        assert_eq!(extra.get("metering_balance"), Some(&json!(3000)));
-        assert_eq!(extra.get("metering_generated_tokens_n"), Some(&json!(50)));
         assert_eq!(extra.get("system_fingerprint"), Some(&json!("fp_nested")));
     }
 
     #[test]
     fn test_extract_extra_fields_ignores_null() {
         let json = json!({
-            "metering_balance": null,
-            "metering_prompt_tokens_n": 100
+            "billing_amount": null,
+            "cost_total": 100
         });
 
         let extra = extract_extra_fields(&json);
 
-        assert!(extra.get("metering_balance").is_none());
-        assert_eq!(extra.get("metering_prompt_tokens_n"), Some(&json!(100)));
+        assert!(extra.get("billing_amount").is_none());
+        assert_eq!(extra.get("cost_total"), Some(&json!(100)));
     }
 
     #[test]

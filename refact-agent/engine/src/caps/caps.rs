@@ -5,11 +5,8 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock as ARwLock;
-use url::Url;
 use tracing::{info, warn};
 
-use crate::custom_error::MapErrToString;
-use crate::global_context::CommandLine;
 use crate::global_context::GlobalContext;
 use crate::caps::providers::{
     add_models_to_caps, read_providers_d, resolve_provider_api_key, post_process_provider,
@@ -19,8 +16,6 @@ use crate::providers::config::ProviderDefaults;
 use crate::caps::model_caps::{ModelCapabilities, get_model_caps, resolve_model_caps};
 use crate::llm::WireFormat;
 use crate::providers::traits::AvailableModel;
-
-pub const MODEL_CATALOG_PATH: &str = "v1/model-catalog";
 
 #[derive(Debug, Serialize, Clone, Deserialize, Default, PartialEq)]
 pub struct BaseModelRecord {
@@ -46,9 +41,6 @@ pub struct BaseModelRecord {
     pub auth_token: String,
     #[serde(default, skip_serializing)]
     pub tokenizer_api_key: String,
-
-    #[serde(default, skip_serializing)]
-    pub support_metadata: bool,
     #[serde(default, skip_serializing)]
     pub extra_headers: std::collections::HashMap<String, String>,
     #[serde(default, skip_serializing)]
@@ -275,14 +267,6 @@ impl Default for CapsMetadata {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CodeAssistantCaps {
-    #[serde(deserialize_with = "normalize_string")]
-    pub cloud_name: String,
-
-    #[serde(default = "default_telemetry_basic_dest")]
-    pub telemetry_basic_dest: String,
-    #[serde(default = "default_telemetry_retrieve_my_own")]
-    pub telemetry_basic_retrieve_my_own: String,
-
     #[serde(skip_deserializing)]
     pub completion_models: IndexMap<String, Arc<CompletionModelRecord>>,
     #[serde(skip_deserializing)]
@@ -315,9 +299,6 @@ pub struct CodeAssistantCaps {
 impl Default for CodeAssistantCaps {
     fn default() -> Self {
         Self {
-            cloud_name: String::new(),
-            telemetry_basic_dest: default_telemetry_basic_dest(),
-            telemetry_basic_retrieve_my_own: default_telemetry_retrieve_my_own(),
             completion_models: IndexMap::new(),
             chat_models: IndexMap::new(),
             embedding_model: EmbeddingModelRecord::default(),
@@ -332,16 +313,8 @@ impl Default for CodeAssistantCaps {
     }
 }
 
-fn default_telemetry_retrieve_my_own() -> String {
-    "https://www.smallcloud.ai/v1/telemetry-retrieve-my-own-stats".to_string()
-}
-
 pub fn default_hf_tokenizer_template() -> String {
     "https://huggingface.co/$HF_MODEL/resolve/main/tokenizer.json".to_string()
-}
-
-fn default_telemetry_basic_dest() -> String {
-    "https://www.smallcloud.ai/v1/telemetry-basic".to_string()
 }
 
 pub fn normalize_string<'de, D: serde::Deserializer<'de>>(
@@ -413,77 +386,6 @@ impl DefaultModels {
     }
 }
 
-pub async fn load_caps_value_from_url(
-    cmdline: CommandLine,
-    gcx: Arc<ARwLock<GlobalContext>>,
-) -> Result<(serde_json::Value, String), String> {
-    let caps_urls = if cmdline.address_url.to_lowercase() == "refact" {
-        vec!["https://inference.smallcloud.ai/v1/model-catalog".to_string()]
-    } else {
-        let base_url = Url::parse(&cmdline.address_url)
-            .map_err(|_| "failed to parse address url".to_string())?;
-
-        vec![base_url
-            .join(MODEL_CATALOG_PATH)
-            .map_err(|_| "failed to join model catalog URL".to_string())?
-            .to_string()]
-    };
-
-    let http_client = gcx.read().await.http_client.clone();
-    let mut headers = reqwest::header::HeaderMap::new();
-
-    let user_agent = reqwest::header::HeaderValue::from_str(&format!(
-        "refact-lsp {}",
-        crate::version::build::PKG_VERSION
-    ))
-    .map_err(|e| format!("Invalid user agent format: {}", e))?;
-    headers.insert(reqwest::header::USER_AGENT, user_agent);
-
-    if !cmdline.api_key.is_empty() {
-        let auth_value =
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", cmdline.api_key))
-                .map_err(|e| format!("Invalid API key format: {}", e))?;
-        headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-    }
-
-    let mut last_status = 0;
-    let mut last_response_json: Option<serde_json::Value> = None;
-
-    for url in &caps_urls {
-        info!("fetching caps from {}", url);
-        let response = http_client
-            .get(url)
-            .headers(headers.clone())
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        last_status = response.status().as_u16();
-
-        if let Ok(json_value) = response.json::<serde_json::Value>().await {
-            if last_status == 200 {
-                return Ok((json_value, url.clone()));
-            }
-            last_response_json = Some(json_value.clone());
-            warn!(
-                "status={}; server responded with:\n{}",
-                last_status, json_value
-            );
-        }
-    }
-
-    if let Some(json_value) = last_response_json {
-        if let Some(detail) = json_value.get("detail").and_then(|d| d.as_str()) {
-            return Err(detail.to_string());
-        }
-    }
-
-    Err(format!(
-        "cannot fetch model catalog, status={}",
-        last_status
-    ))
-}
-
 /// Build ChatModelRecord from an AvailableModel and provider runtime info
 fn build_chat_model_record(
     provider_name: &str,
@@ -494,7 +396,6 @@ fn build_chat_model_record(
     runtime_api_key: &str,
     runtime_auth_token: &str,
     runtime_tokenizer_api_key: &str,
-    runtime_support_metadata: bool,
     runtime_extra_headers: &HashMap<String, String>,
     runtime_supports_cache_control: bool,
 ) -> ChatModelRecord {
@@ -505,25 +406,31 @@ fn build_chat_model_record(
         format!("{}/{}", provider_name, model.id)
     };
 
-    let resolved_caps = resolve_model_caps(model_caps, &model_id).or_else(|| {
-        if model_id.starts_with("openrouter/") {
-            None
-        } else {
-            resolve_model_caps(model_caps, &model.id)
-        }
-    }).or_else(|| {
-        if provider_name == "vllm" {
-            model.display_name.as_ref().filter(|s| !s.trim().is_empty()).and_then(|dn| {
-                resolve_model_caps(model_caps, dn).or_else(|| {
-                    dn.rsplit('/').next().and_then(|last| {
-                        resolve_model_caps(model_caps, last)
+    let resolved_caps = resolve_model_caps(model_caps, &model_id)
+        .or_else(|| {
+            if model_id.starts_with("openrouter/") {
+                None
+            } else {
+                resolve_model_caps(model_caps, &model.id)
+            }
+        })
+        .or_else(|| {
+            if provider_name == "vllm" {
+                model
+                    .display_name
+                    .as_ref()
+                    .filter(|s| !s.trim().is_empty())
+                    .and_then(|dn| {
+                        resolve_model_caps(model_caps, dn).or_else(|| {
+                            dn.rsplit('/')
+                                .next()
+                                .and_then(|last| resolve_model_caps(model_caps, last))
+                        })
                     })
-                })
-            })
-        } else {
-            None
-        }
-    });
+            } else {
+                None
+            }
+        });
 
     let (
         n_ctx,
@@ -641,7 +548,6 @@ fn build_chat_model_record(
             api_key: runtime_api_key.to_string(),
             auth_token: runtime_auth_token.to_string(),
             tokenizer_api_key: runtime_tokenizer_api_key.to_string(),
-            support_metadata: runtime_support_metadata,
             extra_headers: runtime_extra_headers.clone(),
             similar_models: Vec::new(),
             tokenizer,
@@ -755,7 +661,6 @@ pub async fn populate_chat_models_from_providers(
                 &runtime.api_key,
                 &runtime.auth_token,
                 &runtime.tokenizer_api_key,
-                runtime.support_metadata,
                 &runtime.extra_headers,
                 runtime.supports_cache_control,
             );
@@ -837,18 +742,6 @@ pub async fn populate_chat_models_from_providers(
 
         if need_new_default {
             let mut candidates: Vec<&String> = caps.completion_models.keys().collect();
-            // In cloud mode, prefer cloud completion models over local ones
-            if !caps.cloud_name.is_empty() {
-                let cloud_prefix = format!("{}/", caps.cloud_name);
-                let cloud_candidates: Vec<&String> = candidates
-                    .iter()
-                    .filter(|id| id.starts_with(&cloud_prefix))
-                    .cloned()
-                    .collect();
-                if !cloud_candidates.is_empty() {
-                    candidates = cloud_candidates;
-                }
-            }
             candidates.sort();
             if let Some(first_model_id) = candidates.first() {
                 info!(
@@ -861,282 +754,21 @@ pub async fn populate_chat_models_from_providers(
     }
 }
 
-pub(crate) fn convert_self_hosted_caps_if_needed(
-    caps_value: serde_json::Value,
-    caps_url: &str,
-    cmdline_api_key: &str,
-) -> Result<serde_json::Value, String> {
-    let obj = match caps_value.as_object() {
-        Some(o) => o,
-        None => return Ok(caps_value),
-    };
-
-    let is_nested_format = ["chat", "completion", "embedding"]
-        .iter()
-        .any(|key| obj.get(*key).and_then(|v| v.get("models")).is_some());
-    if !is_nested_format {
-        return Ok(caps_value);
-    }
-
-    let support_metadata = obj
-        .get("support_metadata")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let tokenizer_endpoints = obj
-        .get("tokenizer_endpoints")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut chat_models = serde_json::Map::new();
-    if let Some(chat) = obj.get("chat").and_then(|v| v.as_object()) {
-        let endpoint = chat.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
-        if let Some(models) = chat.get("models").and_then(|v| v.as_object()) {
-            for (model_name, model_val) in models {
-                let mut record = model_val.clone();
-                if let Some(rec) = record.as_object_mut() {
-                    rec.insert("name".to_string(), serde_json::json!(model_name));
-                    let model_endpoint = endpoint.replace("$MODEL", model_name);
-                    let full_endpoint =
-                        relative_to_full_url(caps_url, &model_endpoint).unwrap_or(model_endpoint);
-                    rec.insert("endpoint".to_string(), serde_json::json!(full_endpoint));
-                    rec.insert("endpoint_style".to_string(), serde_json::json!("openai"));
-                    rec.insert("enabled".to_string(), serde_json::json!(true));
-                    rec.insert(
-                        "support_metadata".to_string(),
-                        serde_json::json!(support_metadata),
-                    );
-                    if !cmdline_api_key.is_empty() {
-                        rec.insert("api_key".to_string(), serde_json::json!(cmdline_api_key));
-                    }
-                    if let Some(tok_url) = tokenizer_endpoints.get(model_name) {
-                        if let Some(tok_str) = tok_url.as_str() {
-                            let full_tok = relative_to_full_url(caps_url, tok_str)
-                                .unwrap_or(tok_str.to_string());
-                            rec.insert("tokenizer".to_string(), serde_json::json!(full_tok));
-                        }
-                    }
-                    chat_models.insert(model_name.clone(), record);
-                }
-            }
-        }
-    }
-
-    let mut completion_models = serde_json::Map::new();
-    if let Some(completion) = obj.get("completion").and_then(|v| v.as_object()) {
-        let endpoint = completion
-            .get("endpoint")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if let Some(models) = completion.get("models").and_then(|v| v.as_object()) {
-            for (model_name, model_val) in models {
-                let mut record = model_val.clone();
-                if let Some(rec) = record.as_object_mut() {
-                    rec.insert("name".to_string(), serde_json::json!(model_name));
-                    let model_endpoint = endpoint.replace("$MODEL", model_name);
-                    let full_endpoint =
-                        relative_to_full_url(caps_url, &model_endpoint).unwrap_or(model_endpoint);
-                    rec.insert("endpoint".to_string(), serde_json::json!(full_endpoint));
-                    rec.insert("endpoint_style".to_string(), serde_json::json!("openai"));
-                    rec.insert("enabled".to_string(), serde_json::json!(true));
-                    if !cmdline_api_key.is_empty() {
-                        rec.insert("api_key".to_string(), serde_json::json!(cmdline_api_key));
-                    }
-                    if let Some(tok_url) = tokenizer_endpoints.get(model_name) {
-                        if let Some(tok_str) = tok_url.as_str() {
-                            let full_tok = relative_to_full_url(caps_url, tok_str)
-                                .unwrap_or(tok_str.to_string());
-                            rec.insert("tokenizer".to_string(), serde_json::json!(full_tok));
-                        }
-                    }
-                    completion_models.insert(model_name.clone(), record);
-                }
-            }
-        }
-    }
-
-    let mut result = caps_value.clone();
-    if let Some(result_obj) = result.as_object_mut() {
-        result_obj.insert(
-            "chat_models".to_string(),
-            serde_json::Value::Object(chat_models),
-        );
-        result_obj.insert(
-            "completion_models".to_string(),
-            serde_json::Value::Object(completion_models),
-        );
-
-        if let Some(chat) = obj.get("chat").and_then(|v| v.as_object()) {
-            let chat_endpoint = chat.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
-            let full_chat_endpoint =
-                relative_to_full_url(caps_url, chat_endpoint).unwrap_or(chat_endpoint.to_string());
-            result_obj.insert(
-                "chat_endpoint".to_string(),
-                serde_json::json!(full_chat_endpoint),
-            );
-
-            if let Some(dm) = chat.get("default_model").and_then(|v| v.as_str()) {
-                if !dm.is_empty() {
-                    result_obj.insert("chat_default_model".to_string(), serde_json::json!(dm));
-                }
-            }
-            if let Some(dm) = chat.get("default_light_model").and_then(|v| v.as_str()) {
-                if !dm.is_empty() {
-                    result_obj.insert("chat_light_model".to_string(), serde_json::json!(dm));
-                }
-            }
-            if let Some(dm) = chat.get("default_thinking_model").and_then(|v| v.as_str()) {
-                if !dm.is_empty() {
-                    result_obj.insert("chat_thinking_model".to_string(), serde_json::json!(dm));
-                }
-            }
-        }
-
-        if let Some(completion) = obj.get("completion").and_then(|v| v.as_object()) {
-            let comp_endpoint = completion
-                .get("endpoint")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let full_comp_endpoint =
-                relative_to_full_url(caps_url, comp_endpoint).unwrap_or(comp_endpoint.to_string());
-            result_obj.insert(
-                "completion_endpoint".to_string(),
-                serde_json::json!(full_comp_endpoint),
-            );
-        }
-
-        if let Some(embedding) = obj.get("embedding").and_then(|v| v.as_object()) {
-            let emb_endpoint = embedding
-                .get("endpoint")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !emb_endpoint.is_empty() {
-                let full_emb_endpoint = relative_to_full_url(caps_url, emb_endpoint)
-                    .unwrap_or(emb_endpoint.to_string());
-                result_obj.insert(
-                    "embedding_endpoint".to_string(),
-                    serde_json::json!(full_emb_endpoint),
-                );
-            }
-
-            let emb_models = embedding.get("models").and_then(|v| v.as_object());
-
-            // Resolve default model: explicit default_model, or fall back to first in models
-            let default_model_name = embedding
-                .get("default_model")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .or_else(|| emb_models.and_then(|m| m.keys().next().map(|s| s.as_str())));
-
-            if let Some(dm) = default_model_name {
-                // Build a full embedding_model object with n_ctx/embedding_size from models section
-                let mut emb_record = serde_json::json!({"name": dm, "enabled": true});
-                if let Some(model_info) = emb_models
-                    .and_then(|m| m.get(dm))
-                    .and_then(|v| v.as_object())
-                {
-                    if let Some(n_ctx) = model_info.get("n_ctx").and_then(|v| v.as_u64()) {
-                        emb_record["n_ctx"] = serde_json::json!(n_ctx);
-                    }
-                    if let Some(size) = model_info.get("size").and_then(|v| v.as_u64()) {
-                        emb_record["embedding_size"] = serde_json::json!(size);
-                    }
-                }
-                if let Some(tok_url) = tokenizer_endpoints.get(dm) {
-                    if let Some(tok_str) = tok_url.as_str() {
-                        let full_tok =
-                            relative_to_full_url(caps_url, tok_str).unwrap_or(tok_str.to_string());
-                        emb_record["tokenizer"] = serde_json::json!(full_tok);
-                    }
-                }
-                result_obj.insert("default_embeddings_model".to_string(), emb_record);
-            }
-        }
-
-        if let Some(telem) = obj.get("telemetry_endpoints").and_then(|v| v.as_object()) {
-            if let Some(basic) = telem
-                .get("telemetry_basic_endpoint")
-                .and_then(|v| v.as_str())
-            {
-                result_obj.insert("telemetry_basic_dest".to_string(), serde_json::json!(basic));
-            }
-            if let Some(own) = telem
-                .get("telemetry_basic_retrieve_my_own_endpoint")
-                .and_then(|v| v.as_str())
-            {
-                result_obj.insert(
-                    "telemetry_basic_retrieve_my_own".to_string(),
-                    serde_json::json!(own),
-                );
-            }
-        }
-    }
-
-    Ok(result)
-}
-
 pub async fn load_caps(
-    cmdline: crate::global_context::CommandLine,
+    _cmdline: crate::global_context::CommandLine,
     gcx: Arc<ARwLock<GlobalContext>>,
 ) -> Result<Arc<CodeAssistantCaps>, String> {
     let (config_dir, cmdline_api_key, experimental) = {
         let gcx_locked = gcx.read().await;
         (
             gcx_locked.config_dir.clone(),
-            gcx_locked.cmdline.api_key.clone(),
+            String::new(),
             gcx_locked.cmdline.experimental,
         )
     };
 
-    let addr = cmdline.address_url.trim().to_string();
-    let is_refact = addr.eq_ignore_ascii_case("refact");
-    let has_cloud_key = !cmdline_api_key.trim().is_empty();
-    let skip_cloud = addr.is_empty() || (is_refact && !has_cloud_key);
-
-    let (mut caps, server_providers) = if skip_cloud {
-        info!(
-            "Running in BYOK mode (local providers only), address_url={:?} has_key={}",
-            addr, has_cloud_key
-        );
-        (CodeAssistantCaps::default(), vec![])
-    } else {
-        match load_caps_value_from_url(cmdline, gcx.clone()).await {
-            Ok((caps_value, caps_url)) => {
-                let caps_value =
-                    convert_self_hosted_caps_if_needed(caps_value, &caps_url, &cmdline_api_key)?;
-
-                let mut caps = serde_json::from_value::<CodeAssistantCaps>(caps_value.clone())
-                    .map_err_with_prefix("Failed to parse caps:")?;
-                let mut server_provider =
-                    serde_json::from_value::<CapsProvider>(caps_value.clone())
-                        .map_err_with_prefix("Failed to parse caps provider:")?;
-
-                resolve_relative_urls(&mut server_provider, &caps_url)?;
-
-                info!(
-                    "server_provider running_models({})={:?}, completion_endpoint={:?}, completion_default_model={:?}",
-                    server_provider.running_models.len(),
-                    server_provider.running_models.iter().take(10).collect::<Vec<_>>(),
-                    server_provider.completion_endpoint,
-                    server_provider.completion_default_model,
-                );
-
-                caps.telemetry_basic_dest =
-                    relative_to_full_url(&caps_url, &caps.telemetry_basic_dest)?;
-                caps.telemetry_basic_retrieve_my_own =
-                    relative_to_full_url(&caps_url, &caps.telemetry_basic_retrieve_my_own)?;
-
-                (caps, vec![server_provider])
-            }
-            Err(e) => {
-                warn!(
-                    "Cloud caps fetch failed ({}), falling back to local providers only",
-                    e
-                );
-                (CodeAssistantCaps::default(), vec![])
-            }
-        }
-    };
+    let mut caps = CodeAssistantCaps::default();
+    let server_providers = Vec::new();
 
     let (mut providers, error_log): (Vec<CapsProvider>, Vec<_>) =
         read_providers_d(server_providers, &config_dir, experimental).await;
@@ -1149,8 +781,7 @@ pub async fn load_caps(
         provider.api_key = resolve_provider_api_key(&provider, &cmdline_api_key);
     }
 
-    let address_url = gcx.read().await.cmdline.address_url.clone();
-    let model_caps_map = match get_model_caps(gcx.clone(), &address_url, false).await {
+    let model_caps_map = match get_model_caps(gcx.clone(), false).await {
         Ok(map) => map,
         Err(e) => {
             warn!("Failed to fetch model capabilities: {}, using empty map", e);
@@ -1313,35 +944,8 @@ fn validate_default_models(caps: &CodeAssistantCaps) -> Result<(), String> {
     Ok(())
 }
 
-pub fn resolve_relative_urls(provider: &mut CapsProvider, caps_url: &str) -> Result<(), String> {
-    provider.chat_endpoint = relative_to_full_url(caps_url, &provider.chat_endpoint)?;
-    provider.completion_endpoint = relative_to_full_url(caps_url, &provider.completion_endpoint)?;
-    provider.embedding_endpoint = relative_to_full_url(caps_url, &provider.embedding_endpoint)?;
-    Ok(())
-}
-
 pub fn strip_model_from_finetune(model: &str) -> String {
     model.split(":").next().unwrap().to_string()
-}
-
-pub fn relative_to_full_url(caps_url: &str, maybe_relative_url: &str) -> Result<String, String> {
-    if maybe_relative_url.contains("://") {
-        Ok(maybe_relative_url.to_string())
-    } else if maybe_relative_url.is_empty() {
-        Ok("".to_string())
-    } else {
-        let base_url =
-            Url::parse(caps_url).map_err(|_| format!("failed to parse caps url: {}", caps_url))?;
-        let normalized = if maybe_relative_url.starts_with('/') {
-            maybe_relative_url.to_string()
-        } else {
-            format!("/{}", maybe_relative_url)
-        };
-        let joined_url = base_url
-            .join(&normalized)
-            .map_err(|_| format!("failed to join url: {}", maybe_relative_url))?;
-        Ok(joined_url.to_string())
-    }
 }
 
 pub fn resolve_model<'a, T>(
@@ -1468,7 +1072,8 @@ fn apply_registry_caps_to_chat_model(record: &mut ChatModelRecord, caps: &ModelC
 
     record.reasoning_effort_options = caps.reasoning_effort_options.clone();
     record.supports_thinking_budget = caps.supports_thinking_budget;
-    record.base.supports_cache_control = record.base.supports_cache_control && caps.supports_cache_control;
+    record.base.supports_cache_control =
+        record.base.supports_cache_control && caps.supports_cache_control;
     record.supports_agent = record.supports_tools;
     record.supports_temperature = caps.supports_temperature;
     record.base.supports_web_search = caps.supports_web_search;
@@ -1485,11 +1090,6 @@ pub fn resolve_completion_model<'a>(
     };
 
     resolve_model(&caps.completion_models, model_id)
-}
-
-#[allow(dead_code)]
-pub fn is_cloud_model(model_id: &str) -> bool {
-    model_id.starts_with("refact/")
 }
 
 #[cfg(test)]

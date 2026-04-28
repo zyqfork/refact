@@ -19,7 +19,6 @@ mod openai_codex;
 pub mod openai_codex_oauth;
 mod openai_responses;
 mod openrouter;
-mod refact;
 mod vllm;
 mod xai;
 mod xai_responses;

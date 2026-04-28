@@ -204,14 +204,6 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             }
         }
 
-        if settings.support_metadata {
-            if let Some(meta) = &req.meta {
-                if let Ok(meta_value) = serde_json::to_value(meta) {
-                    body["meta"] = meta_value;
-                }
-            }
-        }
-
         tracing::info!(
             model = %settings.model_name,
             endpoint = %settings.endpoint,
@@ -224,7 +216,6 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
             tool_choice = ?req.tool_choice,
             reasoning = ?req.reasoning,
             response_format = ?req.response_format.is_some(),
-            has_meta = %req.meta.is_some(),
             messages_count = %req.messages.len(),
             "openai responses adapter request"
         );
@@ -1089,7 +1080,6 @@ mod tests {
             reasoning_type: Some("openai".to_string()),
             supports_temperature: true,
             supports_max_completion_tokens: false,
-            support_metadata: false,
             eof_is_done: false,
             supports_web_search: false,
             supports_cache_control: true,

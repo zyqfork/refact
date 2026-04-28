@@ -24,9 +24,7 @@ use crate::chat::tools::{execute_tools, ExecuteToolsOptions};
 use crate::chat::types::ThreadParams;
 use crate::chat::trajectories::save_trajectory_as;
 use crate::chat::trajectory_ops::sanitize_messages_for_new_thread;
-use crate::stats::event::{
-    LlmCallEvent, canonicalize_mode_for_stats, split_model_provider, sum_metering_coins,
-};
+use crate::stats::event::{LlmCallEvent, canonicalize_mode_for_stats, split_model_provider};
 
 fn get_context_files_from_messages(messages: &[ChatMessage]) -> Vec<String> {
     use std::collections::HashSet;
@@ -278,7 +276,7 @@ impl StreamCollector for SubchatProgressCollector {
 
 pub struct SubchatResult {
     pub messages: Vec<ChatMessage>,
-    /// Aggregated metering data from all assistant messages (coins, tokens, etc.)
+    /// Reserved for provider-local usage metadata returned by nested agent calls.
     pub metering: serde_json::Map<String, serde_json::Value>,
     /// Set when `config.stateful == true`, allows caller to reference the saved trajectory.
     /// Intentionally public API - callers may use it for trajectory linking.
@@ -1295,7 +1293,6 @@ async fn subchat_stream(
                 cache_creation_tokens: None,
                 total_tokens: 0,
                 cost_usd: None,
-                cost_coins: None,
             };
             if let Some(sender) = &gcx.read().await.llm_stats_sender {
                 if sender.try_send(event).is_err() {
@@ -1305,10 +1302,6 @@ async fn subchat_stream(
         }
         Ok(ref results_ok) => {
             let usage = results_ok.first().and_then(|r| r.usage.as_ref());
-            let cost_coins = results_ok
-                .first()
-                .map(|r| &r.extra)
-                .and_then(|e| sum_metering_coins(e));
             let event = LlmCallEvent {
                 id: uuid::Uuid::new_v4().to_string(),
                 ts_start: call_ts_start,
@@ -1341,7 +1334,6 @@ async fn subchat_stream(
                 cost_usd: usage
                     .and_then(|u| u.metering_usd.as_ref())
                     .map(|m| m.total_usd),
-                cost_coins,
             };
             if let Some(sender) = &gcx.read().await.llm_stats_sender {
                 if sender.try_send(event).is_err() {
@@ -1435,31 +1427,9 @@ fn update_usage_from_messages(usage: &mut ChatUsage, messages: &[Vec<ChatMessage
 }
 
 fn aggregate_metering_from_messages(
-    messages: &[ChatMessage],
+    _messages: &[ChatMessage],
 ) -> serde_json::Map<String, serde_json::Value> {
-    let mut aggregated = serde_json::Map::new();
-    let mut last_balance: Option<serde_json::Value> = None;
-
-    for msg in messages.iter().filter(|m| m.role == "assistant") {
-        for (key, value) in &msg.extra {
-            if key.starts_with("metering_") {
-                if let Some(num) = value.as_f64() {
-                    if key == "metering_balance" {
-                        last_balance = Some(serde_json::json!(num));
-                    } else {
-                        let current = aggregated.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        aggregated.insert(key.clone(), serde_json::json!(current + num));
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(balance) = last_balance {
-        aggregated.insert("metering_balance".to_string(), balance);
-    }
-
-    aggregated
+    serde_json::Map::new()
 }
 
 async fn subchat_single_internal(
@@ -1515,180 +1485,11 @@ async fn subchat_single_internal(
     .await
 }
 #[cfg(test)]
-mod aggregate_metering_tests {
-    use super::aggregate_metering_from_messages;
+mod subchat_tests {
     use super::resolve_subchat_params;
-    use crate::call_validation::{ChatMessage, ChatContent};
     use crate::caps::{BaseModelRecord, ChatModelRecord, CodeAssistantCaps};
     use crate::global_context::tests::make_test_gcx;
-    use crate::yaml_configs::project_configs_bootstrap::global_configs_try_create_all;
-    use serde_json::json;
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn assistant_msg_with_metering(
-        extra: serde_json::Map<String, serde_json::Value>,
-    ) -> ChatMessage {
-        ChatMessage {
-            role: "assistant".to_string(),
-            content: ChatContent::SimpleText("test".to_string()),
-            extra,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn test_coins_are_summed() {
-        let mut extra1 = serde_json::Map::new();
-        extra1.insert("metering_coins_prompt".to_string(), json!(10.0));
-        extra1.insert("metering_coins_generated".to_string(), json!(5.0));
-
-        let mut extra2 = serde_json::Map::new();
-        extra2.insert("metering_coins_prompt".to_string(), json!(20.0));
-        extra2.insert("metering_coins_generated".to_string(), json!(3.0));
-
-        let messages = vec![
-            assistant_msg_with_metering(extra1),
-            assistant_msg_with_metering(extra2),
-        ];
-
-        let result = aggregate_metering_from_messages(&messages);
-        assert_eq!(
-            result
-                .get("metering_coins_prompt")
-                .unwrap()
-                .as_f64()
-                .unwrap(),
-            30.0
-        );
-        assert_eq!(
-            result
-                .get("metering_coins_generated")
-                .unwrap()
-                .as_f64()
-                .unwrap(),
-            8.0
-        );
-    }
-
-    #[test]
-    fn test_balance_takes_last_value() {
-        let mut extra1 = serde_json::Map::new();
-        extra1.insert("metering_balance".to_string(), json!(50000));
-        extra1.insert("metering_coins_prompt".to_string(), json!(10.0));
-
-        let mut extra2 = serde_json::Map::new();
-        extra2.insert("metering_balance".to_string(), json!(49500));
-        extra2.insert("metering_coins_prompt".to_string(), json!(5.0));
-
-        let mut extra3 = serde_json::Map::new();
-        extra3.insert("metering_balance".to_string(), json!(49000));
-        extra3.insert("metering_coins_prompt".to_string(), json!(7.0));
-
-        let messages = vec![
-            assistant_msg_with_metering(extra1),
-            assistant_msg_with_metering(extra2),
-            assistant_msg_with_metering(extra3),
-        ];
-
-        let result = aggregate_metering_from_messages(&messages);
-        assert_eq!(
-            result.get("metering_balance").unwrap().as_f64().unwrap(),
-            49000.0
-        );
-        assert_eq!(
-            result
-                .get("metering_coins_prompt")
-                .unwrap()
-                .as_f64()
-                .unwrap(),
-            22.0
-        );
-    }
-
-    #[test]
-    fn test_non_assistant_messages_ignored() {
-        let mut extra_user = serde_json::Map::new();
-        extra_user.insert("metering_coins_prompt".to_string(), json!(999.0));
-        extra_user.insert("metering_balance".to_string(), json!(999999));
-
-        let mut extra_assistant = serde_json::Map::new();
-        extra_assistant.insert("metering_coins_prompt".to_string(), json!(10.0));
-        extra_assistant.insert("metering_balance".to_string(), json!(45000));
-
-        let messages = vec![
-            ChatMessage {
-                role: "user".to_string(),
-                content: ChatContent::SimpleText("hi".to_string()),
-                extra: extra_user,
-                ..Default::default()
-            },
-            assistant_msg_with_metering(extra_assistant),
-        ];
-
-        let result = aggregate_metering_from_messages(&messages);
-        assert_eq!(
-            result
-                .get("metering_coins_prompt")
-                .unwrap()
-                .as_f64()
-                .unwrap(),
-            10.0
-        );
-        assert_eq!(
-            result.get("metering_balance").unwrap().as_f64().unwrap(),
-            45000.0
-        );
-    }
-
-    #[test]
-    fn test_empty_messages() {
-        let result = aggregate_metering_from_messages(&[]);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_non_metering_keys_ignored() {
-        let mut extra = serde_json::Map::new();
-        extra.insert("metering_coins_prompt".to_string(), json!(10.0));
-        extra.insert("some_other_field".to_string(), json!(42));
-
-        let messages = vec![assistant_msg_with_metering(extra)];
-        let result = aggregate_metering_from_messages(&messages);
-
-        assert_eq!(result.len(), 1);
-        assert!(result.get("some_other_field").is_none());
-    }
-
-    #[test]
-    fn test_balance_absent_from_some_messages() {
-        let mut extra1 = serde_json::Map::new();
-        extra1.insert("metering_balance".to_string(), json!(50000));
-        extra1.insert("metering_coins_prompt".to_string(), json!(10.0));
-
-        let mut extra2 = serde_json::Map::new();
-        extra2.insert("metering_coins_prompt".to_string(), json!(5.0));
-
-        let messages = vec![
-            assistant_msg_with_metering(extra1),
-            assistant_msg_with_metering(extra2),
-        ];
-
-        let result = aggregate_metering_from_messages(&messages);
-        assert_eq!(
-            result.get("metering_balance").unwrap().as_f64().unwrap(),
-            50000.0
-        );
-        assert_eq!(
-            result
-                .get("metering_coins_prompt")
-                .unwrap()
-                .as_f64()
-                .unwrap(),
-            15.0
-        );
-    }
-
     #[tokio::test]
     async fn test_resolve_subchat_params_normalizes_code_review_for_smaller_model() {
         let gcx = make_test_gcx().await;

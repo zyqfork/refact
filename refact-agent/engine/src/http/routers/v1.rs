@@ -2,7 +2,7 @@ use at_tools::handle_v1_post_tools;
 use axum::Router;
 use axum::routing::{get, post, put, patch, delete};
 
-use crate::http::utils::telemetry_middleware;
+use crate::http::utils::request_logging_middleware;
 use crate::http::routers::v1::code_completion::{
     handle_v1_code_completion_web, handle_v1_code_completion_prompt,
 };
@@ -24,14 +24,10 @@ use crate::http::routers::v1::caps::{
 use crate::http::routers::v1::chat_based_handlers::{
     handle_v1_commit_message_from_diff, handle_v1_trajectory_compress,
 };
-use crate::http::routers::v1::dashboard::get_dashboard_plots;
 use crate::http::routers::v1::git::{
     handle_v1_git_commit, handle_v1_checkpoints_preview, handle_v1_checkpoints_restore,
 };
 use crate::http::routers::v1::graceful_shutdown::handle_v1_graceful_shutdown;
-use crate::http::routers::v1::snippet_accepted::handle_v1_snippet_accepted;
-use crate::http::routers::v1::telemetry_network::handle_v1_telemetry_network;
-use crate::http::routers::v1::telemetry_chat::handle_v1_telemetry_chat;
 use crate::http::routers::v1::links::handle_v1_links;
 use crate::http::routers::v1::lsp_like_handlers::{
     handle_v1_lsp_did_change, handle_v1_lsp_add_folder, handle_v1_lsp_initialize,
@@ -68,9 +64,7 @@ use crate::http::routers::v1::v1_integrations::{
 };
 use crate::http::routers::v1::file_edit_tools::handle_v1_file_edit_tool_dry_run;
 use crate::http::routers::v1::code_edit::handle_v1_code_edit;
-use crate::http::routers::v1::workspace::{
-    handle_v1_get_app_searchable_id, handle_v1_set_active_group_id,
-};
+use crate::http::routers::v1::workspace::handle_v1_get_app_searchable_id;
 use crate::chat::{
     handle_v1_chat_subscribe, handle_v1_chat_command, handle_v1_chat_cancel_queued,
     handle_v1_trajectories_list, handle_v1_trajectories_all, handle_v1_trajectories_get,
@@ -113,7 +107,6 @@ pub mod code_lens;
 mod commands_marketplace;
 pub mod customization;
 mod customization_editor;
-mod dashboard;
 pub mod ext_management;
 mod ext_marketplace_sources;
 mod file_edit_tools;
@@ -137,15 +130,12 @@ mod setup_status;
 pub mod sidebar;
 mod skills_marketplace;
 mod skills_status;
-pub mod snippet_accepted;
 mod stats;
 pub mod status;
 mod subagents_marketplace;
 pub mod sync_files;
 pub mod system_prompt;
 pub mod tasks;
-pub mod telemetry_chat;
-pub mod telemetry_network;
 mod trajectory_ops;
 mod v1_browser;
 mod v1_integrations;
@@ -225,9 +215,6 @@ pub fn make_v1_router() -> Router {
         .route("/graceful-shutdown", get(handle_v1_graceful_shutdown))
         .route("/code-completion", post(handle_v1_code_completion_web))
         .route("/code-lens", post(handle_v1_code_lens))
-        .route("/telemetry-network", post(handle_v1_telemetry_network))
-        .route("/telemetry-chat", post(handle_v1_telemetry_chat))
-        .route("/snippet-accepted", post(handle_v1_snippet_accepted))
         .route("/caps", get(handle_v1_caps))
         .route("/model-capabilities", get(handle_v1_model_capabilities))
         .route("/model-supported", get(handle_v1_model_supported))
@@ -375,14 +362,11 @@ pub fn make_v1_router() -> Router {
         .route("/google-gemini/health", get(handle_v1_google_gemini_health))
         .route("/claude-code/usage", get(handle_v1_claude_code_usage))
         .route("/openai-codex/usage", get(handle_v1_openai_codex_usage))
-        // cloud related
-        .route("/set-active-group-id", post(handle_v1_set_active_group_id))
         .route(
             "/get-app-searchable-id",
             get(handle_v1_get_app_searchable_id),
         )
         // experimental
-        .route("/get-dashboard-plots", get(get_dashboard_plots))
         .route(
             "/code-completion-prompt",
             post(handle_v1_code_completion_prompt),
@@ -833,5 +817,5 @@ pub fn make_v1_router() -> Router {
     let rl = buddy_frontend_error::FrontendErrorRateLimiter::new();
     builder
         .layer(axum::Extension(rl))
-        .layer(axum::middleware::from_fn(telemetry_middleware))
+        .layer(axum::middleware::from_fn(request_logging_middleware))
 }

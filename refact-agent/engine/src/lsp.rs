@@ -20,7 +20,6 @@ use crate::files_in_workspace;
 use crate::files_in_workspace::{on_did_change, on_did_delete};
 use crate::global_context::{CommandLine, GlobalContext};
 use crate::http::routers::v1::code_completion::handle_v1_code_completion;
-use crate::telemetry::snippets_collection;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -41,11 +40,6 @@ pub struct CompletionParams1 {
     pub text_document_position: TextDocumentPositionParams,
     pub parameters: RequestParams,
     pub multiline: bool,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SnippetAcceptedParams {
-    snippet_telemetry_id: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -74,7 +68,6 @@ pub struct Choice {
 pub struct CompletionRes {
     pub choices: Vec<Choice>,
     pub cached: Option<bool>,
-    pub snippet_telemetry_id: u32,
     pub model: String,
     pub created: Option<f32>,
 }
@@ -116,7 +109,6 @@ impl LspBackend {
                 .unwrap_or_default(),
             None => return Err(internal_error("document not found")),
         };
-        // url -> String method should be the same as in telemetry::snippets_collection::sources_changed
         let path_string = params
             .text_document_position
             .text_document
@@ -165,13 +157,6 @@ impl LspBackend {
             serde_json::from_str::<CompletionRes>(s.as_str()).map_err(|e| internal_error(e))?;
 
         Ok(value)
-    }
-
-    pub async fn accept_snippet(&self, params: SnippetAcceptedParams) -> Result<SuccessRes> {
-        let success =
-            snippets_collection::snippet_accepted(self.gcx.clone(), params.snippet_telemetry_id)
-                .await;
-        Ok(SuccessRes { success })
     }
 
     pub async fn set_active_document(&self, params: ChangeActiveFile) -> Result<SuccessRes> {
@@ -479,7 +464,6 @@ async fn build_lsp_service(
 ) -> (LspService<LspBackend>, ClientSocket) {
     let (lsp_service, socket) = LspService::build(|client| LspBackend { gcx, client })
         .custom_method("refact/getCompletions", LspBackend::get_completions)
-        .custom_method("refact/acceptCompletion", LspBackend::accept_snippet)
         .custom_method("refact/setActiveDocument", LspBackend::set_active_document)
         .finish();
     (lsp_service, socket)

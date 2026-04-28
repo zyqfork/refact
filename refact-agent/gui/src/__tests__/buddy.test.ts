@@ -505,7 +505,6 @@ describe("BuddyCanvas displaySize", () => {
     const errorTypes = [
       "chat_error",
       "tool_failed",
-      "balance_low",
       "connection_lost",
       "task_failed",
     ];

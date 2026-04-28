@@ -14,31 +14,28 @@ const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STREAM_HEARTBEAT: Duration = Duration::from_secs(2);
 
-use crate::call_validation::{ChatMeta, SamplingParameters};
+use crate::call_validation::SamplingParameters;
 use crate::caps::BaseModelRecord;
 use crate::custom_error::ScratchError;
 use crate::nicer_logs;
 use crate::scratchpad_abstract::{FinishReason, ScratchpadAbstract};
-use crate::telemetry::telemetry_structs;
 use crate::at_commands::at_commands::AtCommandsContext;
 
 pub async fn scratchpad_interaction_not_stream_json(
     ccx: Arc<AMutex<AtCommandsContext>>,
     scratchpad: &mut Box<dyn ScratchpadAbstract>,
-    scope: String,
+    _scope: String,
     prompt: &str,
     model_rec: &BaseModelRecord,
     parameters: &SamplingParameters, // includes n
     only_deterministic_messages: bool,
-    meta: Option<ChatMeta>,
 ) -> Result<serde_json::Value, ScratchError> {
     let t2 = std::time::SystemTime::now();
     let gcx = ccx.lock().await.global_context.clone();
-    let (client, tele_storage, slowdown_arc) = {
+    let (client, slowdown_arc) = {
         let gcx_locked = gcx.write().await;
         (
             gcx_locked.http_client.clone(),
-            gcx_locked.telemetry.clone(),
             gcx_locked.http_client_slowdown.clone(),
         )
     };
@@ -56,38 +53,14 @@ pub async fn scratchpad_interaction_not_stream_json(
             prompt,
             &client,
             &parameters,
-            meta,
         )
         .await
     }
-    .map_err(|e| {
-        tele_storage
-            .write()
-            .unwrap()
-            .tele_net
-            .push(telemetry_structs::TelemetryNetwork::new(
-                save_url.clone(),
-                scope.clone(),
-                false,
-                e.to_string(),
-            ));
-        ScratchError::new_but_skip_telemetry(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("forward_to_endpoint: {}", e),
-        )
-    })?;
+    .map_err(|e| ScratchError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("forward_to_endpoint: {}", e),
+    ))?;
     generate_id_and_index_for_tool_calls_if_missing(&mut model_says);
-
-    tele_storage
-        .write()
-        .unwrap()
-        .tele_net
-        .push(telemetry_structs::TelemetryNetwork::new(
-            save_url.clone(),
-            scope.clone(),
-            true,
-            "".to_string(),
-        ));
     info!(
         "forward to endpoint {:.2}ms, url was {}",
         t2.elapsed().unwrap().as_millis() as f64,
@@ -224,7 +197,6 @@ pub async fn scratchpad_interaction_not_stream(
     model_rec: &BaseModelRecord,
     parameters: &mut SamplingParameters,
     only_deterministic_messages: bool,
-    meta: Option<ChatMeta>,
 ) -> Result<Response<Body>, ScratchError> {
     let t1 = std::time::Instant::now();
     let prompt = scratchpad
@@ -247,7 +219,6 @@ pub async fn scratchpad_interaction_not_stream(
         &model_rec,
         parameters,
         only_deterministic_messages,
-        meta,
     )
     .await?;
     scratchpad_response_json["created"] = json!(t2
@@ -269,11 +240,10 @@ pub async fn scratchpad_interaction_not_stream(
 pub async fn scratchpad_interaction_stream(
     ccx: Arc<AMutex<AtCommandsContext>>,
     mut scratchpad: Box<dyn ScratchpadAbstract>,
-    scope: String,
+    _scope: String,
     mut model_rec: BaseModelRecord,
     parameters: SamplingParameters,
     only_deterministic_messages: bool,
-    meta: Option<ChatMeta>,
     pre_stream_messages: Option<Vec<serde_json::Value>>,
 ) -> Result<Response<Body>, ScratchError> {
     let t1: std::time::SystemTime = std::time::SystemTime::now();
@@ -283,11 +253,10 @@ pub async fn scratchpad_interaction_stream(
         let my_ccx = ccx.clone();
 
         let gcx = ccx.lock().await.global_context.clone();
-        let (client, tele_storage, slowdown_arc) = {
+        let (client, slowdown_arc) = {
             let gcx_locked = gcx.write().await;
             (
                 gcx_locked.http_client.clone(),
-                gcx_locked.telemetry.clone(),
                 gcx_locked.http_client_slowdown.clone()
             )
         };
@@ -380,20 +349,13 @@ pub async fn scratchpad_interaction_stream(
                     &model_rec,
                     &prompt,
                     &client,
-                    &my_parameters,
-                    meta
+                    &my_parameters
                 ).await
             };
             let response = match event_source_maybe {
                 Ok(resp) => resp,
                 Err(e) => {
                     let e_str = format!("forward_to_endpoint: {:?}", e);
-                    tele_storage.write().unwrap().tele_net.push(telemetry_structs::TelemetryNetwork::new(
-                        model_rec.endpoint.clone(),
-                        scope.clone(),
-                        false,
-                        e_str.to_string(),
-                    ));
                     tracing::error!(e_str);
                     let value_str = format!("data: {}\n\n", serde_json::to_string(&json!({"detail": e_str})).unwrap());
                     yield Result::<_, String>::Ok(value_str);
@@ -463,7 +425,6 @@ pub async fn scratchpad_interaction_stream(
                                 tracing::error!("unexpected error: {}", err_str);
                                 let value_str = format!("data: {}\n\n", serde_json::to_string(&json!({"detail": err_str})).unwrap());
                                 yield Result::<_, String>::Ok(value_str);
-                                // TODO: send telemetry
                                 break;
                             }
                         }
@@ -475,14 +436,6 @@ pub async fn scratchpad_interaction_stream(
                         }
                         let problem_str = format!("{}", err);
                         tracing::error!("restream error: {}\n", problem_str);
-                        {
-                            tele_storage.write().unwrap().tele_net.push(telemetry_structs::TelemetryNetwork::new(
-                                model_rec.endpoint.clone(),
-                                scope.clone(),
-                                false,
-                                problem_str.clone(),
-                            ));
-                        }
                         yield Result::<_, String>::Ok(format!("data: {}\n\n", serde_json::to_string(&json!({"detail": problem_str})).unwrap()));
                         return;
                     },
@@ -499,12 +452,6 @@ pub async fn scratchpad_interaction_stream(
         }
         info!("yield: [DONE]");
         yield Result::<_, String>::Ok("data: [DONE]\n\n".to_string());
-        tele_storage.write().unwrap().tele_net.push(telemetry_structs::TelemetryNetwork::new(
-            model_rec.endpoint.clone(),
-            scope.clone(),
-            true,
-            "".to_string(),
-        ));
     };
     Ok(Response::builder()
         .header("Content-Type", "application/json")

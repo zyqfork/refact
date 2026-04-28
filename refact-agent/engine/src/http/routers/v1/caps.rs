@@ -55,8 +55,7 @@ pub async fn handle_v1_model_capabilities(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Query(query): Query<ModelCapsQuery>,
 ) -> Result<Response<Body>, ScratchError> {
-    let address_url = gcx.read().await.cmdline.address_url.clone();
-    let caps = model_caps::get_model_caps(gcx.clone(), &address_url, query.refresh)
+    let caps = model_caps::get_model_caps(gcx.clone(), query.refresh)
         .await
         .map_err(|e| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
 
@@ -98,8 +97,7 @@ pub async fn handle_v1_model_supported(
         )
     })?;
 
-    let address_url = gcx.read().await.cmdline.address_url.clone();
-    let caps = model_caps::get_model_caps(gcx, &address_url, false)
+    let caps = model_caps::get_model_caps(gcx, false)
         .await
         .map_err(|e| ScratchError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
 

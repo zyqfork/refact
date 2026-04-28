@@ -84,23 +84,14 @@ import { ModeSelect } from "./ModeSelect";
 import { addCheckboxValuesToInput } from "./utils";
 import { useCommandCompletionAndPreviewFiles } from "./useCommandCompletionAndPreviewFiles";
 import { useAppSelector, useAppDispatch } from "../../hooks";
-import {
-  clearError,
-  getErrorMessage,
-  getErrorType,
-} from "../../features/Errors/errorsSlice";
+import { clearError, getErrorMessage } from "../../features/Errors/errorsSlice";
 import { useAttachedFiles, useCheckboxes } from "./useCheckBoxes";
 import { useInputValue } from "./useInputValue";
 import {
   clearInformation,
   getInformationMessage,
-  showBalanceLowCallout,
 } from "../../features/Errors/informationSlice";
-import {
-  BallanceCallOut,
-  BallanceLowInformation,
-  InformationCallout,
-} from "../Callout/Callout";
+import { InformationCallout } from "../Callout/Callout";
 import { ToolConfirmation } from "./ToolConfirmation";
 import { selectThreadConfirmation } from "../../features/Chat";
 import { AttachImagesButton } from "../Dropzone";
@@ -122,7 +113,6 @@ import {
   DEFAULT_MODE,
   selectIsBuddyChat,
 } from "../../features/Chat";
-import { telemetryApi } from "../../services/refact";
 import { useReportErrorMutation } from "../../services/refact/buddy";
 import { push } from "../../features/Pages/pagesSlice";
 
@@ -153,7 +143,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   const host = useAppSelector(selectHost);
   const { queryPathThenOpenFile } = useEventsBusForIDE();
   const globalError = useAppSelector(getErrorMessage);
-  const globalErrorType = useAppSelector(getErrorType);
   const chatError = useAppSelector(selectChatError);
   const chatId = useAppSelector(selectCurrentThreadId);
   const isBuddyChat = useAppSelector((state) =>
@@ -195,7 +184,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
 
   const isModeDisabled = useMemo(() => isStreaming, [isStreaming]);
   const attachedFiles = useAttachedFiles();
-  const shouldShowBalanceLow = useAppSelector(showBalanceLowCallout);
   const attachedImages = useAppSelector(selectThreadImages);
   const microphoneRef = React.useRef<MicrophoneButtonRef>(null);
 
@@ -282,9 +270,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
     unCheckAll,
     setLineSelectionInteracted,
   } = useCheckboxes();
-
-  const [sendTelemetryEvent] =
-    telemetryApi.useLazySendTelemetryChatEventQuery();
 
   const [value, setValue, isSendImmediately, setIsSendImmediately] =
     useInputValue(() => unCheckAll());
@@ -404,12 +389,7 @@ export const ChatForm: React.FC<ChatFormProps> = ({
 
   const handleAgentIntegrationsClick = useCallback(() => {
     dispatch(push({ name: "integrations page" }));
-    void sendTelemetryEvent({
-      scope: `openIntegrations`,
-      success: true,
-      error_message: "",
-    });
-  }, [dispatch, sendTelemetryEvent]);
+  }, [dispatch]);
 
   useEffect(() => {
     if (isSendImmediately && !isWaiting && !isStreaming) {
@@ -484,15 +464,6 @@ export const ChatForm: React.FC<ChatFormProps> = ({
           {information}
         </InformationCallout>
       )}
-      {globalErrorType === "balance" && (
-        <BallanceCallOut
-          mt="0"
-          mb="2"
-          mx="0"
-          onClick={() => dispatch(clearError())}
-        />
-      )}
-      {shouldShowBalanceLow && <BallanceLowInformation mt="0" mb="2" mx="0" />}
       {!isOnline && (
         <Callout type="info" mb="2">
           Oops, seems that connection was lost... Check your internet connection

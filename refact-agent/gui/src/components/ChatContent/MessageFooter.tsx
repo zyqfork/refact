@@ -11,7 +11,6 @@ import { Checkpoint } from "../../features/Checkpoints/types";
 import { formatNumberToFixed } from "../../utils/formatNumberToFixed";
 import { calculateUsageInputTokens } from "../../utils/calculateUsageInputTokens";
 import { formatUsd } from "../../utils/getMetering";
-import { Coin } from "../../images";
 import { CheckpointButton } from "../../features/Checkpoints";
 import styles from "./MessageFooter.module.css";
 
@@ -21,10 +20,6 @@ type MessageFooterProps = {
   onBranch?: (messageId: string) => void;
   onDelete?: (messageId: string) => void;
   usage?: Usage | null;
-  metering_coins_prompt?: number;
-  metering_coins_generated?: number;
-  metering_coins_cache_creation?: number;
-  metering_coins_cache_read?: number;
   // For user messages with checkpoints
   checkpoints?: Checkpoint[] | null;
   messageIndex?: number;
@@ -39,22 +34,6 @@ const TokenDisplay: React.FC<{ label: string; value: number }> = ({
       {label}
     </Text>
     <Text size="1">{formatNumberToFixed(value)}</Text>
-  </Flex>
-);
-
-const CoinDisplay: React.FC<{ label: string; value: number }> = ({
-  label,
-  value,
-}) => (
-  <Flex align="center" justify="between" width="100%" gap="4">
-    <Text size="1" weight="bold">
-      {label}
-    </Text>
-    <Text size="1">
-      <Flex align="center" gap="2">
-        {Math.round(value)} <Coin width="12px" height="12px" />
-      </Flex>
-    </Text>
   </Flex>
 );
 
@@ -76,10 +55,6 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
   onBranch,
   onDelete,
   usage,
-  metering_coins_prompt = 0,
-  metering_coins_generated = 0,
-  metering_coins_cache_creation = 0,
-  metering_coins_cache_read = 0,
   checkpoints,
   messageIndex,
 }) => {
@@ -100,15 +75,8 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
     keys: ["completion_tokens"],
   });
 
-  const totalCoins =
-    metering_coins_prompt +
-    metering_coins_generated +
-    metering_coins_cache_creation +
-    metering_coins_cache_read;
-
   const meteringUsd = usage?.metering_usd;
   const hasUsd = meteringUsd !== undefined && meteringUsd.total_usd > 0;
-  const showCoins = !hasUsd && totalCoins > 0;
 
   const contextTokens = calculateUsageInputTokens({
     usage,
@@ -118,8 +86,7 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       "cache_read_input_tokens",
     ],
   });
-  const hasUsageInfo =
-    Boolean(usage && contextTokens > 0) || showCoins || hasUsd;
+  const hasUsageInfo = Boolean(usage && contextTokens > 0) || hasUsd;
 
   return (
     <div className={styles.footerLane}>
@@ -170,12 +137,6 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
                     <span>{formatNumberToFixed(contextTokens)}</span>
                   </div>
                 )}
-                {showCoins && (
-                  <div className={styles.footerItem}>
-                    <Coin />
-                    <span>{Math.round(totalCoins)}</span>
-                  </div>
-                )}
                 {hasUsd && (
                   <div className={styles.footerItem}>
                     <span>{formatUsd(meteringUsd.total_usd)}</span>
@@ -203,50 +164,6 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
                           }
                         />
                       )}
-                  </>
-                )}
-
-                {showCoins && (
-                  <>
-                    <Box
-                      my="2"
-                      style={{ borderTop: "1px solid var(--gray-a6)" }}
-                    />
-                    <Flex align="center" justify="between" width="100%" mb="1">
-                      <Text size="2" weight="bold">
-                        Cost
-                      </Text>
-                      <Text size="2">
-                        <Flex align="center" gap="2">
-                          {Math.round(totalCoins)}{" "}
-                          <Coin width="14px" height="14px" />
-                        </Flex>
-                      </Text>
-                    </Flex>
-                    {metering_coins_prompt > 0 && (
-                      <CoinDisplay
-                        label="Prompt"
-                        value={metering_coins_prompt}
-                      />
-                    )}
-                    {metering_coins_generated > 0 && (
-                      <CoinDisplay
-                        label="Completion"
-                        value={metering_coins_generated}
-                      />
-                    )}
-                    {metering_coins_cache_read > 0 && (
-                      <CoinDisplay
-                        label="Cache read"
-                        value={metering_coins_cache_read}
-                      />
-                    )}
-                    {metering_coins_cache_creation > 0 && (
-                      <CoinDisplay
-                        label="Cache creation"
-                        value={metering_coins_cache_creation}
-                      />
-                    )}
                   </>
                 )}
 

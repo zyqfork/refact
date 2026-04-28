@@ -29,10 +29,7 @@ pub async fn build_pulse(
     p
 }
 
-async fn build_tasks_pulse(
-    gcx: Arc<RwLock<GlobalContext>>,
-    fact_store: &FactStore,
-) -> TaskPulse {
+async fn build_tasks_pulse(gcx: Arc<RwLock<GlobalContext>>, fact_store: &FactStore) -> TaskPulse {
     let mut pulse = TaskPulse::default();
     let stuck = fact_store.recent(BuddyFactKind::TaskStuck, chrono::Duration::hours(1));
     pulse.stuck = stuck.len() as u32;

@@ -4344,7 +4344,9 @@ async fn task_abandoned_not_emitted_when_only_session_missing() {
     let task_meta = create_task(gcx.clone(), "Fix auth bug").await.unwrap();
     let mut meta = load_task_meta(gcx.clone(), &task_meta.id).await.unwrap();
     meta.created_at = (chrono::Utc::now() - Duration::days(8)).to_rfc3339();
-    save_task_meta(gcx.clone(), &task_meta.id, &meta).await.unwrap();
+    save_task_meta(gcx.clone(), &task_meta.id, &meta)
+        .await
+        .unwrap();
 
     let started = (chrono::Utc::now() - Duration::days(7)).to_rfc3339();
     let mut board = load_board(gcx.clone(), &task_meta.id).await.unwrap();
@@ -4367,14 +4369,14 @@ async fn task_abandoned_not_emitted_when_only_session_missing() {
         agent_worktree_name: None,
         target_files: vec![],
     });
-    save_board(gcx.clone(), &task_meta.id, &board).await.unwrap();
+    save_board(gcx.clone(), &task_meta.id, &board)
+        .await
+        .unwrap();
 
     let observer = TaskHealthObserver;
     let ctx = ObserverContext {
         project_root: dir.path().to_path_buf(),
-        last_tick: None,
         now: chrono::Utc::now(),
-        current_pulse: super::types::BuddyPulse::default(),
     };
     let facts = observer.observe(gcx, &ctx).await;
     assert!(
@@ -4427,9 +4429,7 @@ async fn task_cluster_duplicate_emits_with_real_touched_files() {
     let observer = TaskHealthObserver;
     let ctx = ObserverContext {
         project_root: dir.path().to_path_buf(),
-        last_tick: None,
         now: chrono::Utc::now(),
-        current_pulse: super::types::BuddyPulse::default(),
     };
     let facts = observer.observe(gcx, &ctx).await;
     assert!(
@@ -4534,7 +4534,10 @@ fn chat_topic_pivot_not_emitted_after_removal() {
     let messages = vec![
         chat_msg("user", "implement the entire authentication system"),
         chat_msg("assistant", "done with auth"),
-        chat_msg("user", "now fix the completely unrelated database migration schema"),
+        chat_msg(
+            "user",
+            "now fix the completely unrelated database migration schema",
+        ),
     ];
     let facts = run_chat_pattern_observer_sync(&messages, "pivot-removed-test");
     assert!(

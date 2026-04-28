@@ -25,14 +25,12 @@ import { formatNumberToFixed } from "../../utils/formatNumberToFixed";
 import {
   useAppSelector,
   useEffectOnce,
-  useTotalCostForChat,
   useTotalTokenMeteringForChat,
   useTotalUsdForChat,
 } from "../../hooks";
 import { formatUsd } from "../../utils/getMetering";
 
 import styles from "./UsageCounter.module.css";
-import { Coin } from "../../images";
 
 type CircularProgressProps = {
   value: number;
@@ -106,24 +104,6 @@ const TokenDisplay: React.FC<{ label: string; value: number }> = ({
   </Flex>
 );
 
-const CoinDisplay: React.FC<{ label: React.ReactNode; value: number }> = ({
-  label,
-  value,
-}) => {
-  return (
-    <Flex align="center" justify="between" width="100%" gap="4">
-      <Text size="1" weight="bold">
-        {label}
-      </Text>
-      <Text size="1">
-        <Flex align="center" gap="2">
-          {Math.round(value)} <Coin width="12px" height="12px" />
-        </Flex>
-      </Text>
-    </Flex>
-  );
-};
-
 const InlineHoverCard: React.FC<{ messageTokens: number }> = ({
   messageTokens,
 }) => {
@@ -157,41 +137,6 @@ const InlineHoverTriggerContent: React.FC<{ messageTokens: number }> = ({
         {formatNumberToFixed(messageTokens)}{" "}
         {messageTokens === 1 ? "token" : "tokens"}
       </Text>
-    </Flex>
-  );
-};
-
-const CoinsHoverContent: React.FC<{
-  totalCoins: number;
-  prompt?: number;
-  generated?: number;
-  cacheRead?: number;
-  cacheCreation?: number;
-}> = ({ totalCoins, prompt, generated, cacheRead, cacheCreation }) => {
-  return (
-    <Flex direction="column" gap="2" p="1">
-      <Flex align="center" justify="between" width="100%" gap="4">
-        <Text size="2" weight="bold">
-          Total coins
-        </Text>
-        <Text size="2">
-          <Flex align="center" gap="2">
-            {Math.round(totalCoins)} <Coin width="14px" height="14px" />
-          </Flex>
-        </Text>
-      </Flex>
-      {prompt !== undefined && prompt > 0 && (
-        <CoinDisplay label="Prompt" value={prompt} />
-      )}
-      {generated !== undefined && generated > 0 && (
-        <CoinDisplay label="Completion" value={generated} />
-      )}
-      {cacheRead !== undefined && cacheRead > 0 && (
-        <CoinDisplay label="Cache read" value={cacheRead} />
-      )}
-      {cacheCreation !== undefined && cacheCreation > 0 && (
-        <CoinDisplay label="Cache creation" value={cacheCreation} />
-      )}
     </Flex>
   );
 };
@@ -305,16 +250,11 @@ const TokensHoverContent: React.FC<{
 const DefaultHoverTriggerContent: React.FC<{
   currentSessionTokens: number;
   maxContextTokens: number;
-  totalCoins?: number;
   totalUsd?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
-  coinsPrompt?: number;
-  coinsGenerated?: number;
-  coinsCacheRead?: number;
-  coinsCacheCreation?: number;
   usdPrompt?: number;
   usdGenerated?: number;
   usdCacheRead?: number;
@@ -323,16 +263,11 @@ const DefaultHoverTriggerContent: React.FC<{
 }> = ({
   currentSessionTokens,
   maxContextTokens,
-  totalCoins,
   totalUsd,
   inputTokens,
   outputTokens,
   cacheReadTokens,
   cacheCreationTokens,
-  coinsPrompt,
-  coinsGenerated,
-  coinsCacheRead,
-  coinsCacheCreation,
   usdPrompt,
   usdGenerated,
   usdCacheRead,
@@ -340,30 +275,10 @@ const DefaultHoverTriggerContent: React.FC<{
   tokenMap,
 }) => {
   const hasUsd = totalUsd !== undefined && totalUsd > 0;
-  const showCoins = totalCoins !== undefined && totalCoins > 0;
   const showUsd = hasUsd;
 
   return (
     <Flex align="center" gap="3">
-      {showCoins && (
-        <HoverCard.Root>
-          <HoverCard.Trigger>
-            <Flex align="center" gap="1" style={{ cursor: "default" }}>
-              <Text size="1">{Math.round(totalCoins)}</Text>
-              <Coin width="12px" height="12px" />
-            </Flex>
-          </HoverCard.Trigger>
-          <HoverCard.Content size="1" side="top" align="center">
-            <CoinsHoverContent
-              totalCoins={totalCoins}
-              prompt={coinsPrompt}
-              generated={coinsGenerated}
-              cacheRead={coinsCacheRead}
-              cacheCreation={coinsCacheCreation}
-            />
-          </HoverCard.Content>
-        </HoverCard.Root>
-      )}
       {showUsd && (
         <HoverCard.Root>
           <HoverCard.Trigger>
@@ -439,18 +354,8 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
     useUsageCounter();
   const currentMessageTokens = useAppSelector(selectThreadCurrentMessageTokens);
   const meteringTokens = useTotalTokenMeteringForChat();
-  const cost = useTotalCostForChat();
   const usdCost = useTotalUsdForChat();
   const tokenMap = useTokenMap();
-
-  const totalCoins = useMemo(() => {
-    return (
-      (cost?.metering_coins_prompt ?? 0) +
-      (cost?.metering_coins_generated ?? 0) +
-      (cost?.metering_coins_cache_creation ?? 0) +
-      (cost?.metering_coins_cache_read ?? 0)
-    );
-  }, [cost]);
 
   const messageTokens = useMemo(() => {
     if (isMessageEmpty && maybeAttachedImages.length === 0) return 0;
@@ -550,16 +455,11 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
         <DefaultHoverTriggerContent
           currentSessionTokens={currentSessionTokens}
           maxContextTokens={maxContextTokens}
-          totalCoins={totalCoins}
           totalUsd={usdCost?.total_usd}
           inputTokens={inputTokens}
           outputTokens={outputTokens}
           cacheReadTokens={cacheReadTokens}
           cacheCreationTokens={cacheCreationTokens}
-          coinsPrompt={cost?.metering_coins_prompt}
-          coinsGenerated={cost?.metering_coins_generated}
-          coinsCacheRead={cost?.metering_coins_cache_read}
-          coinsCacheCreation={cost?.metering_coins_cache_creation}
           usdPrompt={usdCost?.prompt_usd}
           usdGenerated={usdCost?.generated_usd}
           usdCacheRead={usdCost?.cache_read_usd}

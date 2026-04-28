@@ -21,8 +21,6 @@ import {
   useGetOpenAICodexUsageQuery,
 } from "../../../services/refact";
 
-const SETTINGS_HIDDEN_PROVIDERS = ["refact", "refact_self_hosted"];
-
 export type ProviderFormProps = {
   currentProvider: ProviderListItem;
 };
@@ -184,7 +182,6 @@ export const ProviderForm: React.FC<ProviderFormProps> = ({
     return <Spinner spinning />;
   }
 
-  const hideSettings = SETTINGS_HIDDEN_PROVIDERS.includes(currentProvider.name);
   const hasOAuth = parsedSchema.oauth?.supported === true;
   const status: ProviderStatus =
     detailedProvider?.status ?? currentProvider.status;
@@ -316,72 +313,68 @@ export const ProviderForm: React.FC<ProviderFormProps> = ({
         </Text>
       )}
 
-      {!hideSettings && (
-        <Flex direction="column" width="100%" gap="3">
-          {hasOAuth && (
-            <>
-              <ProviderOAuth
-                providerName={currentProvider.name}
-                oauthConnected={Boolean(
-                  "oauth_connected" in formValues && formValues.oauth_connected,
-                )}
-                authStatus={
-                  "auth_status" in formValues
-                    ? String(formValues.auth_status)
-                    : ""
-                }
-              />
-              {importantFields.length > 0 && <Separator size="4" />}
-            </>
-          )}
-
-          <Flex direction="column" gap="3">
-            {importantFields.map((field) => (
-              <SchemaField
-                key={field.key}
-                field={field}
-                value={formValues[field.key]}
-                disabled={isReadonly}
-                onSave={handleFieldSave}
-              />
-            ))}
-          </Flex>
-
-          {extraFields.length > 0 && (
-            <>
-              <Flex align="center" justify="center">
-                <Button
-                  className={styles.extraButton}
-                  variant="ghost"
-                  color="gray"
-                  size="1"
-                  onClick={() => setAreShowingExtraFields((prev) => !prev)}
-                >
-                  {areShowingExtraFields ? "Hide" : "Show"} advanced fields
-                </Button>
-              </Flex>
-
-              {areShowingExtraFields && (
-                <Flex direction="column" gap="3">
-                  {extraFields.map((field) => (
-                    <SchemaField
-                      key={field.key}
-                      field={field}
-                      value={formValues[field.key]}
-                      disabled={isReadonly}
-                      onSave={handleFieldSave}
-                    />
-                  ))}
-                </Flex>
+      <Flex direction="column" width="100%" gap="3">
+        {hasOAuth && (
+          <>
+            <ProviderOAuth
+              providerName={currentProvider.name}
+              oauthConnected={Boolean(
+                "oauth_connected" in formValues && formValues.oauth_connected,
               )}
-            </>
-          )}
-        </Flex>
-      )}
+              authStatus={
+                "auth_status" in formValues
+                  ? String(formValues.auth_status)
+                  : ""
+              }
+            />
+            {importantFields.length > 0 && <Separator size="4" />}
+          </>
+        )}
 
-      {(hasCredentials || hideSettings) && (
-        <ProviderModelsList provider={currentProvider} />
-      )}
+        <Flex direction="column" gap="3">
+          {importantFields.map((field) => (
+            <SchemaField
+              key={field.key}
+              field={field}
+              value={formValues[field.key]}
+              disabled={isReadonly}
+              onSave={handleFieldSave}
+            />
+          ))}
+        </Flex>
+
+        {extraFields.length > 0 && (
+          <>
+            <Flex align="center" justify="center">
+              <Button
+                className={styles.extraButton}
+                variant="ghost"
+                color="gray"
+                size="1"
+                onClick={() => setAreShowingExtraFields((prev) => !prev)}
+              >
+                {areShowingExtraFields ? "Hide" : "Show"} advanced fields
+              </Button>
+            </Flex>
+
+            {areShowingExtraFields && (
+              <Flex direction="column" gap="3">
+                {extraFields.map((field) => (
+                  <SchemaField
+                    key={field.key}
+                    field={field}
+                    value={formValues[field.key]}
+                    disabled={isReadonly}
+                    onSave={handleFieldSave}
+                  />
+                ))}
+              </Flex>
+            )}
+          </>
+        )}
+      </Flex>
+
+      {hasCredentials && <ProviderModelsList provider={currentProvider} />}
     </Flex>
   );
 };

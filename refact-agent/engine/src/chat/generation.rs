@@ -11,9 +11,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{
     ChatContent, ChatMessage, ChatMeta, ChatUsage, SamplingParameters, is_agentic_mode_id,
 };
-use crate::stats::event::{
-    LlmCallEvent, canonicalize_mode_for_stats, split_model_provider, sum_metering_coins,
-};
+use crate::stats::event::{LlmCallEvent, canonicalize_mode_for_stats, split_model_provider};
 use crate::chat::tool_call_recovery;
 use crate::chat::tool_call_recovery_oss;
 use crate::global_context::GlobalContext;
@@ -1030,7 +1028,7 @@ async fn run_streaming_generation(
     };
     let mut attempt = 0;
 
-    let (result, pending_success_event, pending_success_coins) = loop {
+    let (result, pending_success_event) = loop {
         attempt += 1;
         if can_retry_with_temp_bump && attempt > 1 {
             let retry_temp = TEMPERATURE_BUMP * (attempt - 2) as f32;
@@ -1332,7 +1330,6 @@ async fn run_streaming_generation(
                     cache_creation_tokens: None,
                     total_tokens: 0,
                     cost_usd: None,
-                    cost_coins: None,
                 };
                 if let Some(sender) = &gcx.read().await.llm_stats_sender {
                     if sender.try_send(event).is_err() {
@@ -1348,13 +1345,9 @@ async fn run_streaming_generation(
         let mut result = results.into_iter().next().unwrap_or_default();
 
         if is_result_empty(&result) {
-            let (draft_usage, draft_coins) = {
+            let draft_usage = {
                 let session = session_arc.lock().await;
-                let coins = session
-                    .draft_message
-                    .as_ref()
-                    .and_then(|m| sum_metering_coins(&m.extra));
-                (session.draft_usage.clone(), coins)
+                session.draft_usage.clone()
             };
             let (provider, model) = split_model_provider(&model_id_for_stats);
             let event = LlmCallEvent {
@@ -1393,7 +1386,6 @@ async fn run_streaming_generation(
                     .as_ref()
                     .and_then(|u| u.metering_usd.as_ref())
                     .map(|m| m.total_usd),
-                cost_coins: draft_coins,
             };
             if let Some(sender) = &gcx.read().await.llm_stats_sender {
                 if sender.try_send(event).is_err() {
@@ -1538,13 +1530,9 @@ async fn run_streaming_generation(
 
         maybe_downgrade_bogus_tool_calls_finish_reason(&mut result, "post_tool_normalization");
 
-        let (draft_usage_for_success, success_coins) = {
+        let draft_usage_for_success = {
             let session = session_arc.lock().await;
-            let coins = session
-                .draft_message
-                .as_ref()
-                .and_then(|m| sum_metering_coins(&m.extra));
-            (session.draft_usage.clone(), coins)
+            session.draft_usage.clone()
         };
         let usage_for_event = result.usage.as_ref().or(draft_usage_for_success.as_ref());
         let (provider, model) = split_model_provider(&model_id_for_stats);
@@ -1578,10 +1566,9 @@ async fn run_streaming_generation(
             cache_creation_tokens: usage_for_event.and_then(|u| u.cache_creation_tokens),
             total_tokens: usage_for_event.map(|u| u.total_tokens).unwrap_or(0),
             cost_usd: None,
-            cost_coins: None,
         };
 
-        break (result, pending_success_event, success_coins);
+        break (result, pending_success_event);
     };
 
     let (model_id, usage_for_pricing) = {
@@ -1601,7 +1588,6 @@ async fn run_streaming_generation(
     {
         let mut success_event = pending_success_event;
         success_event.cost_usd = metering_usd.as_ref().map(|m| m.total_usd);
-        success_event.cost_coins = pending_success_coins;
         if let Some(sender) = &gcx.read().await.llm_stats_sender {
             if sender.try_send(success_event).is_err() {
                 tracing::warn!("stats: channel full, dropping LLM call event");

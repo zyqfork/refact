@@ -8,7 +8,6 @@ import { OverviewTab } from "./tabs/OverviewTab";
 import { UsageTab } from "./tabs/UsageTab";
 import { ThreadsTab } from "./tabs/ThreadsTab";
 import { TasksTab } from "./tabs/TasksTab";
-import { ImpactTab } from "./tabs/ImpactTab";
 import styles from "./StatsDashboard.module.css";
 
 export type StatsDashboardProps = {
@@ -62,7 +61,6 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({
             <Tabs.Trigger value="usage">LLM Usage</Tabs.Trigger>
             <Tabs.Trigger value="threads">Threads</Tabs.Trigger>
             <Tabs.Trigger value="tasks">Tasks &amp; Agents</Tabs.Trigger>
-            <Tabs.Trigger value="impact">Impact</Tabs.Trigger>
           </Tabs.List>
 
           <Tabs.Content value="overview" className={styles.tabContent}>
@@ -79,10 +77,6 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({
 
           <Tabs.Content value="tasks" className={styles.tabContent}>
             <TasksTab dateRange={dateRange} />
-          </Tabs.Content>
-
-          <Tabs.Content value="impact" className={styles.tabContent}>
-            <ImpactTab />
           </Tabs.Content>
         </Tabs.Root>
       </Flex>

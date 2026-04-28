@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::call_validation::{ChatMessage, ChatMeta, ChatUsage};
+use crate::call_validation::{ChatMessage, ChatUsage};
 use crate::llm::params::{CacheControl, CommonParams, ReasoningIntent};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,10 +25,6 @@ pub struct LlmRequest {
     pub cache_control: CacheControl,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<serde_json::Map<String, Value>>,
-    /// Metadata for Refact cloud (chat_id, mode, etc.) - sent when support_metadata is true
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<ChatMeta>,
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
 }
@@ -62,7 +58,6 @@ impl LlmRequest {
             response_format: None,
             cache_control: CacheControl::Off,
             extra_body: None,
-            meta: None,
             previous_response_id: None,
         }
     }
@@ -87,11 +82,6 @@ impl LlmRequest {
 
     pub fn with_parallel_tool_calls(mut self, parallel: bool) -> Self {
         self.parallel_tool_calls = parallel;
-        self
-    }
-
-    pub fn with_meta(mut self, meta: ChatMeta) -> Self {
-        self.meta = Some(meta);
         self
     }
 

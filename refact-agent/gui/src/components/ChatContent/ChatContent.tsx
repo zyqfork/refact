@@ -276,12 +276,6 @@ export const ChatContent: React.FC<ChatContentProps> = ({
               contextFilesByToolId={item.contextFilesByToolId}
               diffsByToolId={item.diffsByToolId}
               usage={item.message.usage}
-              metering_coins_prompt={item.message.metering_coins_prompt}
-              metering_coins_generated={item.message.metering_coins_generated}
-              metering_coins_cache_creation={
-                item.message.metering_coins_cache_creation
-              }
-              metering_coins_cache_read={item.message.metering_coins_cache_read}
               isStreaming={item.isStreaming}
             />
           );

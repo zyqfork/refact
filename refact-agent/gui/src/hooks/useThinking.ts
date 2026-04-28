@@ -10,7 +10,6 @@ import {
   setBoostReasoning,
 } from "../features/Chat";
 import { useAppDispatch } from "./useAppDispatch";
-import { useGetUser } from "./useGetUser";
 
 export function useThinking() {
   const dispatch = useAppDispatch();
@@ -23,7 +22,6 @@ export function useThinking() {
   const isBoostReasoningEnabled = useAppSelector(selectThreadBoostReasoning);
 
   const caps = useCapsForToolUse();
-  const { data: userData } = useGetUser();
 
   const currentModel = threadModel || caps.currentModel;
 
@@ -38,16 +36,9 @@ export function useThinking() {
     );
   }, [caps.data?.chat_models, currentModel]);
 
-  const shouldBeTeasing = useMemo(
-    () => userData?.inference === "FREE",
-    [userData],
-  );
-
   const shouldBeDisabled = useMemo(() => {
-    return (
-      !supportsBoostReasoning || shouldBeTeasing || isStreaming || isWaiting
-    );
-  }, [supportsBoostReasoning, isStreaming, isWaiting, shouldBeTeasing]);
+    return !supportsBoostReasoning || isStreaming || isWaiting;
+  }, [supportsBoostReasoning, isStreaming, isWaiting]);
 
   const noteText = useMemo(() => {
     if (!supportsBoostReasoning)
@@ -76,7 +67,6 @@ export function useThinking() {
   return {
     handleReasoningChange,
     shouldBeDisabled,
-    shouldBeTeasing,
     noteText,
     areCapsInitialized: !caps.uninitialized,
     supportsBoostReasoning,

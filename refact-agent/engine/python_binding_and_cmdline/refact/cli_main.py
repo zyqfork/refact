@@ -253,14 +253,8 @@ async def chat_main():
     refact_args = [
         os.path.join(os.path.dirname(__file__), "bin", "refact-lsp"),
     ]
-    if cli_settings.cli_yaml.address_url:
-        refact_args.extend(["--address-url", cli_settings.cli_yaml.address_url])
-    if cli_settings.cli_yaml.api_key:
-        refact_args.extend(["--api-key", cli_settings.cli_yaml.api_key])
     if cli_settings.cli_yaml.insecure_ssl:
         refact_args.append("--insecure-ssl")
-    if cli_settings.cli_yaml.basic_telemetry:
-        refact_args.append("--basic-telemetry")
     if cli_settings.cli_yaml.experimental:
         refact_args.append("--experimental")
     if cli_settings.cli_yaml.ast:

@@ -1,13 +1,11 @@
 import { CapsResponse } from "../services/refact";
 
 export const STUB_CAPS_RESPONSE: CapsResponse = {
-  cloud_name: "Refact",
   endpoint_style: "openai",
   code_completion_n_ctx: 4000,
   tokenizer_rewrite_path: {
     "o1-mini": "Xenova/gpt-4o",
     "gpt-4-turbo-2024-04-09": "Xenova/gpt-4",
-    "Refact/1.6B": "smallcloudai/Refact-1_6B-fim",
     "claude-3-5-sonnet-20240620": "Xenova/claude-tokenizer",
     "gpt-4-turbo": "Xenova/gpt-4",
     "qwen2.5/coder/1.5b/base": "Qwen/Qwen2.5-Coder-1.5B",
@@ -32,135 +30,131 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
     "groq-llama-3.1-8b": "Xenova/Meta-Llama-3.1-Tokenizer",
     "starcoder2/3b": "bigcode/starcoder2-3b",
   },
-  telemetry_basic_dest: "https://www.smallcloud.ai/v1/telemetry-basic",
-  telemetry_basic_retrieve_my_own:
-    "https://staging.smallcloud.ai/v1/telemetry-retrieve-my-own-stats",
   tokenizer_path_template:
     "https://huggingface.co/$MODEL/resolve/main/tokenizer.json",
-  endpoint_chat_passthrough:
-    "https://inference.smallcloud.ai/v1/chat/completions",
-  endpoint_template: "https://inference.smallcloud.ai/v1/completions",
+  endpoint_chat_passthrough: "http://127.0.0.1:8001/v1/chat/completions",
+  endpoint_template: "http://127.0.0.1:8001/v1/completions",
   completion_models: {
-    "Refact/smallcloudai/Refact-1_6B-fim": {
+    "openai/qwen2.5/coder/0.5b/base": {
       n_ctx: 4000,
-      name: "smallcloudai/Refact-1_6B-fim",
+      name: "qwen2.5/coder/0.5b/base",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/Refact/1.6B": {
+    "openai/qwen2.5/coder/3b/base": {
       n_ctx: 4000,
-      name: "Refact/1.6B",
+      name: "qwen2.5/coder/3b/base",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/starcoder2/3b": {
+    "openai/starcoder2/3b": {
       n_ctx: 4000,
       name: "starcoder2/3b",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/qwen2.5/coder/1.5b/base": {
+    "openai/qwen2.5/coder/1.5b/base": {
       n_ctx: 4000,
       name: "qwen2.5/coder/1.5b/base",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/gpt-4o": {
+    "openai/gpt-4o": {
       n_ctx: 4000,
       name: "gpt-4o",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/gpt-4o-mini": {
+    "openai/gpt-4o-mini": {
       n_ctx: 4000,
       name: "gpt-4o-mini",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/claude-3-5-sonnet": {
+    "openai/claude-3-5-sonnet": {
       n_ctx: 4000,
       name: "claude-3-5-sonnet",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/claude-3-5-haiku": {
+    "openai/claude-3-5-haiku": {
       n_ctx: 4000,
       name: "claude-3-5-haiku",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/claude-3-7-sonnet": {
+    "openai/claude-3-7-sonnet": {
       n_ctx: 4000,
       name: "claude-3-7-sonnet",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/groq-llama-3.1-8b": {
+    "openai/groq-llama-3.1-8b": {
       n_ctx: 4000,
       name: "groq-llama-3.1-8b",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/groq-llama-3.1-70b": {
+    "openai/groq-llama-3.1-70b": {
       n_ctx: 4000,
       name: "groq-llama-3.1-70b",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/gemini-2.0-flash-exp": {
+    "openai/gemini-2.0-flash-exp": {
       n_ctx: 4000,
       name: "gemini-2.0-flash-exp",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/gemini-1.5-flash": {
+    "openai/gemini-1.5-flash": {
       n_ctx: 4000,
       name: "gemini-1.5-flash",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/gemini-1.5-flash-8b": {
+    "openai/gemini-1.5-flash-8b": {
       n_ctx: 4000,
       name: "gemini-1.5-flash-8b",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/gemini-1.5-pro": {
+    "openai/gemini-1.5-pro": {
       n_ctx: 4000,
       name: "gemini-1.5-pro",
       enabled: true,
       type: "completion",
       model_family: null,
     },
-    "Refact/gemini-2.0-exp-advanced": {
+    "openai/gemini-2.0-exp-advanced": {
       n_ctx: 4000,
       name: "gemini-2.0-exp-advanced",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/grok-2": {
+    "openai/grok-2": {
       n_ctx: 4000,
       name: "grok-2",
       enabled: true,
       model_family: null,
       type: "completion",
     },
-    "Refact/deepseek-chat": {
+    "openai/deepseek-chat": {
       n_ctx: 4000,
       name: "deepseek-chat",
       type: "completion",
@@ -169,10 +163,10 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
     },
   },
   chat_models: {
-    "Refact/gpt-4o": {
+    "openai/gpt-4o": {
       n_ctx: 128000,
       name: "gpt-4o",
-      id: "Refact/gpt-4o",
+      id: "openai/gpt-4o",
       type: "chat",
       enabled: true,
       tokenizer: "fake",
@@ -184,10 +178,10 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/gpt-4o-mini": {
+    "openai/gpt-4o-mini": {
       n_ctx: 128000,
       name: "gpt-4o-mini",
-      id: "Refact/gpt-4o-mini",
+      id: "openai/gpt-4o-mini",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -199,10 +193,10 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/o1": {
+    "openai/o1": {
       n_ctx: 200000,
       name: "o1",
-      id: "Refact/o1",
+      id: "openai/o1",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -214,10 +208,10 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/o1-mini": {
+    "openai/o1-mini": {
       n_ctx: 128000,
       name: "o1-mini",
-      id: "Refact/o1-mini",
+      id: "openai/o1-mini",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -229,10 +223,10 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/o3-mini": {
+    "openai/o3-mini": {
       n_ctx: 200000,
       name: "o3-mini",
-      id: "Refact/o3-mini",
+      id: "openai/o3-mini",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -244,10 +238,10 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/claude-3-5-sonnet": {
+    "openai/claude-3-5-sonnet": {
       n_ctx: 200000,
       name: "claude-3-5-sonnet",
-      id: "Refact/claude-3-5-sonnet",
+      id: "openai/claude-3-5-sonnet",
       enabled: true,
       type: "chat",
       tokenizer: "fake",
@@ -259,11 +253,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/claude-3-5-haiku": {
+    "openai/claude-3-5-haiku": {
       type: "chat",
       n_ctx: 200000,
       name: "claude-3-5-haiku",
-      id: "Refact/claude-3-5-haiku",
+      id: "openai/claude-3-5-haiku",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -274,11 +268,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/claude-3-7-sonnet": {
+    "openai/claude-3-7-sonnet": {
       type: "chat",
       n_ctx: 200000,
       name: "claude-3-7-sonnet",
-      id: "Refact/claude-3-7-sonnet",
+      id: "openai/claude-3-7-sonnet",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -289,11 +283,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: true,
       default_temperature: null,
     },
-    "Refact/groq-llama-3.1-8b": {
+    "openai/groq-llama-3.1-8b": {
       type: "chat",
       n_ctx: 128000,
       name: "groq-llama-3.1-8b",
-      id: "Refact/groq-llama-3.1-8b",
+      id: "openai/groq-llama-3.1-8b",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -304,11 +298,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/groq-llama-3.1-70b": {
+    "openai/groq-llama-3.1-70b": {
       type: "chat",
       n_ctx: 128000,
       name: "groq-llama-3.1-70b",
-      id: "Refact/groq-llama-3.1-70b",
+      id: "openai/groq-llama-3.1-70b",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -319,11 +313,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/gemini-2.0-flash-exp": {
+    "openai/gemini-2.0-flash-exp": {
       type: "chat",
       n_ctx: 1000000,
       name: "gemini-2.0-flash-exp",
-      id: "Refact/gemini-2.0-flash-exp",
+      id: "openai/gemini-2.0-flash-exp",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -334,11 +328,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/gemini-1.5-flash": {
+    "openai/gemini-1.5-flash": {
       type: "chat",
       n_ctx: 1000000,
       name: "gemini-1.5-flash",
-      id: "Refact/gemini-1.5-flash",
+      id: "openai/gemini-1.5-flash",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -349,11 +343,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/gemini-1.5-flash-8b": {
+    "openai/gemini-1.5-flash-8b": {
       type: "chat",
       n_ctx: 1000000,
       name: "gemini-1.5-flash-8b",
-      id: "Refact/gemini-1.5-flash-8b",
+      id: "openai/gemini-1.5-flash-8b",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -364,11 +358,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/gemini-1.5-pro": {
+    "openai/gemini-1.5-pro": {
       type: "chat",
       n_ctx: 2000000,
       name: "gemini-1.5-pro",
-      id: "Refact/gemini-1.5-pro",
+      id: "openai/gemini-1.5-pro",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -379,11 +373,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/gemini-2.0-exp-advanced": {
+    "openai/gemini-2.0-exp-advanced": {
       type: "chat",
       n_ctx: 1000000,
       name: "gemini-2.0-exp-advanced",
-      id: "Refact/gemini-2.0-exp-advanced",
+      id: "openai/gemini-2.0-exp-advanced",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -394,11 +388,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/grok-2": {
+    "openai/grok-2": {
       type: "chat",
       n_ctx: 128000,
       name: "grok-2",
-      id: "Refact/grok-2",
+      id: "openai/grok-2",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -409,11 +403,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/deepseek-chat": {
+    "openai/deepseek-chat": {
       type: "chat",
       n_ctx: 64000,
       name: "deepseek-chat",
-      id: "Refact/deepseek-chat",
+      id: "openai/deepseek-chat",
       enabled: true,
       tokenizer: "fake",
       supports_tools: true,
@@ -424,11 +418,11 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
       supports_thinking_budget: false,
       default_temperature: null,
     },
-    "Refact/deepseek-reasoner": {
+    "openai/deepseek-reasoner": {
       type: "chat",
       n_ctx: 64000,
       name: "deepseek-reasoner",
-      id: "Refact/deepseek-reasoner",
+      id: "openai/deepseek-reasoner",
       enabled: true,
       tokenizer: "fake",
       supports_tools: false,
@@ -447,13 +441,13 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
     tokenizer: "fake",
     embedding_size: 1536,
     name: "thenlper/gte-base",
-    id: "Refact/thenlper/gte-base",
+    id: "openai/thenlper/gte-base",
     rejection_threshold: 0.25,
     embedding_batch: 64,
   },
   running_models: [
-    "smallcloudai/Refact-1_6B-fim",
-    "Refact/1.6B",
+    "qwen2.5/coder/1.5b/base",
+    "qwen2.5/coder/1.5b/base",
     "thenlper/gte-base",
     "starcoder2/3b",
     "qwen2.5/coder/1.5b/base",
@@ -465,14 +459,13 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
     "groq-llama-3.1-8b",
     "groq-llama-3.1-70b",
   ],
-  completion_default_model: "Refact/1.6B",
+  completion_default_model: "qwen2.5/coder/1.5b/base",
   chat_default_model: "gpt-4o",
   chat_thinking_model: "",
   chat_light_model: "",
   chat_buddy_model: "",
   caps_version: 0,
   code_chat_default_system_prompt: "default",
-  support_metadata: true,
   metadata: {
     pricing: {
       "gpt-3.5-turbo": {
@@ -605,9 +598,7 @@ export const STUB_CAPS_RESPONSE: CapsResponse = {
 };
 
 export const EMPTY_CAPS_RESPONSE: CapsResponse = {
-  support_metadata: false,
   caps_version: 0,
-  cloud_name: "",
   chat_default_model: "",
   code_chat_default_system_prompt: "",
   chat_models: {},
@@ -618,7 +609,6 @@ export const EMPTY_CAPS_RESPONSE: CapsResponse = {
   endpoint_style: "",
   endpoint_template: "",
   running_models: [],
-  telemetry_basic_dest: "",
   tokenizer_path_template: "",
   customization: "",
   tokenizer_rewrite_path: {},
@@ -626,5 +616,4 @@ export const EMPTY_CAPS_RESPONSE: CapsResponse = {
   chat_light_model: "",
   chat_thinking_model: "",
   chat_buddy_model: "",
-  telemetry_basic_retrieve_my_own: "",
 };

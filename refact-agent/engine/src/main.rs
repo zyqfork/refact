@@ -13,7 +13,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::background_tasks::start_background_tasks;
 use crate::lsp::spawn_lsp_task;
-use crate::telemetry::{basic_transmit, snippets_transmit};
 use crate::yaml_configs::create_configs::yaml_configs_try_create_all;
 use crate::yaml_configs::customization_registry::get_project_registry;
 use sqlite_vec::sqlite3_vec_init;
@@ -29,7 +28,6 @@ mod global_context;
 mod indexing_utils;
 mod json_utils;
 mod nicer_logs;
-mod telemetry;
 mod version;
 mod yaml_configs;
 
@@ -58,7 +56,6 @@ mod restream;
 
 mod call_validation;
 mod chat;
-mod dashboard;
 mod http;
 mod lsp;
 
@@ -170,20 +167,8 @@ async fn main() {
             info!("{:>20} {}", k, v);
         }
         info!("cache dir: {}", cache_dir.display());
-        let mut api_key_at: usize = usize::MAX;
         for (arg_n, arg_v) in env::args().enumerate() {
-            info!(
-                "cmdline[{}]: {:?}",
-                arg_n,
-                if arg_n != api_key_at {
-                    arg_v.as_str()
-                } else {
-                    "***"
-                }
-            );
-            if arg_v == "--api-key" {
-                api_key_at = arg_n + 1;
-            }
+            info!("cmdline[{}]: {:?}", arg_n, arg_v.as_str());
         }
     }
 
@@ -253,7 +238,5 @@ async fn main() {
     background_tasks.abort().await;
     git::checkpoints::abort_init_shadow_repos(gcx.clone()).await;
     integrations::sessions::stop_sessions(gcx.clone()).await;
-    info!("saving telemetry without sending, so should be quick");
-    basic_transmit::basic_telemetry_compress(gcx.clone()).await;
     info!("bb\n");
 }

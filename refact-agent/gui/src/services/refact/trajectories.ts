@@ -27,7 +27,6 @@ export type TrajectoryMeta = {
     | "completed"
     | "error";
   root_chat_id?: string;
-  total_coins?: number;
   total_prompt_tokens?: number;
   total_completion_tokens?: number;
   total_tokens?: number;
@@ -78,7 +77,6 @@ export type TrajectoryEvent = {
   root_chat_id?: string;
   model?: string;
   mode?: string;
-  total_coins?: number;
   total_lines_added?: number;
   total_lines_removed?: number;
   tasks_total?: number;

@@ -364,11 +364,6 @@ pub async fn prepare_chat_passthrough(
         llm_request = llm_request.with_previous_response_id(thread.previous_response_id.clone());
     }
 
-    // Add meta for Refact cloud when support_metadata is enabled
-    if model_record.base.support_metadata {
-        llm_request = llm_request.with_meta(meta.clone());
-    }
-
     if model_record.base.id.starts_with("openrouter/")
         && !model_record.available_providers.is_empty()
     {

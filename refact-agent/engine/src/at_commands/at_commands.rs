@@ -176,16 +176,11 @@ pub async fn at_commands_dict(
         ),
     ]);
 
-    let (ast_on, vecdb_on, active_group_id) = {
+    let (ast_on, vecdb_on) = {
         let gcx_locked = gcx.read().await;
         let vecdb_on = gcx_locked.vec_db.lock().await.is_some();
-        (
-            gcx_locked.ast_service.is_some(),
-            vecdb_on,
-            gcx_locked.active_group_id.clone(),
-        )
+        (gcx_locked.ast_service.is_some(), vecdb_on)
     };
-    let allow_knowledge = active_group_id.is_some();
     let mut result = HashMap::new();
     for (key, value) in at_commands_dict {
         let depends_on = value.depends_on();
@@ -193,9 +188,6 @@ pub async fn at_commands_dict(
             continue;
         }
         if depends_on.contains(&"vecdb".to_string()) && !vecdb_on {
-            continue;
-        }
-        if depends_on.contains(&"knowledge".to_string()) && !allow_knowledge {
             continue;
         }
         result.insert(key, value);

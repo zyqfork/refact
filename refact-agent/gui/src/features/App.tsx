@@ -27,7 +27,6 @@ import { Provider } from "react-redux";
 import { PersistGate } from "redux-persist/integration/react";
 import { Theme } from "../components/Theme";
 import { useEventBusForWeb } from "../hooks/useEventBusForWeb";
-import { Statistics } from "./Statistics";
 import {
   push,
   popBackTo,
@@ -42,7 +41,6 @@ import { PageWrapper } from "../components/PageWrapper";
 import { ThreadHistory } from "./ThreadHistory";
 import { Integrations } from "./Integrations";
 import { Providers } from "./Providers";
-import { UserSurvey } from "./UserSurvey";
 import { integrationsApi } from "../services/refact";
 import { LoginPage } from "./Login";
 import { TaskList, TaskWorkspace } from "./Tasks";
@@ -71,8 +69,6 @@ import {
 import styles from "./App.module.css";
 import classNames from "classnames";
 import { usePatchesAndDiffsEventsForIDE } from "../hooks/usePatchesAndDiffEventsForIDE";
-import { UrqlProvider } from "../../urqlProvider";
-import { selectActiveGroup } from "./Teams";
 import { hasAnyUsableActiveProvider } from "./Login/providerAccess";
 
 export interface AppProps {
@@ -98,7 +94,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   const { chatPageChange, setIsChatStreaming, setIsChatReady } =
     useEventsBusForIDE();
   const historyState = useAppSelector((state) => state.history);
-  const maybeCurrentActiveGroup = useAppSelector(selectActiveGroup);
   const chatId = useAppSelector(selectChatId);
   const providersQuery = useGetConfiguredProvidersQuery();
   useEventBusForWeb();
@@ -252,26 +247,20 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
 
   const isLoggedIn = isPageInHistory("history") || isPageInHistory("chat");
 
-  const hasCloudSession =
-    (config.apiKey ?? "").trim().length > 0 &&
-    (config.addressURL ?? "").trim().length > 0;
   const hasAnyActiveProvider = useMemo(() => {
     return hasAnyUsableActiveProvider({
       providers: providersQuery.data?.providers ?? [],
-      addressURL: config.addressURL,
-      apiKey: config.apiKey,
     });
-  }, [providersQuery.data?.providers, config.addressURL, config.apiKey]);
-  const canAccessApp = hasCloudSession || hasAnyActiveProvider;
-  const canResolveProviderAccess =
-    providersQuery.isSuccess || providersQuery.isError;
+  }, [providersQuery.data?.providers]);
+  const canAccessApp = hasAnyActiveProvider;
+  const canResolveProviderAccess = providersQuery.isSuccess;
 
   useEffect(() => {
     if (canAccessApp && !isLoggedIn) {
       if (
         !historyState.isLoading &&
         Object.keys(historyState.chats).length === 0 &&
-        maybeCurrentActiveGroup
+        providersQuery.isSuccess
       ) {
         dispatch(push({ name: "history" }));
         dispatch(newChatAction());
@@ -290,7 +279,7 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
     isLoggedIn,
     dispatch,
     historyState,
-    maybeCurrentActiveGroup,
+    providersQuery.isSuccess,
   ]);
 
   useEffect(() => {
@@ -363,7 +352,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
             renderedPage.name === "integrations page" ? 0 : undefined,
         }}
       >
-        <UserSurvey />
         {renderedPage.name === "login page" && <LoginPage />}
         {pageSwitching && <ChatLoading />}
         {!pageSwitching && renderedPage.name === "history" && <Dashboard />}
@@ -378,14 +366,6 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
           renderedPage.name === "fill in the middle debug page" && (
             <FIMDebug host={config.host} tabbed={config.tabbed} />
           )}
-        {!pageSwitching && renderedPage.name === "statistics page" && (
-          <Statistics
-            backFromStatistic={goBack}
-            tabbed={config.tabbed}
-            host={config.host}
-            onCloseStatistic={goBack}
-          />
-        )}
         {!pageSwitching && renderedPage.name === "integrations page" && (
           <Integrations
             backFromIntegrations={goBackFromIntegrations}
@@ -502,17 +482,15 @@ export const App = () => {
   return (
     <BuddyErrorBoundary>
       <Provider store={store}>
-        <UrqlProvider>
-          <PersistGate persistor={persistor}>
-            <Theme>
-              <AbortControllerProvider>
-                <BuddyErrorBoundary>
-                  <InnerApp />
-                </BuddyErrorBoundary>
-              </AbortControllerProvider>
-            </Theme>
-          </PersistGate>
-        </UrqlProvider>
+        <PersistGate persistor={persistor}>
+          <Theme>
+            <AbortControllerProvider>
+              <BuddyErrorBoundary>
+                <InnerApp />
+              </BuddyErrorBoundary>
+            </AbortControllerProvider>
+          </Theme>
+        </PersistGate>
       </Provider>
     </BuddyErrorBoundary>
   );

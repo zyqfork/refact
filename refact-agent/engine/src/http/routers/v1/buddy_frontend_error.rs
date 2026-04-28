@@ -45,7 +45,6 @@ pub struct FrontendErrorRequest {
     pub stack: String,
     pub url: String,
     pub kind: String,
-    pub user_agent: Option<String>,
 }
 
 pub async fn handle_v1_buddy_frontend_error(

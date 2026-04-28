@@ -289,7 +289,6 @@ pub async fn run_llm_stream<C: StreamCollector>(
         reasoning_type: params.reasoning_type.clone(),
         supports_temperature: params.supports_temperature,
         supports_max_completion_tokens: params.model_rec.supports_max_completion_tokens,
-        support_metadata: params.model_rec.support_metadata,
         eof_is_done: params.model_rec.eof_is_done,
         supports_web_search: params.model_rec.supports_web_search,
         supports_cache_control: params.model_rec.supports_cache_control,

@@ -1,11 +1,14 @@
 import { providersApi } from "../services/refact";
 import { useAppSelector } from "./useAppSelector";
 import { selectBackendStatus } from "../features/Connection";
+import { selectLspPort } from "../features/Config/configSlice";
 
 export function useGetConfiguredProvidersQuery() {
   const backendStatus = useAppSelector(selectBackendStatus);
-  return providersApi.useGetConfiguredProvidersQuery(undefined, {
-    skip: backendStatus === "unknown",
+  const lspPort = useAppSelector(selectLspPort);
+  return providersApi.useGetConfiguredProvidersQuery(lspPort, {
+    skip:
+      backendStatus === "unknown" || !Number.isFinite(lspPort) || lspPort <= 0,
   });
 }
 

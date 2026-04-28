@@ -456,7 +456,7 @@ describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
         },
         {
           op: "merge_extra",
-          extra: { metering_balance: 42 },
+          extra: { provider_request_id: "req-42" },
         },
         {
           op: "append_reasoning",
@@ -497,7 +497,7 @@ describe("Chat Thread Reducer - Event-based (Stateless Trajectory UI)", () => {
       }
       expect(assistant.tool_calls).toHaveLength(1);
       expect(assistant.server_content_blocks).toHaveLength(1);
-      expect(assistant.extra).toEqual({ metering_balance: 42 });
+      expect(assistant.extra).toEqual({ provider_request_id: "req-42" });
       expect(assistant.reasoning_content).toBe("stream reasoning");
       expect(runtime.last_applied_seq).toBe("4");
 

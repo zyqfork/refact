@@ -1,25 +1,26 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex as AMutex, RwLock as ARwLock};
-use tracing::{info, warn};
+use tokio::sync::RwLock as ARwLock;
+use tracing::warn;
 
 use crate::global_context::GlobalContext;
 
-static REFRESH_LOCK: OnceLock<AMutex<()>> = OnceLock::new();
-static FIRST_CALL: AtomicBool = AtomicBool::new(true);
-
-fn get_refresh_lock() -> &'static AMutex<()> {
-    REFRESH_LOCK.get_or_init(|| AMutex::new(()))
-}
-
-const SMALLCLOUD_MODEL_CAPS_URL: &str = "https://inference.smallcloud.ai/v1/model-capabilities";
-const CACHE_FILENAME: &str = "model-capabilities.json";
-const CACHE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+static BUNDLED_MODEL_CAPS: OnceLock<HashMap<String, ModelCapabilities>> = OnceLock::new();
+const BUNDLED_MODEL_CAPS_FILES: &[(&str, &str)] = &[
+    ("antropic", include_str!("model_capabilites/antropic.json")),
+    ("deepseek", include_str!("model_capabilites/deepseek.json")),
+    ("glm", include_str!("model_capabilites/glm.json")),
+    ("google", include_str!("model_capabilites/google.json")),
+    ("kimi", include_str!("model_capabilites/kimi.json")),
+    ("llama", include_str!("model_capabilites/llama.json")),
+    ("mistral", include_str!("model_capabilites/mistral.json")),
+    ("openai", include_str!("model_capabilites/openai.json")),
+    ("other", include_str!("model_capabilites/other.json")),
+    ("qwen", include_str!("model_capabilites/qwen.json")),
+    ("xai", include_str!("model_capabilites/xai.json")),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,29 +120,6 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedModelCaps {
-    pub fetched_at: u64,
-    pub models: HashMap<String, ModelCapabilities>,
-}
-
-impl CachedModelCaps {
-    pub fn is_expired(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        now - self.fetched_at > CACHE_MAX_AGE.as_secs()
-    }
-}
-
-fn get_cache_path() -> PathBuf {
-    let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("refact");
-    cache_dir.join(CACHE_FILENAME)
-}
-
 const MAX_REASONABLE_N_CTX: usize = 10_000_000;
 const MAX_REASONABLE_OUTPUT_TOKENS: usize = 1_000_000;
 
@@ -181,145 +159,42 @@ fn validate_model_caps(caps: &mut HashMap<String, ModelCapabilities>) {
     }
 }
 
-pub async fn load_cached_model_caps() -> Option<CachedModelCaps> {
-    let cache_path = get_cache_path();
+fn load_bundled_model_caps() -> Result<HashMap<String, ModelCapabilities>, String> {
+    let mut models = HashMap::new();
 
-    match tokio::fs::read_to_string(&cache_path).await {
-        Ok(content) => match serde_json::from_str::<CachedModelCaps>(&content) {
-            Ok(mut cached) => {
-                validate_model_caps(&mut cached.models);
-                info!(
-                    "Loaded model capabilities from cache: {} models",
-                    cached.models.len()
-                );
-                Some(cached)
-            }
-            Err(e) => {
+    for (family, content) in BUNDLED_MODEL_CAPS_FILES {
+        let parsed: HashMap<String, ModelCapabilities> = serde_json::from_str(content)
+            .map_err(|e| format!("Failed to parse bundled model caps {family}: {e}"))?;
+        for (name, caps) in parsed {
+            if models.insert(name.clone(), caps).is_some() {
                 warn!(
-                    "Failed to parse cached model capabilities (treating as cache miss): {}",
-                    e
+                    "Bundled model capabilities duplicate model '{}', last one wins",
+                    name
                 );
-                None
             }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            warn!("Failed to read cached model capabilities: {}", e);
-            None
         }
     }
-}
 
-pub async fn save_cached_model_caps(caps: &CachedModelCaps) -> Result<(), String> {
-    let cache_path = get_cache_path();
-
-    if let Some(parent) = cache_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create cache directory: {}", e))?;
-    }
-
-    let content = serde_json::to_string_pretty(caps)
-        .map_err(|e| format!("Failed to serialize model capabilities: {}", e))?;
-    tokio::fs::write(&cache_path, content)
-        .await
-        .map_err(|e| format!("Failed to write model capabilities cache: {}", e))?;
-    info!(
-        "Saved model capabilities to cache: {}",
-        cache_path.display()
-    );
-    Ok(())
-}
-
-fn build_model_caps_url(address_url: &str) -> Result<String, String> {
-    let address_url = address_url.trim();
-    if address_url.is_empty() || address_url.eq_ignore_ascii_case("refact") {
-        return Ok(SMALLCLOUD_MODEL_CAPS_URL.to_string());
-    }
-
-    let base_url = url::Url::parse(address_url)
-        .map_err(|e| format!("Invalid address_url '{}': {}", address_url, e))?;
-    base_url
-        .join("v1/model-capabilities")
-        .map(|u| u.to_string())
-        .map_err(|e| format!("Failed to construct model-capabilities URL: {}", e))
-}
-
-pub async fn fetch_model_caps_from_server(
-    gcx: Arc<ARwLock<GlobalContext>>,
-    address_url: &str,
-) -> Result<HashMap<String, ModelCapabilities>, String> {
-    let http_client = gcx.read().await.http_client.clone();
-    let model_caps_url = build_model_caps_url(address_url)?;
-
-    info!("Fetching model capabilities from {}", model_caps_url);
-
-    let response = http_client
-        .get(&model_caps_url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch model capabilities: {}", e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("Server returned status {}", status));
-    }
-
-    let models: HashMap<String, ModelCapabilities> = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse model capabilities response: {}", e))?;
-
-    info!("Fetched {} model capabilities from server", models.len());
+    validate_model_caps(&mut models);
     Ok(models)
 }
 
-pub async fn get_model_caps(
-    gcx: Arc<ARwLock<GlobalContext>>,
-    address_url: &str,
-    force_refresh: bool,
-) -> Result<HashMap<String, ModelCapabilities>, String> {
-    let _refresh_guard = get_refresh_lock().lock().await;
-
-    let first_call = FIRST_CALL.swap(false, Ordering::SeqCst);
-    let should_refresh = force_refresh || first_call;
-
-    if !should_refresh {
-        if let Some(cached) = load_cached_model_caps().await {
-            if !cached.is_expired() {
-                return Ok(cached.models);
-            }
-            info!("Cached model capabilities expired, fetching fresh data");
-        }
-    } else if first_call {
-        info!("First model capabilities request, fetching fresh data");
-    }
-
-    match fetch_model_caps_from_server(gcx, address_url).await {
-        Ok(mut models) => {
-            validate_model_caps(&mut models);
-            let cached = CachedModelCaps {
-                fetched_at: SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                models: models.clone(),
-            };
-            if let Err(e) = save_cached_model_caps(&cached).await {
-                warn!("Failed to save model capabilities cache: {}", e);
-            }
+pub fn bundled_model_caps() -> Result<HashMap<String, ModelCapabilities>, String> {
+    match BUNDLED_MODEL_CAPS.get() {
+        Some(models) => Ok(models.clone()),
+        None => {
+            let models = load_bundled_model_caps()?;
+            let _ = BUNDLED_MODEL_CAPS.set(models.clone());
             Ok(models)
         }
-        Err(e) => {
-            warn!("Failed to fetch model capabilities from server: {}", e);
-            if let Some(cached) = load_cached_model_caps().await {
-                warn!("Using expired cached model capabilities as fallback");
-                return Ok(cached.models);
-            }
-            Err(e)
-        }
     }
+}
+
+pub async fn get_model_caps(
+    _gcx: Arc<ARwLock<GlobalContext>>,
+    _force_refresh: bool,
+) -> Result<HashMap<String, ModelCapabilities>, String> {
+    bundled_model_caps()
 }
 
 pub fn is_model_supported(caps: &HashMap<String, ModelCapabilities>, model_name: &str) -> bool {
@@ -1062,5 +937,29 @@ mod tests {
 
         let resolved = resolve_model_caps(&caps, "MiniMax-M2.1");
         assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn test_bundled_model_caps_loads_representative_models() {
+        let caps = bundled_model_caps().unwrap();
+
+        for model in [
+            "gpt-4o",
+            "claude-sonnet-4-6",
+            "gemini-3-pro",
+            "deepseek-chat",
+            "qwen3.6-27b",
+            "mistral-large-3",
+            "kimi-k2-instruct",
+            "llama-3.3-70b",
+            "grok-4",
+            "GLM-4.6",
+            "minimax-m2.1",
+        ] {
+            assert!(
+                resolve_model_caps(&caps, model).is_some(),
+                "bundled caps should include {model}"
+            );
+        }
     }
 }

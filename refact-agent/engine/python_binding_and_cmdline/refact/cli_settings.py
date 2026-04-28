@@ -17,15 +17,12 @@ class Caps(BaseModel):
 
 
 class SettingsCLI(BaseModel):
-    address_url: Optional[str] = None
-    api_key: Optional[str] = None
     insecure_ssl: bool = False
     ast: bool = True
     ast_max_files: int = 20000
     vecdb: bool = True
     vecdb_max_files: int = 5000
     experimental: bool = False
-    basic_telemetry: bool = True
     nerd_font: bool = False
     editing_mode: str = "default"
 
@@ -37,11 +34,6 @@ class SettingsCLI(BaseModel):
 
 
 default_config = """
-address_url: Refact
-#api_key: <take-from-website>
-#address_url: http://your-self-hosting-server/
-#api_key: your-secret-key
-
 # Accept self-signed certificates
 #insecure_ssl: true
 
@@ -51,7 +43,6 @@ vecdb: true
 vecdb_max_files: 5000
 
 #experimental: true
-#basic_telemetry: false
 #nerd_font: true
 #editing_mode: vim
 #editing_mode: emacs

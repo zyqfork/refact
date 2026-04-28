@@ -4,7 +4,7 @@ React chat UI for AI coding assistant. Builds to `dist/chat/` (browser UMD) and 
 
 ## Tech Stack
 
-React 18.2 · TypeScript 5.8 (strict) · Vite 5.0 · Redux Toolkit 2.2 (RTK Query) · Radix UI/Themes · CSS Modules · urql 4.2 (GraphQL, SmallCloud only) · Vitest 3.1 · MSW 2.3
+React 18.2 · TypeScript 5.8 (strict) · Vite 5.0 · Redux Toolkit 2.2 (RTK Query) · Radix UI/Themes · CSS Modules · Vitest 3.1 · MSW 2.3
 
 ## Quick Start
 
@@ -19,7 +19,6 @@ DEBUG=* npm run dev     # debug logging
 
 ```
 React App → Redux (RTK Query) → LSP Server (:8001)   [chat, tools, caps, models]
-                               → SmallCloud (GraphQL)  [auth, teams, surveys]
                                → IDE (postMessage)     [file ops, theme, context]
 ```
 
@@ -31,7 +30,6 @@ src/
 ├── features/         # Redux slices + feature UIs
 │   ├── Chat/Thread/  # Multi-thread: reducer, selectors (~40+), actions, types
 │   ├── Checkpoints/  # Workspace rollback
-│   ├── CoinBalance/  # Token/credit balance
 │   ├── Config/       # Global settings + FeatureMenu
 │   ├── Connection/   # SSE connection status
 │   ├── Customization/# Agent modes, subagent forms, tool parameter editor
@@ -45,9 +43,7 @@ src/
 │   ├── Providers/    # LLM provider config + OAuth
 │   ├── Statistics/   # Usage charts
 │   ├── Tasks/        # Task management
-│   ├── Teams/        # Team/group management
 │   ├── ThreadHistory/# Thread history view
-│   └── UserSurvey/
 ├── components/       # Reusable UI (50+ dirs)
 │   ├── ChatContent/  # Message rendering (ChatContent, ToolsContent, DiffContent)
 │   ├── ChatForm/     # Input form + ToolConfirmation
@@ -61,7 +57,6 @@ src/
 ├── hooks/            # 72+ custom hooks
 ├── services/         # RTK Query APIs (20+) + chat commands/subscription
 │   ├── refact/       # LSP APIs (caps, tools, docker, integrations, etc.)
-│   └── smallcloud/   # Cloud auth (GraphQL)
 ├── contexts/         # AbortControllers, InternalLink
 ├── events/           # IDE integration event types + setup
 ├── lib/              # Library entry (render + events export)
@@ -153,13 +148,11 @@ All generate hooks (`useGetCapsQuery`, etc.). Dynamic base URL from Redux state.
 | integrationsApi                 | `/v1/integrations-list`, `/v1/integration-get`, `/v1/integration-save` |
 | modelsApi, providersApi         | `/v1/customization`                                                    |
 | checkpointsApi                  | `/v1/preview_checkpoints`, `/v1/restore_checkpoints`                   |
-| telemetryApi                    | `/v1/telemetry/chat`                                                   |
 | linksApi                        | `/v1/links`                                                            |
 | trajectoriesApi, trajectoryApi  | `/v1/trajectories/*`                                                   |
 | tasksApi                        | Tasks CRUD                                                             |
 | chatModesApi, customizationApi  | Agent modes/customization                                              |
 | knowledgeApi, knowledgeGraphApi | Knowledge/memory                                                       |
-| smallCloudApi                   | `https://www.smallcloud.ai` (GraphQL)                                  |
 
 Chat uses **Commands API** + **SSE subscription**, not RTK Query.
 
@@ -175,7 +168,6 @@ Chat uses **Commands API** + **SSE subscription**, not RTK Query.
 | `useEventBusForIDE`              | GUI → IDE events (open file, paste, tool call)                                           |
 | `usePostMessage`                 | Transport: VSCode `acquireVsCodeApi`, JetBrains `postIntellijMessage`, web `postMessage` |
 | `useCheckpoints`                 | Checkpoint preview/restore                                                               |
-| `useActiveTeamsGroup`            | Teams group management                                                                   |
 
 ## Components
 
@@ -243,7 +235,6 @@ Chat can proceed when ALL true: `snapshot_received && !streaming && !waiting_for
 - **Customization**: Agent modes, subagent forms, tool parameter editor.
 - **Tour/Onboarding**: Welcome screen, guided tour bubbles.
 - **FIM Debug**: Fill-in-Middle debug panel with search context and symbol list.
-- **CoinBalance**: Token/credit tracking with metering fields on messages.
 - **Docker**: Container list, start/stop/kill/remove, env vars, smart links.
 - **Compression Hints**: 🗜️ icon when context approaches limit. `compression_strength: "absent" | "weak" | "strong"`.
 - **Queued Messages**: Send while streaming. Priority queue bypasses tool wait.

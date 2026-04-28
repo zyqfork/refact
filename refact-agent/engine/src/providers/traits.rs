@@ -257,7 +257,6 @@ pub struct ProviderRuntime {
     #[serde(skip_serializing)]
     #[allow(dead_code)]
     pub extra_headers: HashMap<String, String>,
-    pub support_metadata: bool,
     /// Whether this provider supports Anthropic-style prompt cache_control headers.
     /// Set to false for providers like vLLM that reject unknown fields.
     #[serde(default = "default_true")]
@@ -591,25 +590,5 @@ pub fn set_model_enabled_impl(enabled_models: &mut Vec<String>, model_id: &str, 
         }
     } else {
         enabled_models.retain(|m| m != model_id);
-    }
-}
-
-/// Standard implementation for set_model_enabled with denylist semantics
-/// (adds to disabled_models when disabled, removes when enabled)
-pub fn set_model_disabled_impl(disabled_models: &mut Vec<String>, model_id: &str, enabled: bool) {
-    if enabled {
-        disabled_models.retain(|m| m != model_id);
-    } else {
-        if !disabled_models.iter().any(|m| m == model_id) {
-            disabled_models.push(model_id.to_string());
-        }
-    }
-}
-
-/// Parse disabled_models from YAML, replacing the existing list
-pub fn parse_disabled_models(yaml: &serde_yaml::Value, disabled_models: &mut Vec<String>) {
-    if let Some(models) = yaml.get("disabled_models").and_then(|v| v.as_sequence()) {
-        disabled_models.clear();
-        disabled_models.extend(models.iter().filter_map(|v| v.as_str().map(String::from)));
     }
 }

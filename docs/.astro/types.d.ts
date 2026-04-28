@@ -346,114 +346,9 @@ declare module 'astro:content' {
   collection: "docs";
   data: InferEntrySchema<"docs">
 } & { render(): Render[".md"] };
-"features/finetuning.md": {
-	id: "features/finetuning.md";
-  slug: "features/finetuning";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/authentication/keycloak.md": {
-	id: "guides/authentication/keycloak.md";
-  slug: "guides/authentication/keycloak";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/deployment/aws/ec2.md": {
-	id: "guides/deployment/aws/ec2.md";
-  slug: "guides/deployment/aws/ec2";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/deployment/aws/getting-started.md": {
-	id: "guides/deployment/aws/getting-started.md";
-  slug: "guides/deployment/aws/getting-started";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/deployment/aws/marketplace.md": {
-	id: "guides/deployment/aws/marketplace.md";
-  slug: "guides/deployment/aws/marketplace";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/deployment/aws/usage.md": {
-	id: "guides/deployment/aws/usage.md";
-  slug: "guides/deployment/aws/usage";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/deployment/runpod.md": {
-	id: "guides/deployment/runpod.md";
-  slug: "guides/deployment/runpod";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
 "guides/plugins/jetbrains/troubleshooting.md": {
 	id: "guides/plugins/jetbrains/troubleshooting.md";
   slug: "guides/plugins/jetbrains/troubleshooting";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/reverse-proxy.md": {
-	id: "guides/reverse-proxy.md";
-  slug: "guides/reverse-proxy";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/enterprise/getting-started.md": {
-	id: "guides/version-specific/enterprise/getting-started.md";
-  slug: "guides/version-specific/enterprise/getting-started";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/enterprise/license.md": {
-	id: "guides/version-specific/enterprise/license.md";
-  slug: "guides/version-specific/enterprise/license";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/enterprise/model-hosting.md": {
-	id: "guides/version-specific/enterprise/model-hosting.md";
-  slug: "guides/version-specific/enterprise/model-hosting";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/enterprise/plugins.md": {
-	id: "guides/version-specific/enterprise/plugins.md";
-  slug: "guides/version-specific/enterprise/plugins";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/enterprise/users.md": {
-	id: "guides/version-specific/enterprise/users.md";
-  slug: "guides/version-specific/enterprise/users";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/self-hosted.md": {
-	id: "guides/version-specific/self-hosted.md";
-  slug: "guides/version-specific/self-hosted";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"guides/version-specific/teams.md": {
-	id: "guides/version-specific/teams.md";
-  slug: "guides/version-specific/teams";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">
@@ -489,13 +384,6 @@ declare module 'astro:content' {
 "introduction/quickstart.md": {
 	id: "introduction/quickstart.md";
   slug: "introduction/quickstart";
-  body: string;
-  collection: "docs";
-  data: InferEntrySchema<"docs">
-} & { render(): Render[".md"] };
-"introduction/usage-based-pricing.md": {
-	id: "introduction/usage-based-pricing.md";
-  slug: "introduction/usage-based-pricing";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">

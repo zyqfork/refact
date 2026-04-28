@@ -335,10 +335,11 @@ async fn count_tokens(
         accum += message
             .content
             .count_tokens(tokenizer_arc.clone(), &None)
-            .map_err(|e| ScratchError {
-                status_code: StatusCode::INTERNAL_SERVER_ERROR,
-                message: format!("v1_chat_token_counter: count_tokens failed: {}", e),
-                telemetry_skip: false,
+            .map_err(|e| {
+                ScratchError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("v1_chat_token_counter: count_tokens failed: {}", e),
+                )
             })? as u64;
     }
     Ok(accum)

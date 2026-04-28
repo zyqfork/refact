@@ -45,12 +45,9 @@ pub async fn handle_v1_code_completion(
     );
     code_completion_post.parameters.temperature =
         Some(code_completion_post.parameters.temperature.unwrap_or(0.2));
-    let (cache_arc, tele_storage) = {
+    let cache_arc = {
         let gcx_locked = gcx.write().await;
-        (
-            gcx_locked.completions_cache.clone(),
-            gcx_locked.telemetry.clone(),
-        )
+        gcx_locked.completions_cache.clone()
     };
     if !code_completion_post.no_cache {
         let cache_key = completion_cache::cache_key_from_post(&code_completion_post);
@@ -71,7 +68,6 @@ pub async fn handle_v1_code_completion(
         &model_rec,
         &code_completion_post.clone(),
         cache_arc.clone(),
-        tele_storage.clone(),
         ast_service_opt,
     )
     .await
@@ -98,7 +94,6 @@ pub async fn handle_v1_code_completion(
             &model_rec.base,
             &mut code_completion_post.parameters,
             false,
-            None,
         )
         .await
     } else {
@@ -109,7 +104,6 @@ pub async fn handle_v1_code_completion(
             model_rec.base.clone(),
             code_completion_post.parameters.clone(),
             false,
-            None,
             None,
         )
         .await
@@ -147,12 +141,9 @@ pub async fn handle_v1_code_completion_prompt(
         .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
 
     // don't need cache, but go along
-    let (cache_arc, tele_storage) = {
+    let cache_arc = {
         let cx_locked = gcx.write().await;
-        (
-            cx_locked.completions_cache.clone(),
-            cx_locked.telemetry.clone(),
-        )
+        cx_locked.completions_cache.clone()
     };
 
     let ast_service_opt = gcx.read().await.ast_service.clone();
@@ -161,7 +152,6 @@ pub async fn handle_v1_code_completion_prompt(
         &model_rec,
         &post,
         cache_arc.clone(),
-        tele_storage.clone(),
         ast_service_opt,
     )
     .await

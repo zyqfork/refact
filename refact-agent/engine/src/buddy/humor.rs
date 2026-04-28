@@ -15,10 +15,8 @@ pub const HUMOR_BATCH_TTL: Duration = Duration::hours(1);
 /// A cached batch of LLM-generated one-liners for a specific fact kind.
 #[derive(Debug, Clone)]
 pub struct HumorBatch {
-    pub fact_kind: BuddyFactKind,
     pub lines: Vec<String>,
     pub used: u8,
-    pub generated_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -68,6 +66,7 @@ impl HumorService {
     }
 
     /// Create a service with an injected generator (used in tests).
+    #[cfg(test)]
     pub fn new_with_generator(generator: Arc<dyn HumorGenerator>) -> Self {
         Self {
             cache: HashMap::new(),
@@ -123,10 +122,8 @@ impl HumorService {
         }
 
         let batch = HumorBatch {
-            fact_kind: primary_kind,
             lines,
             used: 0,
-            generated_at: now,
             expires_at: now + HUMOR_BATCH_TTL,
         };
         self.cache.insert(primary_kind, batch);

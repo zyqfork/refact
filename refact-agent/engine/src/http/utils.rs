@@ -6,14 +6,13 @@ use axum::response::Response;
 
 use crate::custom_error::ScratchError;
 use crate::global_context::SharedGlobalContext;
-use crate::telemetry::telemetry_structs;
 
 const SPAM_HANDLERS: &[&str] = &["rag-status", "ping"];
 
-pub async fn telemetry_middleware<B>(
+pub async fn request_logging_middleware<B>(
     path: Uri,
-    method: Method,
-    ex: Extension<SharedGlobalContext>,
+    _method: Method,
+    _ex: Extension<SharedGlobalContext>,
     request: Request<B>,
     next: Next<B>,
 ) -> Result<Response, ScratchError> {
@@ -27,21 +26,9 @@ pub async fn telemetry_middleware<B>(
 
     let mut response = next.run(request).await;
 
-    // ScratchError::into_response creates an extension that is used to let us know that this
-    // response used to be a ScratchError. This is useful for logging and telemetry.
+    // ScratchError::into_response creates an extension that is used to let us
+    // preserve structured errors through Axum middleware.
     if let Some(e) = response.extensions_mut().remove::<ScratchError>() {
-        if !e.telemetry_skip {
-            let tele_storage = &ex.read().await.telemetry;
-            let mut tele_storage_locked = tele_storage.write().unwrap();
-            tele_storage_locked
-                .tele_net
-                .push(telemetry_structs::TelemetryNetwork::new(
-                    path.path().to_string(),
-                    format!("{}", method),
-                    false,
-                    format!("{}", e),
-                ));
-        }
         error!("{} returning, client will see \"{}\"", path, e);
         return Err(e);
     }

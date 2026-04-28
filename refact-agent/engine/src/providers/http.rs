@@ -547,10 +547,9 @@ pub async fn handle_v1_provider_available_models(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
-    let (provider, address_url, http_client) = {
+    let (provider, http_client) = {
         let gcx_locked = gcx.read().await;
         let registry = gcx_locked.providers.read().await;
-        let address_url = gcx_locked.cmdline.address_url.clone();
         let http_client = gcx_locked.http_client.clone();
 
         let provider: Box<dyn crate::providers::traits::ProviderTrait> =
@@ -565,11 +564,11 @@ pub async fn handle_v1_provider_available_models(
                 ));
             };
 
-        (provider, address_url, http_client)
+        (provider, http_client)
     };
 
     let source = provider.model_source();
-    let (model_caps, caps_error) = match get_model_caps(gcx.clone(), &address_url, false).await {
+    let (model_caps, caps_error) = match get_model_caps(gcx.clone(), false).await {
         Ok(caps) => (caps, None),
         Err(e) => {
             tracing::warn!(

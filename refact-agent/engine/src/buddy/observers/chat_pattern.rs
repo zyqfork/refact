@@ -2,7 +2,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
-use crate::buddy::observers::{BuddyObserver, Ephemeral, ObserverContext, ObserverCost};
+use crate::buddy::observers::{BuddyObserver, Ephemeral, ObserverContext};
 use crate::buddy::settings::BuddySettings;
 use crate::buddy::types::{BuddyFact, BuddyFactKind};
 use crate::call_validation::{ChatContent, ChatMessage};
@@ -83,10 +83,6 @@ impl BuddyObserver for ChatPatternObserver {
 
     fn cadence_seconds(&self) -> u64 {
         60
-    }
-
-    fn cost_class(&self) -> ObserverCost {
-        ObserverCost::Cheap
     }
 
     fn requires_setting(&self, settings: &BuddySettings) -> bool {

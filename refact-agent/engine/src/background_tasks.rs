@@ -66,12 +66,6 @@ pub async fn start_background_tasks(
         tokio::spawn(crate::files_in_workspace::files_in_workspace_init_task(
             gcx.clone(),
         )),
-        tokio::spawn(crate::telemetry::basic_transmit::telemetry_background_task(
-            gcx.clone(),
-        )),
-        tokio::spawn(crate::snippets_transmit::tele_snip_background_task(
-            gcx.clone(),
-        )),
         tokio::spawn(crate::vecdb::vdb_highlev::vecdb_background_reload(
             gcx.clone(),
         )),

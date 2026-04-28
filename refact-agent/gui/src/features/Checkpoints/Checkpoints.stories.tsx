@@ -16,7 +16,6 @@ const Template: React.FC<{ initialState?: CheckpointsMeta }> = ({
   const store = setUpStore({
     config: {
       apiKey: "foo",
-      addressURL: "Refact",
       host: "web",
       lspPort: 8001,
       themeProps: {

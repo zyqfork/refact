@@ -4,14 +4,9 @@ import { Usage } from "../../services/refact";
 import { formatNumberToFixed } from "../../utils/formatNumberToFixed";
 import { calculateUsageInputTokens } from "../../utils/calculateUsageInputTokens";
 import { formatUsd } from "../../utils/getMetering";
-import { Coin } from "../../images";
 
 type MessageUsageInfoProps = {
   usage?: Usage | null;
-  metering_coins_prompt?: number;
-  metering_coins_generated?: number;
-  metering_coins_cache_creation?: number;
-  metering_coins_cache_read?: number;
 };
 
 const TokenDisplay: React.FC<{ label: string; value: number }> = ({
@@ -23,22 +18,6 @@ const TokenDisplay: React.FC<{ label: string; value: number }> = ({
       {label}
     </Text>
     <Text size="1">{formatNumberToFixed(value)}</Text>
-  </Flex>
-);
-
-const CoinDisplay: React.FC<{ label: string; value: number }> = ({
-  label,
-  value,
-}) => (
-  <Flex align="center" justify="between" width="100%" gap="4">
-    <Text size="1" weight="bold">
-      {label}
-    </Text>
-    <Text size="1">
-      <Flex align="center" gap="2">
-        {Math.round(value)} <Coin width="12px" height="12px" />
-      </Flex>
-    </Text>
   </Flex>
 );
 
@@ -56,10 +35,6 @@ const UsdDisplay: React.FC<{ label: string; value: number | undefined }> = ({
 
 export const MessageUsageInfo: React.FC<MessageUsageInfoProps> = ({
   usage,
-  metering_coins_prompt = 0,
-  metering_coins_generated = 0,
-  metering_coins_cache_creation = 0,
-  metering_coins_cache_read = 0,
 }) => {
   const outputTokens = useMemo(() => {
     return calculateUsageInputTokens({
@@ -67,20 +42,6 @@ export const MessageUsageInfo: React.FC<MessageUsageInfoProps> = ({
       keys: ["completion_tokens"],
     });
   }, [usage]);
-
-  const totalCoins = useMemo(() => {
-    return (
-      metering_coins_prompt +
-      metering_coins_generated +
-      metering_coins_cache_creation +
-      metering_coins_cache_read
-    );
-  }, [
-    metering_coins_prompt,
-    metering_coins_generated,
-    metering_coins_cache_creation,
-    metering_coins_cache_read,
-  ]);
 
   // Context tokens includes prompt + cache tokens for accurate context size
   const contextTokens = useMemo(() => {
@@ -99,9 +60,8 @@ export const MessageUsageInfo: React.FC<MessageUsageInfoProps> = ({
 
   const meteringUsd = usage?.metering_usd;
   const hasUsd = meteringUsd !== undefined && meteringUsd.total_usd > 0;
-  const showCoins = !hasUsd && totalCoins > 0;
 
-  if (!usage && !showCoins && !hasUsd) return null;
+  if (!usage && !hasUsd) return null;
 
   return (
     <Flex justify="end" mt="2">
@@ -121,12 +81,6 @@ export const MessageUsageInfo: React.FC<MessageUsageInfoProps> = ({
                     ctx:
                   </Text>
                   <Text size="1">{formatNumberToFixed(contextTokens)}</Text>
-                </Flex>
-              )}
-              {showCoins && (
-                <Flex align="center" gap="1">
-                  <Text size="1">{Math.round(totalCoins)}</Text>
-                  <Coin width="10px" height="10px" />
                 </Flex>
               )}
               {hasUsd && (
@@ -165,44 +119,6 @@ export const MessageUsageInfo: React.FC<MessageUsageInfoProps> = ({
                       value={usage.completion_tokens_details.reasoning_tokens}
                     />
                   )}
-              </>
-            )}
-
-            {showCoins && (
-              <>
-                <Box my="2" style={{ borderTop: "1px solid var(--gray-a6)" }} />
-                <Flex align="center" justify="between" width="100%" mb="1">
-                  <Text size="2" weight="bold">
-                    Cost
-                  </Text>
-                  <Text size="2">
-                    <Flex align="center" gap="2">
-                      {Math.round(totalCoins)}{" "}
-                      <Coin width="14px" height="14px" />
-                    </Flex>
-                  </Text>
-                </Flex>
-                {metering_coins_prompt > 0 && (
-                  <CoinDisplay label="Prompt" value={metering_coins_prompt} />
-                )}
-                {metering_coins_generated > 0 && (
-                  <CoinDisplay
-                    label="Completion"
-                    value={metering_coins_generated}
-                  />
-                )}
-                {metering_coins_cache_read > 0 && (
-                  <CoinDisplay
-                    label="Cache read"
-                    value={metering_coins_cache_read}
-                  />
-                )}
-                {metering_coins_cache_creation > 0 && (
-                  <CoinDisplay
-                    label="Cache creation"
-                    value={metering_coins_cache_creation}
-                  />
-                )}
               </>
             )}
 

@@ -148,7 +148,6 @@ describe("MarketplacePluginCard", () => {
             lspPort: 8001,
             themeProps: {},
             host: "vscode",
-            addressURL: "Refact",
           },
         },
       },
@@ -179,7 +178,6 @@ describe("MarketplacePluginCard", () => {
             lspPort: 8001,
             themeProps: {},
             host: "vscode",
-            addressURL: "Refact",
           },
         },
       },
@@ -219,7 +217,6 @@ describe("SkillEditor", () => {
           lspPort: 8001,
           themeProps: {},
           host: "vscode",
-          addressURL: "Refact",
         },
       },
     });
@@ -238,7 +235,6 @@ const CONFIG_STATE = {
     lspPort: 8001,
     themeProps: {},
     host: "vscode" as const,
-    addressURL: "Refact",
   },
 };
 

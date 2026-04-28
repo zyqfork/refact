@@ -10,16 +10,9 @@ export function formatCost(usd: number | null): string {
   return `$${usd.toFixed(2)}`;
 }
 
-export function formatCostDisplay(
-  usd: number | null,
-  coins: number | null,
-): string {
-  const parts: string[] = [];
-  if (usd != null && usd > 0) parts.push(`$${usd.toFixed(2)}`);
-  if (coins != null && coins > 0) parts.push(`${coins.toFixed(1)} coins`);
-  if (parts.length > 0) return parts.join(" / ");
+export function formatCostDisplay(usd: number | null): string {
+  if (usd != null && usd > 0) return `$${usd.toFixed(2)}`;
   if (usd != null) return `$${usd.toFixed(2)}`;
-  if (coins != null) return `${coins.toFixed(1)} coins`;
   return "—";
 }
 

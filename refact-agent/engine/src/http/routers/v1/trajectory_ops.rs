@@ -96,7 +96,7 @@ fn describe_transform_actions(opts: &CompressOptions) -> Vec<String> {
         );
     }
     if opts.strip_metering {
-        actions.push("Strip metering information (usage, coins)".to_string());
+        actions.push("Strip metering information".to_string());
     }
     actions.push("Remove invalid tool calls and orphan results".to_string());
     actions

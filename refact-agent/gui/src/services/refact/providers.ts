@@ -36,7 +36,6 @@ export type ProviderRuntime = {
   chat_endpoint: string;
   completion_endpoint: string;
   embedding_endpoint: string;
-  support_metadata: boolean;
   chat_models: ProviderModel[];
   completion_models: ProviderModel[];
   embedding_model: ProviderModel | null;
@@ -285,13 +284,8 @@ export const providersApi = createApi({
     },
   }),
   endpoints: (builder) => ({
-    getConfiguredProviders: builder.query<
-      ConfiguredProvidersResponse,
-      undefined
-    >({
-      queryFn: async (_args, api, extraOptions, baseQuery) => {
-        const state = api.getState() as RootState;
-        const port = state.config.lspPort as unknown as number;
+    getConfiguredProviders: builder.query<ConfiguredProvidersResponse, number>({
+      queryFn: async (port, _api, extraOptions, baseQuery) => {
         const url = `http://127.0.0.1:${port}${PROVIDERS_URL}`;
 
         const result = await baseQuery({
@@ -1084,7 +1078,15 @@ function isProviderListItem(data: unknown): data is ProviderListItem {
     return false;
   if (!hasProperty(data, "model_count") || typeof data.model_count !== "number")
     return false;
-  // has_credentials and status are optional for backward compat
+  if (!hasProperty(data, "has_credentials")) return false;
+  if (typeof data.has_credentials !== "boolean") return false;
+  if (!hasProperty(data, "status")) return false;
+  if (
+    data.status !== "not_configured" &&
+    data.status !== "configured" &&
+    data.status !== "active"
+  )
+    return false;
   return true;
 }
 

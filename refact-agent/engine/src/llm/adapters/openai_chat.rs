@@ -234,7 +234,6 @@ impl LlmWireAdapter for OpenAiChatAdapter {
             reasoning = ?req.reasoning,
             response_format = ?req.response_format.is_some(),
             cache_control = ?req.cache_control,
-            has_meta = %req.meta.is_some(),
             messages_count = %req.messages.len(),
             "openai chat adapter request"
         );
@@ -727,7 +726,6 @@ mod tests {
             reasoning_type: None,
             supports_temperature: true,
             supports_max_completion_tokens: false,
-            support_metadata: false,
             eof_is_done: false,
             supports_web_search: false,
             supports_cache_control: true,
@@ -993,7 +991,7 @@ mod tests {
 
         let http = adapter.build_http(&req, &default_settings()).unwrap();
 
-        // User-Agent should use space separator (not slash) for Refact cloud compatibility
+        // User-Agent should use space separator for broadly compatible provider logging.
         let ua = http.headers.get(USER_AGENT).unwrap().to_str().unwrap();
         assert!(
             ua.starts_with("refact-lsp "),

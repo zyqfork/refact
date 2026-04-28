@@ -48,7 +48,6 @@ export type ChatHistoryItem = Omit<ChatThread, "new_chat_suggested"> & {
     | "error";
   message_count?: number;
   root_chat_id?: string;
-  total_coins?: number;
   total_lines_added?: number;
   total_lines_removed?: number;
   tasks_total?: number;
@@ -265,7 +264,6 @@ function trajectoryMetaToHistoryItem(meta: TrajectoryMeta): ChatHistoryItem {
     session_state: meta.session_state,
     message_count: meta.message_count,
     root_chat_id: meta.root_chat_id,
-    total_coins: meta.total_coins,
     total_lines_added: meta.total_lines_added,
     total_lines_removed: meta.total_lines_removed,
     tasks_total: meta.tasks_total,
@@ -351,7 +349,6 @@ export const historySlice = createSlice({
           existing.session_state = meta.session_state;
           existing.message_count = meta.message_count;
           existing.root_chat_id = meta.root_chat_id;
-          existing.total_coins = meta.total_coins;
           existing.total_lines_added = meta.total_lines_added;
           existing.total_lines_removed = meta.total_lines_removed;
           existing.tasks_total = meta.tasks_total;
@@ -387,7 +384,6 @@ export const historySlice = createSlice({
           existing.session_state = meta.session_state;
           existing.message_count = meta.message_count;
           existing.root_chat_id = meta.root_chat_id;
-          existing.total_coins = meta.total_coins;
           existing.total_lines_added = meta.total_lines_added;
           existing.total_lines_removed = meta.total_lines_removed;
           existing.tasks_total = meta.tasks_total;
@@ -477,7 +473,6 @@ export const historySlice = createSlice({
         parent_id?: string;
         link_type?: string;
         root_chat_id?: string;
-        total_coins?: number;
         total_lines_added?: number;
         total_lines_removed?: number;
         model?: string;
@@ -512,9 +507,6 @@ export const historySlice = createSlice({
       }
       if (action.payload.root_chat_id !== undefined) {
         chat.root_chat_id = action.payload.root_chat_id;
-      }
-      if (action.payload.total_coins !== undefined) {
-        chat.total_coins = action.payload.total_coins;
       }
       if (action.payload.total_lines_added !== undefined) {
         chat.total_lines_added = action.payload.total_lines_added;

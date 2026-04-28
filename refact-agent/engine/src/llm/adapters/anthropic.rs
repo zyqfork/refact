@@ -891,7 +891,6 @@ mod tests {
             reasoning_type: Some("anthropic_budget".to_string()),
             supports_temperature: true,
             supports_max_completion_tokens: false,
-            support_metadata: false,
             eof_is_done: false,
             supports_web_search: false,
             supports_cache_control: true,

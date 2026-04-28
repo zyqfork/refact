@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use std::collections::HashMap;
 
 use crate::buddy::types::{BuddyFact, BuddyFactKind};
@@ -87,6 +87,7 @@ impl FactStore {
     }
 
     /// Count facts of `kind` seen within `within` of now.
+    #[cfg(test)]
     pub fn count_within(&self, kind: BuddyFactKind, within: Duration) -> usize {
         self.recent(kind, within).len()
     }
@@ -94,21 +95,6 @@ impl FactStore {
     /// Iterate over all facts in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &BuddyFact> {
         self.ring.iter()
-    }
-
-    /// Number of facts currently stored.
-    pub fn len(&self) -> usize {
-        self.ring.len()
-    }
-
-    /// Remove all facts whose `seen_at` is older than `max_age` from now.
-    pub fn clear_older_than(&mut self, max_age: Duration) {
-        let cutoff = Utc::now() - max_age;
-        self.ring.retain(|f| f.seen_at >= cutoff);
-        self.by_key.clear();
-        for (idx, fact) in self.ring.iter().enumerate() {
-            self.by_key.insert(fact.key.clone(), idx);
-        }
     }
 }
 

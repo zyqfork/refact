@@ -12,7 +12,6 @@
 
 <div align="center">
   <a href="https://github.com/smallcloudai/refact/stargazers"><img src="https://img.shields.io/github/stars/smallcloudai/refact?style=for-the-badge&color=blue" alt="Stargazers"></a>
-  <a href="https://discord.gg/Kts7CYg99R"><img src="https://img.shields.io/badge/Discord-Join%20Us-purple?logo=discord&logoColor=white&style=for-the-badge" alt="Join our Discord community"></a>
   <a href="https://docs.refact.ai"><img src="https://img.shields.io/badge/documentation-blue?logo=googledocs&logoColor=FFE165&style=for-the-badge" alt="Check out the documentation"></a>
 
 </div>
@@ -34,8 +33,8 @@ Refact Agent works effortlessly with the tools and databases you already use:
 
 ### ⚡ Why Choose Refact Agent?
 
-- ✅ **Deploy On-Premise:** For maximum security, choose our self-hosted AI Agent version and run it on your own infrastructure.
-- 🧠 **Access State-of-the-Art Models:** Use GPT-5, Claude 4.5, Gemini 3.0, DeepSeek, and more with AI Agent or for chat queries.
+- ✅ **Local/BYOK by default:** Run the local Refact engine and connect only the model providers or local runtimes you configure.
+- 🧠 **Access State-of-the-Art Models:** Use GPT-5, Claude 4.5, Gemini 3.0, DeepSeek, local models, and more with AI Agent or for chat queries.
 - 🔑 **Bring Your Own Key (BYOK):** Connect your API key and use any LLM: OpenAI, Anthropic, Google, DeepSeek, Qwen, and others.
 - 💬 **Integrated IDE Chat:** Integrate with GitHub, PostgreSQL, Docker, and more. Refact.ai Agent accesses your resources and handles related operations autonomously, mimicking your workflow.
 - ⚡ **Free, Unlimited, Context-Aware Auto-Completion:** Code faster with smart AI suggestions powered by Qwen2.5-Coder-1.5B with RAG.
@@ -59,21 +58,14 @@ Our Ambassadors shared remarkable stories of how they transform weeks of coding 
 
 📜 [View Full List of Supported Models](https://docs.refact.ai/supported-models/)
 
-> 📢  **Using AI for work? Let’s bring it to your company!**
->
-> [Fill out this form](https://refact.ai/contact/?utm_source=github&utm_medium=readme&utm_campaign=enterprise) — Our AI Agent will be tailored to your company’s data, learning from feedback, and helping organize knowledge for **better collaboration** with your team.
-
-
 ## 📚 Table of Contents
 
 - 🚀 [Core Features and Functionality](#-core-features-and-functionality)
 - 🤖 [Which Tasks Can Refact Help You With?](#-which-tasks-can-refact-help-you-with)
 - ⚙️ [QuickStart](#%EF%B8%8F-quickstart)
-- 🐳 [Running Refact Self-Hosted in a Docker Container](#-running-refact-self-hosted-in-a-docker-container)
 - 🔌 [Getting Started with Plugins](#-getting-started-with-plugins)
 - 📖 [Documentation](#-documentation)
 - 🥇 [Contribution](#-contribution)
-- 🎉 [Join the Community](#-join-the-community)
 
 ## 🚀 Core Features and Functionality
 
@@ -128,22 +120,12 @@ FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=4 INSTALL_OPTIONAL=TRUE pip install .
 
 
 
-## 🐳 Running Refact Self-Hosted in a Docker Container
-
-The easiest way to run the self-hosted server is using a pre-built Docker image.  
-See `CONTRIBUTING.md` for installation without a Docker container.
-
-
 ### 🔌 Getting Started with Plugins
 
 1. **Download Refact** for VS Code or JetBrains.
-2. **Set up a custom inference URL:**
-   ```
-   http://127.0.0.1:8008
-   ```
-3. **Configure the plugin settings:**
-   - **JetBrains:** Settings > Tools > Refact.ai > Advanced > Inference URL
-   - **VSCode:** Extensions > Refact.ai Assistant > Settings > Address URL
+2. Open the Refact sidebar/tool window.
+3. Configure at least one BYOK or local provider in **Provider Setup**.
+4. Select default models in **Default Models**.
 
 
 
@@ -164,13 +146,5 @@ Your contributions help shape the future of Refact Agent! 🚀
 ### ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=smallcloudai/refact&type=Date)](https://www.star-history.com/#smallcloudai/refact&Date)
-
-### 🎉 Join the Community
-
-We're all about open-source and empowering developers with AI tools. Our vision is to build the future of programming. Join us and be part of the journey!
-
-📢 **[Join our Discord server](https://refact.ai/community/)** – A community-run space for discussion, questions, and feedback.
-
-
 
 **Made with ❤️ by developers who automate the boring, so you can focus on building the future.**

@@ -232,7 +232,6 @@ mod tests {
             cache_creation_tokens: None,
             total_tokens: 150,
             cost_usd: Some(0.001),
-            cost_coins: None,
         }
     }
 

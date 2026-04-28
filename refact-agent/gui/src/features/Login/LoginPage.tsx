@@ -1,58 +1,17 @@
 import React, { useCallback } from "react";
-import {
-  Flex,
-  Box,
-  Button,
-  Card,
-  Grid,
-  Text,
-  Separator,
-  TextField,
-  Container,
-  Heading,
-  Badge,
-} from "@radix-ui/themes";
-import { GitHubLogoIcon, CheckCircledIcon } from "@radix-ui/react-icons";
-import { GoogleIcon } from "../../images/GoogleIcon";
-import { Accordion } from "../../components/Accordion";
+import { Box, Button, Card, Flex, Grid, Heading, Text } from "@radix-ui/themes";
 import { ScrollArea } from "../../components/ScrollArea";
-import {
-  useAppDispatch,
-  useAppSelector,
-  useEmailLogin,
-  useLogin,
-  useLogout,
-  useGetUser,
-  useGetConfiguredProvidersQuery,
-} from "../../hooks";
+import { useAppDispatch, useGetConfiguredProvidersQuery } from "../../hooks";
 import { ProviderCard } from "../Providers/ProviderCard";
 import { ProviderPreview } from "../Providers/ProviderPreview";
 import type { ProviderListItem } from "../../services/refact";
 import { useGetConfiguredProvidersView } from "../Providers/ProvidersView/useConfiguredProvidersView";
 import { newChatAction } from "../Chat";
 import { push } from "../Pages/pagesSlice";
-import {
-  selectApiKey,
-  selectAddressURL,
-  setApiKey,
-  setAddressURL,
-} from "../Config/configSlice";
 import { hasAnyUsableActiveProvider } from "./providerAccess";
 
 export const LoginPage: React.FC = () => {
-  const { loginWithProvider, polling, cancelLogin } = useLogin();
-  const { emailLogin, emailLoginResult, emailLoginAbort } = useEmailLogin();
   const dispatch = useAppDispatch();
-  const logout = useLogout();
-  const user = useGetUser();
-
-  const apiKey = useAppSelector(selectApiKey);
-  const addressURL = useAppSelector(selectAddressURL);
-
-  const isRefactCloudLoggedIn =
-    (addressURL ?? "").trim().toLowerCase() === "refact" &&
-    (apiKey ?? "").trim().length > 0;
-
   const providersQuery = useGetConfiguredProvidersQuery();
   const configuredProviders = providersQuery.data?.providers ?? [];
   const { sortedConfiguredProviders } = useGetConfiguredProvidersView({
@@ -61,198 +20,54 @@ export const LoginPage: React.FC = () => {
   const [currentProvider, setCurrentProvider] =
     React.useState<ProviderListItem | null>(null);
 
-  const emailIsLoading = React.useMemo(() => {
-    if (
-      emailLoginResult.isSuccess &&
-      emailLoginResult.data.status !== "user_logged_in"
-    ) {
-      return true;
-    }
-    return emailLoginResult.isLoading;
-  }, [
-    emailLoginResult.data?.status,
-    emailLoginResult.isLoading,
-    emailLoginResult.isSuccess,
-  ]);
-
-  const isLoading = React.useMemo(() => {
-    if (polling.isLoading || polling.isFetching) return true;
-    return emailIsLoading;
-  }, [polling, emailIsLoading]);
-
-  const onCancel = useCallback(() => {
-    try {
-      cancelLogin.current();
-      emailLoginAbort();
-    } catch {
-      // no-op
-    }
-  }, [cancelLogin, emailLoginAbort]);
-
   const hasAnyActiveProvider = React.useMemo(() => {
     return hasAnyUsableActiveProvider({
       providers: sortedConfiguredProviders,
-      addressURL,
-      apiKey,
     });
-  }, [sortedConfiguredProviders, addressURL, apiKey]);
+  }, [sortedConfiguredProviders]);
+
+  const providerStatusLabel = React.useMemo(() => {
+    if (providersQuery.isFetching || providersQuery.isLoading) {
+      return "Loading providers…";
+    }
+    if (providersQuery.isUninitialized) {
+      return "Connecting to backend…";
+    }
+    if (providersQuery.isError) {
+      return "Unable to load providers";
+    }
+    if (hasAnyActiveProvider) {
+      return "Ready to start";
+    }
+    return "Enable at least one model to continue";
+  }, [
+    hasAnyActiveProvider,
+    providersQuery.isError,
+    providersQuery.isFetching,
+    providersQuery.isLoading,
+    providersQuery.isUninitialized,
+  ]);
 
   const onContinue = useCallback(() => {
-    // BYOK path: mark as “logged in” locally without triggering SmallCloud user fetch.
-    if (!addressURL || addressURL.trim().length === 0) {
-      dispatch(setAddressURL("BYOK"));
-    }
-    if (!apiKey || apiKey.trim().length === 0) {
-      dispatch(setApiKey("byok"));
-    }
-
     dispatch(push({ name: "history" }));
     dispatch(newChatAction());
     dispatch(push({ name: "chat" }));
-  }, [addressURL, apiKey, dispatch]);
+  }, [dispatch]);
 
   return (
     <ScrollArea scrollbars="vertical" fullHeight>
-      <Container>
-        <Heading align="center" as="h2" size="6" my="6">
-          Login to Refact.ai
-        </Heading>
+      <Box mx="auto" p="6" style={{ maxWidth: 960 }}>
+        <Flex direction="column" gap="4">
+          <Heading align="center" as="h2" size="6">
+            Set Up Providers
+          </Heading>
+          <Text size="2" color="gray" align="center">
+            Configure at least one BYOK provider or local runtime, enable a
+            model, then continue.
+          </Text>
 
-        <Accordion.Root
-          type="single"
-          defaultValue={"cloud"}
-          disabled={isLoading}
-          collapsible
-        >
-          <Accordion.Item value="cloud">
-            <Accordion.Trigger>Refact Cloud</Accordion.Trigger>
-            <Accordion.Content>
-              {isRefactCloudLoggedIn ? (
-                <Flex direction="column" gap="3" align="center">
-                  <Flex align="center" gap="2">
-                    <CheckCircledIcon
-                      width="16"
-                      height="16"
-                      color="var(--green-9)"
-                    />
-                    <Text size="2" weight="medium">
-                      Logged in to Refact Cloud
-                    </Text>
-                  </Flex>
-                  {user.data && (
-                    <Badge size="2" variant="soft">
-                      {user.data.account}
-                    </Badge>
-                  )}
-                  <Button
-                    variant="outline"
-                    color="red"
-                    size="1"
-                    onClick={logout}
-                  >
-                    Log out
-                  </Button>
-                </Flex>
-              ) : (
-                <>
-                  <Box>
-                    <Text size="2">
-                      <ul>
-                        <li>
-                          Chat with your codebase powered by top models (e.g.
-                          Claude 3.7 Sonnet, OpenAI GPT-4o and o3-mini).
-                        </li>
-                        <li>
-                          Unlimited Code Completions (powered by Qwen2.5).
-                        </li>
-                        <li>Codebase-aware vector database (RAG).</li>
-                        <li>
-                          Agentic features: browser use, database connect,
-                          debugger, shell commands, etc.
-                        </li>
-                      </ul>
-                    </Text>
-                  </Box>
-                  <Separator size="4" my="4" />
-                  <Flex direction="column" gap="3" align="center">
-                    <Button
-                      onClick={() => {
-                        onCancel();
-                        loginWithProvider("google");
-                      }}
-                      disabled={isLoading}
-                    >
-                      <GoogleIcon width="15" height="15" /> Continue with Google
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        onCancel();
-                        loginWithProvider("github");
-                      }}
-                      disabled={isLoading}
-                    >
-                      <GitHubLogoIcon width="15" height="15" /> Continue with
-                      GitHub
-                    </Button>
-
-                    <Text>or</Text>
-
-                    <Flex asChild direction="column" gap="3">
-                      <form
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (isLoading) return;
-                          const formData = new FormData(event.currentTarget);
-                          const email = formData.get("email");
-                          if (typeof email === "string") {
-                            emailLogin(email);
-                          }
-                        }}
-                      >
-                        <TextField.Root
-                          placeholder="Email Address"
-                          type="email"
-                          name="email"
-                          required
-                          disabled={isLoading}
-                        />
-                        <Button
-                          type="submit"
-                          loading={emailIsLoading}
-                          disabled={isLoading}
-                        >
-                          Send magic link
-                        </Button>{" "}
-                        {isLoading && (
-                          <Button onClick={onCancel}>Cancel</Button>
-                        )}
-                        <Text size="1" align="center">
-                          We will send you a one-time login link by email.
-                        </Text>
-                      </form>
-                    </Flex>
-                  </Flex>
-                </>
-              )}
-            </Accordion.Content>
-          </Accordion.Item>
-        </Accordion.Root>
-
-        <Separator size="4" my="6" />
-
-        {!currentProvider && (
-          <>
-            <Flex direction="column" gap="3">
-              <Heading as="h3" size="4">
-                Or bring your own provider
-              </Heading>
-              <Text size="2" color="gray">
-                Configure one or more providers below, enable at least one
-                model, then Continue.
-              </Text>
-            </Flex>
-
-            <Box mt="4">
+          {!currentProvider && (
+            <>
               <Grid columns={{ initial: "2", sm: "3" }} gap="3" width="100%">
                 {sortedConfiguredProviders.map((provider) => (
                   <ProviderCard
@@ -262,49 +77,73 @@ export const LoginPage: React.FC = () => {
                   />
                 ))}
               </Grid>
-            </Box>
-          </>
-        )}
+              {providersQuery.isError && (
+                <Card variant="surface">
+                  <Text size="2" color="gray">
+                    Unable to load providers from the backend. Check that the
+                    local Refact engine is running and the UI is using the
+                    correct port.
+                  </Text>
+                </Card>
+              )}
+              {!providersQuery.isSuccess && !providersQuery.isError && (
+                <Card variant="surface">
+                  <Text size="2" color="gray">
+                    Waiting for the local Refact engine before loading
+                    providers.
+                  </Text>
+                </Card>
+              )}
+              {providersQuery.isSuccess &&
+                sortedConfiguredProviders.length === 0 && (
+                  <Card variant="surface">
+                    <Text size="2" color="gray">
+                      The backend returned an empty provider list. Restart the
+                      local Refact engine, then open the Providers screen again.
+                    </Text>
+                  </Card>
+                )}
+            </>
+          )}
 
-        {currentProvider && (
-          <Card mt="4" variant="surface" style={{ padding: "var(--space-4)" }}>
-            <Flex justify="between" align="center" mb="3" gap="3" wrap="wrap">
-              <Heading as="h4" size="3">
-                {currentProvider.display_name}
-              </Heading>
-              <Button
-                variant="outline"
-                onClick={() => setCurrentProvider(null)}
-              >
-                Back to providers
-              </Button>
-            </Flex>
-            <ProviderPreview
-              configuredProviders={sortedConfiguredProviders}
-              currentProvider={currentProvider}
-              handleSetCurrentProvider={setCurrentProvider}
-            />
-          </Card>
-        )}
+          {currentProvider && (
+            <Card variant="surface" style={{ padding: "var(--space-4)" }}>
+              <Flex justify="between" align="center" mb="3" gap="3" wrap="wrap">
+                <Heading as="h4" size="3">
+                  {currentProvider.display_name}
+                </Heading>
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentProvider(null)}
+                >
+                  Back to providers
+                </Button>
+              </Flex>
+              <ProviderPreview
+                configuredProviders={sortedConfiguredProviders}
+                currentProvider={currentProvider}
+                handleSetCurrentProvider={setCurrentProvider}
+              />
+            </Card>
+          )}
 
-        <Flex justify="end" gap="3" mt="5" align="center" wrap="wrap">
-          <Text size="2" color="gray">
-            {providersQuery.isFetching
-              ? "Loading providers…"
-              : hasAnyActiveProvider
-                ? "Ready to start"
-                : "Enable at least one model to continue"}
-          </Text>
-          <Button
-            onClick={onContinue}
-            disabled={
-              isLoading || providersQuery.isFetching || !hasAnyActiveProvider
-            }
-          >
-            Continue
-          </Button>
+          <Flex justify="end" gap="3" mt="2" align="center" wrap="wrap">
+            <Text size="2" color="gray">
+              {providerStatusLabel}
+            </Text>
+            <Button
+              onClick={onContinue}
+              disabled={
+                !providersQuery.isSuccess ||
+                providersQuery.isFetching ||
+                !hasAnyActiveProvider
+              }
+            >
+              Continue
+            </Button>
+          </Flex>
         </Flex>
-      </Container>
+      </Box>
     </ScrollArea>
   );
 };

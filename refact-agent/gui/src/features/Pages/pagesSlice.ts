@@ -12,10 +12,6 @@ export interface FIMDebugPage {
   name: "fill in the middle debug page";
 }
 
-export interface StatisticsPage {
-  name: "statistics page";
-}
-
 export interface DocumentationSettingsPage {
   name: "documentation settings";
 }
@@ -114,7 +110,6 @@ export type Page =
   | ChatPage
   | HistoryList
   | FIMDebugPage
-  | StatisticsPage
   | DocumentationSettingsPage
   | ChatThreadHistoryPage
   | IntegrationsSetupPage

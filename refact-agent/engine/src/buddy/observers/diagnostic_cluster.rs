@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
 use crate::buddy::diagnostics::DiagnosticContext;
-use crate::buddy::observers::{BuddyObserver, ObserverContext, ObserverCost};
+use crate::buddy::observers::{BuddyObserver, ObserverContext};
 use crate::buddy::settings::BuddySettings;
 use crate::buddy::types::{BuddyFact, BuddyFactKind};
 use crate::global_context::GlobalContext;
@@ -93,10 +93,6 @@ impl BuddyObserver for DiagnosticClusterObserver {
 
     fn cadence_seconds(&self) -> u64 {
         60
-    }
-
-    fn cost_class(&self) -> ObserverCost {
-        ObserverCost::Cheap
     }
 
     fn requires_setting(&self, settings: &BuddySettings) -> bool {

@@ -2,17 +2,10 @@ import { useCallback } from "react";
 import { createAction } from "@reduxjs/toolkit";
 import { usePostMessage } from "./usePostMessage";
 import type { ChatThread } from "../features/Chat/Thread/types";
-import {
-  EVENT_NAMES_FROM_SETUP,
-  HostSettings,
-  SetupHost,
-} from "../events/setup";
 import { pathApi } from "../services/refact/path";
 
-import { telemetryApi } from "../services/refact/telemetry";
 import { ToolEditResult } from "../services/refact";
 import { TextDocToolCall } from "../components/Tools/types";
-import type { TeamsGroup } from "../services/smallcloud/types";
 
 export const ideDiffPasteBackAction = createAction<{
   content: string;
@@ -76,13 +69,6 @@ export const ideForceReloadProjectTreeFiles = createAction(
   "ide/forceReloadProjectTreeFiles",
 );
 
-export const ideSetActiveTeamsGroup = createAction<TeamsGroup>(
-  "ide/setActiveTeamsGroup",
-);
-export const ideClearActiveTeamsGroup = createAction<undefined>(
-  "ide/clearActiveTeamsGroup",
-);
-
 export const ideTaskDone = createAction<{
   chatId: string;
   toolCallId: string;
@@ -106,8 +92,6 @@ export const ideSwitchToThread = createAction<{
 }>("ide/switchToThread");
 
 export const useEventsBusForIDE = () => {
-  const [sendTelemetryEvent] =
-    telemetryApi.useLazySendTelemetryChatEventQuery();
   const postMessage = usePostMessage();
   // const canPaste = useAppSelector((state) => state.active_file.can_paste);
 
@@ -127,31 +111,12 @@ export const useEventsBusForIDE = () => {
     [postMessage],
   );
 
-  const setupHost = useCallback(
-    (host: HostSettings) => {
-      const setupHost: SetupHost = {
-        type: EVENT_NAMES_FROM_SETUP.SETUP_HOST,
-        payload: {
-          host,
-        },
-      };
-
-      postMessage(setupHost);
-    },
-    [postMessage],
-  );
-
   const diffPasteBack = useCallback(
     (content: string, chatId?: string, toolCallId?: string) => {
       const action = ideDiffPasteBackAction({ content, chatId, toolCallId });
       postMessage(action);
-      void sendTelemetryEvent({
-        scope: `replaceSelection`,
-        success: true,
-        error_message: "",
-      });
     },
-    [postMessage, sendTelemetryEvent],
+    [postMessage],
   );
 
   const openSettings = useCallback(() => {
@@ -272,21 +237,9 @@ export const useEventsBusForIDE = () => {
       if (res) {
         const action = ideOpenFile({ file_path: res });
         postMessage(action);
-        const res_split = res.split("/");
-        void sendTelemetryEvent({
-          scope: `ideOpenFile/${res_split[res_split.length - 1]}`,
-          success: true,
-          error_message: "",
-        });
-      } else {
-        void sendTelemetryEvent({
-          scope: `ideOpenFile`,
-          success: false,
-          error_message: res?.toString() ?? "path is not found",
-        });
       }
     },
-    [postMessage, sendTelemetryEvent],
+    [postMessage],
   );
 
   const openCustomizationFile = () =>
@@ -302,19 +255,6 @@ export const useEventsBusForIDE = () => {
     },
     [postMessage],
   );
-
-  const setActiveTeamsGroupInIDE = useCallback(
-    (group: TeamsGroup) => {
-      const action = ideSetActiveTeamsGroup(group);
-      postMessage(action);
-    },
-    [postMessage],
-  );
-
-  const clearActiveTeamsGroupInIDE = useCallback(() => {
-    const action = ideClearActiveTeamsGroup();
-    postMessage(action);
-  }, [postMessage]);
 
   const notifyTaskDone = useCallback(
     (
@@ -358,7 +298,6 @@ export const useEventsBusForIDE = () => {
     openHotKeys,
     openFile,
     openChatInNewTab,
-    setupHost,
     queryPathThenOpenFile,
     openCustomizationFile,
     openPrivacyFile,
@@ -373,8 +312,6 @@ export const useEventsBusForIDE = () => {
     sendToolCallToIde,
     setCodeCompletionModel,
     setLoginMessage,
-    setActiveTeamsGroupInIDE,
-    clearActiveTeamsGroupInIDE,
     notifyTaskDone,
     notifyAskQuestions,
   };

@@ -1,25 +1,22 @@
 ---
-title: Refact for VS Code
-description: A page which explains how to install and use Refact for VS Code
+title: VS Code
+description: Install and configure Refact for VS Code.
 ---
 
-After installing the plugin from the [marketplace](https://marketplace.visualstudio.com/items?itemName=smallcloud.codify), press the Refact logo to open the UI of the plugin.
+## Install
 
-Pick one of the available versions and click the **Next** button.
+Install the Refact extension from the VS Code Marketplace or from a local extension build.
 
-![Refact Login page](../../../assets/login_start.png)
+## First Run
 
-The quickest way to get started is with **Cloud** option. When pressing the **Next** button, you will see an interface similar to the one below:
+Open the Refact sidebar. The first-run screen opens **Provider Setup**.
 
-![Refact Cloud Login](../../../assets/refact_cloud_login.png)
+1. Add a BYOK provider such as OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, or a custom OpenAI-compatible endpoint.
+2. Or add a local provider such as Ollama, LM Studio, or vLLM.
+3. Pick default models in **Default Models**.
 
-When pressing the **Login** or **Create Account** button, you will be redirected to the Refact's login page in your browser.
+No hosted account, managed inference URL, legacy Refact server, or Refact-issued API key is required.
 
-After completing the login process, the interface of the sidebar will change to the following:
+## Local Engine
 
-![Refact Sidebar](../../../assets/refact_loggedin.png)
-
-For the Self-hosted and Enterprise options, follow one of the following guides:
-
-- [Self-hosted Login](https://docs.refact.ai/guides/version-specific/self-hosted/#custom-inference-setup)
-- [Enterprise Login](https://docs.refact.ai/guides/version-specific/enterprise/getting-started/#setting-up-the-plugins)
+The extension starts the local `refact-lsp` engine automatically and communicates with it over localhost.

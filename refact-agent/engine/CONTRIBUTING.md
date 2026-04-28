@@ -120,6 +120,5 @@ run tests for things you might have broken.
 
 #### Contact
 
-If you have any questions or concerns, please contact the project maintainers on Discord:
-https://www.smallcloud.ai/discord
+If you have any questions or concerns, please contact the project maintainers through GitHub issues or discussions.
 

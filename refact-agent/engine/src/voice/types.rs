@@ -72,6 +72,7 @@ pub struct VoiceStatusResponse {
     pub download_progress: u8,
 }
 
+#[cfg(feature = "voice")]
 #[derive(Debug, Serialize)]
 pub struct DownloadModelResponse {
     pub success: bool,

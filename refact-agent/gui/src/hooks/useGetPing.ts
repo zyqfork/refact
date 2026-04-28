@@ -12,6 +12,7 @@ const POLL_INTERVAL_ERROR = 2000;
 export const useGetPing = () => {
   const dispatch = useAppDispatch();
   const currentLspPort = useAppSelector(selectConfig).lspPort;
+  const canPing = Number.isFinite(currentLspPort) && currentLspPort > 0;
 
   const [pollingInterval, setPollingInterval] = useState(POLL_INTERVAL_ERROR);
   const [queryStarted, setQueryStarted] = useState(false);
@@ -19,7 +20,20 @@ export const useGetPing = () => {
   const result = pingApi.endpoints.ping.useQuery(currentLspPort, {
     pollingInterval,
     refetchOnMountOrArgChange: true,
+    skip: !canPing,
   });
+
+  useEffect(() => {
+    if (canPing) return;
+    setPollingInterval(POLL_INTERVAL_ERROR);
+    setQueryStarted(false);
+    dispatch(
+      setBackendStatus({
+        status: "unknown",
+        error: "Backend port is not available",
+      }),
+    );
+  }, [canPing, dispatch]);
 
   useEffect(() => {
     if (result.requestId && !queryStarted) {
@@ -49,6 +63,7 @@ export const useGetPing = () => {
     result.isUninitialized,
     result.error,
     queryStarted,
+    canPing,
     dispatch,
   ]);
 

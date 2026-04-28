@@ -12,7 +12,6 @@ const App: React.FC = () => {
       apiKey: "test-key",
       host: "web",
       lspPort: 8001,
-      addressURL: "Refact",
       themeProps: { appearance: "dark" },
     },
   });

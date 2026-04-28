@@ -349,7 +349,7 @@ export function triggerSignalAnimation(
   } else if (signalType === "task_failed") {
     anim.eyeStyle = "teary";
     anim.eyeStyleTimer = 200;
-  } else if (signalType === "connection_lost" || signalType === "balance_low") {
+  } else if (signalType === "connection_lost") {
     anim.eyeStyle = "angry";
     anim.eyeStyleTimer = 180;
   } else if (signalType === "tool_failed" || signalType === "chat_error") {
@@ -489,8 +489,6 @@ export function triggerSignalAnimation(
     setStatus(anim, "Back online! 📡", 140);
   else if (signalType === "connection_lost")
     setStatus(anim, "Connection lost…", 220);
-  else if (signalType === "balance_low")
-    setStatus(anim, "Credits getting low!", 220);
   else if (signalType === "chat_error")
     setStatus(anim, "Something went wrong…", 200);
   else if (signalType === "tool_failed")
@@ -518,7 +516,7 @@ export function triggerSignalAnimation(
   if (signalType === "memory_extract" || signalType === "knowledge_update") {
     spawnOrbitingOrb(anim, "✨", 3);
   }
-  if (signalType === "connection_lost" || signalType === "balance_low") {
+  if (signalType === "connection_lost") {
     anim.shakeIntensity = Math.max(anim.shakeIntensity, 5);
   }
 }

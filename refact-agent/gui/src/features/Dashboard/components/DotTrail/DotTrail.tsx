@@ -80,15 +80,6 @@ function DotHoverContent({
         </Flex>
       )}
 
-      {(node.total_coins ?? 0) > 0 && (
-        <Flex gap="1" align="center">
-          <Text size="1" color="gray">
-            Cost:
-          </Text>
-          <Text size="1">{(node.total_coins ?? 0).toFixed(1)} coins</Text>
-        </Flex>
-      )}
-
       {((node.total_lines_added ?? 0) > 0 ||
         (node.total_lines_removed ?? 0) > 0) && (
         <Flex gap="1" align="center">

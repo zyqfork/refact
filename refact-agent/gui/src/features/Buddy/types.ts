@@ -137,7 +137,6 @@ export type SignalType =
   | "task_failed"
   | "checkpoint_saved"
   | "skill_learned"
-  | "balance_low"
   | "connection_lost"
   | "connection_restored"
   | "git_changes"

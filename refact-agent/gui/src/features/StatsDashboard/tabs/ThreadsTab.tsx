@@ -175,10 +175,7 @@ export const ThreadsTab: React.FC<Props> = ({ dateRange }) => {
                     {formatTokenCount(c.total_completion_tokens ?? 0)}
                   </td>
                   <td className={styles.td}>
-                    {formatCostDisplay(
-                      c.total_cost_usd ?? null,
-                      c.total_coins ?? null,
-                    )}
+                    {formatCostDisplay(c.total_cost_usd ?? null)}
                   </td>
                 </tr>
               ))}

@@ -384,7 +384,7 @@ export const OverviewTab: React.FC<Props> = ({ dateRange }) => {
             />
             <StatCard
               title="Total Cost"
-              value={formatCostDisplay(t.total_cost_usd, t.total_cost_coins)}
+              value={formatCostDisplay(t.total_cost_usd)}
               subtitle="across all providers"
             />
             <StatCard
@@ -442,10 +442,7 @@ export const OverviewTab: React.FC<Props> = ({ dateRange }) => {
                           {formatTokenCount(c.total_tokens)}
                         </td>
                         <td className={styles.td}>
-                          {formatCostDisplay(
-                            c.total_cost_usd,
-                            c.total_cost_coins,
-                          )}
+                          {formatCostDisplay(c.total_cost_usd)}
                         </td>
                       </tr>
                     ))}

@@ -1585,6 +1585,9 @@ pub async fn install_marketplace_item(
             } else {
                 copy_dir_recursive(&abs_path, &temp, &mut size).await?;
             }
+            if size > MARKETPLACE_SIZE_LIMIT {
+                return Err("Marketplace item exceeds 50MB size limit".to_string());
+            }
             // Apply substitutions to the staged dir, not the live target.
             substitute_params_in_dir(&temp, &req.params).await?;
             // Everything staged: now atomically swap.

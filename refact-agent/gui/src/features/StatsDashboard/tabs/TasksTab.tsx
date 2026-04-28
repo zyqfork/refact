@@ -45,7 +45,7 @@ export const TasksTab: React.FC<Props> = ({ dateRange }) => {
                   {formatTokenCount(m.total_tokens)}
                 </td>
                 <td className={styles.td}>
-                  {formatCostDisplay(m.total_cost_usd, m.total_cost_coins)}
+                  {formatCostDisplay(m.total_cost_usd)}
                 </td>
               </tr>
             ))}

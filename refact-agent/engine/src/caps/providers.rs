@@ -15,7 +15,7 @@ use crate::llm::adapter::WireFormat;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CapsProvider {
-    #[serde(alias = "cloud_name", default, deserialize_with = "normalize_string")]
+    #[serde(default, deserialize_with = "normalize_string")]
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -28,12 +28,11 @@ pub struct CapsProvider {
     #[serde(default = "default_endpoint_style")]
     pub endpoint_style: String,
 
-    // These aliases are for backward compatibility with cloud and self-hosted caps
-    #[serde(default, alias = "endpoint_template")]
+    #[serde(default)]
     pub completion_endpoint: String,
-    #[serde(default, alias = "endpoint_chat_passthrough")]
+    #[serde(default)]
     pub chat_endpoint: String,
-    #[serde(default, alias = "endpoint_embeddings_template")]
+    #[serde(default)]
     pub embedding_endpoint: String,
 
     #[serde(default)]
@@ -49,17 +48,14 @@ pub struct CapsProvider {
     pub code_completion_n_ctx: usize,
 
     #[serde(default)]
-    pub support_metadata: bool,
-
-    #[serde(default)]
     pub completion_models: IndexMap<String, CompletionModelRecord>,
     #[serde(default)]
     pub chat_models: IndexMap<String, ChatModelRecord>,
-    #[serde(default, alias = "default_embeddings_model")]
+    #[serde(default)]
     pub embedding_model: EmbeddingModelRecord,
 
     #[serde(default)]
-    pub models_dict_patch: IndexMap<String, serde_json::Value>, // Used to patch some params from cloud, like n_ctx for pro/free users
+    pub models_dict_patch: IndexMap<String, serde_json::Value>,
 
     // Default model selections — inlined directly instead of using #[serde(flatten)]
     // on DefaultModels, because serde's flatten uses content buffering which breaks
@@ -311,10 +307,6 @@ const PROVIDER_TEMPLATES: &[(&str, &str)] = &[
         include_str!("../yaml_configs/default_providers/openrouter.yaml"),
     ),
     (
-        "refact",
-        include_str!("../yaml_configs/default_providers/refact.yaml"),
-    ),
-    (
         "vllm",
         include_str!("../yaml_configs/default_providers/vllm.yaml"),
     ),
@@ -552,7 +544,6 @@ pub fn add_models_to_caps(caps: &mut CodeAssistantCaps, providers: Vec<CapsProvi
         base_model_rec.api_key = provider.api_key.clone();
         base_model_rec.tokenizer_api_key = provider.tokenizer_api_key.clone();
         base_model_rec.endpoint = endpoint.replace("$MODEL", model_name);
-        base_model_rec.support_metadata = provider.support_metadata;
         base_model_rec.endpoint_style = provider.endpoint_style.clone();
         base_model_rec.wire_format = provider.wire_format;
         base_model_rec.extra_headers = provider.extra_headers.clone();
@@ -705,9 +696,9 @@ pub fn get_embedding_presets() -> &'static EmbeddingPresets {
 }
 
 /// Augment an existing completion model with scratchpad data from a matching preset.
-/// Models created by `convert_self_hosted_caps_if_needed` have correct endpoint/tokenizer
-/// but lack FIM token configuration (scratchpad_patch). This fills in the missing data
-/// from completion_presets.json without overwriting cloud-provided fields.
+/// Models imported from user/provider config can have correct endpoint/tokenizer
+/// but lack FIM token configuration. This fills in the missing data from
+/// completion_presets.json without overwriting configured fields.
 fn augment_completion_model_from_preset(
     model: &mut CompletionModelRecord,
     model_name: &str,
@@ -755,8 +746,8 @@ fn populate_model_records(provider: &mut CapsProvider, experimental: bool) {
                         .insert(model_name.clone(), model_rec);
                 }
             } else {
-                // Model already exists (e.g. from convert_self_hosted_caps_if_needed)
-                // but may lack scratchpad data (FIM tokens). Augment from preset.
+                // Model already exists but may lack scratchpad data (FIM tokens).
+                // Augment from preset without overwriting configured fields.
                 augment_completion_model_from_preset(
                     provider.completion_models.get_mut(model_name).unwrap(),
                     model_name,
@@ -779,7 +770,6 @@ fn populate_model_records(provider: &mut CapsProvider, experimental: bool) {
     }
 
     // Augment all completion models that lack FIM tokens with preset scratchpad data.
-    // This covers models from convert_self_hosted_caps_if_needed that aren't in running_models.
     if provider.supports_completion {
         let model_names: Vec<String> = provider.completion_models.keys().cloned().collect();
         for model_name in &model_names {
@@ -1011,187 +1001,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cloud_caps_json_deserialization() {
-        // Simulate the cloud caps JSON structure from inference.smallcloud.ai
-        let cloud_json = serde_json::json!({
-            "cloud_name": "Refact",
-            "endpoint_template": "/v1/completions",
-            "endpoint_style": "openai",
-            "endpoint_chat_passthrough": "/v1/chat/completions",
-            "code_completion_default_model": "Refact/1.6B",
-            "code_completion_n_ctx": 2048,
-            "code_chat_default_model": "gpt-3.5-turbo",
-            "chat_light_model": "grok-4-1-fast-non-reasoning",
-            "chat_thinking_model": "gpt-5.2",
-            "default_embeddings_model": "thenlper/gte-base",
-            "endpoint_embeddings_template": "/v1/embeddings",
-            "running_models": [
-                "smallcloudai/Refact-1_6B-fim",
-                "Refact/1.6B",
-                "qwen2.5/coder/1.5b/base",
-                "thenlper/gte-base"
-            ],
-            "support_metadata": true
-        });
-
-        let provider: CapsProvider = serde_json::from_value(cloud_json).unwrap();
-
-        // Verify running_models parsed correctly (NOT eaten by serde flatten)
-        assert_eq!(
-            provider.running_models.len(),
-            4,
-            "running_models should have 4 items"
-        );
-        assert_eq!(provider.running_models[0], "smallcloudai/Refact-1_6B-fim");
-
-        // Verify default model fields parsed via aliases
-        assert_eq!(
-            provider.completion_default_model, "Refact/1.6B",
-            "code_completion_default_model alias should work"
-        );
-        assert_eq!(
-            provider.chat_default_model, "gpt-3.5-turbo",
-            "code_chat_default_model alias should work"
-        );
-        assert_eq!(provider.chat_light_model, "grok-4-1-fast-non-reasoning");
-        assert_eq!(provider.chat_thinking_model, "gpt-5.2");
-
-        // Verify embedding model parsed via alias
-        assert_eq!(
-            provider.embedding_model.base.name, "thenlper/gte-base",
-            "default_embeddings_model alias should work"
-        );
-
-        // Verify endpoint aliases
-        assert_eq!(
-            provider.completion_endpoint, "/v1/completions",
-            "endpoint_template alias should work"
-        );
-        assert_eq!(
-            provider.chat_endpoint, "/v1/chat/completions",
-            "endpoint_chat_passthrough alias should work"
-        );
-        assert_eq!(
-            provider.embedding_endpoint, "/v1/embeddings",
-            "endpoint_embeddings_template alias should work"
-        );
-
-        // Verify other fields
-        assert_eq!(provider.code_completion_n_ctx, 2048);
-        assert!(provider.support_metadata);
-    }
-
-    #[test]
-    fn test_qwen_completion_model_scratchpad_patch_preserved() {
-        // Simulate the Refact cloud caps flow: cloud JSON → CapsProvider → post_process → add_models_to_caps
-        // This tests that the qwen2.5-coder-base preset's scratchpad_patch with <|fim_prefix|> tokens
-        // is correctly applied and preserved through the entire flow.
-        let cloud_json = serde_json::json!({
-            "cloud_name": "Refact",
-            "endpoint_template": "/v1/completions",
-            "endpoint_style": "openai",
-            "endpoint_chat_passthrough": "/v1/chat/completions",
-            "code_completion_default_model": "Refact/1.6B",
-            "code_completion_n_ctx": 2048,
-            "code_chat_default_model": "gpt-3.5-turbo",
-            "default_embeddings_model": "thenlper/gte-base",
-            "endpoint_embeddings_template": "/v1/embeddings",
-            "models_dict_patch": {
-                "qwen2.5/coder/1.5b/base": { "n_ctx": 4096 }
-            },
-            "running_models": [
-                "smallcloudai/Refact-1_6B-fim",
-                "Refact/1.6B",
-                "qwen2.5/coder/1.5b/base",
-                "thenlper/gte-base"
-            ],
-            "support_metadata": true
-        });
-
-        let mut provider: CapsProvider = serde_json::from_value(cloud_json).unwrap();
-        assert!(
-            provider.completion_models.is_empty(),
-            "cloud JSON should not have completion_models"
-        );
-
-        // Step 1: post_process_provider populates models from presets
-        post_process_provider(&mut provider, false, false);
-
-        // Step 2: Verify qwen2.5 completion model has correct scratchpad_patch from preset
-        let qwen_model = provider
-            .completion_models
-            .get("qwen2.5/coder/1.5b/base")
-            .expect("qwen2.5/coder/1.5b/base should be in completion_models after populate");
-
-        assert_eq!(
-            qwen_model.scratchpad, "FIM-PSM",
-            "scratchpad should be FIM-PSM"
-        );
-        assert_eq!(
-            qwen_model
-                .scratchpad_patch
-                .get("fim_prefix")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_prefix|>"),
-            "scratchpad_patch should have <|fim_prefix|> from qwen2.5-coder-base preset, got: {:?}",
-            qwen_model.scratchpad_patch
-        );
-        assert_eq!(
-            qwen_model
-                .scratchpad_patch
-                .get("fim_suffix")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_suffix|>"),
-            "scratchpad_patch should have <|fim_suffix|>"
-        );
-        assert_eq!(
-            qwen_model
-                .scratchpad_patch
-                .get("fim_middle")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_middle|>"),
-            "scratchpad_patch should have <|fim_middle|>"
-        );
-        assert_eq!(
-            qwen_model.base.tokenizer, "hf://Qwen/Qwen2.5-Coder-0.5B",
-            "tokenizer should come from preset"
-        );
-        // n_ctx should be patched by models_dict_patch (code_completion_n_ctx applied later in add_models_to_caps)
-        assert_eq!(
-            qwen_model.base.n_ctx, 4096,
-            "n_ctx should be min(preset 8192, models_dict_patch 4096) = 4096 at this stage"
-        );
-
-        // Step 3: Verify Refact/1.6B model
-        let refact_model = provider
-            .completion_models
-            .get("Refact/1.6B")
-            .expect("Refact/1.6B should be in completion_models");
-        assert_eq!(
-            refact_model.scratchpad, "FIM-SPM",
-            "Refact model should use FIM-SPM"
-        );
-
-        // Step 4: add_models_to_caps and verify final state
-        let mut caps = CodeAssistantCaps::default();
-        add_models_to_caps(&mut caps, vec![provider]);
-
-        let final_qwen = caps
-            .completion_models
-            .get("refact/qwen2.5/coder/1.5b/base")
-            .expect("refact/qwen2.5/coder/1.5b/base should be in caps");
-        assert_eq!(
-            final_qwen
-                .scratchpad_patch
-                .get("fim_prefix")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_prefix|>"),
-            "scratchpad_patch should survive add_models_to_caps, got: {:?}",
-            final_qwen.scratchpad_patch
-        );
-    }
-
-    #[test]
     fn test_completion_model_scratchpad_patch_survives_serde_flatten() {
         // CompletionModelRecord uses #[serde(flatten)] on base: BaseModelRecord.
         // Verify that scratchpad_patch (a serde_json::Value) is correctly deserialized
@@ -1243,124 +1052,6 @@ mod tests {
             patch.get("context_format").and_then(|v| v.as_str()),
             Some("qwen2.5")
         );
-    }
-
-    #[test]
-    fn test_nested_caps_embedding_conversion() {
-        // The authenticated cloud response uses a nested format with
-        // "embedding": {"endpoint": "...", "models": {...}, "default_model": "..."}
-        // convert_self_hosted_caps_if_needed must extract these into flat fields
-        let nested_json = serde_json::json!({
-            "cloud_name": "Refact",
-            "chat": {
-                "endpoint": "/v1/chat/completions",
-                "models": {
-                    "gpt-4.1": {"n_ctx": 128000}
-                },
-                "default_model": "gpt-4.1",
-                "default_light_model": "gpt-4.1-mini",
-                "default_thinking_model": "o3-mini"
-            },
-            "completion": {
-                "endpoint": "/v1/completions",
-                "models": {
-                    "Refact/1.6B": {"n_ctx": 4096}
-                }
-            },
-            "embedding": {
-                "endpoint": "v1/embeddings",
-                "models": {
-                    "thenlper/gte-base": {"n_ctx": 512, "size": 768}
-                },
-                "default_model": "thenlper/gte-base"
-            },
-            "telemetry_endpoints": {
-                "telemetry_basic_endpoint": "https://example.com/telemetry-basic"
-            },
-            "tokenizer_endpoints": {},
-            "support_metadata": true,
-            "metadata": {"pricing": {}, "features": []}
-        });
-
-        let caps_url = "https://inference.smallcloud.ai/v1/model-catalog";
-        let converted = crate::caps::caps::convert_self_hosted_caps_if_needed(
-            nested_json,
-            caps_url,
-            "test-key",
-        )
-        .unwrap();
-
-        let obj = converted.as_object().unwrap();
-
-        assert_eq!(
-            obj.get("embedding_endpoint").and_then(|v| v.as_str()),
-            Some("https://inference.smallcloud.ai/v1/embeddings"),
-            "embedding.endpoint must be resolved and extracted as embedding_endpoint"
-        );
-
-        // Embedding model must be extracted as a full object with n_ctx and embedding_size
-        let emb_model = obj
-            .get("default_embeddings_model")
-            .expect("default_embeddings_model must exist");
-        assert_eq!(
-            emb_model.get("name").and_then(|v| v.as_str()),
-            Some("thenlper/gte-base")
-        );
-        assert_eq!(emb_model.get("n_ctx").and_then(|v| v.as_u64()), Some(512));
-        assert_eq!(
-            emb_model.get("embedding_size").and_then(|v| v.as_u64()),
-            Some(768)
-        );
-
-        // Chat fields must also be extracted (existing behavior)
-        assert_eq!(
-            obj.get("chat_default_model").and_then(|v| v.as_str()),
-            Some("gpt-4.1")
-        );
-        assert_eq!(
-            obj.get("chat_light_model").and_then(|v| v.as_str()),
-            Some("gpt-4.1-mini")
-        );
-
-        // CapsProvider deserialization must work with the converted JSON
-        let provider: CapsProvider = serde_json::from_value(converted).unwrap();
-        assert_eq!(provider.embedding_model.base.name, "thenlper/gte-base");
-        assert_eq!(provider.embedding_model.base.n_ctx, 512);
-        assert_eq!(provider.embedding_model.embedding_size, 768);
-        assert_eq!(
-            provider.embedding_endpoint,
-            "https://inference.smallcloud.ai/v1/embeddings"
-        );
-        assert_eq!(provider.chat_default_model, "gpt-4.1");
-    }
-
-    #[test]
-    fn test_nested_caps_embedding_fallback_no_default_model() {
-        // When embedding.default_model is missing, fall back to first model in models
-        let nested_json = serde_json::json!({
-            "cloud_name": "Test",
-            "embedding": {
-                "endpoint": "v1/embeddings",
-                "models": {
-                    "some-new-model": {"n_ctx": 1024, "size": 512}
-                }
-            },
-            "support_metadata": false,
-            "metadata": {}
-        });
-
-        let caps_url = "https://example.com/caps.json";
-        let converted =
-            crate::caps::caps::convert_self_hosted_caps_if_needed(nested_json, caps_url, "")
-                .unwrap();
-
-        let provider: CapsProvider = serde_json::from_value(converted).unwrap();
-        assert_eq!(
-            provider.embedding_model.base.name, "some-new-model",
-            "should fall back to first model when default_model is missing"
-        );
-        assert_eq!(provider.embedding_model.base.n_ctx, 1024);
-        assert_eq!(provider.embedding_model.embedding_size, 512);
     }
 
     #[test]
@@ -1426,142 +1117,31 @@ mod tests {
 
         let mut defaults = DefaultModels::default();
         let other = DefaultModels {
-            completion_default_model: "Refact/1.6B".to_string(),
+            completion_default_model: "Qwen/Qwen2.5-Coder-1.5B".to_string(),
             chat_default_model: "gpt-4.1".to_string(),
-            chat_thinking_model: "refact/o3-mini".to_string(),
+            chat_thinking_model: "custom/o3-mini".to_string(),
             chat_light_model: "".to_string(),
             ..Default::default()
         };
 
-        defaults.apply_override(&other, Some("refact"));
+        defaults.apply_override(&other, Some("custom"));
 
-        // "Refact/1.6B" doesn't start with "refact/" (case mismatch), so gets prefixed
+        // Cross-provider model names must get the configured provider prefix.
         assert_eq!(
-            defaults.completion_default_model, "refact/Refact/1.6B",
+            defaults.completion_default_model, "custom/Qwen/Qwen2.5-Coder-1.5B",
             "model names with / but wrong provider prefix should get prefixed"
         );
         assert_eq!(
-            defaults.chat_default_model, "refact/gpt-4.1",
+            defaults.chat_default_model, "custom/gpt-4.1",
             "unqualified model should get provider prefix"
         );
         assert_eq!(
-            defaults.chat_thinking_model, "refact/o3-mini",
+            defaults.chat_thinking_model, "custom/o3-mini",
             "model already prefixed with same provider should stay unchanged"
         );
         assert_eq!(
             defaults.chat_light_model, "",
             "empty model should stay empty"
-        );
-    }
-
-    #[test]
-    fn test_augment_completion_model_from_nested_caps() {
-        // Simulates the flow when cloud sends nested caps format:
-        // convert_self_hosted_caps_if_needed creates completion_models entries with
-        // endpoint/tokenizer but NO scratchpad_patch (gets default).
-        // populate_model_records should augment with preset FIM tokens.
-        let nested_json = serde_json::json!({
-            "cloud_name": "Refact",
-            "chat": {
-                "endpoint": "/v1/chat/completions",
-                "models": {"gpt-4.1": {"n_ctx": 128000}},
-                "default_model": "gpt-4.1"
-            },
-            "completion": {
-                "endpoint": "/v1/completions",
-                "models": {
-                    "qwen2.5/coder/1.5b/base": {"n_ctx": 4096}
-                }
-            },
-            "tokenizer_endpoints": {
-                "qwen2.5/coder/1.5b/base": "hf://Qwen/Qwen2.5-Coder-1.5B"
-            },
-            "support_metadata": true,
-            "metadata": {"pricing": {}, "features": []}
-        });
-
-        let caps_url = "https://inference.smallcloud.ai/v1/model-catalog";
-        let converted = crate::caps::caps::convert_self_hosted_caps_if_needed(
-            nested_json,
-            caps_url,
-            "test-key",
-        )
-        .unwrap();
-
-        let mut provider: CapsProvider = serde_json::from_value(converted).unwrap();
-
-        // Before post_process: model exists with tokenizer from tokenizer_endpoints
-        // but scratchpad_patch is default (no FIM tokens)
-        assert!(
-            provider
-                .completion_models
-                .contains_key("qwen2.5/coder/1.5b/base"),
-            "completion model should exist from conversion"
-        );
-        let model_before = provider
-            .completion_models
-            .get("qwen2.5/coder/1.5b/base")
-            .unwrap();
-        assert!(
-            model_before.scratchpad_patch.get("fim_prefix").is_none(),
-            "scratchpad_patch should lack fim_prefix before augmentation"
-        );
-        assert_eq!(
-            model_before.base.tokenizer, "hf://Qwen/Qwen2.5-Coder-1.5B",
-            "tokenizer should come from tokenizer_endpoints"
-        );
-
-        // post_process_provider should augment the model with preset scratchpad data
-        post_process_provider(&mut provider, false, false);
-
-        let model_after = provider
-            .completion_models
-            .get("qwen2.5/coder/1.5b/base")
-            .expect("model should still exist after post_process");
-
-        // FIM tokens from qwen2.5-coder-base preset must be applied
-        assert_eq!(
-            model_after
-                .scratchpad_patch
-                .get("fim_prefix")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_prefix|>"),
-            "scratchpad_patch should have <|fim_prefix|> from preset after augmentation"
-        );
-        assert_eq!(
-            model_after
-                .scratchpad_patch
-                .get("fim_suffix")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_suffix|>"),
-        );
-        assert_eq!(
-            model_after
-                .scratchpad_patch
-                .get("fim_middle")
-                .and_then(|v| v.as_str()),
-            Some("<|fim_middle|>"),
-        );
-        assert_eq!(
-            model_after
-                .scratchpad_patch
-                .get("context_format")
-                .and_then(|v| v.as_str()),
-            Some("qwen2.5"),
-            "context_format should come from preset (not default 'chat')"
-        );
-
-        // Cloud-provided tokenizer should be preserved (NOT overwritten by preset)
-        assert_eq!(
-            model_after.base.tokenizer, "hf://Qwen/Qwen2.5-Coder-1.5B",
-            "cloud-provided tokenizer should be preserved, not overwritten by preset 0.5B"
-        );
-
-        // n_ctx should use the smaller of cloud value and preset value
-        // Cloud provides 4096, preset has 8192, but models_dict_patch not involved here
-        assert_eq!(
-            model_after.base.n_ctx, 4096,
-            "cloud-provided n_ctx should be preserved when non-zero"
         );
     }
 

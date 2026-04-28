@@ -9,11 +9,6 @@ export function useGetConfiguredProvidersView({
   const sortedConfiguredProviders = useMemo(() => {
     return [...configuredProviders].sort((a, b) => {
       const getPriority = (provider: { name: string }) => {
-        if (
-          provider.name === "refact" ||
-          provider.name === "refact_self_hosted"
-        )
-          return 0;
         if (provider.name === "custom") return 2;
         return 1;
       };
