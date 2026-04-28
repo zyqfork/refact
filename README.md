@@ -23,13 +23,6 @@ Refact.ai is the open-source AI Agent that handles engineering tasks end-to-end.
 
 ## 🚀 Seamless Integration with Your Workflow
 
-Refact Agent works effortlessly with the tools and databases you already use:
-
-
-- **📁 Version Control:** GitHub, GitLab
-- **🗄️ Databases:** PostgreSQL, MySQL
-- **🛠️ Debugging:** Pdb
-- **🐳 Containerization:** Docker
 
 ### ⚡ Why Choose Refact Agent?
 
