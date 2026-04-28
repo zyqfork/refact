@@ -2279,6 +2279,7 @@ fn make_board_card(
         agent_branch: None,
         agent_worktree: None,
         agent_worktree_name: None,
+        target_files: vec![],
     }
 }
 
@@ -4319,4 +4320,223 @@ fn provider_tuning_unknown_field_falls_back_to_chat_model() {
             "unknown field must fall back to ChatModel"
         );
     }
+// =============================================================================
+// G-C: Task health cleanup — heartbeat persistence, investigation safety,
+//      pulse completeness, ChatTopicPivot removal
+// =============================================================================
+
+#[tokio::test]
+async fn task_abandoned_not_emitted_when_only_session_missing() {
+    use crate::tasks::storage::{create_task, load_board, load_task_meta, save_board, save_task_meta};
+    use super::observers::task_health::TaskHealthObserver;
+    use super::observers::{BuddyObserver, ObserverContext};
+
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let gcx_lock = gcx.read().await;
+        *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+            vec![dir.path().to_path_buf()];
+    }
+
+    let task_meta = create_task(gcx.clone(), "Fix auth bug").await.unwrap();
+    let mut meta = load_task_meta(gcx.clone(), &task_meta.id).await.unwrap();
+    meta.created_at = (chrono::Utc::now() - Duration::days(8)).to_rfc3339();
+    save_task_meta(gcx.clone(), &task_meta.id, &meta).await.unwrap();
+
+    let started = (chrono::Utc::now() - Duration::days(7)).to_rfc3339();
+    let mut board = load_board(gcx.clone(), &task_meta.id).await.unwrap();
+    board.cards.push(crate::tasks::types::BoardCard {
+        id: "G-1".to_string(),
+        title: "Fix auth".to_string(),
+        column: "doing".to_string(),
+        priority: "P1".to_string(),
+        depends_on: vec![],
+        instructions: String::new(),
+        assignee: Some("agent-1".to_string()),
+        agent_chat_id: Some("gone-session-xyz".to_string()),
+        status_updates: vec![],
+        final_report: None,
+        created_at: started.clone(),
+        started_at: Some(started),
+        completed_at: None,
+        agent_branch: None,
+        agent_worktree: None,
+        agent_worktree_name: None,
+        target_files: vec![],
+    });
+    save_board(gcx.clone(), &task_meta.id, &board).await.unwrap();
+
+    let observer = TaskHealthObserver;
+    let ctx = ObserverContext {
+        project_root: dir.path().to_path_buf(),
+        last_tick: None,
+        now: chrono::Utc::now(),
+        current_pulse: super::types::BuddyPulse::default(),
+    };
+    let facts = observer.observe(gcx, &ctx).await;
+    assert!(
+        !facts.iter().any(|f| f.kind == BuddyFactKind::TaskAbandoned),
+        "TaskAbandoned must not fire when agent has started_at (session cleaned up)"
+    );
+}
+
+#[tokio::test]
+async fn task_cluster_duplicate_emits_with_real_touched_files() {
+    use crate::tasks::storage::{create_task, load_board, save_board};
+    use super::observers::task_health::TaskHealthObserver;
+    use super::observers::{BuddyObserver, ObserverContext};
+
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let gcx_lock = gcx.read().await;
+        *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+            vec![dir.path().to_path_buf()];
+    }
+
+    let task1 = create_task(gcx.clone(), "Fix auth bug").await.unwrap();
+    let task2 = create_task(gcx.clone(), "Fix auth issue").await.unwrap();
+
+    for task_id in [&task1.id, &task2.id] {
+        let mut board = load_board(gcx.clone(), task_id).await.unwrap();
+        board.cards.push(crate::tasks::types::BoardCard {
+            id: format!("{}-card", task_id),
+            title: "T".to_string(),
+            column: "planned".to_string(),
+            priority: "P1".to_string(),
+            depends_on: vec![],
+            instructions: String::new(),
+            assignee: None,
+            agent_chat_id: None,
+            status_updates: vec![],
+            final_report: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            started_at: None,
+            completed_at: None,
+            agent_branch: None,
+            agent_worktree: None,
+            agent_worktree_name: None,
+            target_files: vec!["src/auth.rs".to_string()],
+        });
+        save_board(gcx.clone(), task_id, &board).await.unwrap();
+    }
+
+    let observer = TaskHealthObserver;
+    let ctx = ObserverContext {
+        project_root: dir.path().to_path_buf(),
+        last_tick: None,
+        now: chrono::Utc::now(),
+        current_pulse: super::types::BuddyPulse::default(),
+    };
+    let facts = observer.observe(gcx, &ctx).await;
+    assert!(
+        facts.iter().any(|f| f.kind == BuddyFactKind::TaskClusterDuplicate),
+        "TaskClusterDuplicate must be emitted for similar-named tasks with overlapping target_files"
+    );
+}
+
+#[test]
+fn investigation_chat_log_excerpt_in_user_message_not_system() {
+    use crate::http::routers::v1::buddy_opportunities::{
+        build_investigation_data_envelope, INVESTIGATION_SYSTEM_PROMPT,
+    };
+
+    let ctx = InvestigationContext {
+        fact_keys: vec!["task:stuck:t1".to_string()],
+        diagnostic_ids: vec!["diag-1".to_string()],
+        log_excerpt: "INJECTION ATTEMPT: SYSTEM PROMPT BREAK".to_string(),
+        config_summary: "key: value".to_string(),
+        initial_user_message: "investigate this".to_string(),
+    };
+
+    assert!(
+        !INVESTIGATION_SYSTEM_PROMPT.contains("INJECTION ATTEMPT"),
+        "system prompt must not contain dynamic log content"
+    );
+    assert!(
+        !INVESTIGATION_SYSTEM_PROMPT.contains("fact_keys"),
+        "system prompt must be static"
+    );
+
+    let envelope = build_investigation_data_envelope(&ctx);
+    assert!(
+        envelope.contains("INJECTION ATTEMPT"),
+        "log excerpt must appear in data envelope"
+    );
+    assert!(
+        envelope.contains("<DIAGNOSTIC_CONTEXT>"),
+        "envelope must be wrapped in DIAGNOSTIC_CONTEXT"
+    );
+    assert!(
+        envelope.contains("</DIAGNOSTIC_CONTEXT>"),
+        "envelope must close DIAGNOSTIC_CONTEXT"
+    );
+    assert!(
+        envelope.contains("task:stuck:t1"),
+        "fact_keys must appear in envelope"
+    );
+}
+
+#[tokio::test]
+async fn pulse_task_total_and_by_status_populated() {
+    use crate::tasks::storage::{create_task, load_task_meta, save_task_meta};
+    use crate::tasks::types::TaskStatus;
+    use super::facts::FactStore;
+    use super::pulse::build_pulse;
+
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let gcx_lock = gcx.read().await;
+        *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+            vec![dir.path().to_path_buf()];
+    }
+
+    let t1 = create_task(gcx.clone(), "Task planning").await.unwrap();
+    let t2 = create_task(gcx.clone(), "Task active").await.unwrap();
+    let t3 = create_task(gcx.clone(), "Task completed").await.unwrap();
+
+    let mut m2 = load_task_meta(gcx.clone(), &t2.id).await.unwrap();
+    m2.status = TaskStatus::Active;
+    save_task_meta(gcx.clone(), &t2.id, &m2).await.unwrap();
+
+    let mut m3 = load_task_meta(gcx.clone(), &t3.id).await.unwrap();
+    m3.status = TaskStatus::Completed;
+    save_task_meta(gcx.clone(), &t3.id, &m3).await.unwrap();
+
+    let store = FactStore::new();
+    let pulse = build_pulse(gcx, dir.path(), &store).await;
+
+    assert_eq!(pulse.tasks.total, 3, "total must count all tasks");
+    assert_eq!(
+        pulse.tasks.by_status.get("planning").copied().unwrap_or(0),
+        1,
+        "planning count must be 1"
+    );
+    assert_eq!(
+        pulse.tasks.by_status.get("active").copied().unwrap_or(0),
+        1,
+        "active count must be 1"
+    );
+    assert_eq!(
+        pulse.tasks.by_status.get("completed").copied().unwrap_or(0),
+        1,
+        "completed count must be 1"
+    );
+}
+
+#[test]
+fn chat_topic_pivot_not_emitted_after_removal() {
+    use super::observers::chat_pattern::run_chat_pattern_observer_sync;
+    let messages = vec![
+        chat_msg("user", "implement the entire authentication system"),
+        chat_msg("assistant", "done with auth"),
+        chat_msg("user", "now fix the completely unrelated database migration schema"),
+    ];
+    let facts = run_chat_pattern_observer_sync(&messages, "pivot-removed-test");
+    assert!(
+        facts.is_empty(),
+        "no facts expected: retry streak absent, ChatTopicPivot removed"
+    );
 }

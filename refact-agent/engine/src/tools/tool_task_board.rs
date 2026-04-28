@@ -228,6 +228,7 @@ impl Tool for ToolTaskBoardCreateCard {
             agent_branch: None,
             agent_worktree: None,
             agent_worktree_name: None,
+            target_files: vec![],
         });
         board.rev += 1;
 

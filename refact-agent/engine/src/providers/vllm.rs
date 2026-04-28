@@ -85,11 +85,13 @@ impl VLLMProvider {
         let root = model
             .get("root")
             .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .map(String::from);
 
         Some(AvailableModel {
             id,
-            display_name: model.get("root").and_then(|v| v.as_str()).map(String::from),
+            display_name: root,
             n_ctx: max_model_len.unwrap_or(32_768),
             supports_tools,
             supports_parallel_tools: supports_tools,
@@ -106,7 +108,7 @@ impl VLLMProvider {
             selected_provider: None,
             max_output_tokens,
             provider_variants: Vec::new(),
-            base_model: root,
+            base_model: None,
         })
     }
 }

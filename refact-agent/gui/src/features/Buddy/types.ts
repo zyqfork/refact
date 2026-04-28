@@ -565,7 +565,6 @@ export type BuddyFactKind =
   | "task_cluster_duplicate"
   | "trajectory_clutter"
   | "chat_retry_streak"
-  | "chat_topic_pivot"
   | "memory_orphan"
   | "memory_stale_conflict"
   | "memory_recurring_lesson"

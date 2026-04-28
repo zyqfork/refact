@@ -389,7 +389,6 @@ pub enum BuddyFactKind {
     TaskClusterDuplicate,
     TrajectoryClutter,
     ChatRetryStreak,
-    ChatTopicPivot,
     MemoryOrphan,
     MemoryStaleConflict,
     MemoryRecurringLesson,

@@ -208,6 +208,7 @@ pub async fn handle_patch_board(
                 agent_branch: None,
                 agent_worktree: None,
                 agent_worktree_name: None,
+                target_files: vec![],
             });
         }
         BoardPatch::UpdateCard {

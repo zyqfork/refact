@@ -121,6 +121,8 @@ pub struct BoardCard {
     pub agent_worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_worktree_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_files: Vec<String>,
 }
 
 fn default_priority() -> String {

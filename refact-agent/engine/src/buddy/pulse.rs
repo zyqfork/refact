@@ -17,7 +17,7 @@ pub async fn build_pulse(
     let mut p = BuddyPulse::default();
     p.generated_at = Some(Utc::now());
 
-    p.tasks = build_tasks_pulse(fact_store);
+    p.tasks = build_tasks_pulse(gcx.clone(), fact_store).await;
     p.trajectories = build_trajectories_pulse(project_root).await;
     p.memory = build_memory_pulse(project_root, fact_store);
     p.providers = build_providers_pulse(gcx.clone()).await;
@@ -29,12 +29,25 @@ pub async fn build_pulse(
     p
 }
 
-fn build_tasks_pulse(fact_store: &FactStore) -> TaskPulse {
+async fn build_tasks_pulse(
+    gcx: Arc<RwLock<GlobalContext>>,
+    fact_store: &FactStore,
+) -> TaskPulse {
     let mut pulse = TaskPulse::default();
     let stuck = fact_store.recent(BuddyFactKind::TaskStuck, chrono::Duration::hours(1));
     pulse.stuck = stuck.len() as u32;
     let abandoned = fact_store.recent(BuddyFactKind::TaskAbandoned, chrono::Duration::hours(24));
     pulse.abandoned = abandoned.len() as u32;
+    if let Ok(tasks) = crate::tasks::storage::list_tasks(gcx).await {
+        pulse.total = tasks.len() as u32;
+        for task in &tasks {
+            let key = serde_json::to_value(&task.status)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            *pulse.by_status.entry(key).or_insert(0) += 1;
+        }
+    }
     pulse
 }
 

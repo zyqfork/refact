@@ -512,13 +512,17 @@ fn build_chat_model_record(
             resolve_model_caps(model_caps, &model.id)
         }
     }).or_else(|| {
-        model.display_name.as_ref().and_then(|dn| {
-            resolve_model_caps(model_caps, dn).or_else(|| {
-                dn.rsplit('/').next().and_then(|last| {
-                    resolve_model_caps(model_caps, last)
+        if provider_name == "vllm" {
+            model.display_name.as_ref().filter(|s| !s.trim().is_empty()).and_then(|dn| {
+                resolve_model_caps(model_caps, dn).or_else(|| {
+                    dn.rsplit('/').next().and_then(|last| {
+                        resolve_model_caps(model_caps, last)
+                    })
                 })
             })
-        })
+        } else {
+            None
+        }
     });
 
     let (
@@ -629,7 +633,7 @@ fn build_chat_model_record(
     ChatModelRecord {
         base: BaseModelRecord {
             n_ctx,
-            name: model.display_name.clone().unwrap_or_else(|| model.id.clone()),
+            name: model.id.clone(),
             id: model_id,
             endpoint,
             endpoint_style,
@@ -1464,11 +1468,10 @@ fn apply_registry_caps_to_chat_model(record: &mut ChatModelRecord, caps: &ModelC
 
     record.reasoning_effort_options = caps.reasoning_effort_options.clone();
     record.supports_thinking_budget = caps.supports_thinking_budget;
-    record.supports_adaptive_thinking_budget = caps.supports_adaptive_thinking_budget;
+    record.base.supports_cache_control = record.base.supports_cache_control && caps.supports_cache_control;
     record.supports_agent = record.supports_tools;
     record.supports_temperature = caps.supports_temperature;
     record.base.supports_web_search = caps.supports_web_search;
-    record.base.supports_cache_control = caps.supports_cache_control;
 }
 
 pub fn resolve_completion_model<'a>(

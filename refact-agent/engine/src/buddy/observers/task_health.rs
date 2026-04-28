@@ -184,26 +184,39 @@ impl BuddyObserver for TaskHealthObserver {
             let mut latest_heartbeat: Option<chrono::DateTime<Utc>> = None;
             for card in &board.cards {
                 if card.column == "doing" {
-                    if let Some(chat_id) = &card.agent_chat_id {
-                        if let Some(h) = crate::chat::task_agent_monitor::get_last_agent_heartbeat(
+                    let live = if let Some(chat_id) = &card.agent_chat_id {
+                        crate::chat::task_agent_monitor::get_last_agent_heartbeat(
                             gcx.clone(),
                             chat_id,
                         )
                         .await
-                        {
-                            latest_heartbeat = Some(match latest_heartbeat {
-                                Some(t) if t > h => t,
-                                _ => h,
-                            });
-                        }
+                    } else {
+                        None
+                    };
+                    let hb = live.or_else(|| {
+                        card.started_at
+                            .as_deref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|t| t.with_timezone(&Utc))
+                    });
+                    if let Some(h) = hb {
+                        latest_heartbeat = Some(match latest_heartbeat {
+                            Some(t) if t > h => t,
+                            _ => h,
+                        });
                     }
                 }
             }
+            let touched_files: Vec<String> = board
+                .cards
+                .iter()
+                .flat_map(|c| c.target_files.iter().cloned())
+                .collect();
             entries.push(TaskHealthEntry {
                 meta,
                 board,
                 last_heartbeat: latest_heartbeat,
-                touched_files: vec![],
+                touched_files,
             });
         }
         detect_task_health_facts(&entries, ctx.now)
