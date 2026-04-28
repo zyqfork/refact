@@ -16,13 +16,16 @@ import {
   CodeIcon,
   InfoCircledIcon,
 } from "@radix-ui/react-icons";
+import { skipToken } from "@reduxjs/toolkit/query";
 import {
   useGetSkillQuery,
   useSaveSkillMutation,
   type SkillDetail,
 } from "../../../services/refact/extensions";
+import { useGetDraftQuery } from "../../../services/refact/buddy";
 import { StringListEditor } from "../../Customization/components/StringListEditor";
 import { Spinner } from "../../../components/Spinner";
+import { BuddyDraftPreview } from "../../Buddy/BuddyDraftPreview";
 import styles from "./SkillEditor.module.css";
 
 type EditorView = "form" | "raw";
@@ -165,22 +168,48 @@ const SkillForm: React.FC<SkillFormProps> = ({ data, onChange, disabled }) => {
 type SkillEditorProps = {
   name: string;
   onBack: () => void;
+  draftId?: string;
 };
 
-export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
+export const SkillEditor: React.FC<SkillEditorProps> = ({
+  name,
+  onBack,
+  draftId,
+}) => {
   const { data, isLoading, error } = useGetSkillQuery({ name });
+  const {
+    data: draft,
+    isLoading: draftLoading,
+    error: draftError,
+  } = useGetDraftQuery(draftId ?? skipToken);
   const [saveSkill, { isLoading: isSaving }] = useSaveSkillMutation();
   const [view, setView] = useState<EditorView>("form");
   const [localData, setLocalData] = useState<SkillDetail | null>(null);
   const [rawContent, setRawContent] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [draftExpired, setDraftExpired] = useState(false);
+
+  useEffect(() => {
+    if (draftError) {
+      setDraftExpired(true);
+    }
+  }, [draftError]);
+
+  useEffect(() => {
+    if (draft && draft.kind === "skill") {
+      setRawContent(draft.yaml_or_json);
+      setView("raw");
+    }
+  }, [draft]);
 
   useEffect(() => {
     if (data) {
       setLocalData(data);
-      setRawContent(data.raw_content);
+      if (!draft || draft.kind !== "skill") {
+        setRawContent(data.raw_content);
+      }
     }
-  }, [data]);
+  }, [data, draft]);
 
   const handleFormChange = useCallback((patch: Partial<SkillDetail>) => {
     setLocalData((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -191,7 +220,10 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
     if (!localData) return;
     try {
       if (view === "raw") {
-        await saveSkill({ name, body: { raw_content: rawContent } }).unwrap();
+        await saveSkill({
+          name,
+          body: { raw_content: rawContent, draft_id: draftId },
+        }).unwrap();
       } else {
         await saveSkill({
           name,
@@ -205,15 +237,16 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
             context: localData.context,
             agent: localData.agent,
             body: localData.body,
+            draft_id: draftId,
           },
         }).unwrap();
       }
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
     }
-  }, [name, view, localData, rawContent, saveSkill]);
+  }, [name, view, localData, rawContent, saveSkill, draftId]);
 
-  if (isLoading) return <Spinner spinning />;
+  if (isLoading || draftLoading) return <Spinner spinning />;
   if (!localData) {
     return (
       <Callout.Root color="red">
@@ -223,6 +256,17 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
         <Callout.Text>
           {error !== undefined ? "Failed to load skill" : "Loading..."}
         </Callout.Text>
+      </Callout.Root>
+    );
+  }
+
+  if (draft && draft.kind !== "skill") {
+    return (
+      <Callout.Root color="red">
+        <Callout.Icon>
+          <InfoCircledIcon />
+        </Callout.Icon>
+        <Callout.Text>Draft kind mismatch: expected skill draft</Callout.Text>
       </Callout.Root>
     );
   }
@@ -239,6 +283,17 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ name, onBack }) => {
       >
         <ArrowLeftIcon /> Back to list
       </Button>
+
+      {draftExpired && (
+        <Callout.Root color="orange">
+          <Callout.Icon>
+            <InfoCircledIcon />
+          </Callout.Icon>
+          <Callout.Text>Draft expired</Callout.Text>
+        </Callout.Root>
+      )}
+
+      {draft && <BuddyDraftPreview draft={draft} />}
 
       {isReadOnly && (
         <Callout.Root color="blue">

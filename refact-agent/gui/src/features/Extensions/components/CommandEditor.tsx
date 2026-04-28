@@ -14,13 +14,16 @@ import {
   CodeIcon,
   InfoCircledIcon,
 } from "@radix-ui/react-icons";
+import { skipToken } from "@reduxjs/toolkit/query";
 import {
   useGetCommandQuery,
   useSaveCommandMutation,
   type CommandDetail,
 } from "../../../services/refact/extensions";
+import { useGetDraftQuery } from "../../../services/refact/buddy";
 import { StringListEditor } from "../../Customization/components/StringListEditor";
 import { Spinner } from "../../../components/Spinner";
+import { BuddyDraftPreview } from "../../Buddy/BuddyDraftPreview";
 import styles from "./CommandEditor.module.css";
 
 type EditorView = "form" | "raw";
@@ -114,25 +117,48 @@ const CommandForm: React.FC<CommandFormProps> = ({
 type CommandEditorProps = {
   name: string;
   onBack: () => void;
+  draftId?: string;
 };
 
 export const CommandEditor: React.FC<CommandEditorProps> = ({
   name,
   onBack,
+  draftId,
 }) => {
   const { data, isLoading, error } = useGetCommandQuery({ name });
+  const {
+    data: draft,
+    isLoading: draftLoading,
+    error: draftError,
+  } = useGetDraftQuery(draftId ?? skipToken);
   const [saveCommand, { isLoading: isSaving }] = useSaveCommandMutation();
   const [view, setView] = useState<EditorView>("form");
   const [localData, setLocalData] = useState<CommandDetail | null>(null);
   const [rawContent, setRawContent] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [draftExpired, setDraftExpired] = useState(false);
+
+  useEffect(() => {
+    if (draftError) {
+      setDraftExpired(true);
+    }
+  }, [draftError]);
+
+  useEffect(() => {
+    if (draft && draft.kind === "command") {
+      setRawContent(draft.yaml_or_json);
+      setView("raw");
+    }
+  }, [draft]);
 
   useEffect(() => {
     if (data) {
       setLocalData(data);
-      setRawContent(data.raw_content);
+      if (!draft || draft.kind !== "command") {
+        setRawContent(data.raw_content);
+      }
     }
-  }, [data]);
+  }, [data, draft]);
 
   const handleFormChange = useCallback((patch: Partial<CommandDetail>) => {
     setLocalData((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -143,7 +169,10 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({
     if (!localData) return;
     try {
       if (view === "raw") {
-        await saveCommand({ name, body: { raw_content: rawContent } }).unwrap();
+        await saveCommand({
+          name,
+          body: { raw_content: rawContent, draft_id: draftId },
+        }).unwrap();
       } else {
         await saveCommand({
           name,
@@ -153,15 +182,16 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({
             allowed_tools: localData.allowed_tools,
             model: localData.model,
             body: localData.body,
+            draft_id: draftId,
           },
         }).unwrap();
       }
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
     }
-  }, [name, view, localData, rawContent, saveCommand]);
+  }, [name, view, localData, rawContent, saveCommand, draftId]);
 
-  if (isLoading) return <Spinner spinning />;
+  if (isLoading || draftLoading) return <Spinner spinning />;
   if (!localData) {
     return (
       <Callout.Root color="red">
@@ -171,6 +201,17 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({
         <Callout.Text>
           {error !== undefined ? "Failed to load command" : "Loading..."}
         </Callout.Text>
+      </Callout.Root>
+    );
+  }
+
+  if (draft && draft.kind !== "command") {
+    return (
+      <Callout.Root color="red">
+        <Callout.Icon>
+          <InfoCircledIcon />
+        </Callout.Icon>
+        <Callout.Text>Draft kind mismatch: expected command draft</Callout.Text>
       </Callout.Root>
     );
   }
@@ -187,6 +228,17 @@ export const CommandEditor: React.FC<CommandEditorProps> = ({
       >
         <ArrowLeftIcon /> Back to list
       </Button>
+
+      {draftExpired && (
+        <Callout.Root color="orange">
+          <Callout.Icon>
+            <InfoCircledIcon />
+          </Callout.Icon>
+          <Callout.Text>Draft expired</Callout.Text>
+        </Callout.Root>
+      )}
+
+      {draft && <BuddyDraftPreview draft={draft} />}
 
       {isReadOnly && (
         <Callout.Root color="blue">

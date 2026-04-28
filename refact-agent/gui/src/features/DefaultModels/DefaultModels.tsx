@@ -1,6 +1,11 @@
 import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { Flex, Button, Text, Card, Heading, Callout } from "@radix-ui/themes";
-import { ArrowLeftIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import {
+  ArrowLeftIcon,
+  ExclamationTriangleIcon,
+  InfoCircledIcon,
+} from "@radix-ui/react-icons";
+import { skipToken } from "@reduxjs/toolkit/query";
 
 import { ScrollArea } from "../../components/ScrollArea";
 import { PageWrapper } from "../../components/PageWrapper";
@@ -18,8 +23,10 @@ import {
   type ProviderDefaults,
 } from "../../services/refact/providers";
 import { useGetCapsQuery } from "../../services/refact/caps";
+import { useGetDraftQuery } from "../../services/refact/buddy";
 
 import type { Config } from "../Config/configSlice";
+import { BuddyDraftPreview } from "../Buddy/BuddyDraftPreview";
 
 import styles from "./DefaultModels.module.css";
 
@@ -27,6 +34,7 @@ type DefaultModelsProps = {
   backFromDefaultModels: () => void;
   host: Config["host"];
   tabbed: Config["tabbed"];
+  draftId?: string;
 };
 
 type ModelTypeKey = "chat" | "chat_light" | "chat_thinking" | "chat_buddy";
@@ -115,6 +123,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
   backFromDefaultModels,
   host,
   tabbed,
+  draftId,
 }) => {
   const {
     data: defaults,
@@ -124,6 +133,11 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
     refetch,
   } = useGetDefaultsQuery(undefined);
   const { data: capsData } = useGetCapsQuery(undefined);
+  const {
+    data: draft,
+    isLoading: draftLoading,
+    error: draftError,
+  } = useGetDraftQuery(draftId ?? skipToken);
   const [updateDefaults, { isLoading: isSaving }] = useUpdateDefaultsMutation();
 
   const capsDefaults = useMemo(
@@ -145,20 +159,50 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
 
   const [hasChanges, setHasChanges] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [draftExpired, setDraftExpired] = useState(false);
+
+  useEffect(() => {
+    if (draftError) {
+      setDraftExpired(true);
+    }
+  }, [draftError]);
 
   useEffect(() => {
     if (defaults) {
-      setLocalDefaults({
+      const base: ProviderDefaults = {
         chat: defaults.chat,
         chat_light: defaults.chat_light,
         chat_thinking: defaults.chat_thinking,
         chat_buddy: defaults.chat_buddy ?? {},
         completion_model: defaults.completion_model,
         embedding_model: defaults.embedding_model,
-      });
+      };
+      if (draft && draft.kind === "defaults_model") {
+        try {
+          const patch = JSON.parse(draft.yaml_or_json) as Partial<
+            Record<ModelTypeKey, Partial<ModelTypeDefaults>>
+          >;
+          const merged: ProviderDefaults = { ...base };
+          for (const key of [
+            "chat",
+            "chat_light",
+            "chat_thinking",
+            "chat_buddy",
+          ] as ModelTypeKey[]) {
+            if (patch[key]) {
+              merged[key] = { ...(base[key] ?? {}), ...patch[key] };
+            }
+          }
+          setLocalDefaults(merged);
+        } catch {
+          setLocalDefaults(base);
+        }
+      } else {
+        setLocalDefaults(base);
+      }
       setHasChanges(false);
     }
-  }, [defaults]);
+  }, [defaults, draft]);
 
   const handleModelTypeChange = useCallback(
     (key: ModelTypeKey, config: ModelTypeDefaults) => {
@@ -182,7 +226,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
     }
   }, [localDefaults, updateDefaults]);
 
-  if (isLoading) {
+  if (isLoading || draftLoading) {
     return <Spinner spinning />;
   }
 
@@ -236,6 +280,17 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
             {isSaving ? "Saving..." : "Save Changes"}
           </Button>
         </Flex>
+
+        {draftExpired && (
+          <Callout.Root color="orange">
+            <Callout.Icon>
+              <InfoCircledIcon />
+            </Callout.Icon>
+            <Callout.Text>Draft expired</Callout.Text>
+          </Callout.Root>
+        )}
+
+        {draft && <BuddyDraftPreview draft={draft} />}
 
         {saveError && (
           <Callout.Root color="red">

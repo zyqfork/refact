@@ -128,9 +128,15 @@ export const customizationApi = createApi({
         id: string;
         config: Record<string, unknown>;
         scope?: "global" | "local";
+        draft_id?: string;
       }
     >({
-      queryFn: async ({ kind, id, config, scope }, api, _opts, baseQuery) => {
+      queryFn: async (
+        { kind, id, config, scope, draft_id },
+        api,
+        _opts,
+        baseQuery,
+      ) => {
         const state = api.getState() as RootState;
         const port = state.config.lspPort;
         if (!port) {
@@ -139,7 +145,7 @@ export const customizationApi = createApi({
         const result = await baseQuery({
           url: `http://127.0.0.1:${port}/v1/customization/${kind}/${id}`,
           method: "PUT",
-          body: { config, scope },
+          body: { config, scope, draft_id },
         });
         if (result.error) {
           return {
