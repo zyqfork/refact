@@ -29,6 +29,7 @@ import styles from "./ChatsSection.module.css";
 type ChatsSectionProps = {
   breakpoint: DashboardBreakpoint;
   collapsed: boolean;
+  projectLoading: boolean;
   onToggleCollapsed: () => void;
 };
 
@@ -86,6 +87,7 @@ function buildFlatList(
 export const ChatsSection: React.FC<ChatsSectionProps> = ({
   breakpoint,
   collapsed,
+  projectLoading,
   onToggleCollapsed,
 }) => {
   const dispatch = useAppDispatch();
@@ -118,6 +120,8 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
     () => buildFlatList(filteredTree, expandedIds),
     [filteredTree, expandedIds],
   );
+  const showLoading =
+    projectLoading || (isInitialLoading && filteredTree.length === 0);
 
   const handleToggleExpand = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -185,7 +189,7 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
           </Text>
           <Flex align="center" gap="1">
             <Text size="1" color="gray">
-              {filteredTree.length} total
+              {showLoading ? "Loading" : `${filteredTree.length} total`}
             </Text>
             {collapsed ? (
               <ChevronDownIcon width={12} height={12} color="var(--gray-9)" />
@@ -219,7 +223,7 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
         </div>
 
         <div className={styles.list}>
-          {isInitialLoading && filteredTree.length === 0 ? (
+          {showLoading ? (
             <Flex direction="column" gap="1" p="1">
               {Array.from({ length: 8 }, (_, i) => (
                 <Flex key={i} align="center" gap="2" py="1" px="2">
@@ -299,7 +303,7 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
               }}
             />
           )}
-          {!isInitialLoading && filteredTree.length === 0 && (
+          {!showLoading && filteredTree.length === 0 && (
             <Text
               size="2"
               color="gray"

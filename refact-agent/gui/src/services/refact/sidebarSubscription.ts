@@ -36,6 +36,7 @@ export type SidebarEvent =
       category: "snapshot";
       trajectories: TrajectoryMeta[];
       tasks: TaskMeta[];
+      workspace_roots?: string[];
       buddy?: BuddySnapshot | { enabled: false } | null;
     }
   | ({ category: "trajectory" } & TrajectoryEvent)
@@ -55,7 +56,11 @@ export type SidebarSubscriptionCallbacks = {
 };
 
 function isValidSnapshot(obj: Record<string, unknown>): boolean {
-  return Array.isArray(obj.trajectories) && Array.isArray(obj.tasks);
+  return (
+    Array.isArray(obj.trajectories) &&
+    Array.isArray(obj.tasks) &&
+    (obj.workspace_roots === undefined || Array.isArray(obj.workspace_roots))
+  );
 }
 
 function isValidTrajectoryEvent(obj: Record<string, unknown>): boolean {

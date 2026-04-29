@@ -21,6 +21,7 @@ import {
   closeThread,
   updateChatRuntimeFromSessionState,
 } from "../features/Chat/Thread";
+import { setCurrentProjectInfo } from "../features/Chat/currentProject";
 import { tasksApi } from "../services/refact/tasks";
 import {
   setBuddySnapshot,
@@ -49,6 +50,13 @@ import { useAppSelector } from "./useAppSelector";
 
 const RECONNECT_DELAY_MS = 500;
 const MIGRATION_KEY = "refact-trajectories-migrated";
+
+function getWorkspaceDisplayName(root: string): string {
+  const trimmed = root.trim();
+  if (!trimmed) return "";
+  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.split("/").pop() ?? normalized;
+}
 
 function getLegacyHistory(): ChatHistoryItem[] {
   try {
@@ -339,6 +347,16 @@ export function useSidebarSubscription() {
 
   const processSnapshot = useCallback(
     (event: SidebarEventEnvelope & { category: "snapshot" }) => {
+      if (event.workspace_roots !== undefined) {
+        const workspaceRoots = event.workspace_roots;
+        dispatch(
+          setCurrentProjectInfo({
+            name: getWorkspaceDisplayName(workspaceRoots[0] ?? ""),
+            workspaceRoots,
+          }),
+        );
+      }
+
       const trajectoryItems = event.trajectories.map((t: TrajectoryMeta) => ({
         id: t.id,
         title: t.title,

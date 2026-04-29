@@ -47,6 +47,7 @@ pub enum SidebarEvent {
     Snapshot {
         trajectories: Vec<TrajectoryMeta>,
         tasks: Vec<TaskMeta>,
+        workspace_roots: Vec<String>,
         buddy: serde_json::Value,
     },
     Trajectory(TrajectoryEvent),
@@ -66,12 +67,20 @@ pub struct SidebarEventEnvelope {
 
 async fn fetch_snapshot(
     gcx: Arc<ARwLock<GlobalContext>>,
-) -> Result<(Vec<TrajectoryMeta>, Vec<TaskMeta>), String> {
+) -> Result<(Vec<TrajectoryMeta>, Vec<TaskMeta>, Vec<String>), String> {
     let trajectories = list_all_trajectories_meta(gcx.clone()).await?;
     let tasks = list_tasks_with_session_state(gcx.clone())
         .await
         .map_err(|e| e.to_string())?;
-    Ok((trajectories, tasks))
+    let workspace_roots = {
+        let gcx_locked = gcx.read().await;
+        let folders = gcx_locked.documents_state.workspace_folders.lock().unwrap();
+        folders
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect()
+    };
+    Ok((trajectories, tasks, workspace_roots))
 }
 
 async fn fetch_buddy_snapshot(gcx: Arc<ARwLock<GlobalContext>>) -> serde_json::Value {
@@ -128,7 +137,7 @@ pub async fn handle_sidebar_subscribe(
         )
     };
 
-    let (trajectories, tasks) = fetch_snapshot(gcx.clone())
+    let (trajectories, tasks, workspace_roots) = fetch_snapshot(gcx.clone())
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -139,7 +148,12 @@ pub async fn handle_sidebar_subscribe(
         let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
         let envelope = SidebarEventEnvelope {
             seq,
-            event: SidebarEvent::Snapshot { trajectories, tasks, buddy: buddy_snap },
+            event: SidebarEvent::Snapshot {
+                trajectories,
+                tasks,
+                workspace_roots,
+                buddy: buddy_snap,
+            },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
             yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
@@ -173,12 +187,19 @@ pub async fn handle_sidebar_subscribe(
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            if let Ok((trajectories, tasks)) = fetch_snapshot(gcx_for_stream.clone()).await {
+                            if let Ok((trajectories, tasks, workspace_roots)) =
+                                fetch_snapshot(gcx_for_stream.clone()).await
+                            {
                                 let buddy = fetch_buddy_snapshot(gcx_for_stream.clone()).await;
                                 let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
                                 let envelope = SidebarEventEnvelope {
                                     seq,
-                                    event: SidebarEvent::Snapshot { trajectories, tasks, buddy },
+                                    event: SidebarEvent::Snapshot {
+                                        trajectories,
+                                        tasks,
+                                        workspace_roots,
+                                        buddy,
+                                    },
                                 };
                                 if let Ok(json) = serde_json::to_string(&envelope) {
                                     yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
@@ -204,12 +225,19 @@ pub async fn handle_sidebar_subscribe(
                 } => {
                     match result {
                         Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
-                            if let Ok((trajectories, tasks)) = fetch_snapshot(gcx_for_stream.clone()).await {
+                            if let Ok((trajectories, tasks, workspace_roots)) =
+                                fetch_snapshot(gcx_for_stream.clone()).await
+                            {
                                 let buddy = fetch_buddy_snapshot(gcx_for_stream.clone()).await;
                                 let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
                                 let envelope = SidebarEventEnvelope {
                                     seq,
-                                    event: SidebarEvent::Snapshot { trajectories, tasks, buddy },
+                                    event: SidebarEvent::Snapshot {
+                                        trajectories,
+                                        tasks,
+                                        workspace_roots,
+                                        buddy,
+                                    },
                                 };
                                 if let Ok(json) = serde_json::to_string(&envelope) {
                                     yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
@@ -240,12 +268,19 @@ pub async fn handle_sidebar_subscribe(
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            if let Ok((trajectories, tasks)) = fetch_snapshot(gcx_for_stream.clone()).await {
+                            if let Ok((trajectories, tasks, workspace_roots)) =
+                                fetch_snapshot(gcx_for_stream.clone()).await
+                            {
                                 let buddy = fetch_buddy_snapshot(gcx_for_stream.clone()).await;
                                 let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
                                 let envelope = SidebarEventEnvelope {
                                     seq,
-                                    event: SidebarEvent::Snapshot { trajectories, tasks, buddy },
+                                    event: SidebarEvent::Snapshot {
+                                        trajectories,
+                                        tasks,
+                                        workspace_roots,
+                                        buddy,
+                                    },
                                 };
                                 if let Ok(json) = serde_json::to_string(&envelope) {
                                     yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));

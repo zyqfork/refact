@@ -23,6 +23,7 @@ import styles from "./TasksSection.module.css";
 type TasksSectionProps = {
   breakpoint: DashboardBreakpoint;
   collapsed: boolean;
+  projectLoading: boolean;
   onToggleCollapsed: () => void;
 };
 
@@ -103,10 +104,21 @@ function buildFlatList(tasks: TaskMeta[]): FlatItem[] {
 export const TasksSection: React.FC<TasksSectionProps> = ({
   breakpoint,
   collapsed,
+  projectLoading,
   onToggleCollapsed,
 }) => {
   const dispatch = useAppDispatch();
-  const { data: tasks, isLoading, isError } = useListTasksQuery(undefined);
+  const {
+    data: tasks,
+    isLoading,
+    isFetching,
+    isError,
+  } = useListTasksQuery(undefined, {
+    skip: projectLoading,
+    refetchOnMountOrArgChange: true,
+    refetchOnFocus: true,
+    refetchOnReconnect: true,
+  });
   const [createTask, { isLoading: isCreatingTask }] = useCreateTaskMutation();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -166,6 +178,8 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
   const activeCount = filteredTasks.filter(
     (t) => t.status === "active" || t.status === "planning",
   ).length;
+  const tasksLoading =
+    projectLoading || isLoading || isFetching || tasks === undefined;
 
   const renderHeader = (children?: React.ReactNode) => (
     <div className={styles.header}>
@@ -185,7 +199,7 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
             </Text>
           )}
           <Text size="1" color="gray">
-            {filteredTasks.length} total
+            {tasksLoading ? "Loading" : `${filteredTasks.length} total`}
           </Text>
           {collapsed ? (
             <ChevronDownIcon width={12} height={12} color="var(--gray-9)" />
@@ -198,7 +212,7 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
     </div>
   );
 
-  if (isLoading) {
+  if (tasksLoading) {
     return (
       <div className={styles.section} data-collapsed={collapsed || undefined}>
         {renderHeader()}

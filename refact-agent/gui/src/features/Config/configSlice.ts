@@ -70,6 +70,8 @@ export const reducer = createReducer<Config>(initialState, (builder) => {
     state.apiKey = action.payload.apiKey ?? state.apiKey;
     state.lspPort = action.payload.lspPort ?? state.lspPort;
     state.keyBindings = action.payload.keyBindings ?? state.keyBindings;
+    state.currentWorkspaceName =
+      action.payload.currentWorkspaceName ?? state.currentWorkspaceName;
     state.shiftEnterToSubmit =
       action.payload.shiftEnterToSubmit ?? state.shiftEnterToSubmit;
   });

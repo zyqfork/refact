@@ -3,6 +3,7 @@ import { RootState } from "../../app/store";
 
 export type CurrentProjectInfo = {
   name: string;
+  workspaceRoots?: string[];
 };
 
 const initialState: CurrentProjectInfo = {
@@ -34,4 +35,16 @@ export const selectThreadProjectOrCurrentProject = (state: RootState) => {
     return thread.integration.project;
   }
   return thread.project_name ?? state.current_project.name;
+};
+
+export const selectHasActiveProject = (state: RootState): boolean => {
+  const workspaceRoots = state.current_project.workspaceRoots;
+  if (workspaceRoots !== undefined) {
+    return workspaceRoots.length > 0;
+  }
+
+  return Boolean(
+    state.current_project.name.trim() ||
+      state.config.currentWorkspaceName?.trim(),
+  );
 };
