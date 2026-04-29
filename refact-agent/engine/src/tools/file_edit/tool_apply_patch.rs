@@ -53,20 +53,19 @@ fn parse_patch_arg(args: &HashMap<String, Value>) -> Result<ParsedPatch, String>
     parse_patch(patch_text).map_err(|e| e.to_string())
 }
 
-fn try_strip_workspace_prefix(path: &str, project_dirs: &[PathBuf]) -> String {
-    let p = std::path::Path::new(path);
-    if !p.is_absolute() {
-        return path.to_string();
+fn absolute_path_inside_workspace(path: &str, project_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return None;
     }
-    for dir in project_dirs {
-        if let Ok(relative) = p.strip_prefix(dir) {
-            let rel_str = relative.to_string_lossy().to_string();
-            if !rel_str.is_empty() {
-                return rel_str;
-            }
-        }
-    }
-    path.to_string()
+
+    project_dirs
+        .iter()
+        .any(|dir| {
+            path.strip_prefix(dir)
+                .is_ok_and(|relative| !relative.as_os_str().is_empty())
+        })
+        .then_some(path)
 }
 
 async fn resolve_patch_path(
@@ -75,39 +74,50 @@ async fn resolve_patch_path(
     must_exist: bool,
 ) -> Result<PathBuf, String> {
     let project_dirs = get_project_dirs(gcx.clone()).await;
-    let corrected_path = try_strip_workspace_prefix(rel_path.trim(), &project_dirs);
-    let rel_path_buf = validate_relative_path(&corrected_path)?;
-
     if project_dirs.is_empty() {
         return Err("No workspace found".to_string());
     }
 
-    let full_path = if project_dirs.len() == 1 {
-        project_dirs[0].join(&rel_path_buf)
-    } else if must_exist {
-        let existing: Vec<_> = project_dirs
-            .iter()
-            .map(|d| d.join(&rel_path_buf))
-            .filter(|p| p.exists())
-            .collect();
-        if existing.len() == 1 {
-            existing.into_iter().next().unwrap()
-        } else if existing.is_empty() {
+    let requested_path = rel_path.trim();
+    let full_path = if let Some(absolute_path) =
+        absolute_path_inside_workspace(requested_path, &project_dirs)
+    {
+        if must_exist && !absolute_path.exists() {
             return Err(format!(
-                "File '{}' not found in any workspace: {:?}",
-                rel_path, project_dirs
-            ));
-        } else {
-            return Err(format!(
-                "File '{}' exists in multiple workspaces: {:?}",
-                rel_path, existing
+                "File '{}' not found: {:?}",
+                rel_path, absolute_path
             ));
         }
+        absolute_path
     } else {
-        let active = crate::files_correction::get_active_project_path(gcx.clone())
-            .await
-            .ok_or_else(|| "No active workspace found for new file".to_string())?;
-        active.join(&rel_path_buf)
+        let rel_path_buf = validate_relative_path(requested_path)?;
+        if project_dirs.len() == 1 {
+            project_dirs[0].join(&rel_path_buf)
+        } else if must_exist {
+            let existing: Vec<_> = project_dirs
+                .iter()
+                .map(|d| d.join(&rel_path_buf))
+                .filter(|p| p.exists())
+                .collect();
+            if existing.len() == 1 {
+                existing.into_iter().next().unwrap()
+            } else if existing.is_empty() {
+                return Err(format!(
+                    "File '{}' not found in any workspace: {:?}",
+                    rel_path, project_dirs
+                ));
+            } else {
+                return Err(format!(
+                    "File '{}' exists in multiple workspaces: {:?}",
+                    rel_path, existing
+                ));
+            }
+        } else {
+            let active = crate::files_correction::get_active_project_path(gcx.clone())
+                .await
+                .ok_or_else(|| "No active workspace found for new file".to_string())?;
+            active.join(&rel_path_buf)
+        }
     };
 
     let canonical = if full_path.exists() {
@@ -507,3 +517,40 @@ const APPLY_PATCH_PARAM_DESCRIPTION: &str = r#"The patch content in envelope for
 +new
 *** Delete File: path/to/remove.txt
 *** End Patch"#;
+
+#[cfg(test)]
+mod tests {
+    use super::absolute_path_inside_workspace;
+    use std::path::PathBuf;
+
+    #[test]
+    fn absolute_workspace_path_keeps_disambiguating_root() {
+        let project_dirs = vec![PathBuf::from("/repo/main"), PathBuf::from("/repo/worktree")];
+        let path = "/repo/main/refact-agent/engine/src/subchat.rs";
+
+        assert_eq!(
+            absolute_path_inside_workspace(path, &project_dirs),
+            Some(PathBuf::from(path))
+        );
+    }
+
+    #[test]
+    fn relative_workspace_path_is_not_resolved_as_absolute() {
+        let project_dirs = vec![PathBuf::from("/repo/main")];
+
+        assert_eq!(
+            absolute_path_inside_workspace("refact-agent/engine/src/subchat.rs", &project_dirs),
+            None
+        );
+    }
+
+    #[test]
+    fn absolute_path_outside_workspaces_is_rejected_by_helper() {
+        let project_dirs = vec![PathBuf::from("/repo/main")];
+
+        assert_eq!(
+            absolute_path_inside_workspace("/tmp/subchat.rs", &project_dirs),
+            None
+        );
+    }
+}
