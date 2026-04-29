@@ -16,6 +16,10 @@ fn default_enforce() -> bool {
     false
 }
 
+fn default_registry_schema_version() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorktreeMeta {
     pub id: String,
@@ -49,6 +53,182 @@ pub struct WorktreeMeta {
     pub agent_id: Option<String>,
     #[serde(default = "default_enforce")]
     pub enforce: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WorktreeReference {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+impl WorktreeReference {
+    pub fn has_identity(&self) -> bool {
+        self.chat_id.is_some()
+            || self.task_id.is_some()
+            || self.card_id.is_some()
+            || self.agent_id.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WorktreeStatus {
+    pub path_exists: bool,
+    pub is_git_worktree: bool,
+    pub dirty: bool,
+    pub staged_count: usize,
+    pub unstaged_count: usize,
+    pub untracked_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeRegistryRecord {
+    pub meta: WorktreeMeta,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
+    #[serde(default)]
+    pub references: Vec<WorktreeReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_known_status: Option<WorktreeStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeRegistry {
+    #[serde(default = "default_registry_schema_version")]
+    pub schema_version: u32,
+    #[serde(
+        serialize_with = "serialize_path",
+        deserialize_with = "deserialize_path"
+    )]
+    pub source_workspace_root: PathBuf,
+    pub project_hash: String,
+    #[serde(default)]
+    pub records: Vec<WorktreeRegistryRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeRecordView {
+    pub meta: WorktreeMeta,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
+    pub references: Vec<WorktreeReference>,
+    pub reference_count: usize,
+    pub status: WorktreeStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeListResponse {
+    pub project_hash: String,
+    #[serde(
+        serialize_with = "serialize_path",
+        deserialize_with = "deserialize_path"
+    )]
+    pub source_workspace_root: PathBuf,
+    pub worktrees: Vec<WorktreeRecordView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct CreateWorktreeRequest {
+    #[serde(default)]
+    pub source_workspace_root: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    #[serde(default)]
+    pub chat_id: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub card_id: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateWorktreeResponse {
+    pub worktree: WorktreeRecordView,
+    pub branch_was_created: bool,
+    pub dirty_source_warning: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DeleteWorktreeRequest {
+    #[serde(default)]
+    pub delete_branch: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteWorktreeResponse {
+    pub deleted: bool,
+    pub branch_deleted: bool,
+    pub stale_path: bool,
+    pub affected_references: Vec<WorktreeReference>,
+    pub affected_reference_count: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenWorktreeResponse {
+    pub id: String,
+    #[serde(
+        serialize_with = "serialize_path",
+        deserialize_with = "deserialize_path"
+    )]
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub can_open_folder: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeDiffFile {
+    pub path: String,
+    pub status: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WorktreeDiffStats {
+    pub committed_files: usize,
+    pub staged_files: usize,
+    pub unstaged_files: usize,
+    pub untracked_files: usize,
+    pub files_changed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeDiffResponse {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    pub files: Vec<WorktreeDiffFile>,
+    pub stats: WorktreeDiffStats,
+    pub patch: String,
+    pub patch_truncated: bool,
 }
 
 #[cfg(test)]

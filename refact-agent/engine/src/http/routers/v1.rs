@@ -88,6 +88,10 @@ use crate::http::routers::v1::project_configs::{
     handle_v1_project_configs_get, handle_v1_project_configs_rescan,
     handle_v1_project_configs_bootstrap,
 };
+use crate::http::routers::v1::worktrees::{
+    handle_v1_worktrees_create, handle_v1_worktrees_delete, handle_v1_worktrees_diff,
+    handle_v1_worktrees_get, handle_v1_worktrees_list, handle_v1_worktrees_open,
+};
 
 mod ast;
 pub mod at_commands;
@@ -141,6 +145,7 @@ mod v1_integrations;
 pub mod vecdb;
 pub mod voice;
 mod workspace;
+mod worktrees;
 
 use crate::http::routers::v1::ext_management::{
     handle_v1_ext_registry, handle_v1_ext_skill_get, handle_v1_ext_skill_put,
@@ -247,6 +252,12 @@ pub fn make_v1_router() -> Router {
             "/project-configs/bootstrap",
             post(handle_v1_project_configs_bootstrap),
         )
+        .route("/worktrees", get(handle_v1_worktrees_list))
+        .route("/worktrees", post(handle_v1_worktrees_create))
+        .route("/worktrees/:id", get(handle_v1_worktrees_get))
+        .route("/worktrees/:id", delete(handle_v1_worktrees_delete))
+        .route("/worktrees/:id/diff", get(handle_v1_worktrees_diff))
+        .route("/worktrees/:id/open", post(handle_v1_worktrees_open))
         .route("/chat-modes", get(handle_v1_chat_modes))
         .route(
             "/customization/registry",
