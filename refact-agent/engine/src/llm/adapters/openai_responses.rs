@@ -930,6 +930,13 @@ fn value_to_arguments_string(v: &Value) -> String {
     }
 }
 
+fn positive_usize(value: Option<&Value>) -> Option<usize> {
+    value
+        .and_then(|t| t.as_u64())
+        .filter(|&v| v > 0)
+        .map(|v| v as usize)
+}
+
 fn extract_tool_call_from_item(item: &Value, event: &Value) -> Option<Value> {
     let call_id = item.get("call_id")?;
     let output_index = event
@@ -1037,7 +1044,7 @@ fn extract_usage(json: &Value) -> Option<ChatUsage> {
     let usage = json
         .get("usage")
         .or_else(|| json.get("response").and_then(|r| r.get("usage")))?;
-    let prompt_tokens = usage
+    let raw_prompt_tokens = usage
         .get("input_tokens")
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as usize;
@@ -1045,20 +1052,35 @@ fn extract_usage(json: &Value) -> Option<ChatUsage> {
         .get("output_tokens")
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as usize;
+
+    let cache_creation = positive_usize(usage.get("cache_creation_input_tokens"));
+    let top_level_cache_read = positive_usize(usage.get("cache_read_input_tokens"));
+    let details_cache_read = usage
+        .get("input_tokens_details")
+        .or_else(|| usage.get("prompt_tokens_details"))
+        .and_then(|details| positive_usize(details.get("cached_tokens")));
+    let cache_read = top_level_cache_read.or(details_cache_read);
+
+    let prompt_tokens = raw_prompt_tokens
+        .saturating_sub(cache_read.unwrap_or(0))
+        .saturating_sub(cache_creation.unwrap_or(0));
     let total_tokens = usage
         .get("total_tokens")
         .and_then(|t| t.as_u64())
         .map(|t| t as usize)
-        .unwrap_or_else(|| prompt_tokens + completion_tokens);
-    // Note: OpenAI's cached_tokens is a SUBSET of input_tokens (already included),
-    // not separate like Anthropic. We don't set cache_read_tokens here to avoid
-    // double-counting in context calculations that sum prompt_tokens + cache_read.
+        .unwrap_or_else(|| {
+            prompt_tokens
+                + completion_tokens
+                + cache_creation.unwrap_or(0)
+                + cache_read.unwrap_or(0)
+        });
+
     Some(ChatUsage {
         prompt_tokens,
         completion_tokens,
         total_tokens,
-        cache_creation_tokens: None,
-        cache_read_tokens: None,
+        cache_creation_tokens: cache_creation,
+        cache_read_tokens: cache_read,
         metering_usd: None,
     })
 }
@@ -1526,6 +1548,51 @@ mod tests {
                 assert_eq!(usage.prompt_tokens, 100);
                 assert_eq!(usage.completion_tokens, 50);
                 assert_eq!(usage.total_tokens, 150);
+            }
+            _ => panic!("expected SetUsage"),
+        }
+    }
+
+    #[test]
+    fn test_usage_extracts_openai_cached_input_tokens() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.completed","usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},"output_tokens":100,"total_tokens":1100}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        let usage_delta = deltas
+            .iter()
+            .find(|d| matches!(d, LlmStreamDelta::SetUsage { .. }));
+        assert!(usage_delta.is_some());
+        match usage_delta.unwrap() {
+            LlmStreamDelta::SetUsage { usage } => {
+                assert_eq!(usage.prompt_tokens, 200);
+                assert_eq!(usage.completion_tokens, 100);
+                assert_eq!(usage.total_tokens, 1100);
+                assert_eq!(usage.cache_creation_tokens, None);
+                assert_eq!(usage.cache_read_tokens, Some(800));
+            }
+            _ => panic!("expected SetUsage"),
+        }
+    }
+
+    #[test]
+    fn test_usage_extracts_cached_tokens_from_response_wrapper() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"response.completed","response":{"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":750},"output_tokens":100}}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        let usage_delta = deltas
+            .iter()
+            .find(|d| matches!(d, LlmStreamDelta::SetUsage { .. }));
+        assert!(usage_delta.is_some());
+        match usage_delta.unwrap() {
+            LlmStreamDelta::SetUsage { usage } => {
+                assert_eq!(usage.prompt_tokens, 250);
+                assert_eq!(usage.completion_tokens, 100);
+                assert_eq!(usage.total_tokens, 1100);
+                assert_eq!(usage.cache_read_tokens, Some(750));
             }
             _ => panic!("expected SetUsage"),
         }
