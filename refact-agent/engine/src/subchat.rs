@@ -413,7 +413,7 @@ pub async fn resolve_subchat_params(
         ));
     }
 
-    let model = resolve_subchat_model(gcx.clone(), &params).await?;
+    let model = resolve_subchat_model_for_tool(gcx.clone(), tool_name, &params).await?;
     let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
         .await
         .map_err(|e| format!("failed to load caps: {:?}", e))?;
@@ -427,13 +427,39 @@ pub async fn resolve_subchat_model(
     gcx: Arc<ARwLock<GlobalContext>>,
     params: &SubchatParameters,
 ) -> Result<String, String> {
+    resolve_subchat_model_inner(gcx, params, None).await
+}
+
+async fn resolve_subchat_model_for_tool(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    tool_name: &str,
+    params: &SubchatParameters,
+) -> Result<String, String> {
+    resolve_subchat_model_inner(gcx, params, Some(tool_name)).await
+}
+
+async fn resolve_subchat_model_inner(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    params: &SubchatParameters,
+    tool_name: Option<&str>,
+) -> Result<String, String> {
     let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
         .await
         .map_err(|e| format!("failed to load caps: {:?}", e))?;
 
     if !params.subchat_model.is_empty() {
-        resolve_chat_model(caps, &params.subchat_model)?;
-        return Ok(params.subchat_model.clone());
+        let model_rec = resolve_chat_model(caps, &params.subchat_model).map_err(|e| {
+            subchat_explicit_model_error(tool_name, &params.subchat_model, "is not available", &e)
+        })?;
+        if let Some(reason) = llm_endpoint_unusable_reason(&model_rec.base.endpoint) {
+            return Err(subchat_explicit_model_error(
+                tool_name,
+                &params.subchat_model,
+                "is misconfigured",
+                &reason,
+            ));
+        }
+        return Ok(model_rec.base.id.clone());
     }
 
     let model_id = match params.subchat_model_type {
@@ -442,18 +468,102 @@ pub async fn resolve_subchat_model(
         ChatModelType::Thinking => &caps.defaults.chat_thinking_model,
         ChatModelType::Buddy => &caps.defaults.chat_buddy_model,
     };
+    let model_label = subchat_model_type_label(params.subchat_model_type);
 
-    if model_id.is_empty() {
+    if model_id.trim().is_empty() {
         return Err(format!(
-            "no model configured for {:?} in caps.defaults",
-            params.subchat_model_type
+            "{} is not set up. Go to Default model settings and configure {}.",
+            subchat_model_requirement_label(tool_name, params.subchat_model_type),
+            model_label
         ));
     }
 
-    let model_rec = resolve_model(&caps.chat_models, model_id)
-        .map_err(|e| format!("model '{}' not found: {}", model_id, e))?;
+    let model_rec = resolve_model(&caps.chat_models, model_id).map_err(|e| {
+        format!(
+            "{} '{}' is not available: {}. Go to Default model settings and configure {}.",
+            subchat_model_requirement_label(tool_name, params.subchat_model_type),
+            model_id,
+            e,
+            model_label
+        )
+    })?;
+
+    if let Some(reason) = llm_endpoint_unusable_reason(&model_rec.base.endpoint) {
+        return Err(format!(
+            "{} '{}' is misconfigured: {}. Go to Default model settings and configure {}.",
+            subchat_model_requirement_label(tool_name, params.subchat_model_type),
+            model_id,
+            reason,
+            model_label
+        ));
+    }
 
     Ok(model_rec.base.id.clone())
+}
+
+fn subchat_explicit_model_error(
+    tool_name: Option<&str>,
+    model: &str,
+    state: &str,
+    reason: &str,
+) -> String {
+    match tool_name {
+        Some(tool_name) => format!(
+            "Subagent '{}' is pinned to model '{}', but it {}: {}. Go to Default model settings and configure this model or update the subagent config.",
+            tool_name, model, state, reason
+        ),
+        None => format!(
+            "Subchat model '{}' {}: {}. Go to Default model settings and configure this model or update the subagent config.",
+            model, state, reason
+        ),
+    }
+}
+
+fn subchat_model_requirement_label(tool_name: Option<&str>, model_type: ChatModelType) -> String {
+    let model_label = subchat_model_type_label(model_type);
+    match tool_name {
+        Some(tool_name) => format!(
+            "{} required by subagent '{}' (model_type: {})",
+            model_label,
+            tool_name,
+            subchat_model_type_config_value(model_type)
+        ),
+        None => model_label.to_string(),
+    }
+}
+
+fn subchat_model_type_config_value(model_type: ChatModelType) -> &'static str {
+    match model_type {
+        ChatModelType::Light => "light",
+        ChatModelType::Default => "default",
+        ChatModelType::Thinking => "thinking",
+        ChatModelType::Buddy => "buddy",
+    }
+}
+
+fn subchat_model_type_label(model_type: ChatModelType) -> &'static str {
+    match model_type {
+        ChatModelType::Light => "Light model",
+        ChatModelType::Default => "Default model",
+        ChatModelType::Thinking => "Thinking model",
+        ChatModelType::Buddy => "Buddy model",
+    }
+}
+
+fn llm_endpoint_unusable_reason(endpoint: &str) -> Option<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Some("an empty LLM endpoint URL".to_string());
+    }
+    match url::Url::parse(endpoint) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => None,
+        Ok(url) => Some(format!(
+            "an unsupported LLM endpoint URL scheme '{}': {}",
+            url.scheme(),
+            endpoint
+        )),
+        Err(e) => Some(format!("an invalid LLM endpoint URL '{}': {}", endpoint, e)),
+    }
 }
 
 pub async fn resolve_subchat_config(
@@ -524,7 +634,7 @@ pub async fn resolve_subchat_config_with_parent(
     }
 
     let params = resolve_subchat_params(gcx.clone(), tool_name).await?;
-    let model = resolve_subchat_model(gcx.clone(), &params).await?;
+    let model = resolve_subchat_model_for_tool(gcx.clone(), tool_name, &params).await?;
 
     let caps = try_load_caps_quickly_if_not_present(gcx.clone(), 0)
         .await
@@ -1486,12 +1596,41 @@ async fn subchat_single_internal(
 }
 #[cfg(test)]
 mod subchat_tests {
-    use super::resolve_subchat_params;
+    use super::{resolve_subchat_model, resolve_subchat_params};
+    use crate::call_validation::{ChatModelType, SubchatParameters};
     use crate::caps::{BaseModelRecord, ChatModelRecord, CodeAssistantCaps};
     use crate::global_context::tests::make_test_gcx;
     use crate::yaml_configs::project_configs_bootstrap::global_configs_try_create_all;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn chat_model_record(id: &str, n_ctx: usize, endpoint: &str) -> Arc<ChatModelRecord> {
+        Arc::new(ChatModelRecord {
+            base: BaseModelRecord {
+                id: id.to_string(),
+                name: id.to_string(),
+                n_ctx,
+                endpoint: endpoint.to_string(),
+                ..Default::default()
+            },
+            max_output_tokens: Some(128_000),
+            ..Default::default()
+        })
+    }
+
+    async fn install_caps(
+        gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>,
+        caps: CodeAssistantCaps,
+    ) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_add(60);
+        let mut gcx_locked = gcx.write().await;
+        gcx_locked.caps = Some(Arc::new(caps));
+        gcx_locked.caps_last_attempted_ts = now;
+    }
 
     #[tokio::test]
     async fn test_resolve_subchat_params_normalizes_code_review_for_smaller_model() {
@@ -1503,30 +1642,17 @@ mod subchat_tests {
         let mut caps = CodeAssistantCaps::default();
         caps.chat_models.insert(
             thinking_model_id.clone(),
-            Arc::new(ChatModelRecord {
-                base: BaseModelRecord {
-                    id: thinking_model_id.clone(),
-                    name: thinking_model_id.clone(),
-                    n_ctx: 200_000,
-                    ..Default::default()
-                },
-                max_output_tokens: Some(128_000),
-                ..Default::default()
-            }),
+            chat_model_record(
+                &thinking_model_id,
+                200_000,
+                "https://api.anthropic.com/v1/messages",
+            ),
         );
         caps.defaults.chat_default_model = thinking_model_id.clone();
         caps.defaults.chat_light_model = thinking_model_id.clone();
         caps.defaults.chat_thinking_model = thinking_model_id;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            .saturating_add(60);
-        let mut gcx_locked = gcx.write().await;
-        gcx_locked.caps = Some(Arc::new(caps));
-        gcx_locked.caps_last_attempted_ts = now;
-        drop(gcx_locked);
+        install_caps(gcx.clone(), caps).await;
 
         let params = resolve_subchat_params(gcx, "code_review").await.unwrap();
         let extra_budget = (params.subchat_n_ctx as f32 * 0.06) as usize;
@@ -1537,5 +1663,149 @@ mod subchat_tests {
                 < params.subchat_n_ctx,
             "normalized code_review budget must fit the clamped model context window"
         );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_subchat_model_errors_when_light_model_missing() {
+        let gcx = make_test_gcx().await;
+        let default_model_id = "openai/gpt-4o".to_string();
+
+        let mut caps = CodeAssistantCaps::default();
+        caps.chat_models.insert(
+            default_model_id.clone(),
+            chat_model_record(
+                &default_model_id,
+                128_000,
+                "https://api.openai.com/v1/chat/completions",
+            ),
+        );
+        caps.defaults.chat_default_model = default_model_id;
+
+        install_caps(gcx.clone(), caps).await;
+
+        let params = SubchatParameters {
+            subchat_model_type: ChatModelType::Light,
+            subchat_model: String::new(),
+            subchat_n_ctx: 128_000,
+            subchat_max_new_tokens: 8_192,
+            subchat_temperature: None,
+            subchat_tokens_for_rag: 0,
+            subchat_reasoning_effort: None,
+        };
+
+        let err = resolve_subchat_model(gcx, &params).await.unwrap_err();
+        assert!(err.contains("Light model is not set up"));
+        assert!(err.contains("Default model settings"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_subchat_model_errors_when_endpoint_empty() {
+        let gcx = make_test_gcx().await;
+        let default_model_id = "openai/gpt-4o".to_string();
+        let thinking_model_id = "broken/o1".to_string();
+
+        let mut caps = CodeAssistantCaps::default();
+        caps.chat_models.insert(
+            default_model_id.clone(),
+            chat_model_record(
+                &default_model_id,
+                128_000,
+                "https://api.openai.com/v1/chat/completions",
+            ),
+        );
+        caps.chat_models.insert(
+            thinking_model_id.clone(),
+            chat_model_record(&thinking_model_id, 128_000, ""),
+        );
+        caps.defaults.chat_default_model = default_model_id;
+        caps.defaults.chat_light_model = "openai/gpt-4o-mini".to_string();
+        caps.defaults.chat_thinking_model = thinking_model_id.clone();
+
+        install_caps(gcx.clone(), caps).await;
+
+        let params = SubchatParameters {
+            subchat_model_type: ChatModelType::Thinking,
+            subchat_model: String::new(),
+            subchat_n_ctx: 128_000,
+            subchat_max_new_tokens: 8_192,
+            subchat_temperature: None,
+            subchat_tokens_for_rag: 0,
+            subchat_reasoning_effort: None,
+        };
+
+        let err = resolve_subchat_model(gcx, &params).await.unwrap_err();
+        assert!(err.contains("Thinking model 'broken/o1' is misconfigured"));
+        assert!(err.contains("an empty LLM endpoint URL"));
+        assert!(err.contains("Default model settings"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_subchat_model_errors_when_endpoint_relative() {
+        let gcx = make_test_gcx().await;
+        let default_model_id = "openai/gpt-4o".to_string();
+        let thinking_model_id = "openai/o1".to_string();
+
+        let mut caps = CodeAssistantCaps::default();
+        caps.chat_models.insert(
+            default_model_id.clone(),
+            chat_model_record(
+                &default_model_id,
+                128_000,
+                "https://api.openai.com/v1/chat/completions",
+            ),
+        );
+        caps.chat_models.insert(
+            thinking_model_id.clone(),
+            chat_model_record(&thinking_model_id, 128_000, "/v1/chat/completions"),
+        );
+        caps.defaults.chat_default_model = default_model_id;
+        caps.defaults.chat_thinking_model = thinking_model_id.clone();
+
+        install_caps(gcx.clone(), caps).await;
+
+        let params = SubchatParameters {
+            subchat_model_type: ChatModelType::Thinking,
+            subchat_model: String::new(),
+            subchat_n_ctx: 128_000,
+            subchat_max_new_tokens: 8_192,
+            subchat_temperature: None,
+            subchat_tokens_for_rag: 0,
+            subchat_reasoning_effort: None,
+        };
+
+        let err = resolve_subchat_model(gcx, &params).await.unwrap_err();
+        assert!(err.contains("Thinking model 'openai/o1' is misconfigured"));
+        assert!(err.contains("an invalid LLM endpoint URL"));
+        assert!(err.contains("Default model settings"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_subchat_params_names_gather_files_light_model_requirement() {
+        let gcx = make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        global_configs_try_create_all(&config_dir).await.unwrap();
+
+        let thinking_model_id = "openai/gpt-5".to_string();
+        let mut caps = CodeAssistantCaps::default();
+        caps.chat_models.insert(
+            thinking_model_id.clone(),
+            chat_model_record(
+                &thinking_model_id,
+                128_000,
+                "https://api.openai.com/v1/chat/completions",
+            ),
+        );
+        caps.defaults.chat_default_model = thinking_model_id.clone();
+        caps.defaults.chat_thinking_model = thinking_model_id;
+
+        install_caps(gcx.clone(), caps).await;
+
+        let err = resolve_subchat_params(gcx, "code_review_gather_files")
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("Light model required by subagent 'code_review_gather_files'"));
+        assert!(err.contains("model_type: light"));
+        assert!(err.contains("Default model settings"));
     }
 }

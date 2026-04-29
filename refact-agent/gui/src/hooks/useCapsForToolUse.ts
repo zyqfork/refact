@@ -8,6 +8,7 @@ import {
   setChatModel,
   setMaxNewTokens,
 } from "../features/Chat";
+import { isLegacyRefactModel } from "../utils/modelProviders";
 
 export const PAID_AGENT_LIST = [
   "gpt-4o",
@@ -86,7 +87,7 @@ export function useCapsForToolUse() {
 
   const usableModels = useMemo(() => {
     const models = caps.data?.chat_models ?? {};
-    return Object.keys(models);
+    return Object.keys(models).filter((model) => !isLegacyRefactModel(model));
   }, [caps.data?.chat_models]);
 
   const usableModelsForPlan = useMemo(() => {

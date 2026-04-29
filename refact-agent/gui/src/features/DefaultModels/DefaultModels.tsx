@@ -105,15 +105,29 @@ const ModelTypeSection: React.FC<{
             defaultValue={capsDefault}
             showLabel={false}
             compact={false}
+            allowUnset
+            unsetLabel="None"
           />
         </Flex>
 
-        <ModelSamplingParams
-          model={effectiveModel}
-          values={config}
-          onChange={handleSamplingChange}
-          size="2"
-        />
+        {effectiveModel ? (
+          <ModelSamplingParams
+            model={effectiveModel}
+            values={config}
+            onChange={handleSamplingChange}
+            size="2"
+          />
+        ) : (
+          <Callout.Root color="gray">
+            <Callout.Icon>
+              <InfoCircledIcon />
+            </Callout.Icon>
+            <Callout.Text>
+              No model selected. Features that require this model type will ask
+              you to configure it.
+            </Callout.Text>
+          </Callout.Root>
+        )}
       </Flex>
     </Card>
   );
@@ -132,7 +146,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
     isError,
     refetch,
   } = useGetDefaultsQuery(undefined);
-  const { data: capsData } = useGetCapsQuery(undefined);
+  const { data: capsData, refetch: refetchCaps } = useGetCapsQuery(undefined);
   const {
     data: draft,
     isLoading: draftLoading,
@@ -219,12 +233,13 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
   const handleSave = useCallback(async () => {
     try {
       await updateDefaults(localDefaults).unwrap();
+      void refetchCaps();
       setHasChanges(false);
       setSaveError(null);
     } catch {
       setSaveError("Failed to save defaults. Please try again.");
     }
-  }, [localDefaults, updateDefaults]);
+  }, [localDefaults, refetchCaps, updateDefaults]);
 
   if (isLoading || draftLoading) {
     return <Spinner spinning />;

@@ -3,6 +3,7 @@ import { hasProperty } from "../../utils";
 import { isDetailMessage } from "./commands";
 import { PROVIDERS_URL, PROVIDER_DEFAULTS_URL } from "./consts";
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
+import { capsApi } from "./caps";
 
 export type WireFormat =
   | "openai_chat_completions"
@@ -679,6 +680,8 @@ export const providersApi = createApi({
           };
         }
 
+        api.dispatch(capsApi.util.resetApiState());
+
         return {
           data: {
             success: true,
@@ -725,6 +728,8 @@ export const providersApi = createApi({
         if (result.error) {
           return { error: result.error };
         }
+
+        api.dispatch(capsApi.util.resetApiState());
 
         return {
           data: {
@@ -777,6 +782,8 @@ export const providersApi = createApi({
           };
         }
 
+        api.dispatch(capsApi.util.resetApiState());
+
         return { data: { success: true, model_id: args.model.id } };
       },
     }),
@@ -822,6 +829,8 @@ export const providersApi = createApi({
           };
         }
 
+        api.dispatch(capsApi.util.resetApiState());
+
         return { data: { success: true, model_id: args.modelId } };
       },
     }),
@@ -861,6 +870,8 @@ export const providersApi = createApi({
             },
           };
         }
+
+        api.dispatch(capsApi.util.resetApiState());
 
         return { data: { success: true } };
       },
@@ -923,6 +934,7 @@ export const providersApi = createApi({
           success: boolean;
           auth_status: string;
         };
+        api.dispatch(capsApi.util.resetApiState());
         return { data };
       },
     }),
@@ -951,6 +963,7 @@ export const providersApi = createApi({
         if (result.error) {
           return { error: result.error };
         }
+        api.dispatch(capsApi.util.resetApiState());
         return { data: { success: true } };
       },
     }),
@@ -986,6 +999,8 @@ export const providersApi = createApi({
             },
           };
         }
+
+        api.dispatch(capsApi.util.resetApiState());
 
         return { data: { success: true } };
       },
@@ -1044,6 +1059,8 @@ export const providersApi = createApi({
         if (result.error) {
           return { error: result.error };
         }
+
+        api.dispatch(capsApi.util.resetApiState());
 
         return { data: { success: true } };
       },

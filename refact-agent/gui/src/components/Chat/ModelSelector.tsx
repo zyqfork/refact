@@ -1,9 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { Select, Text, Flex } from "@radix-ui/themes";
-import { useCapsForToolUse } from "../../hooks";
 import { useGetCapsQuery } from "../../services/refact/caps";
 import { RichModelSelectItem } from "../Select/RichModelSelectItem";
 import { enrichAndGroupModels } from "../../utils/enrichModels";
+import { isLegacyRefactModel } from "../../utils/modelProviders";
 import styles from "../Select/select.module.css";
 
 export type ModelSelectorProps = {
@@ -14,7 +14,11 @@ export type ModelSelectorProps = {
   showLabel?: boolean;
   compact?: boolean;
   defaultValue?: string;
+  allowUnset?: boolean;
+  unsetLabel?: string;
 };
+
+const UNSET_MODEL_VALUE = "__refact_unset_model__";
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   disabled,
@@ -24,28 +28,100 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   showLabel = true,
   compact = true,
   defaultValue,
+  allowUnset = false,
+  unsetLabel = "None",
 }) => {
-  const capsForToolUse = useCapsForToolUse();
   const { data: caps } = useGetCapsQuery(undefined);
 
-  const capsData = caps ?? capsForToolUse.data;
-
-  const usableModels = capsForToolUse.usableModelsForPlan;
+  const usableModels = useMemo(() => {
+    return Object.keys(caps?.chat_models ?? {})
+      .filter((model) => !isLegacyRefactModel(model))
+      .map((model) => ({
+        value: model,
+        disabled: false,
+        textValue: model,
+      }));
+  }, [caps?.chat_models]);
 
   const groupedModels = useMemo(
-    () => enrichAndGroupModels(usableModels, capsData),
-    [usableModels, capsData],
+    () => enrichAndGroupModels(usableModels, caps),
+    [usableModels, caps],
   );
 
-  const defaultModel = defaultValue ?? capsData?.chat_default_model ?? "";
+  const defaultModel = defaultValue ?? caps?.chat_default_model ?? "";
   const effectiveValue = value ?? defaultModel;
+  const firstModelValue = groupedModels[0]?.models[0]?.value ?? "";
+  const selectValue =
+    allowUnset && !effectiveValue
+      ? UNSET_MODEL_VALUE
+      : effectiveValue || firstModelValue;
   const currentModelName = effectiveValue.replace(/^refact\//, "");
+  const triggerLabel =
+    allowUnset && !effectiveValue ? unsetLabel : currentModelName;
+  const hasEffectiveValueInList = groupedModels.some((group) =>
+    group.models.some((model) => model.value === effectiveValue),
+  );
+  const showUnavailableValue = Boolean(
+    effectiveValue && !hasEffectiveValueInList,
+  );
+  const handleValueChange = useCallback(
+    (nextValue: string) => {
+      onValueChange(nextValue === UNSET_MODEL_VALUE ? "" : nextValue);
+    },
+    [onValueChange],
+  );
 
-  if (!capsData || groupedModels.length === 0) {
+  if (!caps || groupedModels.length === 0) {
+    if (allowUnset) {
+      return (
+        <Flex
+          direction={compact ? "row" : "column"}
+          align={compact ? "center" : undefined}
+          gap="1"
+        >
+          {showLabel && (
+            <Text size="1" color="gray">
+              {label}
+            </Text>
+          )}
+          <Select.Root
+            value={showUnavailableValue ? effectiveValue : UNSET_MODEL_VALUE}
+            onValueChange={handleValueChange}
+            disabled={disabled}
+            size={compact ? "1" : "2"}
+          >
+            <Select.Trigger
+              variant={compact ? "ghost" : undefined}
+              className={compact ? styles.compactTrigger : undefined}
+              style={compact ? undefined : { width: "100%" }}
+            />
+            <Select.Content position="popper">
+              {showUnavailableValue && (
+                <Select.Item
+                  value={effectiveValue}
+                  disabled
+                  textValue={effectiveValue}
+                >
+                  <span className={styles.trigger_only}>{effectiveValue}</span>
+                  <span className={styles.dropdown_only}>
+                    Unavailable: {effectiveValue}
+                  </span>
+                </Select.Item>
+              )}
+              <Select.Item value={UNSET_MODEL_VALUE} textValue={unsetLabel}>
+                <span className={styles.trigger_only}>{unsetLabel}</span>
+                <span className={styles.dropdown_only}>{unsetLabel}</span>
+              </Select.Item>
+            </Select.Content>
+          </Select.Root>
+        </Flex>
+      );
+    }
+
     return (
       <Text size="1" color="gray" style={{ lineHeight: 1 }}>
         {showLabel ? `${label} ` : ""}
-        {currentModelName || "No models"}
+        {triggerLabel || "No models"}
       </Text>
     );
   }
@@ -59,8 +135,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           </Text>
         )}
         <Select.Root
-          value={effectiveValue}
-          onValueChange={onValueChange}
+          value={selectValue}
+          onValueChange={handleValueChange}
           disabled={disabled}
           size="1"
         >
@@ -78,6 +154,24 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             }}
           />
           <Select.Content position="popper">
+            {showUnavailableValue && (
+              <Select.Item
+                value={effectiveValue}
+                disabled
+                textValue={effectiveValue}
+              >
+                <span className={styles.trigger_only}>{effectiveValue}</span>
+                <span className={styles.dropdown_only}>
+                  Unavailable: {effectiveValue}
+                </span>
+              </Select.Item>
+            )}
+            {allowUnset && (
+              <Select.Item value={UNSET_MODEL_VALUE} textValue={unsetLabel}>
+                <span className={styles.trigger_only}>{unsetLabel}</span>
+                <span className={styles.dropdown_only}>{unsetLabel}</span>
+              </Select.Item>
+            )}
             {groupedModels.map((group) => (
               <Select.Group key={group.provider}>
                 <Select.Label>{group.displayName}</Select.Label>
@@ -118,13 +212,31 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         </Text>
       )}
       <Select.Root
-        value={effectiveValue}
-        onValueChange={onValueChange}
+        value={selectValue}
+        onValueChange={handleValueChange}
         disabled={disabled}
         size="2"
       >
         <Select.Trigger style={{ width: "100%" }} />
         <Select.Content position="popper">
+          {showUnavailableValue && (
+            <Select.Item
+              value={effectiveValue}
+              disabled
+              textValue={effectiveValue}
+            >
+              <span className={styles.trigger_only}>{effectiveValue}</span>
+              <span className={styles.dropdown_only}>
+                Unavailable: {effectiveValue}
+              </span>
+            </Select.Item>
+          )}
+          {allowUnset && (
+            <Select.Item value={UNSET_MODEL_VALUE} textValue={unsetLabel}>
+              <span className={styles.trigger_only}>{unsetLabel}</span>
+              <span className={styles.dropdown_only}>{unsetLabel}</span>
+            </Select.Item>
+          )}
           {groupedModels.map((group) => (
             <Select.Group key={group.provider}>
               <Select.Label>{group.displayName}</Select.Label>

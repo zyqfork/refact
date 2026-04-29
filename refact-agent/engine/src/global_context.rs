@@ -179,7 +179,6 @@ pub struct CommandLine {
         help = "Specify the privacy.yaml, replacing the global one"
     )]
     pub privacy_yaml: String,
-
 }
 
 pub struct AtCommandsPreviewCache {
@@ -549,8 +548,8 @@ pub async fn create_global_context(
         project_registry_cache: Arc::new(StdRwLock::new(RegistryCacheManager::new())),
         providers: Arc::new(ARwLock::new(
             load_providers_from_config(&config_dir, &http_client)
-            .await
-            .unwrap_or_default(),
+                .await
+                .unwrap_or_default(),
         )),
         knowledge_index: Arc::new(AMutex::new(KnowledgeIndex::empty())),
         llm_stats_sender: None,

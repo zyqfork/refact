@@ -18,7 +18,7 @@ tool:
 subchat:
   context_mode: bare
   stateful: false
-  model: refact/o4-mini-deep-research
+  model_type: thinking
   n_ctx: 200000
   max_new_tokens: 100000
   reasoning_effort: medium

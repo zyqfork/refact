@@ -12,7 +12,7 @@ use crate::caps::providers::{
     add_models_to_caps, read_providers_d, resolve_provider_api_key, post_process_provider,
     CapsProvider,
 };
-use crate::providers::config::ProviderDefaults;
+use crate::providers::config::{ModelTypeDefaults, ProviderDefaults, is_legacy_refact_model};
 use crate::caps::model_caps::{ModelCapabilities, get_model_caps, resolve_model_caps};
 use crate::llm::WireFormat;
 use crate::providers::traits::AvailableModel;
@@ -682,57 +682,9 @@ pub async fn populate_chat_models_from_providers(
         }
     }
 
-    if !caps.chat_models.is_empty() {
-        let need_new_default = caps.defaults.chat_default_model.is_empty()
-            || !caps
-                .chat_models
-                .contains_key(&caps.defaults.chat_default_model);
-
-        if need_new_default {
-            let mut sorted_model_ids: Vec<&String> = caps.chat_models.keys().collect();
-            sorted_model_ids.sort();
-            if let Some(first_model_id) = sorted_model_ids.first() {
-                info!("Auto-selecting default chat model: {}", first_model_id);
-                caps.defaults.chat_default_model = (*first_model_id).clone();
-            }
-        }
-
-        let need_new_light = caps.defaults.chat_light_model.is_empty()
-            || !caps
-                .chat_models
-                .contains_key(&caps.defaults.chat_light_model);
-        if need_new_light && !caps.defaults.chat_default_model.is_empty() {
-            info!(
-                "Light model '{}' not available, falling back to default '{}'",
-                caps.defaults.chat_light_model, caps.defaults.chat_default_model
-            );
-            caps.defaults.chat_light_model = caps.defaults.chat_default_model.clone();
-        }
-
-        let need_new_thinking = caps.defaults.chat_thinking_model.is_empty()
-            || !caps
-                .chat_models
-                .contains_key(&caps.defaults.chat_thinking_model);
-        if need_new_thinking && !caps.defaults.chat_default_model.is_empty() {
-            info!(
-                "Thinking model '{}' not available, falling back to default '{}'",
-                caps.defaults.chat_thinking_model, caps.defaults.chat_default_model
-            );
-            caps.defaults.chat_thinking_model = caps.defaults.chat_default_model.clone();
-        }
-
-        let need_new_buddy = caps.defaults.chat_buddy_model.is_empty()
-            || !caps
-                .chat_models
-                .contains_key(&caps.defaults.chat_buddy_model);
-        if need_new_buddy && !caps.defaults.chat_light_model.is_empty() {
-            info!(
-                "Buddy model '{}' not available, falling back to light model '{}'",
-                caps.defaults.chat_buddy_model, caps.defaults.chat_light_model
-            );
-            caps.defaults.chat_buddy_model = caps.defaults.chat_light_model.clone();
-        }
-    }
+    // Chat default model slots are intentionally not auto-filled. The Default Models UI can
+    // leave each slot unset, and tools that require a model type report a setup error instead
+    // of silently falling back to another model type.
 
     if !caps.completion_models.is_empty() {
         let need_new_default = caps.defaults.completion_default_model.is_empty()
@@ -750,6 +702,144 @@ pub async fn populate_chat_models_from_providers(
                 );
                 caps.defaults.completion_default_model = (*first_model_id).clone();
             }
+        }
+    }
+}
+
+fn resolve_user_default_chat_model(
+    model: &str,
+    chat_models: &IndexMap<String, Arc<ChatModelRecord>>,
+) -> Option<String> {
+    if model.is_empty() {
+        return None;
+    }
+    if chat_models.contains_key(model) {
+        return Some(model.to_string());
+    }
+    if !model.contains('/') {
+        for key in chat_models.keys() {
+            if let Some(name) = key.split('/').last() {
+                if name == model {
+                    return Some(key.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn apply_user_default_chat_model(
+    target: &mut String,
+    defaults: &ModelTypeDefaults,
+    label: &str,
+    chat_models: &IndexMap<String, Arc<ChatModelRecord>>,
+) {
+    let Some(model) = defaults.model.as_deref() else {
+        return;
+    };
+
+    let model = model.trim();
+    if model.is_empty() {
+        target.clear();
+        return;
+    }
+
+    if is_legacy_refact_model(model) {
+        warn!(
+            "Legacy Refact Cloud {} default '{}' was reset to none",
+            label, model
+        );
+        target.clear();
+        return;
+    }
+
+    match resolve_user_default_chat_model(model, chat_models) {
+        Some(resolved) => *target = resolved,
+        None => {
+            warn!(
+                "User default {} model '{}' not found in available models; keeping configured value for setup diagnostics",
+                label, model
+            );
+            *target = model.to_string();
+        }
+    }
+}
+
+fn clear_legacy_refact_chat_defaults(caps: &mut CodeAssistantCaps) {
+    let defaults = &mut caps.defaults;
+    clear_legacy_refact_chat_default("chat", &mut defaults.chat_default_model);
+    clear_legacy_refact_chat_default("light", &mut defaults.chat_light_model);
+    clear_legacy_refact_chat_default("thinking", &mut defaults.chat_thinking_model);
+    clear_legacy_refact_chat_default("buddy", &mut defaults.chat_buddy_model);
+}
+
+fn clear_legacy_refact_chat_default(label: &str, value: &mut String) {
+    if is_legacy_refact_model(value) {
+        warn!(
+            "Legacy Refact Cloud {} default '{}' was reset to none",
+            label, value
+        );
+        value.clear();
+    }
+}
+
+fn remove_legacy_refact_models_from_caps(caps: &mut CodeAssistantCaps) {
+    caps.chat_models.retain(|model_id, _| {
+        let keep = !is_legacy_refact_model(model_id);
+        if !keep {
+            warn!(
+                "Legacy Refact Cloud chat model '{}' was removed from caps",
+                model_id
+            );
+        }
+        keep
+    });
+
+    caps.completion_models.retain(|model_id, _| {
+        let keep = !is_legacy_refact_model(model_id);
+        if !keep {
+            warn!(
+                "Legacy Refact Cloud completion model '{}' was removed from caps",
+                model_id
+            );
+        }
+        keep
+    });
+
+    if is_legacy_refact_model(&caps.embedding_model.base.id)
+        || is_legacy_refact_model(&caps.embedding_model.base.name)
+    {
+        warn!(
+            "Legacy Refact Cloud embedding model '{}' was reset to none",
+            caps.embedding_model.base.id
+        );
+        caps.embedding_model = EmbeddingModelRecord::default();
+    }
+
+    clear_legacy_refact_chat_defaults(caps);
+
+    if is_legacy_refact_model(&caps.defaults.completion_default_model)
+        || (!caps.defaults.completion_default_model.is_empty()
+            && !caps
+                .completion_models
+                .contains_key(&caps.defaults.completion_default_model))
+    {
+        warn!(
+            "Completion default model '{}' was reset to none because it is no longer available",
+            caps.defaults.completion_default_model
+        );
+        caps.defaults.completion_default_model.clear();
+    }
+
+    if caps.defaults.completion_default_model.is_empty() && !caps.completion_models.is_empty() {
+        let mut candidates: Vec<&String> = caps.completion_models.keys().collect();
+        candidates.sort();
+        if let Some(first_model_id) = candidates.first() {
+            info!(
+                "Auto-selecting default completion model after legacy cleanup: {}",
+                first_model_id
+            );
+            caps.defaults.completion_default_model = (*first_model_id).clone();
         }
     }
 }
@@ -809,70 +899,35 @@ pub async fn load_caps(
     add_models_to_caps(&mut caps, providers);
     populate_chat_models_from_providers(&mut caps, gcx.clone()).await;
     apply_model_caps_to_all_chat_models(&mut caps);
+    remove_legacy_refact_models_from_caps(&mut caps);
 
     match ProviderDefaults::load(&config_dir).await {
         Ok(user_defaults) => {
-            let resolve_user_model = |model: &str,
-                                      chat_models: &IndexMap<String, Arc<ChatModelRecord>>|
-             -> Option<String> {
-                if model.is_empty() {
-                    return None;
-                }
-                if chat_models.contains_key(model) {
-                    return Some(model.to_string());
-                }
-                if !model.contains('/') {
-                    for key in chat_models.keys() {
-                        if let Some(name) = key.split('/').last() {
-                            if name == model {
-                                return Some(key.clone());
-                            }
-                        }
-                    }
-                }
-                None
-            };
-
-            if let Some(model) = &user_defaults.chat.model {
-                match resolve_user_model(model, &caps.chat_models) {
-                    Some(resolved) => caps.defaults.chat_default_model = resolved,
-                    None if !model.is_empty() => warn!(
-                        "User default chat model '{}' not found in available models, ignoring",
-                        model
-                    ),
-                    _ => {}
-                }
-            }
-            if let Some(model) = &user_defaults.chat_light.model {
-                match resolve_user_model(model, &caps.chat_models) {
-                    Some(resolved) => caps.defaults.chat_light_model = resolved,
-                    None if !model.is_empty() => warn!(
-                        "User default light model '{}' not found in available models, ignoring",
-                        model
-                    ),
-                    _ => {}
-                }
-            }
-            if let Some(model) = &user_defaults.chat_buddy.model {
-                match resolve_user_model(model, &caps.chat_models) {
-                    Some(resolved) => caps.defaults.chat_buddy_model = resolved,
-                    None if !model.is_empty() => warn!(
-                        "User default buddy model '{}' not found in available models, ignoring",
-                        model
-                    ),
-                    _ => {}
-                }
-            }
-            if let Some(model) = &user_defaults.chat_thinking.model {
-                match resolve_user_model(model, &caps.chat_models) {
-                    Some(resolved) => caps.defaults.chat_thinking_model = resolved,
-                    None if !model.is_empty() => warn!(
-                        "User default thinking model '{}' not found in available models, ignoring",
-                        model
-                    ),
-                    _ => {}
-                }
-            }
+            apply_user_default_chat_model(
+                &mut caps.defaults.chat_default_model,
+                &user_defaults.chat,
+                "chat",
+                &caps.chat_models,
+            );
+            apply_user_default_chat_model(
+                &mut caps.defaults.chat_light_model,
+                &user_defaults.chat_light,
+                "light",
+                &caps.chat_models,
+            );
+            apply_user_default_chat_model(
+                &mut caps.defaults.chat_buddy_model,
+                &user_defaults.chat_buddy,
+                "buddy",
+                &caps.chat_models,
+            );
+            apply_user_default_chat_model(
+                &mut caps.defaults.chat_thinking_model,
+                &user_defaults.chat_thinking,
+                "thinking",
+                &caps.chat_models,
+            );
+            remove_legacy_refact_models_from_caps(&mut caps);
             caps.user_defaults = user_defaults;
         }
         Err(e) => {

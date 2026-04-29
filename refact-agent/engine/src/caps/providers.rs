@@ -419,6 +419,14 @@ pub async fn read_providers_d(
             None => continue,
         };
 
+        if provider_name == "refact" {
+            tracing::warn!(
+                "Legacy Refact Cloud provider config '{}' is ignored; configure a BYOK provider instead",
+                yaml_path.display()
+            );
+            continue;
+        }
+
         if !seen_provider_names.insert(provider_name.clone()) {
             error_log.push(YamlError {
                 path: yaml_path.to_string_lossy().to_string(),

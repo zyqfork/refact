@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::caps::model_caps::ModelCapabilities;
 use crate::llm::adapter::WireFormat;
-use crate::providers::config::resolve_env_var;
+use crate::providers::config::{is_legacy_refact_model, resolve_env_var};
 use crate::providers::traits::{
     AvailableModel, CustomModelConfig, ModelPricing, ModelSource, ProviderRuntime, ProviderTrait,
     merge_custom_models, parse_enabled_models, parse_custom_models, set_model_enabled_impl,
@@ -202,7 +202,7 @@ available:
             Ok(resp) => resp,
             Err(e) => {
                 tracing::warn!("OpenAI: failed to fetch models: {}", e);
-                return self.get_available_models_from_caps(model_caps);
+                return self.get_custom_models_only();
             }
         };
 
@@ -211,14 +211,14 @@ available:
                 "OpenAI: models endpoint returned status {}",
                 response.status()
             );
-            return self.get_available_models_from_caps(model_caps);
+            return self.get_custom_models_only();
         }
 
         let json: serde_json::Value = match response.json().await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("OpenAI: failed to parse models response: {}", e);
-                return self.get_available_models_from_caps(model_caps);
+                return self.get_custom_models_only();
             }
         };
 
@@ -237,6 +237,13 @@ available:
                     Some(id) => id.to_string(),
                     None => continue,
                 };
+
+                if is_legacy_refact_model(&id) {
+                    continue;
+                }
+                if !is_openai_chat_model_id(&id) {
+                    continue;
+                }
 
                 let matches_filter = match &filter_regex {
                     Some(regex) => regex.is_match(&id),
@@ -283,26 +290,38 @@ available:
             }
         }
 
-        // Also include models from model_caps that match filter but weren't in API response
-        // (some models might be in caps registry but not returned by the models endpoint)
-        for (name, caps) in model_caps {
-            let matches = match &filter_regex {
-                Some(regex) => regex.is_match(name),
-                None => true,
-            };
-            if matches && !models_map.contains_key(name) {
-                let enabled = enabled_set.contains(name.as_str());
-                let pricing = self.model_pricing(name);
-                models_map.insert(
-                    name.clone(),
-                    AvailableModel::from_caps(name, caps, enabled, pricing),
-                );
-            }
-        }
-
         let mut models: Vec<AvailableModel> = models_map.into_values().collect();
         merge_custom_models(&mut models, &self.custom_models, &enabled_set);
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models
     }
+}
+
+fn is_openai_chat_model_id(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    if [
+        "audio",
+        "dall-e",
+        "embedding",
+        "image",
+        "moderation",
+        "realtime",
+        "speech",
+        "transcribe",
+        "tts",
+        "whisper",
+    ]
+    .iter()
+    .any(|blocked| id.contains(blocked))
+    {
+        return false;
+    }
+
+    id.starts_with("gpt-")
+        || id == "o1"
+        || id.starts_with("o1-")
+        || id == "o3"
+        || id.starts_with("o3-")
+        || id == "o4"
+        || id.starts_with("o4-")
 }

@@ -1,8 +1,15 @@
+export function isLegacyRefactModel(modelName: string): boolean {
+  const name = modelName.trim();
+  return (
+    name === "refact" || name.startsWith("refact/") || name.includes("/refact/")
+  );
+}
+
 /**
- * Extract provider name from model name (e.g., "refact/gpt-4o" -> "openai")
+ * Extract provider name from model name (e.g., "openai/gpt-4o" -> "openai")
  */
 export function extractProvider(modelName: string): string {
-  const name = modelName.replace(/^refact\//, "").toLowerCase();
+  const name = modelName.toLowerCase();
 
   if (name.includes("gpt") || name.includes("o1") || name.includes("o3")) {
     return "openai";

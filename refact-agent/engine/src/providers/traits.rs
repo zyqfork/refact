@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::caps::model_caps::ModelCapabilities;
 use crate::llm::adapter::WireFormat;
+use crate::providers::config::is_legacy_refact_model;
 
 static REGEX_CACHE: OnceLock<RwLock<HashMap<&'static str, Regex>>> = OnceLock::new();
 
@@ -428,6 +429,9 @@ pub trait ProviderTrait: Send + Sync {
         let regex_opt: Option<Regex> = self.model_filter_regex().and_then(get_cached_regex);
 
         for (name, caps) in model_caps {
+            if is_legacy_refact_model(name) {
+                continue;
+            }
             let matches = match &regex_opt {
                 Some(regex) => regex.is_match(name),
                 None => true,
@@ -460,6 +464,7 @@ pub trait ProviderTrait: Send + Sync {
         let mut models: Vec<AvailableModel> = self
             .custom_models()
             .iter()
+            .filter(|(id, _)| !is_legacy_refact_model(id))
             .map(|(id, config)| {
                 let enabled = enabled_set.contains(id.as_str());
                 AvailableModel::from_custom(id, config, enabled)
@@ -480,6 +485,9 @@ pub fn merge_custom_models(
     enabled_set: &std::collections::HashSet<&str>,
 ) {
     for (id, config) in custom_models {
+        if is_legacy_refact_model(id) {
+            continue;
+        }
         let enabled = enabled_set.contains(id.as_str());
         if let Some(existing) = models.iter_mut().find(|m| m.id == *id) {
             let has_capability_overrides = config.n_ctx.is_some()
@@ -561,7 +569,13 @@ pub fn derive_endpoint_from_chat_url(chat_endpoint: &str) -> Option<String> {
 pub fn parse_enabled_models(yaml: &serde_yaml::Value, enabled_models: &mut Vec<String>) {
     if let Some(models) = yaml.get("enabled_models").and_then(|v| v.as_sequence()) {
         enabled_models.clear();
-        enabled_models.extend(models.iter().filter_map(|v| v.as_str().map(String::from)));
+        enabled_models.extend(
+            models
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|model_id| !is_legacy_refact_model(model_id))
+                .map(String::from),
+        );
     }
 }
 
@@ -574,6 +588,9 @@ pub fn parse_custom_models(
         custom_models.clear();
         for (key, value) in custom {
             if let Some(model_id) = key.as_str() {
+                if is_legacy_refact_model(model_id) {
+                    continue;
+                }
                 if let Ok(config) = serde_yaml::from_value(value.clone()) {
                     custom_models.insert(model_id.to_string(), config);
                 }
@@ -584,6 +601,11 @@ pub fn parse_custom_models(
 
 /// Standard implementation for set_model_enabled (allowlist - adds when enabled)
 pub fn set_model_enabled_impl(enabled_models: &mut Vec<String>, model_id: &str, enabled: bool) {
+    if is_legacy_refact_model(model_id) {
+        enabled_models.retain(|m| !is_legacy_refact_model(m));
+        return;
+    }
+
     if enabled {
         if !enabled_models.iter().any(|m| m == model_id) {
             enabled_models.push(model_id.to_string());
