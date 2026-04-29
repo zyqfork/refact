@@ -135,14 +135,13 @@ const EDITING_TOOLS: &[&str] = &[
     "mv",
 ];
 
-const DANGEROUS_TOOLS: &[&str] = &["shell", "rm"];
-
 fn is_editing_tool(tool_name: &str) -> bool {
     EDITING_TOOLS.contains(&tool_name)
 }
 
-fn is_dangerous_tool(tool_name: &str) -> bool {
-    DANGEROUS_TOOLS.contains(&tool_name)
+fn should_auto_approve_confirmation(thread: &ThreadParams, tool_name: &str) -> bool {
+    thread.auto_approve_dangerous_commands
+        || (thread.auto_approve_editing_tools && is_editing_tool(tool_name))
 }
 
 fn get_context_files_from_messages(messages: &[ChatMessage]) -> Vec<String> {
@@ -305,17 +304,29 @@ mod tests {
     }
 
     #[test]
-    fn test_is_dangerous_tool() {
-        assert!(is_dangerous_tool("shell"));
-        assert!(is_dangerous_tool("rm"));
+    fn test_auto_approve_dangerous_commands_approves_all_tools() {
+        let thread = ThreadParams {
+            auto_approve_dangerous_commands: true,
+            ..Default::default()
+        };
+
+        assert!(should_auto_approve_confirmation(&thread, "shell"));
+        assert!(should_auto_approve_confirmation(&thread, "rm"));
+        assert!(should_auto_approve_confirmation(&thread, "cat"));
+        assert!(should_auto_approve_confirmation(&thread, "ask_questions"));
     }
 
     #[test]
-    fn test_is_not_dangerous_tool() {
-        assert!(!is_dangerous_tool("cat"));
-        assert!(!is_dangerous_tool("mv"));
-        assert!(!is_dangerous_tool("patch"));
-        assert!(!is_dangerous_tool(""));
+    fn test_auto_approve_editing_tools_stays_limited_to_editing_tools() {
+        let thread = ThreadParams {
+            auto_approve_editing_tools: true,
+            ..Default::default()
+        };
+
+        assert!(should_auto_approve_confirmation(&thread, "apply_patch"));
+        assert!(should_auto_approve_confirmation(&thread, "mv"));
+        assert!(!should_auto_approve_confirmation(&thread, "cat"));
+        assert!(!should_auto_approve_confirmation(&thread, "shell"));
     }
 
     #[test]
@@ -752,13 +763,9 @@ pub async fn process_tool_calls_once(
 
     if !confirmations.is_empty() {
         let (auto_approved, remaining): (Vec<_>, Vec<_>) =
-            confirmations.into_iter().partition(|c| {
-                let auto_editing =
-                    thread.auto_approve_editing_tools && is_editing_tool(&c.tool_name);
-                let auto_dangerous =
-                    thread.auto_approve_dangerous_commands && is_dangerous_tool(&c.tool_name);
-                auto_editing || auto_dangerous
-            });
+            confirmations
+                .into_iter()
+                .partition(|c| should_auto_approve_confirmation(&thread, &c.tool_name));
 
         if !remaining.is_empty() {
             let mut auto_approved_ids: Vec<String> = auto_approved
