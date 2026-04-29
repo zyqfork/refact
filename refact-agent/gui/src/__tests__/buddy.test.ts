@@ -1699,6 +1699,13 @@ describe("buddy opportunities, pulse, and drafts", () => {
       patch: {},
     };
     expect(a3.kind).toBe("draft_defaults_change");
+
+    const a4: BuddyAction = {
+      kind: "draft_defaults_change",
+      defaults_kind: "chat_light_model",
+      patch: { chat_light: { model: "openai/gpt-4o-mini" } },
+    };
+    expect(a4.defaults_kind).toBe("chat_light_model");
   });
 
   test("BuddyPage discriminated union type check", () => {

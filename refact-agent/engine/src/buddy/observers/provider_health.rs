@@ -45,7 +45,7 @@ fn check_default_model(
 pub fn detect_provider_health_facts(
     defaults: &DefaultModels,
     chat_models: &[String],
-    completion_models: &[String],
+    _completion_models: &[String],
     now: DateTime<Utc>,
 ) -> Vec<BuddyFact> {
     let mut facts = vec![];
@@ -81,14 +81,6 @@ pub fn detect_provider_health_facts(
             now,
         );
     }
-    check_default_model(
-        &mut facts,
-        "completion_default_model",
-        defaults.completion_default_model.as_str(),
-        "completion_model",
-        completion_models,
-        now,
-    );
     facts
 }
 
@@ -117,7 +109,6 @@ impl BuddyObserver for ProviderHealthObserver {
             None => return vec![],
         };
         let chat_models: Vec<String> = caps.chat_models.keys().cloned().collect();
-        let completion_models: Vec<String> = caps.completion_models.keys().cloned().collect();
-        detect_provider_health_facts(&caps.defaults, &chat_models, &completion_models, Utc::now())
+        detect_provider_health_facts(&caps.defaults, &chat_models, &[], Utc::now())
     }
 }

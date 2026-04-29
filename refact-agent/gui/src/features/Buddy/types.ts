@@ -613,6 +613,7 @@ export type OpportunityStatus =
 
 export type DefaultsKind =
   | "chat_model"
+  | "chat_light_model"
   | "chat_buddy_model"
   | "chat_thinking_model";
 

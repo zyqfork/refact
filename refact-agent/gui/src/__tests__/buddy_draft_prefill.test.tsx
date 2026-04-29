@@ -6,6 +6,8 @@ import { SkillEditor } from "../features/Extensions/components/SkillEditor";
 import { CommandEditor } from "../features/Extensions/components/CommandEditor";
 import { BuddyDraftPreview } from "../features/Buddy/BuddyDraftPreview";
 import { ConfigEditor } from "../features/Customization/Customization";
+import { DefaultModels } from "../features/DefaultModels";
+import { STUB_CAPS_RESPONSE } from "../__fixtures__/caps";
 import type { BuddyDraft } from "../features/Buddy/types";
 import type { ConfigItem } from "../services/refact/customization";
 
@@ -94,6 +96,28 @@ const MODE_DRAFT: BuddyDraft = {
   explanation: "Buddy suggests this mode change",
   created_at: "2024-01-01T00:00:00Z",
   expires_at: "2099-12-31T00:00:00Z",
+};
+
+const DEFAULTS_DRAFT: BuddyDraft = {
+  id: "draft-defaults-1",
+  kind: "defaults_model",
+  title: "Default Models Draft",
+  yaml_or_json: JSON.stringify({
+    chat: { model: "openai/gpt-4o" },
+    chat_light: { model: "openai/gpt-4o-mini" },
+    chat_thinking: { model: "openai/o1" },
+    chat_buddy: { model: "openai/claude-3-5-sonnet" },
+  }),
+  explanation: "Buddy suggests default models",
+  created_at: "2024-01-01T00:00:00Z",
+  expires_at: "2099-12-31T00:00:00Z",
+};
+
+const MOCK_DEFAULTS = {
+  chat: {},
+  chat_light: {},
+  chat_thinking: {},
+  chat_buddy: {},
 };
 
 describe("BuddyDraftPreview_visible_when_draft_present", () => {
@@ -311,6 +335,57 @@ describe("CustomizationEditor_with_draft_id_prefills", () => {
     await waitFor(() => {
       expect(savedBody).not.toBeNull();
       expect(savedBody?.draft_id).toBe("draft-mode-1");
+    });
+  });
+});
+
+
+describe("DefaultModels_with_defaults_model_draft", () => {
+  it("overlays ProviderDefaults shape and sends draft_id on save", async () => {
+    let savedBody: Record<string, unknown> | null = null;
+
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/caps", () =>
+        HttpResponse.json(STUB_CAPS_RESPONSE),
+      ),
+      http.get("http://127.0.0.1:8001/v1/defaults", () =>
+        HttpResponse.json(MOCK_DEFAULTS),
+      ),
+      http.get("http://127.0.0.1:8001/v1/buddy/drafts/draft-defaults-1", () =>
+        HttpResponse.json(DEFAULTS_DRAFT),
+      ),
+      http.post("http://127.0.0.1:8001/v1/defaults", async ({ request }) => {
+        savedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ success: true });
+      }),
+    );
+
+    render(
+      <DefaultModels
+        backFromDefaultModels={vi.fn()}
+        host="vscode"
+        tabbed={false}
+        draftId="draft-defaults-1"
+      />,
+      { preloadedState: CONFIG_STATE },
+    );
+
+    await screen.findByText("Buddy Draft: Default Models Draft");
+
+    const saveBtn = screen.getByText("Save Changes");
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    saveBtn.click();
+
+    await waitFor(() => {
+      expect(savedBody).toMatchObject({
+        draft_id: "draft-defaults-1",
+        chat: { model: "openai/gpt-4o" },
+        chat_light: { model: "openai/gpt-4o-mini" },
+        chat_thinking: { model: "openai/o1" },
+        chat_buddy: { model: "openai/claude-3-5-sonnet" },
+      });
+      expect(savedBody).not.toHaveProperty("chat_default_model");
+      expect(savedBody).not.toHaveProperty("completion_default_model");
     });
   });
 });

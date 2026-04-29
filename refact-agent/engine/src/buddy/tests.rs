@@ -2396,6 +2396,7 @@ fn schema_contract_opportunity_status_variants() {
 fn schema_contract_defaults_kind_variants() {
     let cases = vec![
         (DefaultsKind::ChatModel, "chat_model"),
+        (DefaultsKind::ChatLightModel, "chat_light_model"),
         (DefaultsKind::ChatBuddyModel, "chat_buddy_model"),
         (DefaultsKind::ChatThinkingModel, "chat_thinking_model"),
     ];
@@ -3362,28 +3363,25 @@ fn provider_health_no_emit_when_ok() {
 }
 
 #[test]
-fn provider_health_completion_default_uses_completion_namespace() {
+fn provider_health_ignores_completion_default() {
     use super::observers::provider_health::detect_provider_health_facts;
     use crate::caps::DefaultModels;
     let now = chrono::Utc::now();
     let defaults = DefaultModels {
-        completion_default_model: "shared/model".to_string(),
+        completion_default_model: "missing-completion".to_string(),
         chat_default_model: "openai/gpt-4o".to_string(),
         chat_thinking_model: "openai/o1".to_string(),
         chat_light_model: "openai/gpt-4o-mini".to_string(),
         chat_buddy_model: "openai/gpt-4o-mini".to_string(),
     };
     let chat_models = vec![
-        "shared/model".to_string(),
         "openai/gpt-4o".to_string(),
         "openai/o1".to_string(),
         "openai/gpt-4o-mini".to_string(),
     ];
     let facts = detect_provider_health_facts(&defaults, &chat_models, &[], now);
-    assert!(facts.iter().any(|f| {
-        f.kind == BuddyFactKind::BrokenModelReference
-            && f.payload.get("field").and_then(|v| v.as_str()) == Some("completion_model")
-            && f.payload.get("model_id").and_then(|v| v.as_str()) == Some("shared/model")
+    assert!(!facts.iter().any(|f| {
+        f.payload.get("field").and_then(|v| v.as_str()) == Some("completion_model")
     }));
 }
 
@@ -5414,11 +5412,11 @@ async fn pulse_populates_all_subpulse_counts() {
 
     let gcx = crate::global_context::tests::make_test_gcx().await;
 
-    // Set up caps with all 3 required models so defaults_ok = true.
     {
         let mut gcx_w = gcx.write().await;
         let mut caps = CodeAssistantCaps::default();
         caps.defaults.chat_default_model = "openai/gpt-4o".to_string();
+        caps.defaults.chat_light_model = "openai/gpt-4o-mini".to_string();
         caps.defaults.chat_thinking_model = "openai/o1".to_string();
         caps.defaults.chat_buddy_model = "openai/gpt-4o-mini".to_string();
         gcx_w.caps = Some(Arc::new(caps));
@@ -5439,7 +5437,7 @@ async fn pulse_populates_all_subpulse_counts() {
     assert!(pulse.generated_at.is_some(), "generated_at must be set");
     assert!(
         pulse.providers.defaults_ok,
-        "defaults_ok must be true when all 3 models set"
+        "defaults_ok must be true when all chat-family models are set"
     );
     assert_eq!(
         pulse.mcp.total,
@@ -5605,7 +5603,7 @@ async fn accept_route_response_shape_for_defaults_draft() {
         patch: serde_json::json!({}),
     };
 
-    let outcome = dispatch_action(gcx, "irrelevant-id", &action)
+    let outcome = dispatch_action(gcx.clone(), "irrelevant-id", &action)
         .await
         .unwrap();
 
@@ -5622,6 +5620,28 @@ async fn accept_route_response_shape_for_defaults_draft() {
         Some("chat_buddy_model"),
         "defaults_kind must be a separate field with the DefaultsKind value"
     );
+    let draft_id = result
+        .get("draft_id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    let draft = lock
+        .as_ref()
+        .unwrap()
+        .draft_store
+        .get(&draft_id)
+        .unwrap();
+    let content: serde_json::Value = serde_json::from_str(&draft.yaml_or_json).unwrap();
+    assert_eq!(
+        content
+            .get("chat_buddy")
+            .and_then(|v| v.get("model"))
+            .and_then(|v| v.as_str()),
+        Some("your-provider/model-name")
+    );
+
     assert!(
         result
             .get("draft_id")
@@ -5630,6 +5650,175 @@ async fn accept_route_response_shape_for_defaults_draft() {
             .unwrap_or(false),
         "draft_id must be present and non-empty"
     );
+}
+
+#[tokio::test]
+async fn defaults_update_with_valid_draft_consumes_after_save() {
+    use axum::Extension;
+    use crate::providers::config::ProviderDefaults;
+    use crate::providers::http::handle_v1_defaults_update;
+    use hyper::body::Bytes;
+    use hyper::StatusCode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    gcx.write().await.config_dir = dir.path().to_path_buf();
+
+    let mut svc = make_service();
+    let draft = svc
+        .create_draft(
+            DraftKind::DefaultsModel,
+            "Default Models".to_string(),
+            r#"{"chat":{"model":"openai/gpt-4o"}}"#.to_string(),
+            String::new(),
+        )
+        .unwrap();
+    let draft_id = draft.id.clone();
+    *gcx.read().await.buddy.lock().await = Some(svc);
+
+    let body = serde_json::json!({
+        "chat": { "model": "openai/gpt-4o" },
+        "chat_light": { "model": "openai/gpt-4o-mini" },
+        "chat_thinking": {},
+        "chat_buddy": {},
+        "draft_id": draft_id.clone(),
+    });
+    let response = handle_v1_defaults_update(Extension(gcx.clone()), Bytes::from(body.to_string()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = ProviderDefaults::load(dir.path()).await.unwrap();
+    assert_eq!(saved.chat.model.as_deref(), Some("openai/gpt-4o"));
+    assert_eq!(
+        saved.chat_light.model.as_deref(),
+        Some("openai/gpt-4o-mini")
+    );
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    assert!(lock
+        .as_ref()
+        .unwrap()
+        .draft_store
+        .get(&draft_id)
+        .is_none());
+}
+
+#[tokio::test]
+async fn defaults_update_wrong_draft_kind_returns_conflict_and_keeps_draft() {
+    use axum::Extension;
+    use crate::providers::http::handle_v1_defaults_update;
+    use hyper::body::Bytes;
+    use hyper::StatusCode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    gcx.write().await.config_dir = dir.path().to_path_buf();
+
+    let mut svc = make_service();
+    let draft = svc
+        .create_draft(
+            DraftKind::Skill,
+            "Skill Draft".to_string(),
+            "---\nname: skill\n---\nbody".to_string(),
+            String::new(),
+        )
+        .unwrap();
+    let draft_id = draft.id.clone();
+    *gcx.read().await.buddy.lock().await = Some(svc);
+
+    let body = serde_json::json!({
+        "chat": { "model": "openai/gpt-4o" },
+        "chat_light": {},
+        "chat_thinking": {},
+        "chat_buddy": {},
+        "draft_id": draft_id.clone(),
+    });
+    let err = handle_v1_defaults_update(Extension(gcx.clone()), Bytes::from(body.to_string()))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.status_code, StatusCode::CONFLICT);
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    assert!(lock
+        .as_ref()
+        .unwrap()
+        .draft_store
+        .get(&draft_id)
+        .is_some());
+}
+
+#[tokio::test]
+async fn defaults_update_parse_invalid_draft_returns_422_and_keeps_draft() {
+    use axum::Extension;
+    use crate::providers::http::handle_v1_defaults_update;
+    use hyper::body::Bytes;
+    use hyper::StatusCode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    gcx.write().await.config_dir = dir.path().to_path_buf();
+
+    let mut svc = make_service();
+    let draft = svc
+        .create_draft(
+            DraftKind::DefaultsModel,
+            "Default Models".to_string(),
+            r#"{"chat_default_model":"openai/gpt-4o"}"#.to_string(),
+            String::new(),
+        )
+        .unwrap();
+    let draft_id = draft.id.clone();
+    *gcx.read().await.buddy.lock().await = Some(svc);
+
+    let body = serde_json::json!({
+        "chat": { "model": "openai/gpt-4o" },
+        "chat_light": {},
+        "chat_thinking": {},
+        "chat_buddy": {},
+        "draft_id": draft_id.clone(),
+    });
+    let err = handle_v1_defaults_update(Extension(gcx.clone()), Bytes::from(body.to_string()))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.status_code, StatusCode::UNPROCESSABLE_ENTITY);
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    assert!(lock
+        .as_ref()
+        .unwrap()
+        .draft_store
+        .get(&draft_id)
+        .is_some());
+}
+
+#[tokio::test]
+async fn defaults_update_without_draft_id_still_saves() {
+    use axum::Extension;
+    use crate::providers::config::ProviderDefaults;
+    use crate::providers::http::handle_v1_defaults_update;
+    use hyper::body::Bytes;
+    use hyper::StatusCode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    gcx.write().await.config_dir = dir.path().to_path_buf();
+
+    let body = serde_json::json!({
+        "chat": { "model": "openai/gpt-4o" },
+        "chat_light": {},
+        "chat_thinking": {},
+        "chat_buddy": {}
+    });
+    let response = handle_v1_defaults_update(Extension(gcx), Bytes::from(body.to_string()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = ProviderDefaults::load(dir.path()).await.unwrap();
+    assert_eq!(saved.chat.model.as_deref(), Some("openai/gpt-4o"));
 }
 
 #[test]
@@ -6212,13 +6401,10 @@ fn provider_tuning_uses_field_specific_defaults_kind() {
     let now = chrono::Utc::now();
 
     let cases: &[(&str, &str, &str)] = &[
-        ("chat_model", "chat_default_model", "chat_model"),
-        ("chat_buddy_model", "chat_buddy_model", "chat_buddy_model"),
-        (
-            "chat_thinking_model",
-            "chat_thinking_model",
-            "chat_thinking_model",
-        ),
+        ("chat_model", "chat", "chat_model"),
+        ("chat_light_model", "chat_light", "chat_light_model"),
+        ("chat_buddy_model", "chat_buddy", "chat_buddy_model"),
+        ("chat_thinking_model", "chat_thinking", "chat_thinking_model"),
     ];
 
     for (field, patch_key, expected_kind_str) in cases {
@@ -6259,9 +6445,13 @@ fn provider_tuning_uses_field_specific_defaults_kind() {
                 "field={} must map to defaults_kind={}",
                 field, expected_kind_str
             );
-            assert!(
-                patch.get(patch_key).is_some(),
-                "field={} patch must contain key '{}', got: {}",
+            assert_eq!(
+                patch
+                    .get(patch_key)
+                    .and_then(|v| v.get("model"))
+                    .and_then(|v| v.as_str()),
+                Some("your-provider/model-name"),
+                "field={} patch must contain ProviderDefaults key '{}', got: {}",
                 field,
                 patch_key,
                 patch
@@ -6271,42 +6461,28 @@ fn provider_tuning_uses_field_specific_defaults_kind() {
 }
 
 #[test]
-fn provider_tuning_unknown_field_falls_back_to_chat_model() {
+fn provider_tuning_ignores_unknown_and_completion_fields() {
     use super::facts::FactStore;
     use super::opportunities::{OpportunityDetector, OpportunityQueue};
     let now = chrono::Utc::now();
     let mut store = FactStore::new();
-    store.ingest(BuddyFact {
-        kind: BuddyFactKind::DefaultModelMissing,
-        key: "provider:default_missing:weird_field".to_string(),
-        source: "test",
-        payload: serde_json::json!({ "field": "weird_field", "model_id": serde_json::Value::Null }),
-        seen_at: now,
-        confidence: 0.8,
-    });
+    for field in ["weird_field", "completion_model"] {
+        store.ingest(BuddyFact {
+            kind: BuddyFactKind::DefaultModelMissing,
+            key: format!("provider:default_missing:{}", field),
+            source: "test",
+            payload: serde_json::json!({ "field": field, "model_id": serde_json::Value::Null }),
+            seen_at: now,
+            confidence: 0.8,
+        });
+    }
     let pulse = BuddyPulse::default();
     let queue = OpportunityQueue::new();
     let opps = OpportunityDetector::new().detect(&store, &pulse, &queue);
 
-    let provider_opp = opps
+    assert!(!opps
         .iter()
-        .find(|(o, _)| o.kind == BuddyOpportunityKind::ProviderTuning)
-        .expect("must emit ProviderTuning for unknown field");
-
-    let draft_action = provider_opp
-        .0
-        .proposed_actions
-        .iter()
-        .find(|a| matches!(a, BuddyAction::DraftDefaultsChange { .. }))
-        .expect("must have DraftDefaultsChange for unknown field");
-
-    if let BuddyAction::DraftDefaultsChange { defaults_kind, .. } = draft_action {
-        assert_eq!(
-            *defaults_kind,
-            DefaultsKind::ChatModel,
-            "unknown field must fall back to ChatModel"
-        );
-    }
+        .any(|(o, _)| o.kind == BuddyOpportunityKind::ProviderTuning));
 }
 
 // =============================================================================
@@ -6974,13 +7150,13 @@ async fn pulse_task_total_and_by_status_populated() {
 }
 
 #[test]
-fn provider_health_checks_chat_light_and_completion_models() {
+fn provider_health_checks_chat_light_and_ignores_completion_models() {
     use super::observers::provider_health::detect_provider_health_facts;
     use crate::caps::DefaultModels;
 
     let now = chrono::Utc::now();
     let defaults = DefaultModels {
-        completion_default_model: String::new(),
+        completion_default_model: "missing-completion".to_string(),
         chat_default_model: "openai/gpt-4o".to_string(),
         chat_thinking_model: "openai/o1".to_string(),
         chat_light_model: String::new(),
@@ -6997,9 +7173,8 @@ fn provider_health_checks_chat_light_and_completion_models() {
         f.kind == BuddyFactKind::DefaultModelMissing
             && f.payload.get("field").and_then(|v| v.as_str()) == Some("chat_light_model")
     }));
-    assert!(facts.iter().any(|f| {
-        f.kind == BuddyFactKind::DefaultModelMissing
-            && f.payload.get("field").and_then(|v| v.as_str()) == Some("completion_model")
+    assert!(!facts.iter().any(|f| {
+        f.payload.get("field").and_then(|v| v.as_str()) == Some("completion_model")
     }));
 }
 

@@ -191,6 +191,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
         completion_model: defaults.completion_model,
         embedding_model: defaults.embedding_model,
       };
+      let appliedDraft = false;
       if (draft && draft.kind === "defaults_model") {
         try {
           const patch = JSON.parse(draft.yaml_or_json) as Partial<
@@ -205,6 +206,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
           ] as ModelTypeKey[]) {
             if (patch[key]) {
               merged[key] = { ...(base[key] ?? {}), ...patch[key] };
+              appliedDraft = true;
             }
           }
           setLocalDefaults(merged);
@@ -214,7 +216,7 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
       } else {
         setLocalDefaults(base);
       }
-      setHasChanges(false);
+      setHasChanges(appliedDraft);
     }
   }, [defaults, draft]);
 
@@ -232,14 +234,17 @@ export const DefaultModels: React.FC<DefaultModelsProps> = ({
 
   const handleSave = useCallback(async () => {
     try {
-      await updateDefaults(localDefaults).unwrap();
+      const payload = draftId
+        ? { ...localDefaults, draft_id: draftId }
+        : localDefaults;
+      await updateDefaults(payload).unwrap();
       void refetchCaps();
       setHasChanges(false);
       setSaveError(null);
     } catch {
       setSaveError("Failed to save defaults. Please try again.");
     }
-  }, [localDefaults, refetchCaps, updateDefaults]);
+  }, [draftId, localDefaults, refetchCaps, updateDefaults]);
 
   if (isLoading || draftLoading) {
     return <Spinner spinning />;

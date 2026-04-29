@@ -15,8 +15,8 @@ use uuid::Uuid;
 use crate::buddy::drafts::{draft_kind_str, DraftCreateError, DraftTarget, DraftValidationError};
 use crate::buddy::opportunities::is_terminal_status;
 use crate::buddy::types::{
-    BuddyAction, BuddyDraft, BuddyPulse, CustomizationKind, DraftKind, InvestigationContext,
-    MarketKind, OpportunityStatus, PulseScope,
+    BuddyAction, BuddyDraft, BuddyPulse, CustomizationKind, DefaultsKind, DraftKind,
+    InvestigationContext, MarketKind, OpportunityStatus, PulseScope,
 };
 use crate::custom_error::ScratchError;
 use crate::ext::config_dirs::get_ext_dirs;
@@ -211,6 +211,23 @@ async fn clear_accept_claim(gcx: Arc<ARwLock<GlobalContext>>, id: &str) {
     }
 }
 
+fn provider_defaults_patch(defaults_kind: DefaultsKind) -> serde_json::Value {
+    match defaults_kind {
+        DefaultsKind::ChatModel => {
+            serde_json::json!({ "chat": { "model": "your-provider/model-name" } })
+        }
+        DefaultsKind::ChatLightModel => {
+            serde_json::json!({ "chat_light": { "model": "your-provider/model-name" } })
+        }
+        DefaultsKind::ChatThinkingModel => {
+            serde_json::json!({ "chat_thinking": { "model": "your-provider/model-name" } })
+        }
+        DefaultsKind::ChatBuddyModel => {
+            serde_json::json!({ "chat_buddy": { "model": "your-provider/model-name" } })
+        }
+    }
+}
+
 pub(crate) async fn dispatch_action(
     gcx: Arc<ARwLock<GlobalContext>>,
     _opp_id: &str,
@@ -315,13 +332,8 @@ pub(crate) async fn dispatch_action(
             let content = if patch != &serde_json::json!({}) {
                 serde_json::to_string_pretty(patch).unwrap_or_default()
             } else {
-                use crate::buddy::types::DefaultsKind;
-                let key = match defaults_kind {
-                    DefaultsKind::ChatBuddyModel => "chat_buddy_model",
-                    DefaultsKind::ChatThinkingModel => "chat_thinking_model",
-                    _ => "chat_default_model",
-                };
-                format!("{{\n  \"{}\": \"your-provider/model-name\"\n}}", key)
+                serde_json::to_string_pretty(&provider_defaults_patch(*defaults_kind))
+                    .unwrap_or_default()
             };
             let draft = synthesize_draft(
                 gcx.clone(),

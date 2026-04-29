@@ -254,6 +254,10 @@ export type ProviderDefaults = {
   embedding_model?: string;
 };
 
+export type ProviderDefaultsUpdateRequest = ProviderDefaults & {
+  draft_id?: string;
+};
+
 export type ErrorLogInstance = {
   path: string;
   error_line: number;
@@ -1040,7 +1044,10 @@ export const providersApi = createApi({
       },
     }),
 
-    updateDefaults: builder.mutation<{ success: boolean }, ProviderDefaults>({
+    updateDefaults: builder.mutation<
+      { success: boolean },
+      ProviderDefaultsUpdateRequest
+    >({
       invalidatesTags: ["DEFAULTS"],
       queryFn: async (defaults, api, extraOptions, baseQuery) => {
         const state = api.getState() as RootState;

@@ -518,6 +518,35 @@ mod rules {
             .collect()
     }
 
+    fn provider_defaults_patch(field: &str) -> Option<(DefaultsKind, serde_json::Value)> {
+        match field {
+            "chat_model" => Some((
+                DefaultsKind::ChatModel,
+                serde_json::json!({ "chat": { "model": "your-provider/model-name" } }),
+            )),
+            "chat_light_model" => Some((
+                DefaultsKind::ChatLightModel,
+                serde_json::json!({ "chat_light": { "model": "your-provider/model-name" } }),
+            )),
+            "chat_thinking_model" => Some((
+                DefaultsKind::ChatThinkingModel,
+                serde_json::json!({ "chat_thinking": { "model": "your-provider/model-name" } }),
+            )),
+            "chat_buddy_model" => Some((
+                DefaultsKind::ChatBuddyModel,
+                serde_json::json!({ "chat_buddy": { "model": "your-provider/model-name" } }),
+            )),
+            _ => None,
+        }
+    }
+
+    fn is_chat_default_field(field: &str) -> bool {
+        matches!(
+            field,
+            "chat_model" | "chat_light_model" | "chat_thinking_model" | "chat_buddy_model"
+        )
+    }
+
     pub fn provider_tuning_missing(
         store: &crate::buddy::facts::FactStore,
         _pulse: &BuddyPulse,
@@ -527,29 +556,15 @@ mod rules {
         store
             .recent_at(BuddyFactKind::DefaultModelMissing, Duration::hours(6), now)
             .into_iter()
-            .map(|fact| {
+            .filter_map(|fact| {
                 let field = fact
                     .payload
                     .get("field")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("chat_model");
-                let (defaults_kind, patch_key) = match field {
-                    "chat_buddy_model" => (DefaultsKind::ChatBuddyModel, "chat_buddy_model"),
-                    "chat_thinking_model" => {
-                        (DefaultsKind::ChatThinkingModel, "chat_thinking_model")
-                    }
-                    "chat_light_model" => (DefaultsKind::ChatModel, "chat_light_model"),
-                    "completion_model" => (DefaultsKind::ChatModel, "completion_default_model"),
-                    "chat_model" => (DefaultsKind::ChatModel, "chat_default_model"),
-                    other => {
-                        tracing::warn!(
-                            "provider_tuning_missing: unknown field {}, falling back to ChatModel",
-                            other
-                        );
-                        (DefaultsKind::ChatModel, "chat_default_model")
-                    }
+                    .unwrap_or("");
+                let Some((defaults_kind, patch)) = provider_defaults_patch(field) else {
+                    return None;
                 };
-                let patch = serde_json::json!({ patch_key: "your-provider/model-name" });
                 let mut o = opp(
                     BuddyOpportunityKind::ProviderTuning,
                     "Default model not configured",
@@ -570,7 +585,7 @@ mod rules {
                     now,
                 );
                 o.related = related_with_config_paths(vec!["providers/defaults".to_string()]);
-                o
+                Some(o)
             })
             .collect()
     }
@@ -584,13 +599,15 @@ mod rules {
         store
             .recent_at(BuddyFactKind::BrokenModelReference, Duration::hours(6), now)
             .into_iter()
-            .map(|fact| {
+            .filter_map(|fact| {
                 let field = fact
                     .payload
                     .get("field")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("chat_model")
-                    .to_string();
+                    .unwrap_or("");
+                if !is_chat_default_field(field) {
+                    return None;
+                }
                 let model = fact
                     .payload
                     .get("model_id")
@@ -613,7 +630,7 @@ mod rules {
                     now,
                 );
                 o.related = related_with_config_paths(vec!["providers/defaults".to_string()]);
-                o
+                Some(o)
             })
             .collect()
     }

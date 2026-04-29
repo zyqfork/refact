@@ -86,12 +86,14 @@ async fn build_providers_pulse(gcx: Arc<RwLock<GlobalContext>>) -> ProviderPulse
     if let Some(caps) = &gcx_r.caps {
         let d = &caps.defaults;
         pulse.defaults_ok = !d.chat_default_model.is_empty()
+            && !d.chat_light_model.is_empty()
             && !d.chat_thinking_model.is_empty()
             && !d.chat_buddy_model.is_empty();
         let available: std::collections::HashSet<&str> =
             caps.chat_models.keys().map(|s| s.as_str()).collect();
         let to_check = [
             d.chat_default_model.as_str(),
+            d.chat_light_model.as_str(),
             d.chat_buddy_model.as_str(),
             d.chat_thinking_model.as_str(),
         ];

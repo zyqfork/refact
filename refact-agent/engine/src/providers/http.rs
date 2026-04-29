@@ -3,11 +3,13 @@ use axum::Extension;
 use axum::http::{Response, StatusCode};
 use hyper::Body;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock as ARwLock;
 
+use crate::buddy::drafts::{draft_kind_str, DraftTarget, DraftValidationError};
+use crate::buddy::types::DraftKind;
 use crate::caps::model_caps::get_model_caps;
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
@@ -418,22 +420,139 @@ pub async fn handle_v1_defaults_get(
     json_response(StatusCode::OK, &defaults)
 }
 
+#[derive(Deserialize)]
+struct DefaultsUpdateRequest {
+    #[serde(default)]
+    draft_id: Option<String>,
+    #[serde(flatten)]
+    defaults: ProviderDefaults,
+}
+
+fn defaults_draft_validation_error(err: DraftValidationError) -> ScratchError {
+    match err {
+        DraftValidationError::NotFound => {
+            ScratchError::new(StatusCode::NOT_FOUND, "draft_not_found".to_string())
+        }
+        DraftValidationError::KindMismatch { expected, actual } => ScratchError::new(
+            StatusCode::CONFLICT,
+            format!(
+                "draft_kind_mismatch: expected {}, got {}",
+                draft_kind_str(&expected),
+                draft_kind_str(&actual)
+            ),
+        ),
+        DraftValidationError::TargetMismatch { expected, actual } => ScratchError::new(
+            StatusCode::CONFLICT,
+            format!("draft_target_mismatch: expected {}, got {}", expected, actual),
+        ),
+        DraftValidationError::Parse(err) => ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("draft_parse_failed: {}", err),
+        ),
+    }
+}
+
+fn validate_defaults_draft_shape(content: &str) -> Result<(), ScratchError> {
+    let value: Value = serde_json::from_str(content).map_err(|e| {
+        ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("draft_parse_failed: {}", e),
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "draft_parse_failed: defaults draft must be a JSON object".to_string(),
+        )
+    })?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "chat"
+                | "chat_light"
+                | "chat_thinking"
+                | "chat_buddy"
+                | "completion_model"
+                | "embedding_model"
+        ) {
+            return Err(ScratchError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("draft_parse_failed: unsupported defaults key {}", key),
+            ));
+        }
+    }
+    serde_json::from_value::<ProviderDefaults>(value).map_err(|e| {
+        ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("draft_parse_failed: {}", e),
+        )
+    })?;
+    Ok(())
+}
+
+async fn validate_defaults_draft(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    draft_id: &str,
+) -> Result<(), ScratchError> {
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    let svc = lock.as_ref().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".to_string(),
+        )
+    })?;
+    let content = svc
+        .draft_store
+        .get_validated(draft_id, DraftKind::DefaultsModel, DraftTarget::Any)
+        .map_err(defaults_draft_validation_error)?
+        .yaml_or_json
+        .clone();
+    drop(lock);
+    validate_defaults_draft_shape(&content)
+}
+
+async fn consume_defaults_draft(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    draft_id: &str,
+) -> Result<(), ScratchError> {
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let mut lock = buddy_arc.lock().await;
+    let svc = lock.as_mut().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "buddy not initialized".to_string(),
+        )
+    })?;
+    svc.consume_validated_draft(draft_id, DraftKind::DefaultsModel, DraftTarget::Any)
+        .map(|_| ())
+        .map_err(defaults_draft_validation_error)
+}
+
 pub async fn handle_v1_defaults_update(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let defaults: ProviderDefaults = serde_json::from_slice(&body_bytes).map_err(|e| {
+    let req: DefaultsUpdateRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             format!("Invalid JSON: {}", e),
         )
     })?;
 
+    if let Some(draft_id) = req.draft_id.as_deref() {
+        validate_defaults_draft(gcx.clone(), draft_id).await?;
+    }
+
     let config_dir = gcx.read().await.config_dir.clone();
-    defaults
+    req.defaults
         .save(&config_dir)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    if let Some(draft_id) = req.draft_id.as_deref() {
+        consume_defaults_draft(gcx.clone(), draft_id).await?;
+    }
 
     invalidate_caps(gcx).await;
 
