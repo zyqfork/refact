@@ -292,6 +292,7 @@ pub async fn handle_handoff_apply(
         auto_approve_dangerous_commands: thread.auto_approve_dangerous_commands,
         version: 1,
         task_meta,
+        worktree: thread.worktree.clone(),
         parent_id: Some(chat_id.clone()),
         link_type: Some("handoff".to_string()),
         root_chat_id: thread
@@ -492,6 +493,7 @@ pub async fn handle_mode_transition_apply(
         auto_approve_dangerous_commands: thread.auto_approve_dangerous_commands,
         version: 1,
         task_meta,
+        worktree: thread.worktree.clone(),
         parent_id: Some(chat_id.clone()),
         link_type: Some("mode_transition".to_string()),
         root_chat_id: thread
@@ -614,6 +616,7 @@ pub async fn handle_planner_from_transition(
         auto_approve_dangerous_commands: thread.auto_approve_dangerous_commands,
         version: 1,
         task_meta: Some(task_meta),
+        worktree: thread.worktree.clone(),
         parent_id: Some(req.source_chat_id.clone()),
         link_type: Some("mode_transition".to_string()),
         root_chat_id: thread

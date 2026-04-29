@@ -382,6 +382,7 @@ pub async fn handle_v1_buddy_conversations_create(
         auto_approve_dangerous_commands: false,
         version: 1,
         task_meta: None,
+        worktree: None,
         parent_id: None,
         link_type: None,
         root_chat_id: None,

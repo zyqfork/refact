@@ -7,6 +7,7 @@ use ropey::Rope;
 use crate::custom_error::ScratchError;
 use crate::git::checkpoints::Checkpoint;
 use crate::scratchpads::multimodality::MultimodalElement;
+use crate::worktrees::types::WorktreeMeta;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CursorPosition {
@@ -343,6 +344,8 @@ pub struct ChatMeta {
     pub include_project_info: bool,
     #[serde(default)]
     pub context_tokens_cap: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeMeta>,
 }
 
 fn default_mode_id() -> String {
@@ -359,6 +362,7 @@ impl Default for ChatMeta {
             current_config_file: String::new(),
             include_project_info: true,
             context_tokens_cap: None,
+            worktree: None,
         }
     }
 }

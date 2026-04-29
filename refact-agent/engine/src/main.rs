@@ -53,6 +53,7 @@ mod forward_to_openai_endpoint;
 mod llm;
 mod providers;
 mod restream;
+pub mod worktrees;
 
 mod call_validation;
 mod chat;

@@ -1265,6 +1265,7 @@ async fn subchat_stream(
         context_tokens_cap: Some(capped_n_ctx),
         include_project_info: true,
         request_attempt_id: Uuid::new_v4().to_string(),
+        worktree: None,
     };
 
     let thread = ThreadParams {

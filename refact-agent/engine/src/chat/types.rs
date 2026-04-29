@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::call_validation::{ChatMessage, ChatUsage};
 use crate::git::checkpoints::Checkpoint;
+use crate::worktrees::types::WorktreeMeta;
 use super::config::{limits, timeouts, presentation};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -158,6 +159,8 @@ pub struct ThreadParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_meta: Option<TaskMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_type: Option<String>,
@@ -202,6 +205,7 @@ impl Default for ThreadParams {
             auto_approve_editing_tools: false,
             auto_approve_dangerous_commands: false,
             task_meta: None,
+            worktree: None,
             parent_id: None,
             link_type: None,
             root_chat_id: None,
@@ -211,6 +215,12 @@ impl Default for ThreadParams {
             auto_enrichment_enabled: None,
             buddy_meta: None,
         }
+    }
+}
+
+impl crate::worktrees::scope::WorktreeThread for ThreadParams {
+    fn worktree(&self) -> Option<&WorktreeMeta> {
+        self.worktree.as_ref()
     }
 }
 
@@ -776,6 +786,7 @@ mod tests {
         assert!(params.checkpoints_enabled);
         assert!(!params.is_title_generated);
         assert!(params.context_tokens_cap.is_none());
+        assert!(params.worktree.is_none());
         assert!(!params.id.is_empty());
     }
 
@@ -1105,6 +1116,15 @@ mod tests {
         let json_str = r#"{"id":"test","title":"Test","model":"gpt-4","mode":"agent","tool_use":"agent","include_project_info":true,"checkpoints_enabled":true}"#;
         let params: ThreadParams = serde_json::from_str(json_str).unwrap();
         assert!(params.browser_meta.is_none());
+        assert_eq!(params.id, "test");
+        assert_eq!(params.mode, "agent");
+    }
+
+    #[test]
+    fn test_thread_params_backward_compat_no_worktree() {
+        let json_str = r#"{"id":"test","title":"Test","model":"gpt-4","mode":"agent","tool_use":"agent","include_project_info":true,"checkpoints_enabled":true}"#;
+        let params: ThreadParams = serde_json::from_str(json_str).unwrap();
+        assert!(params.worktree.is_none());
         assert_eq!(params.id, "test");
         assert_eq!(params.mode, "agent");
     }

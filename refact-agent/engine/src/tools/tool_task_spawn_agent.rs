@@ -572,6 +572,7 @@ impl Tool for ToolTaskSpawnAgent {
                     agent_id: Some(agent_id.clone()),
                     card_id: Some(card_id.to_string()),
                 }),
+                worktree: None,
                 parent_id: None,
                 link_type: None,
                 root_chat_id: None,

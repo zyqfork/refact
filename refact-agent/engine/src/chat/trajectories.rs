@@ -19,6 +19,7 @@ use crate::global_context::GlobalContext;
 use crate::files_correction::get_project_dirs;
 use crate::subchat::run_subchat_once;
 use crate::yaml_configs::customization_registry::get_subagent_config;
+use crate::worktrees::types::WorktreeMeta;
 
 pub async fn atomic_write_file(tmp_path: &Path, dest_path: &Path) -> Result<(), String> {
     #[cfg(windows)]
@@ -190,6 +191,7 @@ pub struct TrajectorySnapshot {
     pub auto_approve_dangerous_commands: bool,
     pub version: u64,
     pub task_meta: Option<super::types::TaskMeta>,
+    pub worktree: Option<WorktreeMeta>,
     pub parent_id: Option<String>,
     pub link_type: Option<String>,
     pub root_chat_id: Option<String>,
@@ -225,6 +227,7 @@ impl TrajectorySnapshot {
             auto_approve_dangerous_commands: session.thread.auto_approve_dangerous_commands,
             version: session.trajectory_version,
             task_meta: session.thread.task_meta.clone(),
+            worktree: session.thread.worktree.clone(),
             parent_id: session.thread.parent_id.clone(),
             link_type: session.thread.link_type.clone(),
             root_chat_id: session.thread.root_chat_id.clone(),
@@ -477,6 +480,9 @@ pub async fn load_trajectory_for_chat(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         task_meta,
+        worktree: t
+            .get("worktree")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
         parent_id: t
             .get("parent_id")
             .and_then(|v| v.as_str())
@@ -634,6 +640,7 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
         auto_approve_dangerous_commands: true,
         auto_enrichment_enabled: Some(false),
         task_meta: Some(task_meta),
+        worktree: None,
         version: 1,
         parent_id: None,
         link_type: None,
@@ -677,6 +684,7 @@ pub async fn save_trajectory_as(
         auto_approve_dangerous_commands: thread.auto_approve_dangerous_commands,
         version: 1,
         task_meta: thread.task_meta.clone(),
+        worktree: thread.worktree.clone(),
         parent_id: thread.parent_id.clone(),
         link_type: thread.link_type.clone(),
         root_chat_id: thread.root_chat_id.clone(),
@@ -759,6 +767,9 @@ pub async fn save_trajectory_snapshot(
     }
     if let Some(ref buddy_meta) = snapshot.buddy_meta {
         trajectory["buddy_meta"] = serde_json::to_value(buddy_meta).unwrap_or_default();
+    }
+    if let Some(ref worktree) = snapshot.worktree {
+        trajectory["worktree"] = serde_json::to_value(worktree).unwrap_or_default();
     }
 
     if let Some(ref parent_id) = snapshot.parent_id {
@@ -3027,6 +3038,7 @@ mod tests {
                 auto_approve_editing_tools: false,
                 auto_approve_dangerous_commands: false,
                 task_meta: None,
+                worktree: None,
                 parent_id: Some("parent-chat-id".to_string()),
                 link_type: Some("subagent".to_string()),
                 root_chat_id: Some("root-chat-id".to_string()),

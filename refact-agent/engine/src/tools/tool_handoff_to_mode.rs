@@ -259,6 +259,7 @@ impl Tool for ToolHandoffToMode {
             auto_approve_dangerous_commands: thread.auto_approve_dangerous_commands,
             version: 1,
             task_meta,
+            worktree: thread.worktree.clone(),
             parent_id: Some(chat_id.clone()),
             link_type: Some("mode_transition".to_string()),
             root_chat_id: thread

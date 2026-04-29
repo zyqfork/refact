@@ -215,6 +215,7 @@ pub async fn prepare_session_preamble_and_knowledge(
             context_tokens_cap: thread.context_tokens_cap,
             include_project_info: thread.include_project_info,
             request_attempt_id: Uuid::new_v4().to_string(),
+            worktree: thread.worktree.clone(),
         };
 
         let messages = {
@@ -883,6 +884,7 @@ pub async fn run_llm_generation(
         context_tokens_cap: thread.context_tokens_cap,
         include_project_info: thread.include_project_info,
         request_attempt_id: Uuid::new_v4().to_string(),
+        worktree: thread.worktree.clone(),
     };
 
     let messages = {
