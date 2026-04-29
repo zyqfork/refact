@@ -13,6 +13,8 @@ mod deepseek;
 mod doubao;
 mod google_gemini;
 mod groq;
+pub mod github_copilot;
+pub mod github_copilot_oauth;
 mod kimi;
 mod lmstudio;
 mod minimax;

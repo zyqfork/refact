@@ -291,6 +291,10 @@ const PROVIDER_TEMPLATES: &[(&str, &str)] = &[
         include_str!("../yaml_configs/default_providers/groq.yaml"),
     ),
     (
+        "github_copilot",
+        include_str!("../yaml_configs/default_providers/github_copilot.yaml"),
+    ),
+    (
         "kimi",
         include_str!("../yaml_configs/default_providers/kimi.yaml"),
     ),

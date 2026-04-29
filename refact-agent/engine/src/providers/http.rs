@@ -1627,10 +1627,18 @@ async fn reload_provider_from_disk(
     Ok(())
 }
 
+#[derive(Deserialize, Default)]
+struct GitHubCopilotOAuthStartRequest {
+    #[serde(default, alias = "enterpriseUrl")]
+    enterprise_url: Option<String>,
+    #[serde(default, alias = "deploymentType")]
+    deployment_type: Option<String>,
+}
+
 pub async fn handle_v1_provider_oauth_start(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
-    _body_bytes: hyper::body::Bytes,
+    body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
     match params.name.as_str() {
         "claude_code" => {
@@ -1695,6 +1703,44 @@ pub async fn handle_v1_provider_oauth_start(
                 }),
             )
         }
+        "github_copilot" => {
+            let request = if body_bytes.is_empty() {
+                GitHubCopilotOAuthStartRequest::default()
+            } else {
+                serde_json::from_slice::<GitHubCopilotOAuthStartRequest>(&body_bytes).map_err(
+                    |e| {
+                        ScratchError::new(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            format!("Invalid JSON: {e}"),
+                        )
+                    },
+                )?
+            };
+            if request
+                .deployment_type
+                .as_deref()
+                .is_some_and(|value| value == "enterprise")
+                && request
+                    .enterprise_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .is_none()
+            {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    "GitHub Enterprise login requires enterprise_url".to_string(),
+                ));
+            }
+            let http_client = gcx.read().await.http_client.clone();
+            let start = crate::providers::github_copilot_oauth::start_oauth_session(
+                &http_client,
+                request.enterprise_url.as_deref(),
+            )
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+            json_response(StatusCode::OK, &start)
+        }
         _ => Err(ScratchError::new(
             StatusCode::BAD_REQUEST,
             format!("OAuth not supported for provider '{}'", params.name),
@@ -1705,6 +1751,7 @@ pub async fn handle_v1_provider_oauth_start(
 #[derive(Deserialize)]
 pub struct OAuthExchangeRequest {
     pub session_id: String,
+    #[serde(default)]
     pub code: String,
 }
 
@@ -1768,6 +1815,63 @@ pub async fn handle_v1_provider_oauth_exchange(
             )
             .await?;
         }
+        "github_copilot" => {
+            let outcome = crate::providers::github_copilot_oauth::poll_oauth_session(
+                &http_client,
+                &request.session_id,
+            )
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+            match outcome {
+                crate::providers::github_copilot_oauth::DevicePollOutcome::Success(tokens) => {
+                    save_provider_oauth_tokens(
+                        &gcx,
+                        &config_dir,
+                        "github_copilot",
+                        &serde_yaml::to_value(&tokens).map_err(|e| {
+                            ScratchError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to serialize tokens: {}", e),
+                            )
+                        })?,
+                    )
+                    .await?;
+                }
+                crate::providers::github_copilot_oauth::DevicePollOutcome::AuthorizationPending {
+                    poll_interval,
+                } => {
+                    return json_response(
+                        StatusCode::OK,
+                        &json!({
+                            "success": false,
+                            "status": "authorization_pending",
+                            "poll_interval": poll_interval,
+                            "auth_status": "Waiting for GitHub device authorization",
+                        }),
+                    );
+                }
+                crate::providers::github_copilot_oauth::DevicePollOutcome::SlowDown {
+                    poll_interval,
+                } => {
+                    return json_response(
+                        StatusCode::OK,
+                        &json!({
+                            "success": false,
+                            "status": "slow_down",
+                            "poll_interval": poll_interval,
+                            "auth_status": "GitHub requested a slower polling interval",
+                        }),
+                    );
+                }
+                crate::providers::github_copilot_oauth::DevicePollOutcome::ExpiredToken { message }
+                | crate::providers::github_copilot_oauth::DevicePollOutcome::AccessDenied {
+                    message,
+                }
+                | crate::providers::github_copilot_oauth::DevicePollOutcome::Error { message } => {
+                    return Err(ScratchError::new(StatusCode::BAD_REQUEST, message));
+                }
+            }
+        }
         _ => {
             return Err(ScratchError::new(
                 StatusCode::BAD_REQUEST,
@@ -1813,6 +1917,18 @@ pub async fn handle_v1_provider_oauth_logout(
                         )
                     })?;
             save_provider_oauth_tokens(&gcx, &config_dir, "openai_codex", &empty).await?;
+        }
+        "github_copilot" => {
+            let empty = serde_yaml::to_value(
+                &crate::providers::github_copilot_oauth::OAuthTokens::default(),
+            )
+            .map_err(|e| {
+                ScratchError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to serialize: {}", e),
+                )
+            })?;
+            save_provider_oauth_tokens(&gcx, &config_dir, "github_copilot", &empty).await?;
         }
         _ => {
             return Err(ScratchError::new(
@@ -2543,6 +2659,90 @@ mod tests {
                 .and_then(|tokens| tokens.get("openai_api_key"))
                 .and_then(|value| value.as_str()),
             Some("sk-new")
+        );
+    }
+
+    #[tokio::test]
+    async fn github_copilot_oauth_save_writes_redactable_yaml() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let tokens = crate::providers::github_copilot_oauth::OAuthTokens {
+            access_token: "gho-secret".to_string(),
+            expires_at: 0,
+            enterprise_url: Some("company.ghe.com".to_string()),
+            api_base: Some("https://copilot-api.company.ghe.com".to_string()),
+        };
+        let tokens_value = serde_yaml::to_value(&tokens).unwrap();
+
+        save_provider_oauth_tokens(&gcx, &config_dir, "github_copilot", &tokens_value)
+            .await
+            .unwrap();
+
+        let content =
+            tokio::fs::read_to_string(config_dir.join("providers.d").join("github_copilot.yaml"))
+                .await
+                .unwrap();
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        assert_eq!(
+            yaml.get("oauth_tokens")
+                .and_then(|tokens| tokens.get("access_token"))
+                .and_then(|value| value.as_str()),
+            Some("gho-secret")
+        );
+        assert_eq!(
+            yaml.get("oauth_tokens")
+                .and_then(|tokens| tokens.get("api_base"))
+                .and_then(|value| value.as_str()),
+            Some("https://copilot-api.company.ghe.com")
+        );
+
+        let stored = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            registry
+                .get("github_copilot")
+                .unwrap()
+                .provider_settings_as_json()
+        };
+        assert_eq!(stored["oauth_tokens"]["access_token"], "***");
+        assert!(!stored.to_string().contains("gho-secret"));
+    }
+
+    #[tokio::test]
+    async fn github_copilot_oauth_logout_clears_token_fields() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("github_copilot.yaml"),
+            "oauth_tokens:\n  access_token: gho-secret\n  expires_at: 0\n  api_base: https://api.githubcopilot.com\n",
+        )
+        .await
+        .unwrap();
+        let empty =
+            serde_yaml::to_value(&crate::providers::github_copilot_oauth::OAuthTokens::default())
+                .unwrap();
+
+        save_provider_oauth_tokens(&gcx, &config_dir, "github_copilot", &empty)
+            .await
+            .unwrap();
+
+        let content = tokio::fs::read_to_string(providers_dir.join("github_copilot.yaml"))
+            .await
+            .unwrap();
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        assert_eq!(
+            yaml.get("oauth_tokens")
+                .and_then(|tokens| tokens.get("access_token"))
+                .and_then(|value| value.as_str()),
+            Some("")
+        );
+        assert_eq!(
+            yaml.get("oauth_tokens")
+                .and_then(|tokens| tokens.get("expires_at"))
+                .and_then(|value| value.as_i64()),
+            Some(0)
         );
     }
 
