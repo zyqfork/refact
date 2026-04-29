@@ -37,8 +37,8 @@ impl Tool for ToolTaskMergeAgent {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Merge an agent's work back to the main branch and cleanup the worktree. The agent must have completed work on a card with an associated git branch and worktree.".to_string(),
-            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID whose agent branch to merge"), ("strategy", "string", "Merge strategy: 'merge' (default) or 'squash'"), ("delete_worktree", "boolean", "Delete worktree and branch after merge (default: true)")], &["card_id"]),
+            description: "Merge an agent's work back to the main branch and always cleanup the worktree after a successful merge or no-op merged state. The agent must have completed work on a card with an associated git branch and worktree.".to_string(),
+            input_schema: json_schema_from_params(&[("card_id", "string", "Card ID whose agent branch to merge"), ("strategy", "string", "Merge strategy: 'merge' (default) or 'squash'")], &["card_id"]),
             output_schema: None,
             annotations: None,
         }
@@ -81,12 +81,6 @@ impl Tool for ToolTaskMergeAgent {
             .get("strategy")
             .and_then(|v| v.as_str())
             .unwrap_or("merge");
-
-        let delete_worktree = match args.get("delete_worktree") {
-            Some(Value::Bool(b)) => *b,
-            Some(Value::String(s)) => s.to_lowercase() == "true",
-            _ => true,
-        };
 
         if strategy != "merge" && strategy != "squash" {
             return Err(format!(
@@ -195,7 +189,7 @@ impl Tool for ToolTaskMergeAgent {
             };
 
             let mut cleanup_status = Vec::new();
-            if delete_worktree && agent_branch != base_branch {
+            if agent_branch != base_branch {
                 crate::files_in_workspace::remove_folder(
                     gcx.clone(),
                     &std::path::PathBuf::from(agent_worktree),
@@ -435,7 +429,7 @@ Use `cat <file>` to see conflict markers in each file."#,
             }
         }
 
-        let (worktree_removed, branch_deleted) = if delete_worktree && agent_branch != base_branch {
+        let (worktree_removed, branch_deleted) = if agent_branch != base_branch {
             crate::files_in_workspace::remove_folder(
                 gcx.clone(),
                 &std::path::PathBuf::from(agent_worktree),
@@ -477,7 +471,7 @@ Use `cat <file>` to see conflict markers in each file."#,
             .await?;
         }
 
-        let cleanup_info = if delete_worktree && agent_branch != base_branch {
+        let cleanup_info = if agent_branch != base_branch {
             match (worktree_removed, branch_deleted) {
                 (true, true) => "Worktree and branch cleaned up.".to_string(),
                 (true, false) => "Worktree removed, branch deletion failed.".to_string(),
@@ -485,7 +479,7 @@ Use `cat <file>` to see conflict markers in each file."#,
                 (false, false) => "Cleanup failed (worktree and branch still exist).".to_string(),
             }
         } else {
-            "No cleanup requested.".to_string()
+            "Cleanup skipped because agent branch matches base branch.".to_string()
         };
 
         let result_message = format!(

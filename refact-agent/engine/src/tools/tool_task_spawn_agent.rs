@@ -91,6 +91,24 @@ impl PreparedWorktree {
     }
 }
 
+fn find_abandoned_worktrees(board: &crate::tasks::types::TaskBoard) -> Vec<String> {
+    board
+        .cards
+        .iter()
+        .filter(|card| card.column != "doing")
+        .filter_map(|card| {
+            let worktree = card.agent_worktree.as_ref()?;
+            if !std::path::Path::new(worktree).exists() {
+                return None;
+            }
+            Some(format!(
+                "- {} ({}) in column `{}`: `{}`",
+                card.id, card.title, card.column, worktree
+            ))
+        })
+        .collect()
+}
+
 async fn prepare_agent_worktree(
     gcx: Arc<ARwLock<GlobalContext>>,
     task_id: &str,
@@ -313,6 +331,15 @@ impl Tool for ToolTaskSpawnAgent {
         validate_id(card_id, "card_id")?;
 
         let board = storage::load_board(gcx.clone(), &task_id).await?;
+        let abandoned_worktrees = find_abandoned_worktrees(&board);
+        if !abandoned_worktrees.is_empty() {
+            return Err(format!(
+                "Cannot spawn a new task agent while abandoned task worktrees exist. \
+                Clean them first with `task_merge_agent(card_id=...)` for merged cards, or remove them manually if they were intentionally abandoned.\n\n{}",
+                abandoned_worktrees.join("\n")
+            ));
+        }
+
         let card = board
             .get_card(card_id)
             .ok_or_else(|| format!("Card {} not found", card_id))?;
@@ -691,5 +718,64 @@ The agent will call `task_agent_finish()` when done. Use `task_check_agents` to 
 
     fn tool_depends_on(&self) -> Vec<String> {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::types::{BoardCard, TaskBoard};
+
+    fn test_card(id: &str, column: &str, worktree: Option<String>) -> BoardCard {
+        BoardCard {
+            id: id.to_string(),
+            title: format!("Card {}", id),
+            column: column.to_string(),
+            priority: "P1".to_string(),
+            depends_on: vec![],
+            instructions: String::new(),
+            assignee: None,
+            agent_chat_id: None,
+            status_updates: vec![],
+            final_report: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            started_at: None,
+            last_heartbeat_at: None,
+            completed_at: None,
+            agent_branch: None,
+            agent_worktree: worktree,
+            agent_worktree_name: None,
+            target_files: vec![],
+        }
+    }
+
+    #[test]
+    fn abandoned_worktree_detection_ignores_active_agents() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let worktree_path = tempdir.path().join("agent-worktree");
+        std::fs::create_dir_all(&worktree_path).unwrap();
+
+        let mut board = TaskBoard::default();
+        board.cards.push(test_card(
+            "T-1",
+            "done",
+            Some(worktree_path.to_string_lossy().to_string()),
+        ));
+        board.cards.push(test_card(
+            "T-2",
+            "doing",
+            Some(worktree_path.to_string_lossy().to_string()),
+        ));
+        board.cards.push(test_card(
+            "T-3",
+            "failed",
+            Some(tempdir.path().join("missing").to_string_lossy().to_string()),
+        ));
+
+        let abandoned = find_abandoned_worktrees(&board);
+        assert_eq!(abandoned.len(), 1);
+        assert!(abandoned[0].contains("T-1"));
+        assert!(!abandoned[0].contains("T-2"));
+        assert!(!abandoned[0].contains("T-3"));
     }
 }
