@@ -406,31 +406,24 @@ fn build_chat_model_record(
         format!("{}/{}", provider_name, model.id)
     };
 
-    let resolved_caps = resolve_model_caps(model_caps, &model_id)
-        .or_else(|| {
-            if model_id.starts_with("openrouter/") {
-                None
-            } else {
-                resolve_model_caps(model_caps, &model.id)
-            }
-        })
-        .or_else(|| {
-            if provider_name == "vllm" {
-                model
-                    .display_name
-                    .as_ref()
-                    .filter(|s| !s.trim().is_empty())
-                    .and_then(|dn| {
-                        resolve_model_caps(model_caps, dn).or_else(|| {
-                            dn.rsplit('/')
-                                .next()
-                                .and_then(|last| resolve_model_caps(model_caps, last))
-                        })
-                    })
-            } else {
-                None
-            }
-        });
+    let resolved_caps = if provider_name == "vllm" {
+        model
+            .base_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|base_model| !base_model.is_empty())
+            .and_then(|base_model| resolve_model_caps(model_caps, base_model))
+    } else {
+        None
+    }
+    .or_else(|| resolve_model_caps(model_caps, &model_id))
+    .or_else(|| {
+        if model_id.starts_with("openrouter/") {
+            None
+        } else {
+            resolve_model_caps(model_caps, &model.id)
+        }
+    });
 
     let (
         n_ctx,
@@ -1251,5 +1244,69 @@ mod tests {
 
         let result = resolve_model(&models, "nonexistent");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vllm_caps_resolution_prefers_base_model_root() {
+        let mut model_caps = HashMap::new();
+        model_caps.insert(
+            "served-alias".to_string(),
+            ModelCapabilities {
+                n_ctx: 1024,
+                supports_tools: false,
+                tokenizer: "alias-tokenizer".to_string(),
+                ..Default::default()
+            },
+        );
+        model_caps.insert(
+            "Qwen/Qwen3.6-27B-FP8".to_string(),
+            ModelCapabilities {
+                n_ctx: 200_000,
+                supports_tools: true,
+                tokenizer: "root-tokenizer".to_string(),
+                ..Default::default()
+            },
+        );
+
+        let model = AvailableModel {
+            id: "served-alias".to_string(),
+            display_name: Some("Served Alias".to_string()),
+            n_ctx: 131_072,
+            supports_tools: false,
+            supports_parallel_tools: false,
+            supports_strict_tools: false,
+            supports_multimodality: false,
+            reasoning_effort_options: None,
+            supports_thinking_budget: false,
+            supports_adaptive_thinking_budget: false,
+            tokenizer: None,
+            enabled: true,
+            is_custom: false,
+            pricing: None,
+            available_providers: Vec::new(),
+            selected_provider: None,
+            max_output_tokens: None,
+            provider_variants: Vec::new(),
+            base_model: Some("Qwen/Qwen3.6-27B-FP8".to_string()),
+        };
+
+        let record = build_chat_model_record(
+            "vllm",
+            &model,
+            &model_caps,
+            WireFormat::OpenaiChatCompletions,
+            "http://localhost:8000/v1/chat/completions",
+            "",
+            "",
+            "",
+            &HashMap::new(),
+            false,
+        );
+
+        assert_eq!(record.base.id, "vllm/served-alias");
+        assert_eq!(record.base.name, "served-alias");
+        assert_eq!(record.base.tokenizer, "root-tokenizer");
+        assert_eq!(record.base.n_ctx, 131_072);
+        assert!(record.supports_tools);
     }
 }

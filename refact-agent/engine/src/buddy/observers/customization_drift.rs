@@ -16,7 +16,6 @@ fn cap_prompt(text: &str) -> String {
     text.chars().take(MAX_MODE_PROMPT_CHARS).collect()
 }
 
-
 fn tokenize_for_tf(text: &str) -> HashMap<String, u32> {
     let mut counts = HashMap::new();
     for word in text

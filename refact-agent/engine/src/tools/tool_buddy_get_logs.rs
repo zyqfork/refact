@@ -13,7 +13,6 @@ const MAX_LINES: usize = 500;
 const DEFAULT_LINES: usize = 50;
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 
-
 static REDACT_PATTERNS: &[&str] = &[
     r"sk-[a-zA-Z0-9]{20,}",
     r"Bearer [^\s]+",

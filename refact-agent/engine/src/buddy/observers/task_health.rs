@@ -12,7 +12,6 @@ use crate::tasks::types::{TaskBoard, TaskMeta, TaskStatus};
 pub struct TaskHealthObserver;
 pub(crate) const MAX_TASK_CLUSTER_ENTRIES: usize = 200;
 
-
 pub struct TaskHealthEntry {
     pub meta: TaskMeta,
     pub board: TaskBoard,

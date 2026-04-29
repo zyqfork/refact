@@ -82,6 +82,12 @@ impl VLLMProvider {
             })
             .unwrap_or(false);
 
+        let display_name = model
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != id)
+            .map(String::from);
         let root = model
             .get("root")
             .and_then(|v| v.as_str())
@@ -91,7 +97,7 @@ impl VLLMProvider {
 
         Some(AvailableModel {
             id,
-            display_name: root,
+            display_name,
             n_ctx: max_model_len.unwrap_or(32_768),
             supports_tools,
             supports_parallel_tools: supports_tools,
@@ -108,8 +114,32 @@ impl VLLMProvider {
             selected_provider: None,
             max_output_tokens,
             provider_variants: Vec::new(),
-            base_model: None,
+            base_model: root,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::VLLMProvider;
+
+    #[test]
+    fn parse_openai_model_keeps_root_only_as_base_model() {
+        let model = VLLMProvider::parse_openai_model(
+            &json!({
+                "id": "served-alias",
+                "name": "Served Alias",
+                "root": "Qwen/Qwen3.6-27B-FP8"
+            }),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(model.id, "served-alias");
+        assert_eq!(model.display_name.as_deref(), Some("Served Alias"));
+        assert_eq!(model.base_model.as_deref(), Some("Qwen/Qwen3.6-27B-FP8"));
     }
 }
 

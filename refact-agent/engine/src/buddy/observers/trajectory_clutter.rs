@@ -11,7 +11,6 @@ pub struct TrajectoryClutterObserver;
 pub(crate) const MAX_TRAJECTORY_SCAN_FILES: usize = 500;
 const MAX_TRAJECTORY_FILE_BYTES: u64 = 256 * 1024;
 
-
 fn path_hash(p: &std::path::Path) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
