@@ -31,15 +31,20 @@ impl RuntimeQueue {
                 .iter_mut()
                 .find(|e| e.dedupe_key.as_deref() == Some(key))
             {
+                existing.signal_type = event.signal_type;
                 existing.title = event.title;
                 existing.description = event.description;
+                existing.source = event.source;
                 existing.progress = event.progress;
                 existing.status = event.status;
+                existing.priority = event.priority;
+                existing.ttl_ms = event.ttl_ms;
                 existing.speech_text = event.speech_text;
                 existing.scene = event.scene;
                 existing.duration_hint = event.duration_hint;
                 existing.persistent = event.persistent;
                 existing.controls = event.controls;
+                existing.chat_id = event.chat_id;
                 // Sticky dismissal: once the user dismissed an event, any
                 // subsequent re-emission with the same dedupe_key (e.g.
                 // because the same window error fired again) stays hidden.
@@ -103,10 +108,14 @@ impl RuntimeQueue {
             .find(|e| e.dedupe_key.as_deref() == Some(dedupe_key))
         {
             e.status = status.to_string();
+            e.persistent = false;
+            e.ttl_ms.get_or_insert(4000);
         }
         if let Some(ref mut np) = self.now_playing {
             if np.dedupe_key.as_deref() == Some(dedupe_key) {
                 np.status = status.to_string();
+                np.persistent = false;
+                np.ttl_ms.get_or_insert(4000);
             }
         }
     }

@@ -9,7 +9,7 @@ import { BuddyPulseCard } from "./BuddyPulseCard";
 import { BuddyOpportunitiesFeed } from "./BuddyOpportunitiesFeed";
 import { BuddyWorkshop } from "./BuddyWorkshop";
 import { BuddySettingsPanel } from "./BuddySettingsPanel";
-import { BuddyHero } from "./BuddyHero";
+import { BuddyWorld } from "./BuddyWorld";
 import { BuddySummaryStrip } from "./BuddySummaryStrip";
 import { BuddyPersonalityPanel, type NeedRow } from "./BuddyPersonalityPanel";
 import { BuddyActivityPanel } from "./BuddyActivityPanel";
@@ -25,15 +25,20 @@ import {
   selectBuddyActivities,
   selectNowPlaying,
   selectActiveSpeech,
+  selectBuddySuggestions,
   selectBuddyDiagnostics,
   selectRuntimeQueue,
+  selectPulse,
   dismissRuntimeEvent,
 } from "./buddySlice";
 import {
   openChatInModeAndStart,
   startBuddyInvestigation,
 } from "../Chat/Thread";
-import { executeBuddyAction } from "./executeBuddyAction";
+import {
+  executeBuddyAction,
+  navigateFromBuddyPage,
+} from "./executeBuddyAction";
 import {
   useDeleteDraftMutation,
   useDismissBuddyRuntimeEventMutation,
@@ -45,7 +50,9 @@ import type {
   BuddyControl,
   BuddyDraft,
   BuddyNeeds,
+  BuddyPage,
   BuddyRuntimeEvent,
+  BuddySpeechItem,
   DraftKind,
 } from "./types";
 import { PALETTES, STAGES } from "./constants";
@@ -171,15 +178,18 @@ const BuddyHomeDraftReview: React.FC<{ draftId: string }> = ({ draftId }) => {
 export const BuddyHome: React.FC = () => {
   const dispatch = useAppDispatch();
   const currentPage = useAppSelector(selectCurrentPage);
-  const draftId = currentPage?.name === "buddy" ? currentPage.draftId : undefined;
+  const draftId =
+    currentPage?.name === "buddy" ? currentPage.draftId : undefined;
   const snapshot = useAppSelector(selectBuddySnapshot);
   const loaded = useAppSelector(selectBuddyLoaded);
   const enabled = useAppSelector(selectIsBuddyEnabled);
   const activities = useAppSelector(selectBuddyActivities);
   const nowPlaying = useAppSelector(selectNowPlaying);
   const activeSpeech = useAppSelector(selectActiveSpeech);
+  const suggestions = useAppSelector(selectBuddySuggestions);
   const diagnostics = useAppSelector(selectBuddyDiagnostics);
   const runtimeQueue = useAppSelector(selectRuntimeQueue);
+  const pulse = useAppSelector(selectPulse);
   const [dismissRuntimeMutation] = useDismissBuddyRuntimeEventMutation();
   const buddy = useBuddyState();
   const { state } = buddy;
@@ -201,7 +211,6 @@ export const BuddyHome: React.FC = () => {
   const progression = snapshot?.state.progression;
   const identity = snapshot?.state.identity;
   const skills = snapshot?.state.skills;
-  const semantic = snapshot?.state.semantic;
   const pet = snapshot?.state.pet;
   const personality = snapshot?.state.personality;
   const settings = snapshot?.settings;
@@ -219,7 +228,6 @@ export const BuddyHome: React.FC = () => {
   );
 
   const name = identity?.name ?? state.name;
-  const statusText = semantic?.headline ?? "";
   const needRows = useMemo<NeedRow[]>(
     () =>
       NEED_ROWS.map((item) => {
@@ -252,6 +260,13 @@ export const BuddyHome: React.FC = () => {
   const handleViewStats = useCallback(() => {
     dispatch(push({ name: "stats dashboard" }));
   }, [dispatch]);
+
+  const handleOpenWorldPage = useCallback(
+    (page: BuddyPage) => {
+      navigateFromBuddyPage(page, dispatch);
+    },
+    [dispatch],
+  );
 
   const handleRunMode = useCallback(
     (mode: string) => {
@@ -303,21 +318,59 @@ export const BuddyHome: React.FC = () => {
     );
   }, [dispatch]);
 
-  const activeDiagnostic = activeSpeech?.chat_id
-    ? diagnostics.find((diag) => diag.chat_id === activeSpeech.chat_id)
+  const activeSuggestion = useMemo(
+    () => suggestions.find((suggestion) => !suggestion.dismissed) ?? null,
+    [suggestions],
+  );
+  const activeSuggestionSpeech = useMemo<BuddySpeechItem | null>(() => {
+    if (!activeSuggestion) return null;
+    const controls = activeSuggestion.controls.map((control) =>
+      control.action === "dismiss"
+        ? {
+            ...control,
+            action: "dismiss_suggestion",
+            action_param: activeSuggestion.id,
+          }
+        : control,
+    );
+    return {
+      id: activeSuggestion.id,
+      text: `${activeSuggestion.title}: ${activeSuggestion.description}`,
+      mood: "curious",
+      scope: "global",
+      persistent: false,
+      ttl_seconds: 12,
+      dedupe_key: `suggestion_${activeSuggestion.id}`,
+      created_at: activeSuggestion.created_at,
+      controls,
+    };
+  }, [activeSuggestion]);
+  const runtimeIsWorking = Boolean(
+    nowPlaying &&
+      !nowPlaying.dismissed &&
+      nowPlaying.status !== "completed" &&
+      nowPlaying.status !== "failed" &&
+      nowPlaying.status !== "info",
+  );
+  const heroSpeech = runtimeIsWorking
+    ? null
+    : activeSpeech ?? activeSuggestionSpeech;
+
+  const activeDiagnostic = heroSpeech?.chat_id
+    ? diagnostics.find((diag) => diag.chat_id === heroSpeech.chat_id)
     : undefined;
 
   const handleSpeechControl = useCallback(
     async (ctrl: BuddyControl) => {
-      if (!activeSpeech) return;
+      if (!heroSpeech) return;
       await executeBuddyAction(ctrl, dispatch, {
-        triggerText: activeSpeech.text,
+        triggerText: heroSpeech.text,
         triggerSource: "runtime",
-        sourceChatId: activeSpeech.chat_id,
+        sourceChatId: heroSpeech.chat_id,
         diagnostic: activeDiagnostic,
       });
     },
-    [dispatch, activeSpeech, activeDiagnostic],
+    [dispatch, heroSpeech, activeDiagnostic],
   );
 
   const handleQuestControl = useCallback(
@@ -463,18 +516,21 @@ export const BuddyHome: React.FC = () => {
         </Button>
       </div>
 
-      <BuddyHero
+      <BuddyWorld
         palette={palette}
         stage={stage}
-        statusText={statusText}
         state={state}
-        onCanvasEvent={buddy.handleCanvasEvent}
-        activeSpeech={activeSpeech}
+        pulse={pulse}
+        pet={pet}
         nowPlaying={nowPlaying}
+        activeQuest={activeQuest}
+        onCanvasEvent={buddy.handleCanvasEvent}
+        activeSpeech={heroSpeech}
         setupNeeded={setupNeeded}
         onRunMode={handleRunMode}
         onDismissSetup={handleDismissSetup}
         onCare={(action, toy) => void handleCare(action, toy)}
+        onOpenPage={handleOpenWorldPage}
         onSpeechControl={(control) => void handleSpeechControl(control)}
       />
 

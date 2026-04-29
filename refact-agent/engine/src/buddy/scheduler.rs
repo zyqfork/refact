@@ -42,6 +42,15 @@ impl Default for BuddyJobResult {
     }
 }
 
+impl BuddyJobResult {
+    fn has_visible_output(&self) -> bool {
+        self.speech.is_some()
+            || self.suggestion.is_some()
+            || self.activity.is_some()
+            || self.runtime_event.is_some()
+    }
+}
+
 #[async_trait::async_trait]
 pub trait BuddyJob: Send + Sync {
     fn id(&self) -> &str;
@@ -163,6 +172,7 @@ impl BuddyScheduler {
                 continue;
             }
             let result = job.execute(gcx.clone(), ctx).await;
+            let has_visible_output = result.has_visible_output();
             let mut buddy = buddy_arc.lock().await;
             if let Some(svc) = buddy.as_mut() {
                 let mut js = svc
@@ -192,7 +202,9 @@ impl BuddyScheduler {
                     svc.enqueue_runtime_event(event);
                 }
             }
-            break; // max 1 job per tick
+            if has_visible_output {
+                break; // max 1 visible job per tick
+            }
         }
     }
 }

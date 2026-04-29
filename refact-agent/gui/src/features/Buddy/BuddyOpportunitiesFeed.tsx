@@ -2,10 +2,17 @@ import React from "react";
 import { Text } from "@radix-ui/themes";
 import { BuddyOpportunityCard } from "./BuddyOpportunityCard";
 import { useBuddyOpportunities } from "./hooks/useBuddyOpportunities";
+import { useAppSelector } from "../../hooks";
+import { selectBuddySuggestions } from "./buddySlice";
 import styles from "./BuddyOpportunitiesFeed.module.css";
 
 export const BuddyOpportunitiesFeed: React.FC = () => {
   const { unread } = useBuddyOpportunities();
+  const suggestions = useAppSelector(selectBuddySuggestions);
+  const activeSuggestions = suggestions.filter(
+    (suggestion) => !suggestion.dismissed,
+  );
+  const itemCount = unread.length + activeSuggestions.length;
 
   return (
     <div className={styles.feed} data-testid="buddy-opportunities-feed">
@@ -13,13 +20,13 @@ export const BuddyOpportunitiesFeed: React.FC = () => {
         <Text size="1" weight="bold" color="gray" className={styles.label}>
           OPPORTUNITIES
         </Text>
-        {unread.length > 0 && (
+        {itemCount > 0 && (
           <Text size="1" color="gray" className={styles.count}>
-            {unread.length}
+            {itemCount}
           </Text>
         )}
       </div>
-      {unread.length === 0 ? (
+      {itemCount === 0 ? (
         <Text size="1" className={styles.empty}>
           No opportunities right now.
         </Text>
@@ -32,6 +39,16 @@ export const BuddyOpportunitiesFeed: React.FC = () => {
           {unread.map((opp) => (
             <div key={opp.id} className={styles.item} role="listitem">
               <BuddyOpportunityCard opportunity={opp} />
+            </div>
+          ))}
+          {activeSuggestions.map((suggestion) => (
+            <div key={suggestion.id} className={styles.item} role="listitem">
+              <Text size="2" weight="bold">
+                {suggestion.title}
+              </Text>
+              <Text size="1" color="gray">
+                {suggestion.description}
+              </Text>
             </div>
           ))}
         </div>

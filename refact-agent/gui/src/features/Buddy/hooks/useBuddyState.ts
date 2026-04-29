@@ -234,7 +234,7 @@ export function useBuddyState(
     if (isActive && !isCompleted) {
       return;
     }
-    const ttl = nowPlaying.persistent
+    const ttl = nowPlaying.persistent && !isCompleted
       ? undefined
       : nowPlaying.ttl_ms ??
         signalDef?.duration ??

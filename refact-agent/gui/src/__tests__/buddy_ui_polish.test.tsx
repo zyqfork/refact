@@ -5,6 +5,7 @@ import { server } from "../utils/mockServer";
 import { setUpStore } from "../app/store";
 import { actionLabel } from "../features/Buddy/buddyOpportunityActions";
 import { BuddyHome } from "../features/Buddy/BuddyHome";
+import { BuddyDashboardScene } from "../features/Buddy/BuddyDashboardScene";
 import {
   addOpportunity,
   buddySlice,
@@ -36,8 +37,8 @@ type CapturedThunk = (
 ) => unknown;
 
 function makeThunkDispatch() {
-  const innerDispatch = vi.fn();
-  const dispatch = vi.fn((action: unknown) => {
+  const innerDispatch = vi.fn((action: unknown): unknown => action);
+  const dispatch = vi.fn((action: unknown): unknown => {
     if (typeof action === "function") {
       return (action as CapturedThunk)(
         innerDispatch,
@@ -254,7 +255,10 @@ describe("buddy UI polish", () => {
       { type: "setup_mode", mode: "setup_mcp" },
       dispatch as never,
     );
-    expect(innerDispatch.mock.calls.map((call) => call[0])).toEqual(
+    const dispatchedActions = innerDispatch.mock.calls.map(
+      ([action]) => action,
+    );
+    expect(dispatchedActions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "chatThread/createWithId",
@@ -290,13 +294,36 @@ describe("buddy UI polish", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("buddy-hero")).toBeInTheDocument();
+      expect(screen.getByTestId("buddy-world")).toBeInTheDocument();
+      expect(screen.getByTestId("buddy-world-canvas")).toBeInTheDocument();
+      expect(screen.getByTestId("buddy-world-character")).toBeInTheDocument();
       expect(screen.getByTestId("buddy-summary-strip")).toBeInTheDocument();
       expect(screen.getByTestId("buddy-personality-panel")).toBeInTheDocument();
       expect(screen.getByTestId("buddy-activity-panel")).toBeInTheDocument();
       expect(
         screen.getByTestId("buddy-recent-errors-panel"),
       ).toBeInTheDocument();
+    });
+  });
+
+  it("BuddyDashboardScene_renders_shared_canvas_scene", async () => {
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/setup/status", () =>
+        HttpResponse.json({ configured: true }),
+      ),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot()));
+
+    render(<BuddyDashboardScene />, {
+      preloadedState: { ...CONFIG_STATE, buddy: store.getState().buddy },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("buddy-world")).toBeInTheDocument();
+      expect(screen.getByTestId("buddy-world-canvas")).toBeInTheDocument();
+      expect(screen.getByTestId("buddy-world-character")).toBeInTheDocument();
     });
   });
 });

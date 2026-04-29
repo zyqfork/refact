@@ -79,6 +79,8 @@ where
         None,
     );
     started.speech_text = Some(format!("I'm working on {}...", label));
+    started.scene = Some("working".to_string());
+    started.persistent = true;
     crate::buddy::actor::buddy_enqueue_event(gcx.clone(), started).await;
 
     let result = workflow_fn().await;

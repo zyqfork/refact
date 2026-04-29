@@ -1004,13 +1004,31 @@ fn test_persistent_event_fields_coalesced() {
     ev1.persistent = true;
     queue.enqueue(ev1);
     let mut ev2 =
-        super::actor::make_runtime_event("streaming", "Updated", "chat", "key_1", "progress", None);
+        super::actor::make_runtime_event("tool_used", "Updated", "tool", "key_1", "progress", None);
     ev2.speech_text = Some("Updated text".to_string());
     ev2.persistent = true;
     queue.enqueue(ev2);
     assert_eq!(queue.items.len(), 1);
+    assert_eq!(queue.items[0].signal_type, "tool_used");
+    assert_eq!(queue.items[0].source, "tool");
     assert_eq!(queue.items[0].speech_text.as_deref(), Some("Updated text"));
     assert_eq!(queue.items[0].status, "progress");
+}
+
+#[test]
+fn test_completing_persistent_event_makes_it_temporary() {
+    use super::runtime_queue::RuntimeQueue;
+    let mut queue = RuntimeQueue::new();
+    let mut ev =
+        super::actor::make_runtime_event("streaming", "Working", "chat", "key_1", "started", None);
+    ev.persistent = true;
+    queue.enqueue(ev);
+
+    queue.complete("key_1", "completed");
+
+    assert_eq!(queue.items[0].status, "completed");
+    assert!(!queue.items[0].persistent);
+    assert_eq!(queue.items[0].ttl_ms, Some(4000));
 }
 
 #[tokio::test]

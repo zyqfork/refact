@@ -1,6 +1,10 @@
 import type { AppDispatch } from "../../app/store";
 import { push } from "../Pages/pagesSlice";
-import { clearActiveSpeech, setBuddySnapshot } from "./buddySlice";
+import {
+  clearActiveSpeech,
+  dismissBuddySuggestion,
+  setBuddySnapshot,
+} from "./buddySlice";
 import {
   openChatInModeAndStart,
   startBuddyInvestigation,
@@ -47,6 +51,16 @@ export async function executeBuddyAction(
       dispatch(clearActiveSpeech());
       break;
 
+    case "dismiss_suggestion": {
+      const suggestionId = ctrl.action_param;
+      if (!suggestionId) break;
+      await dispatch(
+        buddyApi.endpoints.dismissBuddySuggestion.initiate(suggestionId),
+      ).unwrap();
+      dispatch(dismissBuddySuggestion(suggestionId));
+      break;
+    }
+
     case "open_setup":
       void dispatch(openChatInModeAndStart({ mode: "setup" }));
       dispatch(clearActiveSpeech());
@@ -65,7 +79,8 @@ export async function executeBuddyAction(
     case "open_setup_commands":
     case "open_setup_agents_md":
     case "open_setup_subagents": {
-      const mode = LEGACY_SETUP_ACTION_TO_MODE[ctrl.action as LegacySetupAction];
+      const mode =
+        LEGACY_SETUP_ACTION_TO_MODE[ctrl.action as LegacySetupAction];
       void dispatch(openChatInModeAndStart({ mode }));
       dispatch(clearActiveSpeech());
       break;

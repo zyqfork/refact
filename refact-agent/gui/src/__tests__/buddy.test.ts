@@ -788,6 +788,31 @@ describe("runtime event new fields", () => {
     const state = reducer(undefined, enqueueRuntimeEvent(evt));
     expect(state.runtimeQueue[0].controls).toHaveLength(1);
   });
+
+  test("completed persistent runtime event becomes temporary when coalesced", () => {
+    const started = makeEvent({
+      id: "evt-started",
+      dedupe_key: "workflow_1",
+      status: "started",
+      persistent: true,
+    });
+    const completed = makeEvent({
+      id: "evt-completed",
+      dedupe_key: "workflow_1",
+      status: "completed",
+      persistent: false,
+      ttl_ms: 4000,
+    });
+
+    const state = reducer(
+      reducer(undefined, enqueueRuntimeEvent(started)),
+      enqueueRuntimeEvent(completed),
+    );
+
+    expect(state.runtimeQueue[0].status).toBe("completed");
+    expect(state.runtimeQueue[0].persistent).toBe(false);
+    expect(state.runtimeQueue[0].ttl_ms).toBe(4000);
+  });
 });
 
 describe("SIGNALS scene categories", () => {
@@ -1003,7 +1028,10 @@ describe("BuddyPanel hero layout", () => {
   });
 
   test("bulk opportunity dismiss uses settled results", () => {
-    const panel = fs.readFileSync(path.join(buddyDir, "BuddyPanel.tsx"), "utf8");
+    const panel = fs.readFileSync(
+      path.join(buddyDir, "BuddyPanel.tsx"),
+      "utf8",
+    );
     const companion = fs.readFileSync(
       path.join(buddyDir, "BuddyChatCompanion.tsx"),
       "utf8",
@@ -1013,7 +1041,10 @@ describe("BuddyPanel hero layout", () => {
   });
 
   test("runtime signal chrome uses fallback lookup", () => {
-    const panel = fs.readFileSync(path.join(buddyDir, "BuddyPanel.tsx"), "utf8");
+    const panel = fs.readFileSync(
+      path.join(buddyDir, "BuddyPanel.tsx"),
+      "utf8",
+    );
     const hero = fs.readFileSync(path.join(buddyDir, "BuddyHero.tsx"), "utf8");
     expect(panel).toContain("getSignalDef(activeRuntime.signal_type)");
     expect(hero).toContain("getSignalDef(nowPlaying.signal_type)");
@@ -1078,14 +1109,7 @@ describe("Buddy investigation prompt hardening", () => {
       "utf8",
     );
     const chatActions = fs.readFileSync(
-      path.join(
-        __dirname,
-        "..",
-        "features",
-        "Chat",
-        "Thread",
-        "actions.ts",
-      ),
+      path.join(__dirname, "..", "features", "Chat", "Thread", "actions.ts"),
       "utf8",
     );
 
@@ -1427,7 +1451,9 @@ describe("Buddy frontend error reporting helpers", () => {
       ],
     };
 
-    expect(() => buildBuddyCrashRecoveryError(malformed as never)).not.toThrow();
+    expect(() =>
+      buildBuddyCrashRecoveryError(malformed as never),
+    ).not.toThrow();
     const report = buildBuddyCrashRecoveryError(malformed as never);
     expect(report).toContain("Started at: unknown");
     expect(report).toContain("Last heartbeat: unknown");
@@ -2021,13 +2047,7 @@ describe("routeDraftByKind preserves draft IDs", () => {
     expect(buddyApi.endpoints.createHookDraft).toBeDefined();
     expect(buddyApi.endpoints.createPulseReportDraft).toBeDefined();
     const source = fs.readFileSync(
-      path.join(
-        __dirname,
-        "..",
-        "services",
-        "refact",
-        "buddy.ts",
-      ),
+      path.join(__dirname, "..", "services", "refact", "buddy.ts"),
       "utf8",
     );
     expect(source).toContain("/v1/buddy/drafts/hook");
@@ -2066,7 +2086,10 @@ describe("pagesSlice handles new page entries", () => {
   });
 
   test("push buddy draft stores draftId", () => {
-    const state = reducer(undefined, push({ name: "buddy", draftId: "draft-x" }));
+    const state = reducer(
+      undefined,
+      push({ name: "buddy", draftId: "draft-x" }),
+    );
     const last = state[state.length - 1];
     expect(last.name).toBe("buddy");
     if (last.name === "buddy") {

@@ -10,6 +10,7 @@ import {
   setBuddySnapshot,
   setPulse,
   addOpportunity,
+  addBuddySuggestion,
 } from "../features/Buddy/buddySlice";
 import { push } from "../features/Pages/pagesSlice";
 import { BuddyPulseCard } from "../features/Buddy/BuddyPulseCard";
@@ -19,13 +20,18 @@ import { BuddyWorkshop } from "../features/Buddy/BuddyWorkshop";
 import { BuddyDraftPreview } from "../features/Buddy/BuddyDraftPreview";
 import { BuddySettingsPanel } from "../features/Buddy/BuddySettingsPanel";
 import { BuddyPanel } from "../features/Buddy/BuddyPanel";
+import { BuddyWorld } from "../features/Buddy/BuddyWorld";
+import { buildBuddyWorldState } from "../features/Buddy/buddyWorldModel";
 import { useExecuteBuddyAction } from "../features/Buddy/hooks/useExecuteBuddyAction";
 import { executeBuddyNavigation } from "../features/Buddy/executeBuddyAction";
+import { PALETTES, STAGES } from "../features/Buddy/constants";
 import type {
   BuddyOpportunity,
+  BuddySuggestion,
   BuddyDraft,
   BuddyPulse,
   BuddySnapshot,
+  BuddyRuntimeEvent,
 } from "../features/Buddy/types";
 import type React from "react";
 
@@ -70,6 +76,20 @@ function makeOpportunity(
     related: { chat_ids: [], task_ids: [], memory_ids: [], config_paths: [] },
     created_at: "2024-01-01T00:00:00Z",
     expires_at: "2099-12-31T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeSuggestion(overrides?: Partial<BuddySuggestion>): BuddySuggestion {
+  return {
+    id: "suggestion-1",
+    suggestion_type: "quest_start_setup",
+    title: "Warm up this workspace",
+    description: "Kick off setup so Buddy can help proactively.",
+    created_at: "2024-01-01T00:00:00Z",
+    dismissed: false,
+    controls: [],
+    quest: null,
     ...overrides,
   };
 }
@@ -308,6 +328,144 @@ describe("BuddyHome_renders_all_sections", () => {
   });
 });
 
+describe("BuddyWorld_dynamic_environment", () => {
+  it("builds time-dependent sun and moon phases", () => {
+    const morning = buildBuddyWorldState({
+      now: new Date("2024-01-01T08:00:00"),
+      pulse: makePulse(),
+      pet: makeSnapshot().state.pet,
+      nowPlaying: null,
+      activeQuest: null,
+    });
+    const night = buildBuddyWorldState({
+      now: new Date("2024-01-01T23:00:00"),
+      pulse: makePulse(),
+      pet: makeSnapshot().state.pet,
+      nowPlaying: null,
+      activeQuest: null,
+    });
+
+    expect(morning.phase).toBe("morning");
+    expect(morning.celestialLabel).toBe("Sunrise");
+    expect(night.phase).toBe("night");
+    expect(night.celestialLabel).toBe("Moon");
+  });
+
+  it("turns pulse problems into stormy weather and interactive objects", () => {
+    const pulse = makePulse();
+    const world = buildBuddyWorldState({
+      now: new Date("2024-01-01T14:00:00"),
+      pulse,
+      pet: makeSnapshot().state.pet,
+      nowPlaying: null,
+      activeQuest: null,
+    });
+
+    expect(world.weather).toBe("storm");
+    expect(world.objects.map((item) => item.label)).toEqual(
+      expect.arrayContaining([
+        "Task grove",
+        "Memory fireflies",
+        "Model observatory",
+        "MCP satellites",
+      ]),
+    );
+  });
+
+  it("renders world controls and routes object clicks", async () => {
+    const onCare = vi.fn();
+    const onOpenPage = vi.fn();
+
+    const { user } = render(
+      <BuddyWorld
+        palette={PALETTES[0]}
+        stage={STAGES[2]}
+        state={{
+          name: "Buddy",
+          paletteIndex: 0,
+          born: 0,
+          mood: {
+            happiness: 80,
+            energy: 80,
+            curiosity: 70,
+            anxiety: 0,
+            boredom: 10,
+            affection: 80,
+          },
+          personality: {
+            playfulness: 70,
+            confidence: 60,
+            clinginess: 70,
+            resilience: 60,
+            chaos: 30,
+            sociability: 70,
+            curiosity: 70,
+          },
+          progress: { xp: 0, stage: 2 },
+          activity: {
+            mood: "idle",
+            animationType: "idle",
+            lastSignalTime: 0,
+            lastSignalType: null,
+          },
+          skills: [],
+          log: [],
+        }}
+        pulse={makePulse()}
+        pet={makeSnapshot().state.pet}
+        nowPlaying={null}
+        activeQuest={null}
+        activeSpeech={null}
+        setupNeeded={false}
+        now={new Date("2024-01-01T14:00:00")}
+        onCanvasEvent={vi.fn()}
+        onCare={onCare}
+        onOpenPage={onOpenPage}
+        onRunMode={vi.fn()}
+        onDismissSetup={vi.fn()}
+        onSpeechControl={vi.fn()}
+      />,
+      { preloadedState: CONFIG_STATE },
+    );
+
+    expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+      "data-phase",
+      "day",
+    );
+    expect(screen.getByTestId("buddy-world-canvas")).toBeInTheDocument();
+    expect(screen.getByTestId("buddy-world-character")).toBeInTheDocument();
+    expect(screen.getByText("Daylight build mode")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /play in sun/i }));
+    expect(onCare).toHaveBeenCalledWith("play", "scroll");
+
+    await user.click(screen.getByRole("button", { name: /open task grove/i }));
+    expect(onOpenPage).toHaveBeenCalledWith({ type: "tasks_list" });
+  });
+
+  it("uses active runtime work as busy weather", () => {
+    const runtimeEvent: BuddyRuntimeEvent = {
+      id: "rt-1",
+      signal_type: "tool_used",
+      title: "Running browser checks",
+      source: "test",
+      status: "progress",
+      priority: "normal",
+      created_at: "2024-01-01T00:00:00Z",
+    };
+    const world = buildBuddyWorldState({
+      now: new Date("2024-01-01T14:00:00"),
+      pulse: makePulse(),
+      pet: makeSnapshot().state.pet,
+      nowPlaying: runtimeEvent,
+      activeQuest: null,
+    });
+
+    expect(world.weather).toBe("busy");
+    expect(world.weatherDescription).toBe("Running browser checks");
+  });
+});
+
 describe("BuddySettingsPanel_local_state_save", () => {
   it("editing input does not update store until Save clicked", async () => {
     server.use(
@@ -442,5 +600,27 @@ describe("BuddyPanel_opportunity_notifications", () => {
     });
 
     expect(screen.queryByTestId("buddy-unread-badge")).not.toBeInTheDocument();
+  });
+});
+
+describe("BuddyOpportunitiesFeed_suggestions", () => {
+  it("shows active Buddy suggestions when detector opportunities are empty", async () => {
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [] }),
+      ),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot()));
+    store.dispatch(addBuddySuggestion(makeSuggestion()));
+
+    render(<BuddyOpportunitiesFeed />, {
+      preloadedState: { ...CONFIG_STATE, buddy: store.getState().buddy },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Warm up this workspace")).toBeInTheDocument();
+    });
   });
 });

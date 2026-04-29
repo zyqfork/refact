@@ -1,0 +1,360 @@
+.scene {
+  position: relative;
+  height: 280px;
+  min-height: 220px;
+  margin: 0 var(--space-3) var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-4);
+  background: var(--gray-a2);
+  box-shadow: inset 0 0 0 1px var(--gray-a2);
+  flex-shrink: 0;
+}
+
+.compact {
+  height: 210px;
+  min-height: 180px;
+  margin: 0;
+}
+
+.scene[data-weather="storm"] {
+  box-shadow:
+    inset 0 0 0 1px var(--red-a5),
+    0 0 24px var(--red-a2);
+}
+
+.scene[data-weather="dream"] {
+  filter: saturate(0.86);
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+.sceneHud {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  right: var(--space-2);
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.titleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-3);
+  background: rgba(17, 24, 39, 0.42);
+  color: white;
+  backdrop-filter: blur(6px);
+}
+
+.sectionLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.vitalityBadge {
+  padding: 4px 9px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(17, 24, 39, 0.42);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
+
+.vitalityLush {
+  color: var(--grass-10);
+}
+
+.vitalityGrowing {
+  color: var(--amber-10);
+}
+
+.vitalityTangled {
+  color: var(--red-10);
+}
+
+.hotspot,
+.objectHotspot,
+.sceneButton,
+.sceneButtonGhost {
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.hotspot,
+.objectHotspot {
+  position: absolute;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 9999px;
+  background: rgba(17, 24, 39, 0.26);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  line-height: 1.2;
+  backdrop-filter: blur(6px);
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.hotspot {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.objectHotspot {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.hotspot:hover,
+.hotspot:focus-visible,
+.objectHotspot:hover,
+.objectHotspot:focus-visible {
+  transform: translate(-50%, -52%) scale(1.04);
+  border-color: rgba(255, 255, 255, 0.38);
+  background: rgba(17, 24, 39, 0.58);
+  outline: none;
+}
+
+.celestialHotspot {
+  box-shadow: 0 0 22px rgba(251, 191, 36, 0.28);
+}
+
+.weatherHotspot {
+  box-shadow: 0 0 22px rgba(96, 165, 250, 0.24);
+}
+
+.hotspotDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow:
+    0 0 0 3px rgba(17, 24, 39, 0.36),
+    0 0 12px currentColor;
+}
+
+.objectTooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 96px;
+  max-width: 132px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-3);
+  background: rgba(17, 24, 39, 0.72);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+  backdrop-filter: blur(8px);
+}
+
+.objectHotspot:hover .objectTooltip,
+.objectHotspot:focus-visible .objectTooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.objectLabel {
+  max-width: 96px;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.objectValue {
+  max-width: 96px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toneGood {
+  border-color: rgba(34, 197, 94, 0.42);
+}
+
+.toneNeutral {
+  border-color: rgba(96, 165, 250, 0.42);
+}
+
+.toneWarning {
+  border-color: rgba(245, 158, 11, 0.62);
+}
+
+.toneDanger {
+  border-color: rgba(239, 68, 68, 0.68);
+}
+
+.character {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+}
+
+.stageBadge {
+  margin-top: -10px;
+  padding: 3px 9px;
+  border: 1px solid;
+  border-radius: 9999px;
+  background: rgba(17, 24, 39, 0.58);
+  font-size: 10px;
+  font-weight: 700;
+  backdrop-filter: blur(6px);
+}
+
+.setupDock,
+.careDock {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.setupDock {
+  left: var(--space-2);
+  bottom: var(--space-2);
+  max-width: 42%;
+}
+
+.careDock {
+  right: var(--space-2);
+  bottom: var(--space-2);
+  justify-content: flex-end;
+  max-width: 42%;
+}
+
+.sceneButton,
+.sceneButtonGhost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 9999px;
+  background: rgba(17, 24, 39, 0.46);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 10px;
+  backdrop-filter: blur(6px);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.12s ease;
+}
+
+.sceneButtonGhost {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.sceneButton:hover,
+.sceneButton:focus-visible,
+.sceneButtonGhost:hover,
+.sceneButtonGhost:focus-visible {
+  background: rgba(17, 24, 39, 0.64);
+  border-color: rgba(255, 255, 255, 0.36);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.caption {
+  position: absolute;
+  z-index: 4;
+  left: var(--space-2);
+  bottom: 56px;
+  max-width: min(420px, 46%);
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-3);
+  background: rgba(17, 24, 39, 0.42);
+  color: rgba(255, 255, 255, 0.9);
+  text-align: left;
+  backdrop-filter: blur(6px);
+}
+
+.compact .caption {
+  display: none;
+}
+
+.compact .sceneHud {
+  top: var(--space-1);
+  left: var(--space-1);
+  right: var(--space-1);
+}
+
+.compact .character {
+  bottom: 2px;
+}
+
+.compact .objectHotspot {
+  padding: 4px 6px;
+}
+
+.compact .setupDock,
+.compact .careDock {
+  bottom: var(--space-1);
+}
+
+@media (max-width: 720px) {
+  .scene {
+    height: 250px;
+  }
+
+  .objectHotspot {
+    display: none;
+  }
+
+  .setupDock,
+  .careDock {
+    max-width: 48%;
+  }
+
+  .caption {
+    width: min(360px, 70%);
+    bottom: 56px;
+  }
+}
