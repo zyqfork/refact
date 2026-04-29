@@ -5,11 +5,14 @@ import { useGetSetupStatusQuery } from "../../services/refact/setupStatus";
 import {
   selectActiveSpeech,
   selectBuddyDiagnostics,
+  selectBuddySuggestions,
   selectBuddyLoaded,
   selectBuddySnapshot,
   selectIsBuddyEnabled,
   selectNowPlaying,
   selectPulse,
+  selectRuntimeQueue,
+  dismissRuntimeEvent,
 } from "./buddySlice";
 import { PALETTES, STAGES } from "./constants";
 import {
@@ -18,6 +21,8 @@ import {
 } from "./executeBuddyAction";
 import { useBuddyState } from "./hooks/useBuddyState";
 import { BuddyWorld } from "./BuddyWorld";
+import { buildBuddySceneSpeech } from "./buddySceneSpeech";
+import { useDismissBuddyRuntimeEventMutation } from "../../services/refact/buddy";
 import type { BuddyCareAction, BuddyControl, BuddyPage } from "./types";
 
 export const BuddyDashboardScene: React.FC = () => {
@@ -27,9 +32,12 @@ export const BuddyDashboardScene: React.FC = () => {
   const enabled = useAppSelector(selectIsBuddyEnabled);
   const pulse = useAppSelector(selectPulse);
   const nowPlaying = useAppSelector(selectNowPlaying);
+  const runtimeQueue = useAppSelector(selectRuntimeQueue);
   const activeSpeech = useAppSelector(selectActiveSpeech);
+  const suggestions = useAppSelector(selectBuddySuggestions);
   const diagnostics = useAppSelector(selectBuddyDiagnostics);
   const [setupDismissed, setSetupDismissed] = useState(false);
+  const [dismissRuntimeMutation] = useDismissBuddyRuntimeEventMutation();
   const buddy = useBuddyState();
   const { state } = buddy;
   const { data: setupData } = useGetSetupStatusQuery(undefined, {
@@ -45,17 +53,25 @@ export const BuddyDashboardScene: React.FC = () => {
     snapshot?.state.identity.palette_index ?? state.paletteIndex;
   const palette = PALETTES[paletteIndex] ?? PALETTES[0];
 
-  const runtimeIsWorking = Boolean(
-    nowPlaying &&
-      !nowPlaying.dismissed &&
-      nowPlaying.status !== "completed" &&
-      nowPlaying.status !== "failed" &&
-      nowPlaying.status !== "info",
-  );
-  const sceneSpeech = runtimeIsWorking ? null : activeSpeech;
+  const activeSuggestion =
+    suggestions.find((suggestion) => !suggestion.dismissed) ?? null;
+  const sceneSpeech = buildBuddySceneSpeech({
+    activeSpeech,
+    nowPlaying,
+    runtimeQueue,
+    activeSuggestion,
+  });
   const activeDiagnostic = sceneSpeech?.chat_id
     ? diagnostics.find((diag) => diag.chat_id === sceneSpeech.chat_id)
     : undefined;
+
+  const dismissRuntimeSpeech = useCallback(
+    async (runtimeEventId: string) => {
+      dispatch(dismissRuntimeEvent(runtimeEventId));
+      await dismissRuntimeMutation(runtimeEventId).unwrap();
+    },
+    [dispatch, dismissRuntimeMutation],
+  );
 
   const handleCare = useCallback(
     async (action: BuddyCareAction, toy?: string) => {
@@ -90,14 +106,23 @@ export const BuddyDashboardScene: React.FC = () => {
   const handleSpeechControl = useCallback(
     async (control: BuddyControl) => {
       if (!sceneSpeech) return;
+      if (
+        sceneSpeech.source === "runtime" &&
+        sceneSpeech.runtimeEventId &&
+        (control.action === "dismiss" || control.action === "dismiss_speech")
+      ) {
+        await dismissRuntimeSpeech(sceneSpeech.runtimeEventId);
+        return;
+      }
       await executeBuddyAction(control, dispatch, {
         triggerText: sceneSpeech.text,
-        triggerSource: "runtime",
+        triggerSource:
+          sceneSpeech.source === "suggestion" ? "suggestion" : "runtime",
         sourceChatId: sceneSpeech.chat_id,
         diagnostic: activeDiagnostic,
       });
     },
-    [activeDiagnostic, dispatch, sceneSpeech],
+    [activeDiagnostic, dismissRuntimeSpeech, dispatch, sceneSpeech],
   );
 
   if (!loaded || snapshot === null || !enabled) {

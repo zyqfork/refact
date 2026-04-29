@@ -395,7 +395,7 @@ export type BuddyEvent =
   | { type: "petted" }
   | { type: "semantic_update"; patch: Partial<BuddySemanticState> };
 
-export type BubblePosition = "above" | "left" | "right";
+export type BubblePosition = "top" | "left" | "right";
 
 export interface BuddyCanvasProps {
   state: BuddySemanticState;
@@ -409,8 +409,10 @@ export interface BuddyCanvasProps {
   speechControls?: BuddyControl[];
   /** Called when a speech bubble button is clicked */
   onSpeechControlClick?: (ctrl: BuddyControl) => void;
-  /** Where to position the speech bubble relative to the buddy. Default: "above" */
+  /** Where to position the speech bubble relative to the buddy. Default: "top" */
   bubblePosition?: BubblePosition;
+  /** If true, each new saying picks top, left, or right at random. */
+  randomizeBubblePosition?: boolean;
 }
 
 export interface BuddyIdentity {

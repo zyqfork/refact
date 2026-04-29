@@ -432,12 +432,18 @@ describe("BuddyWorld_dynamic_environment", () => {
       "data-phase",
       "day",
     );
+    expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+      "data-vitality",
+      "tangled",
+    );
     expect(screen.getByTestId("buddy-world-canvas")).toBeInTheDocument();
     expect(screen.getByTestId("buddy-world-character")).toBeInTheDocument();
-    expect(screen.getByText("Daylight build mode")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /play in sun/i }));
     expect(onCare).toHaveBeenCalledWith("play", "scroll");
+
+    await user.click(screen.getByRole("button", { name: /open buddy home/i }));
+    expect(onOpenPage).toHaveBeenCalledWith({ type: "buddy" });
 
     await user.click(screen.getByRole("button", { name: /open task grove/i }));
     expect(onOpenPage).toHaveBeenCalledWith({ type: "tasks_list" });

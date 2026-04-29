@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, useState } from "react";
 import { createInitialAnimState } from "./state";
 import { renderFrame } from "./canvas/render";
 import {
@@ -18,18 +18,19 @@ import type {
   BuddyAnimState,
   BuddySemanticState,
   BuddyEvent,
+  BubblePosition,
 } from "./types";
 
 const BUBBLE_STYLES: Record<
-  string,
+  BubblePosition,
   {
     container: React.CSSProperties;
     tail: React.CSSProperties;
   }
 > = {
-  above: {
+  top: {
     container: {
-      bottom: "64%",
+      bottom: "58%",
       left: "50%",
       transform: "translateX(-50%)",
     },
@@ -44,9 +45,9 @@ const BUBBLE_STYLES: Record<
   },
   left: {
     container: {
-      right: "78%",
-      top: "10%",
-      marginRight: "4px",
+      right: "56%",
+      top: "18%",
+      marginRight: "-8px",
     },
     tail: {
       left: "100%",
@@ -59,9 +60,9 @@ const BUBBLE_STYLES: Record<
   },
   right: {
     container: {
-      left: "78%",
-      top: "10%",
-      marginLeft: "4px",
+      left: "56%",
+      top: "18%",
+      marginLeft: "-8px",
     },
     tail: {
       right: "100%",
@@ -74,6 +75,15 @@ const BUBBLE_STYLES: Record<
   },
 };
 
+const BUBBLE_POSITIONS: BubblePosition[] = ["top", "left", "right"];
+
+function randomBubblePosition(previous?: BubblePosition): BubblePosition {
+  const choices = previous
+    ? BUBBLE_POSITIONS.filter((position) => position !== previous)
+    : BUBBLE_POSITIONS;
+  return choices[Math.floor(Math.random() * choices.length)] ?? "top";
+}
+
 export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   state,
   onEvent,
@@ -83,7 +93,8 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   speechOverride,
   speechControls,
   onSpeechControlClick,
-  bubblePosition = "above",
+  bubblePosition = "top",
+  randomizeBubblePosition = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<BuddyAnimState>(createInitialAnimState());
@@ -92,11 +103,23 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   const frameIdRef = useRef<number>(0);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const bubbleTextRef = useRef<string>("");
+  const [activeBubblePosition, setActiveBubblePosition] =
+    useState<BubblePosition>(bubblePosition);
+  const activeBubblePositionRef = useRef<BubblePosition>(bubblePosition);
+  const bubblePositionRef = useRef<BubblePosition>(bubblePosition);
   const speechOverrideRef = useRef<string | null | undefined>(speechOverride);
 
   useEffect(() => {
     speechOverrideRef.current = speechOverride;
   }, [speechOverride]);
+
+  useEffect(() => {
+    bubblePositionRef.current = bubblePosition;
+    if (!randomizeBubblePosition) {
+      activeBubblePositionRef.current = bubblePosition;
+      setActiveBubblePosition(bubblePosition);
+    }
+  }, [bubblePosition, randomizeBubblePosition]);
 
   const palette = PALETTES[state.paletteIndex] ?? PALETTES[0];
 
@@ -144,6 +167,13 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
           const opacity = overrideText ? 1 : anim.statusOpacity;
           if (text !== bubbleTextRef.current) {
             bubbleTextRef.current = text;
+            const nextPosition = randomizeBubblePosition
+              ? randomBubblePosition(activeBubblePositionRef.current)
+              : bubblePositionRef.current;
+            if (nextPosition !== activeBubblePositionRef.current) {
+              activeBubblePositionRef.current = nextPosition;
+              setActiveBubblePosition(nextPosition);
+            }
             const span = bubbleRef.current
               .firstElementChild as HTMLElement | null;
             if (span) span.textContent = text;
@@ -161,7 +191,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
     };
     frameIdRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameIdRef.current);
-  }, [emit]);
+  }, [emit, randomizeBubblePosition]);
 
   const toCanvasCoords = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -280,32 +310,34 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
       />
       {displaySize >= 100 &&
         (() => {
-          const pos = BUBBLE_STYLES[bubblePosition];
+          const pos = BUBBLE_STYLES[activeBubblePosition];
           const tailColor: React.CSSProperties =
-            bubblePosition === "left"
-              ? { borderLeft: `7px solid ${palette.body}` }
-              : bubblePosition === "right"
-                ? { borderRight: `7px solid ${palette.body}` }
-                : { borderTop: `7px solid ${palette.body}` };
+            activeBubblePosition === "left"
+              ? { borderLeft: `8px solid ${palette.body}` }
+              : activeBubblePosition === "right"
+                ? { borderRight: `8px solid ${palette.body}` }
+                : { borderTop: `8px solid ${palette.body}` };
           return (
             <div
               ref={bubbleRef}
+              data-bubble-position={activeBubblePosition}
               style={{
                 position: "absolute",
                 ...pos.container,
-                background: "#0d0d16",
-                border: `2px solid ${palette.body}`,
-                borderRadius: "2px",
-                padding: "4px 10px",
-                fontSize: "10px",
-                fontFamily: "'Courier New', Courier, monospace",
+                background: "rgba(13, 18, 30, 0.9)",
+                border: `1px solid ${palette.body}`,
+                borderRadius: "10px",
+                padding: "6px 11px",
+                fontSize: "11px",
+                fontFamily:
+                  "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
                 fontWeight: 700,
-                letterSpacing: "0.3px",
+                letterSpacing: "0.1px",
                 whiteSpace: speechControls?.length ? "normal" : "nowrap",
-                width: speechControls?.length ? "300px" : "max-content",
+                width: speechControls?.length ? "260px" : "max-content",
                 pointerEvents: speechControls?.length ? "auto" : "none",
                 color: palette.light,
-                boxShadow: `3px 3px 0 ${palette.dark}, 0 0 0 3px #000`,
+                boxShadow: `0 6px 18px rgba(0, 0, 0, 0.3), 0 0 18px ${palette.dark}55`,
                 zIndex: 5,
                 visibility: "hidden",
                 opacity: 0,

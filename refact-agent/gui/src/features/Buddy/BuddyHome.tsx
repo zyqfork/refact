@@ -39,6 +39,7 @@ import {
   executeBuddyAction,
   navigateFromBuddyPage,
 } from "./executeBuddyAction";
+import { buildBuddySceneSpeech } from "./buddySceneSpeech";
 import {
   useDeleteDraftMutation,
   useDismissBuddyRuntimeEventMutation,
@@ -52,7 +53,6 @@ import type {
   BuddyNeeds,
   BuddyPage,
   BuddyRuntimeEvent,
-  BuddySpeechItem,
   DraftKind,
 } from "./types";
 import { PALETTES, STAGES } from "./constants";
@@ -322,39 +322,12 @@ export const BuddyHome: React.FC = () => {
     () => suggestions.find((suggestion) => !suggestion.dismissed) ?? null,
     [suggestions],
   );
-  const activeSuggestionSpeech = useMemo<BuddySpeechItem | null>(() => {
-    if (!activeSuggestion) return null;
-    const controls = activeSuggestion.controls.map((control) =>
-      control.action === "dismiss"
-        ? {
-            ...control,
-            action: "dismiss_suggestion",
-            action_param: activeSuggestion.id,
-          }
-        : control,
-    );
-    return {
-      id: activeSuggestion.id,
-      text: `${activeSuggestion.title}: ${activeSuggestion.description}`,
-      mood: "curious",
-      scope: "global",
-      persistent: false,
-      ttl_seconds: 12,
-      dedupe_key: `suggestion_${activeSuggestion.id}`,
-      created_at: activeSuggestion.created_at,
-      controls,
-    };
-  }, [activeSuggestion]);
-  const runtimeIsWorking = Boolean(
-    nowPlaying &&
-      !nowPlaying.dismissed &&
-      nowPlaying.status !== "completed" &&
-      nowPlaying.status !== "failed" &&
-      nowPlaying.status !== "info",
-  );
-  const heroSpeech = runtimeIsWorking
-    ? null
-    : activeSpeech ?? activeSuggestionSpeech;
+  const heroSpeech = buildBuddySceneSpeech({
+    activeSpeech,
+    nowPlaying,
+    runtimeQueue,
+    activeSuggestion,
+  });
 
   const activeDiagnostic = heroSpeech?.chat_id
     ? diagnostics.find((diag) => diag.chat_id === heroSpeech.chat_id)
@@ -363,14 +336,24 @@ export const BuddyHome: React.FC = () => {
   const handleSpeechControl = useCallback(
     async (ctrl: BuddyControl) => {
       if (!heroSpeech) return;
+      if (
+        heroSpeech.source === "runtime" &&
+        heroSpeech.runtimeEventId &&
+        (ctrl.action === "dismiss" || ctrl.action === "dismiss_speech")
+      ) {
+        dispatch(dismissRuntimeEvent(heroSpeech.runtimeEventId));
+        await dismissRuntimeMutation(heroSpeech.runtimeEventId).unwrap();
+        return;
+      }
       await executeBuddyAction(ctrl, dispatch, {
         triggerText: heroSpeech.text,
-        triggerSource: "runtime",
+        triggerSource:
+          heroSpeech.source === "suggestion" ? "suggestion" : "runtime",
         sourceChatId: heroSpeech.chat_id,
         diagnostic: activeDiagnostic,
       });
     },
-    [dispatch, heroSpeech, activeDiagnostic],
+    [activeDiagnostic, dismissRuntimeMutation, dispatch, heroSpeech],
   );
 
   const handleQuestControl = useCallback(

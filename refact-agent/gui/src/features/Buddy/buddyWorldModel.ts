@@ -232,9 +232,9 @@ function buildObjects(
           : "No diff winds right now.",
       page: { type: "stats" },
       tone: toneFromCount(pulse.git.uncommitted_files, 8, 20),
-      x: 52,
-      y: 78,
-      size: 14,
+      x: 38,
+      y: 76,
+      size: 12,
     },
     {
       id: "market",
@@ -277,8 +277,8 @@ function weatherFromState(
       weather: "busy",
       weatherLabel: "Busy currents",
       weatherDescription: nowPlaying.title,
-      weatherX: 57,
-      weatherY: 34,
+      weatherX: 40,
+      weatherY: 28,
     };
   }
 

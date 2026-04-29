@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Text } from "@radix-ui/themes";
 import classNames from "classnames";
 import { BuddyCharacter } from "./BuddyCharacter";
 import type {
@@ -54,17 +53,13 @@ const TONE_CLASS: Record<BuddyWorldTone, string> = {
   danger: styles.toneDanger,
 };
 
-const VITALITY_CLASS: Record<BuddyWorldState["vitality"], string> = {
-  lush: styles.vitalityLush,
-  growing: styles.vitalityGrowing,
-  tangled: styles.vitalityTangled,
-};
-
 const SETUP_MODE_ACTIONS = [
   { mode: "setup", label: "Warm up" },
   { mode: "setup_mcp", label: "Link MCP" },
   { mode: "setup_skills", label: "Teach skills" },
 ] as const;
+
+const HOME_HOTSPOT = { x: 8.5, y: 67 } as const;
 
 function pctX(width: number, value: number): number {
   return (width * value) / 100;
@@ -223,14 +218,14 @@ function drawWeather(
   }
 
   if (world.weather === "busy") {
-    ctx.strokeStyle = "rgba(96,165,250,0.72)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(96,165,250,0.38)";
+    ctx.lineWidth = 2;
     for (let i = 0; i < 3; i += 1) {
       ctx.beginPath();
       ctx.arc(
         x,
         y,
-        16 + i * 13 + Math.sin(frame / 20 + i) * 3,
+        12 + i * 10 + Math.sin(frame / 20 + i) * 2,
         0,
         Math.PI * 1.5,
       );
@@ -272,6 +267,100 @@ function drawWeather(
   }
 }
 
+function drawGround(
+  ctx: CanvasRenderingContext2D,
+  frame: number,
+  width: number,
+  height: number,
+): void {
+  const baseY = height * 0.735;
+  const darkGround = "rgba(20,83,45,0.88)";
+  const midGround = "rgba(22,101,52,0.72)";
+
+  for (let x = 0; x < width; x += 4) {
+    const ridge = Math.sin(x / 34 + frame / 90) * 2 + Math.sin(x / 17) * 1.5;
+    fillPixelRect(ctx, x, baseY + ridge, 4, height - baseY - ridge, darkGround);
+    if (x % 24 === 0) {
+      fillPixelRect(ctx, x, baseY + ridge + 8, 14, 3, midGround);
+    }
+  }
+
+  for (let x = 0; x < width; ) {
+    const offset = (x * 19) % 29;
+    const clumpX = x + offset;
+    const clumpY = baseY + 7 + ((x * 7) % 18);
+    const grassHeight = 3 + ((x + frame + offset) % 7);
+    fillPixelRect(
+      ctx,
+      clumpX,
+      clumpY - grassHeight,
+      3,
+      grassHeight,
+      "rgba(187,247,208,0.42)",
+    );
+    fillPixelRect(
+      ctx,
+      clumpX + 4,
+      clumpY - grassHeight + 2,
+      2,
+      Math.max(2, grassHeight - 1),
+      "rgba(74,222,128,0.36)",
+    );
+    x += 18 + offset;
+  }
+}
+
+function drawBuddyLandingPad(
+  ctx: CanvasRenderingContext2D,
+  frame: number,
+  width: number,
+  height: number,
+): void {
+  const x = width / 2;
+  const y = height * 0.735 + Math.sin(frame / 30) * 1.2;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(4, 20, 18, 0.32)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 18, 54, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(74, 222, 128, 0.16)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 14, 38, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBuddyHomeDoor(
+  ctx: CanvasRenderingContext2D,
+  frame: number,
+  width: number,
+  height: number,
+  palette: Palette,
+): void {
+  const x = pctX(width, HOME_HOTSPOT.x);
+  const y = pctY(height, HOME_HOTSPOT.y);
+  const glow = 0.25 + Math.sin(frame / 32) * 0.08;
+
+  ctx.save();
+  ctx.fillStyle = `rgba(96,165,250,${glow})`;
+  ctx.beginPath();
+  ctx.ellipse(x, y + 15, 36, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  fillPixelRect(ctx, x - 21, y - 5, 42, 28, "#78350F");
+  fillPixelRect(ctx, x - 17, y - 21, 34, 18, palette.dark);
+  fillPixelRect(ctx, x - 11, y - 13, 22, 22, palette.body);
+  fillPixelRect(ctx, x - 7, y - 4, 14, 27, "#1E293B");
+  fillPixelRect(ctx, x + 5, y + 8, 3, 3, "#FDE68A");
+  fillPixelRect(ctx, x - 25, y + 23, 50, 4, "rgba(15,23,42,0.42)");
+
+  fillPixelRect(ctx, x - 23, y - 32, 46, 10, "rgba(15,23,42,0.72)");
+  drawPixelText(ctx, "HOME", x, y - 27, palette.light);
+  ctx.restore();
+}
+
 function drawObject(
   ctx: CanvasRenderingContext2D,
   item: BuddyWorldObject,
@@ -284,9 +373,9 @@ function drawObject(
   const tone = toneColor(item.tone);
   const pulse = Math.sin(frame / 24 + item.x) * 2;
 
-  ctx.fillStyle = `${tone}33`;
+  ctx.fillStyle = `${tone}1F`;
   ctx.beginPath();
-  ctx.arc(x, y + 14, item.size + 18, 0, Math.PI * 2);
+  ctx.arc(x, y + 14, item.size + 12, 0, Math.PI * 2);
   ctx.fill();
 
   switch (item.sprite) {
@@ -334,9 +423,53 @@ function drawObject(
   }
 }
 
+function drawVitality(
+  ctx: CanvasRenderingContext2D,
+  world: BuddyWorldState,
+  frame: number,
+  width: number,
+  height: number,
+): void {
+  const groundY = height * 0.8;
+
+  if (world.vitality === "lush") {
+    for (let i = 0; i < width; i += 46) {
+      const bloomY = groundY + 18 + Math.sin(frame / 28 + i) * 2;
+      fillPixelRect(ctx, i + 10, bloomY, 4, 4, "#FDE68A");
+      fillPixelRect(ctx, i + 14, bloomY - 4, 4, 4, "#F9A8D4");
+      fillPixelRect(ctx, i + 14, bloomY + 4, 4, 4, "#86EFAC");
+    }
+    return;
+  }
+
+  if (world.vitality === "growing") {
+    for (let i = 20; i < width; i += 62) {
+      const sway = Math.sin(frame / 32 + i) * 2;
+      fillPixelRect(ctx, i + sway, groundY + 12, 4, 18, "#16A34A");
+      fillPixelRect(ctx, i - 9 + sway, groundY + 14, 12, 5, "#86EFAC");
+      fillPixelRect(ctx, i + 3 + sway, groundY + 8, 14, 5, "#4ADE80");
+    }
+    return;
+  }
+
+  for (let i = 0; i < width; ) {
+    const offset = (i * 13) % 31;
+    const x = i + offset;
+    const sway = Math.sin(frame / 36 + x) * 3;
+    const heightOffset = (i * 7) % 10;
+    fillPixelRect(ctx, x + sway, groundY + 10 - heightOffset, 4, 24, "#365314");
+    fillPixelRect(ctx, x - 7 + sway, groundY + 15, 14, 3, "#854D0E");
+    if (i % 3 === 0) {
+      fillPixelRect(ctx, x + 7 + sway, groundY + 24, 3, 3, "#EF4444");
+    }
+    i += 48 + offset;
+  }
+}
+
 function drawScene(
   ctx: CanvasRenderingContext2D,
   world: BuddyWorldState,
+  palette: Palette,
   frame: number,
   width: number,
   height: number,
@@ -382,48 +515,14 @@ function drawScene(
   drawCelestial(ctx, world, frame, width, height);
   drawWeather(ctx, world, frame, width, height);
 
-  fillPixelRect(
-    ctx,
-    0,
-    height * 0.74,
-    width,
-    height * 0.26,
-    "rgba(20,83,45,0.86)",
-  );
-  fillPixelRect(ctx, 0, height * 0.8, width, 6, "rgba(134,239,172,0.5)");
-  for (let i = 0; i < width; i += 18) {
-    const grassHeight = 4 + ((i + frame) % 9);
-    fillPixelRect(
-      ctx,
-      i,
-      height * 0.79 - grassHeight,
-      3,
-      grassHeight,
-      "rgba(187,247,208,0.7)",
-    );
-  }
+  drawGround(ctx, frame, width, height);
+
+  drawBuddyHomeDoor(ctx, frame, width, height, palette);
+  drawVitality(ctx, world, frame, width, height);
+  drawBuddyLandingPad(ctx, frame, width, height);
 
   for (const item of world.objects) {
     drawObject(ctx, item, frame, width, height);
-  }
-}
-
-function weatherEmoji(world: BuddyWorldState): string {
-  switch (world.weather) {
-    case "storm":
-      return "⛈️";
-    case "rain":
-      return "🌧️";
-    case "wind":
-      return "🍃";
-    case "busy":
-      return "🌀";
-    case "dream":
-      return "💤";
-    case "aurora":
-      return "🌌";
-    case "clear":
-      return "🌤️";
   }
 }
 
@@ -499,13 +598,13 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
           canvas.height = targetHeight;
         }
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-        drawScene(ctx, world, frame, cssWidth, cssHeight);
+        drawScene(ctx, world, palette, frame, cssWidth, cssHeight);
       }
       raf = window.requestAnimationFrame(render);
     };
     render();
     return () => window.cancelAnimationFrame(raf);
-  }, [compact, world]);
+  }, [compact, palette, world]);
 
   const handleCelestialClick = () => {
     if (world.phase === "night") {
@@ -532,41 +631,27 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     setReaction("Buddy chirps back at the sky.");
   };
 
-  const speechOverride = activeSpeech ? activeSpeech.text : null;
-  const statusLine = reaction;
+  const handleHomeClick = () => {
+    onOpenPage({ type: "buddy" });
+    setReaction("Buddy opens the front door.");
+  };
+
+  const speechOverride = activeSpeech ? activeSpeech.text : reaction;
 
   return (
     <section
       className={classNames(styles.scene, { [styles.compact]: compact })}
       data-phase={world.phase}
       data-weather={world.weather}
+      data-vitality={world.vitality}
       data-testid="buddy-world"
-      aria-label="Buddy virtual scene"
+      aria-label={`Buddy virtual scene: ${world.phaseLabel}. ${world.vitalityLabel}.`}
     >
       <canvas
         ref={canvasRef}
         className={styles.canvas}
         data-testid="buddy-world-canvas"
       />
-
-      <div className={styles.sceneHud}>
-        <div className={styles.titleGroup}>
-          <Text size="1" color="gray" className={styles.sectionLabel}>
-            Buddy scene
-          </Text>
-          <Text size="3" weight="bold">
-            {world.phaseLabel}
-          </Text>
-        </div>
-        <div
-          className={classNames(
-            styles.vitalityBadge,
-            VITALITY_CLASS[world.vitality],
-          )}
-        >
-          {world.vitalityLabel}
-        </div>
-      </div>
 
       <button
         type="button"
@@ -575,9 +660,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         onClick={handleCelestialClick}
         aria-label={`${world.celestialAction} with ${world.celestialLabel}`}
         title={`${world.celestialAction} with ${world.celestialLabel}`}
-      >
-        <span>{world.celestialEmoji}</span>
-      </button>
+      />
 
       <button
         type="button"
@@ -586,9 +669,16 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         onClick={handleWeatherClick}
         aria-label={`Interact with ${world.weatherLabel}`}
         title={world.weatherLabel}
-      >
-        <span>{weatherEmoji(world)}</span>
-      </button>
+      />
+
+      <button
+        type="button"
+        className={classNames(styles.hotspot, styles.homeHotspot)}
+        style={{ left: `${HOME_HOTSPOT.x}%`, top: `${HOME_HOTSPOT.y}%` }}
+        onClick={handleHomeClick}
+        aria-label="Open Buddy home"
+        title="Open Buddy home"
+      />
 
       {world.objects.map((item) => (
         <button
@@ -603,7 +693,6 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
           aria-label={`Open ${item.label}`}
           title={`${item.label}: ${item.description}`}
         >
-          <span className={styles.hotspotDot} />
           <span className={styles.objectTooltip}>
             <span className={styles.objectLabel}>{item.label}</span>
             <span className={styles.objectValue}>{item.value}</span>
@@ -615,9 +704,10 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         state={state}
         stage={stage}
         palette={palette}
-        displaySize={compact ? 150 : 205}
+        displaySize={compact ? 170 : 220}
         speechText={speechOverride}
         speechControls={activeSpeech ? activeSpeech.controls : undefined}
+        randomizeBubblePosition
         onCanvasEvent={onCanvasEvent}
         onSpeechControl={activeSpeech ? onSpeechControl : undefined}
       />
@@ -648,38 +738,36 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         <button
           type="button"
           className={styles.sceneButton}
+          aria-label="Water Buddy garden"
           onClick={() => onCare("feed")}
         >
-          🍜 Water
+          🍜
         </button>
         <button
           type="button"
           className={styles.sceneButton}
+          aria-label="Hunt bugs with Buddy"
           onClick={() => onCare("play", "bug")}
         >
-          🐛 Hunt
+          🐛
         </button>
         <button
           type="button"
           className={styles.sceneButton}
+          aria-label="Clean Buddy"
           onClick={() => onCare("clean")}
         >
-          🧼 Clean
+          🧼
         </button>
         <button
           type="button"
           className={styles.sceneButton}
+          aria-label="Let Buddy rest"
           onClick={() => onCare("sleep")}
         >
-          😴 Rest
+          😴
         </button>
       </div>
-
-      {statusLine && (
-        <div className={styles.caption}>
-          <Text size="2">{statusLine}</Text>
-        </div>
-      )}
     </section>
   );
 };

@@ -7,7 +7,6 @@ import { ResizeDivider } from "./components/ResizeDivider/ResizeDivider";
 import { useDashboardLayout } from "./hooks/useDashboardLayout";
 import { useDashboardCollapseState } from "./hooks/useDashboardCollapseState";
 import { useDashboardResize } from "./hooks/useDashboardResize";
-import { BuddyPanel } from "../Buddy/BuddyPanel";
 import { BuddyDashboardScene } from "../Buddy/BuddyDashboardScene";
 import styles from "./Dashboard.module.css";
 import { ChatLoading } from "../../components/ChatContent/ChatLoading";
@@ -74,7 +73,6 @@ export const Dashboard: React.FC = () => {
         <OfflineState />
       ) : (
         <>
-          <BuddyPanel />
           <BuddyDashboardScene />
 
           <div className={styles.sectionDivider} />

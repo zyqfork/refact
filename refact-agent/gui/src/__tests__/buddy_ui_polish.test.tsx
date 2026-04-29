@@ -36,9 +36,22 @@ type CapturedThunk = (
   extra: unknown,
 ) => unknown;
 
+type TestDispatch = (action: unknown) => unknown;
+
+function isSetupModeCreateAction(action: unknown): boolean {
+  if (typeof action !== "object" || action === null) return false;
+  const candidate = action as { payload?: unknown; type?: unknown };
+  if (candidate.type !== "chatThread/createWithId") return false;
+  if (typeof candidate.payload !== "object" || candidate.payload === null) {
+    return false;
+  }
+  const payload = candidate.payload as { mode?: unknown };
+  return payload.mode === "setup_mcp";
+}
+
 function makeThunkDispatch() {
-  const innerDispatch = vi.fn((action: unknown): unknown => action);
-  const dispatch = vi.fn((action: unknown): unknown => {
+  const innerDispatch = vi.fn<TestDispatch>((action) => action);
+  const dispatch = vi.fn<TestDispatch>((action) => {
     if (typeof action === "function") {
       return (action as CapturedThunk)(
         innerDispatch,
@@ -255,17 +268,8 @@ describe("buddy UI polish", () => {
       { type: "setup_mode", mode: "setup_mcp" },
       dispatch as never,
     );
-    const dispatchedActions = innerDispatch.mock.calls.map(
-      ([action]) => action,
-    );
-    expect(dispatchedActions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "chatThread/createWithId",
-          payload: expect.objectContaining({ mode: "setup_mcp" }),
-        }),
-      ]),
-    );
+    const dispatchedActions = innerDispatch.mock.calls.map((call) => call[0]);
+    expect(dispatchedActions.some(isSetupModeCreateAction)).toBe(true);
   });
 
   it("BuddyHome_container_renders_split_subcomponents", async () => {

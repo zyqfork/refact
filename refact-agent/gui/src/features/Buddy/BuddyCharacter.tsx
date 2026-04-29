@@ -4,6 +4,7 @@ import type {
   BuddyControl,
   BuddyEvent,
   BuddySemanticState,
+  BubblePosition,
   Palette,
   Stage,
 } from "./types";
@@ -14,6 +15,9 @@ interface BuddyCharacterProps {
   stage: Stage;
   palette: Palette;
   displaySize: number;
+  showStageBadge?: boolean;
+  bubblePosition?: BubblePosition;
+  randomizeBubblePosition?: boolean;
   speechText?: string | null;
   speechControls?: BuddyControl[];
   onCanvasEvent: (event: BuddyEvent) => void;
@@ -25,6 +29,9 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
   stage,
   palette,
   displaySize,
+  showStageBadge = false,
+  bubblePosition = "top",
+  randomizeBubblePosition = false,
   speechText,
   speechControls,
   onCanvasEvent,
@@ -38,13 +45,16 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
       speechOverride={speechText}
       speechControls={speechControls}
       onSpeechControlClick={onSpeechControl}
-      bubblePosition="right"
+      bubblePosition={bubblePosition}
+      randomizeBubblePosition={randomizeBubblePosition}
     />
-    <div
-      className={styles.stageBadge}
-      style={{ borderColor: palette.body, color: palette.body }}
-    >
-      {stage.emoji} {stage.name}
-    </div>
+    {showStageBadge && (
+      <div
+        className={styles.stageBadge}
+        style={{ borderColor: palette.body, color: palette.body }}
+      >
+        {stage.emoji} {stage.name}
+      </div>
+    )}
   </div>
 );

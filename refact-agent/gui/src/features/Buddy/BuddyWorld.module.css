@@ -4,10 +4,10 @@
   min-height: 220px;
   margin: 0 var(--space-3) var(--space-2);
   overflow: hidden;
-  border: 1px solid var(--gray-a4);
+  border: 1px solid var(--gray-a3);
   border-radius: var(--radius-4);
-  background: var(--gray-a2);
-  box-shadow: inset 0 0 0 1px var(--gray-a2);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   flex-shrink: 0;
 }
 
@@ -19,8 +19,8 @@
 
 .scene[data-weather="storm"] {
   box-shadow:
-    inset 0 0 0 1px var(--red-a5),
-    0 0 24px var(--red-a2);
+    inset 0 0 0 1px rgba(239, 68, 68, 0.16),
+    0 0 18px rgba(239, 68, 68, 0.08);
 }
 
 .scene[data-weather="dream"] {
@@ -109,31 +109,27 @@
   align-items: center;
   justify-content: center;
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 0;
   border-radius: 9999px;
-  background: rgba(17, 24, 39, 0.26);
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 13px;
-  line-height: 1.2;
-  backdrop-filter: blur(6px);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  opacity: 0;
   transition:
+    opacity 0.12s ease,
     transform 0.12s ease,
-    border-color 0.12s ease,
     background 0.12s ease;
 }
 
 .hotspot {
-  width: 30px;
-  height: 30px;
+  width: 82px;
+  height: 82px;
   padding: 0;
 }
 
 .objectHotspot {
-  width: 18px;
-  height: 18px;
+  width: 58px;
+  height: 58px;
   padding: 0;
-  background: transparent;
-  backdrop-filter: none;
 }
 
 .hotspot:hover,
@@ -141,27 +137,31 @@
 .objectHotspot:hover,
 .objectHotspot:focus-visible {
   transform: translate(-50%, -52%) scale(1.04);
-  border-color: rgba(255, 255, 255, 0.38);
-  background: rgba(17, 24, 39, 0.58);
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
   outline: none;
 }
 
+.hotspot:focus-visible,
+.objectHotspot:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.48);
+}
+
 .celestialHotspot {
-  box-shadow: 0 0 22px rgba(251, 191, 36, 0.28);
+  box-shadow: none;
 }
 
 .weatherHotspot {
-  box-shadow: 0 0 22px rgba(96, 165, 250, 0.24);
+  box-shadow: none;
+}
+
+.homeHotspot {
+  width: 78px;
+  height: 64px;
 }
 
 .hotspotDot {
-  width: 9px;
-  height: 9px;
-  border-radius: 9999px;
-  background: currentColor;
-  box-shadow:
-    0 0 0 3px rgba(17, 24, 39, 0.36),
-    0 0 12px currentColor;
+  display: none;
 }
 
 .objectTooltip {
@@ -171,12 +171,12 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 96px;
-  max-width: 132px;
-  padding: 5px 8px;
+  min-width: 88px;
+  max-width: 122px;
+  padding: 4px 7px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius-3);
-  background: rgba(17, 24, 39, 0.72);
+  background: rgba(17, 24, 39, 0.64);
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%) translateY(4px);
@@ -229,7 +229,7 @@
   position: absolute;
   z-index: 5;
   left: 50%;
-  bottom: 10px;
+  bottom: -8px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -254,33 +254,44 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
 
 .setupDock {
   left: var(--space-2);
   bottom: var(--space-2);
-  max-width: 42%;
+  max-width: 36%;
 }
 
 .careDock {
   right: var(--space-2);
   bottom: var(--space-2);
   justify-content: flex-end;
-  max-width: 42%;
+  max-width: 36%;
+}
+
+.setupDock:hover,
+.setupDock:focus-within,
+.careDock:hover,
+.careDock:focus-within {
+  opacity: 1;
 }
 
 .sceneButton,
 .sceneButtonGhost {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 9px;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 9999px;
-  background: rgba(17, 24, 39, 0.46);
+  background: rgba(17, 24, 39, 0.28);
   color: rgba(255, 255, 255, 0.9);
-  font-size: 10px;
-  backdrop-filter: blur(6px);
+  font-size: 11px;
+  backdrop-filter: blur(4px);
   transition:
     background 0.12s ease,
     border-color 0.12s ease,
@@ -327,11 +338,12 @@
 }
 
 .compact .character {
-  bottom: 2px;
+  bottom: -12px;
 }
 
 .compact .objectHotspot {
-  padding: 4px 6px;
+  width: 50px;
+  height: 50px;
 }
 
 .compact .setupDock,
