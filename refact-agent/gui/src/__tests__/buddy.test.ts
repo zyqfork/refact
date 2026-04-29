@@ -1550,6 +1550,30 @@ describe("buddy opportunities, pulse, and drafts", () => {
     expect(s3.activeDrafts[0].id).toBe("d1");
   });
 
+  test("removeDraft syncs snapshot active drafts", () => {
+    const d1 = makeDraft({ id: "d1" });
+    const d2 = makeDraft({ id: "d2" });
+    const s1 = reducer(
+      undefined,
+      setBuddySnapshot(makeSnapshot({ active_drafts: [d1, d2] })),
+    );
+    const s2 = reducer(s1, removeDraft("d1"));
+    expect(s2.activeDrafts).toEqual([d2]);
+    expect(s2.snapshot?.active_drafts).toEqual([d2]);
+  });
+
+  test("DraftRemoved after snapshot does not leave stale snapshot drafts", () => {
+    const d1 = makeDraft({ id: "d1" });
+    const d2 = makeDraft({ id: "d2" });
+    const s1 = reducer(
+      undefined,
+      setBuddySnapshot(makeSnapshot({ active_drafts: [d1, d2] })),
+    );
+    const s2 = reducer(s1, removeDraft("d2"));
+    expect(s2.snapshot?.active_drafts?.map((d) => d.id)).toEqual(["d1"]);
+    expect(s2.activeDrafts.map((d) => d.id)).toEqual(["d1"]);
+  });
+
   test("setBuddySnapshot without pulse defaults defensively", () => {
     const snap = makeSnapshot();
     const state = reducer(undefined, setBuddySnapshot(snap));

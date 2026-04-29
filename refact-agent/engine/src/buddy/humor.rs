@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::buddy::types::{BuddyFactKind, BuddyOpportunity, BuddyPulse};
+use crate::buddy::types::{BuddyFactKind, BuddyPulse};
 use crate::global_context::GlobalContext;
 
 pub const HUMOR_BUDGET_PER_HOUR: u32 = 3;
@@ -98,27 +98,6 @@ impl HumorService {
             used_this_hour: 0,
             hour_started_at: Utc::now(),
             generator,
-        }
-    }
-
-    /// Lazily attach a humor line to `opp`. No fallback on failure.
-    /// Mutates `opp.humor` in place when a line is successfully obtained.
-    pub async fn attach_humor(
-        &mut self,
-        opp: &mut BuddyOpportunity,
-        primary_kind: BuddyFactKind,
-        pulse: &BuddyPulse,
-        gcx: Arc<RwLock<GlobalContext>>,
-    ) {
-        match self.plan_humor(primary_kind, pulse) {
-            HumorPlan::Ready(line) => opp.humor = Some(line),
-            HumorPlan::Generate(reservation) => {
-                let lines = reservation.generate(gcx).await;
-                if let Some(line) = self.complete_humor(reservation, lines) {
-                    opp.humor = Some(line);
-                }
-            }
-            HumorPlan::Skip => {}
         }
     }
 

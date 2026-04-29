@@ -212,22 +212,8 @@ impl DraftStore {
         self.drafts.remove(id)
     }
 
-    pub fn insert(&mut self, draft: BuddyDraft) {
-        self.drafts.insert(draft.id.clone(), draft);
-    }
-
     pub fn consume(&mut self, id: &str) -> Option<BuddyDraft> {
         self.drafts.remove(id)
-    }
-
-    pub fn consume_validated(
-        &mut self,
-        id: &str,
-        expected_kind: DraftKind,
-        target: DraftTarget<'_>,
-    ) -> Result<BuddyDraft, DraftValidationError> {
-        self.get_validated(id, expected_kind, target)?;
-        self.consume(id).ok_or(DraftValidationError::NotFound)
     }
 
     pub fn expire_old(&mut self, now: DateTime<Utc>) -> Vec<String> {

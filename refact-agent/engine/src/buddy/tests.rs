@@ -1865,6 +1865,13 @@ fn make_opportunity(id: &str, cooldown_key: &str) -> BuddyOpportunity {
     }
 }
 
+fn push_opportunity(queue: &mut super::opportunities::OpportunityQueue, opp: BuddyOpportunity) {
+    queue.push_with_cooldown(
+        opp,
+        super::opportunities::DEFAULT_COOLDOWN.num_seconds() as u64,
+    );
+}
+
 #[test]
 fn fact_store_dedup_by_key() {
     use super::facts::FactStore;
@@ -1880,7 +1887,7 @@ fn fact_store_dedup_by_key() {
     };
     store.ingest(f1);
     store.ingest(f2);
-    assert_eq!(store.len(), 1);
+    assert_eq!(store.iter().count(), 1);
     assert_eq!(store.iter().next().unwrap().payload["v"], 2);
 }
 
@@ -1896,7 +1903,7 @@ fn fact_store_ring_evicts_oldest() {
             now,
         ));
     }
-    assert_eq!(store.len(), FACT_RING_CAPACITY);
+    assert_eq!(store.iter().count(), FACT_RING_CAPACITY);
     assert!(
         !store.iter().any(|f| f.key == "key-0"),
         "first key must be evicted"
@@ -1936,7 +1943,7 @@ fn fact_store_count_within() {
 fn opportunity_queue_unread_cap_state() {
     use super::opportunities::OpportunityQueue;
     let mut q = OpportunityQueue::new();
-    q.push(make_opportunity("opp1", "ck1"));
+    push_opportunity(&mut q, make_opportunity("opp1", "ck1"));
     assert_eq!(q.unread_count(), 1);
     q.mark_status("opp1", OpportunityStatus::Dismissed);
     assert_eq!(q.unread_count(), 0);
@@ -1946,7 +1953,7 @@ fn opportunity_queue_unread_cap_state() {
 fn opportunity_queue_cooldown_blocks_dup() {
     use super::opportunities::OpportunityQueue;
     let mut q = OpportunityQueue::new();
-    q.push(make_opportunity("opp1", "ck1"));
+    push_opportunity(&mut q, make_opportunity("opp1", "ck1"));
     assert!(q.cooldown_active("ck1"));
 }
 
@@ -1954,7 +1961,7 @@ fn opportunity_queue_cooldown_blocks_dup() {
 fn opportunity_queue_dismissed_24h() {
     use super::opportunities::OpportunityQueue;
     let mut q = OpportunityQueue::new();
-    q.push(make_opportunity("opp1", "ck1"));
+    push_opportunity(&mut q, make_opportunity("opp1", "ck1"));
     q.dismiss("opp1");
     assert!(q.recently_dismissed("ck1", Duration::hours(24)));
     assert!(!q.recently_dismissed("ck1", Duration::zero()));
@@ -1968,7 +1975,7 @@ fn opportunity_queue_expire_old() {
     let mut opp = make_opportunity("opp1", "ck1");
     opp.expires_at = now - Duration::hours(1);
     opp.created_at = now - Duration::minutes(5);
-    q.push(opp);
+    push_opportunity(&mut q, opp);
     q.expire_old(now);
     assert_eq!(
         q.get("opp1").map(|o| o.status),
@@ -1983,10 +1990,10 @@ fn opportunity_queue_cap() {
     use super::opportunities::{OpportunityQueue, MAX_OPPORTUNITIES};
     let mut q = OpportunityQueue::new();
     for i in 0..=MAX_OPPORTUNITIES {
-        q.push(make_opportunity(
-            &format!("opp-{}", i),
-            &format!("ck-{}", i),
-        ));
+        push_opportunity(
+            &mut q,
+            make_opportunity(&format!("opp-{}", i), &format!("ck-{}", i)),
+        );
     }
     assert!(q.iter().count() <= MAX_OPPORTUNITIES);
 }
@@ -2600,10 +2607,10 @@ fn policy_unread_cap_drops() {
     let settings = BuddySettings::default();
     let mut queue = OpportunityQueue::new();
     for i in 0..MAX_UNREAD {
-        queue.push(make_opportunity(
-            &format!("pre-{}", i),
-            &format!("ck-pre-{}", i),
-        ));
+        push_opportunity(
+            &mut queue,
+            make_opportunity(&format!("pre-{}", i), &format!("ck-pre-{}", i)),
+        );
     }
     assert_eq!(queue.unread_count(), MAX_UNREAD);
     let opp = make_opp_with_priority("new-opp", BuddyPriority::Normal);
@@ -2623,7 +2630,7 @@ fn policy_dismissed_24h_drops() {
     let settings = BuddySettings::default();
     let mut queue = OpportunityQueue::new();
     let opp = make_opportunity("opp-dm", "key-dm");
-    queue.push(opp.clone());
+    push_opportunity(&mut queue, opp.clone());
     queue.dismiss("opp-dm");
     let new_opp = make_opportunity("opp-new", "key-dm");
     let result = evaluate(&new_opp, &settings, &queue);
@@ -2641,7 +2648,7 @@ fn policy_cooldown_drops() {
     use super::opportunities::OpportunityQueue;
     let settings = BuddySettings::default();
     let mut queue = OpportunityQueue::new();
-    queue.push(make_opportunity("opp-cd", "cooldown-key"));
+    push_opportunity(&mut queue, make_opportunity("opp-cd", "cooldown-key"));
     assert!(queue.cooldown_active("cooldown-key"));
     let new_opp = make_opportunity("opp-cd2", "cooldown-key");
     let result = evaluate(&new_opp, &settings, &queue);
@@ -2755,6 +2762,25 @@ impl super::humor::HumorGenerator for EmptyGenerator {
     }
 }
 
+async fn apply_humor_plan(
+    service: &mut super::humor::HumorService,
+    opp: &mut BuddyOpportunity,
+    kind: BuddyFactKind,
+    pulse: &BuddyPulse,
+    gcx: Arc<tokio::sync::RwLock<crate::global_context::GlobalContext>>,
+) {
+    match service.plan_humor(kind, pulse) {
+        super::humor::HumorPlan::Ready(line) => opp.humor = Some(line),
+        super::humor::HumorPlan::Generate(reservation) => {
+            let lines = reservation.generate(gcx).await;
+            if let Some(line) = service.complete_humor(reservation, lines) {
+                opp.humor = Some(line);
+            }
+        }
+        super::humor::HumorPlan::Skip => {}
+    }
+}
+
 #[tokio::test]
 async fn humor_uses_cache_before_calling_generator() {
     use super::humor::HumorService;
@@ -2775,7 +2801,7 @@ async fn humor_uses_cache_before_calling_generator() {
 
     for i in 0..4 {
         let mut opp = make_opportunity(&format!("opp-h{}", i), &format!("ck-h{}", i));
-        svc.attach_humor(&mut opp, kind, &pulse, gcx.clone()).await;
+        apply_humor_plan(&mut svc, &mut opp, kind, &pulse, gcx.clone()).await;
         assert!(opp.humor.is_some(), "call {} must have humor", i);
     }
     assert_eq!(
@@ -2805,7 +2831,7 @@ async fn humor_budget_enforced() {
 
     for (i, &kind) in kinds.iter().enumerate() {
         let mut opp = make_opportunity(&format!("opp-b{}", i), &format!("ck-b{}", i));
-        svc.attach_humor(&mut opp, kind, &pulse, gcx.clone()).await;
+        apply_humor_plan(&mut svc, &mut opp, kind, &pulse, gcx.clone()).await;
         if i < 3 {
             assert!(opp.humor.is_some(), "call {} should have humor", i);
         } else {
@@ -2824,8 +2850,14 @@ async fn humor_no_fallback_on_empty_lines() {
     let gcx = crate::global_context::tests::make_test_gcx().await;
     let pulse = BuddyPulse::default();
     let mut opp = make_opportunity("opp-nf", "ck-nf");
-    svc.attach_humor(&mut opp, BuddyFactKind::TaskStuck, &pulse, gcx.clone())
-        .await;
+    apply_humor_plan(
+        &mut svc,
+        &mut opp,
+        BuddyFactKind::TaskStuck,
+        &pulse,
+        gcx.clone(),
+    )
+    .await;
     assert!(
         opp.humor.is_none(),
         "humor must remain None when generator returns empty — no fallback"
@@ -2846,7 +2878,7 @@ async fn humor_cache_expiry() {
     let kind = BuddyFactKind::TaskStuck;
 
     let mut opp1 = make_opportunity("opp-ex1", "ck-ex1");
-    svc.attach_humor(&mut opp1, kind, &pulse, gcx.clone()).await;
+    apply_humor_plan(&mut svc, &mut opp1, kind, &pulse, gcx.clone()).await;
     assert!(opp1.humor.is_some());
     assert_eq!(count.load(Ordering::SeqCst), 1, "one generation so far");
 
@@ -2854,7 +2886,7 @@ async fn humor_cache_expiry() {
     svc.cache_purge_expired(future);
 
     let mut opp2 = make_opportunity("opp-ex2", "ck-ex2");
-    svc.attach_humor(&mut opp2, kind, &pulse, gcx.clone()).await;
+    apply_humor_plan(&mut svc, &mut opp2, kind, &pulse, gcx.clone()).await;
     assert!(opp2.humor.is_some());
     assert_eq!(
         count.load(Ordering::SeqCst),
@@ -2886,8 +2918,7 @@ async fn humor_timeout_returns_none_quickly() {
     let pulse = BuddyPulse::default();
     let mut opp = make_opportunity("opp-timeout", "ck-timeout");
     let start = std::time::Instant::now();
-    svc.attach_humor(&mut opp, BuddyFactKind::TaskStuck, &pulse, gcx)
-        .await;
+    apply_humor_plan(&mut svc, &mut opp, BuddyFactKind::TaskStuck, &pulse, gcx).await;
     let elapsed = start.elapsed();
     assert!(opp.humor.is_none(), "timed out humor must remain None");
     assert!(
@@ -3630,10 +3661,10 @@ fn detector_skips_when_queue_cooldown_active() {
     let pulse = BuddyPulse::default();
     let mut queue = OpportunityQueue::new();
     // Push an opp with the same cooldown_key to activate cooldown
-    queue.push(make_opportunity(
-        "existing-opp",
-        "task_health:stuck:cd-task",
-    ));
+    push_opportunity(
+        &mut queue,
+        make_opportunity("existing-opp", "task_health:stuck:cd-task"),
+    );
     assert!(queue.cooldown_active("task_health:stuck:cd-task"));
     let opps = OpportunityDetector::new().detect(&store, &pulse, &queue);
     assert!(opps.is_empty(), "must skip when queue cooldown is active");
@@ -3739,11 +3770,9 @@ async fn actor_humor_attached_when_allowed() {
     opp.priority = BuddyPriority::Normal;
     opp.summary = "test summary".to_string();
     let pulse = BuddyPulse::default();
-    svc.humor_service
-        .lock()
-        .await
-        .attach_humor(&mut opp, BuddyFactKind::TaskStuck, &pulse, gcx)
-        .await;
+    let humor_service = svc.humor_service.clone();
+    let mut humor = humor_service.lock().await;
+    apply_humor_plan(&mut humor, &mut opp, BuddyFactKind::TaskStuck, &pulse, gcx).await;
     assert!(opp.humor.is_some(), "humor must be attached when allowed");
     assert_eq!(opp.humor.as_deref(), Some("Test joke"));
 }
@@ -3754,10 +3783,14 @@ async fn actor_persistence_round_trip() {
     let root = dir.path();
     super::storage::bootstrap_buddy_storage(root).await.unwrap();
     let mut svc = make_service();
-    svc.opportunity_queue
-        .push(make_opportunity("opp-persist-1", "ck-persist-1"));
-    svc.opportunity_queue
-        .push(make_opportunity("opp-persist-2", "ck-persist-2"));
+    push_opportunity(
+        &mut svc.opportunity_queue,
+        make_opportunity("opp-persist-1", "ck-persist-1"),
+    );
+    push_opportunity(
+        &mut svc.opportunity_queue,
+        make_opportunity("opp-persist-2", "ck-persist-2"),
+    );
     let mut state = svc.state.clone();
     state.opportunities = svc.opportunity_queue.snapshot();
     super::state::save_state(root, &state).await.unwrap();
@@ -3808,7 +3841,7 @@ async fn accept_action_dispatch() {
 fn dismiss_marks_history() {
     use super::opportunities::OpportunityQueue;
     let mut q = OpportunityQueue::new();
-    q.push(make_opportunity("opp-dm2", "key-dm2"));
+    push_opportunity(&mut q, make_opportunity("opp-dm2", "key-dm2"));
     q.dismiss("opp-dm2");
     assert!(
         q.recently_dismissed("key-dm2", Duration::hours(24)),
@@ -3956,7 +3989,10 @@ fn tool_buddy_create_draft_persists() {
         matches!(event, super::events::BuddyEvent::DraftCreated { .. }),
         "event must be DraftCreated"
     );
-    assert!(rx.try_recv().is_err(), "draft create must emit exactly once");
+    assert!(
+        rx.try_recv().is_err(),
+        "draft create must emit exactly once"
+    );
 
     let _ = svc.consume_draft(&draft_id);
     assert!(
@@ -4074,7 +4110,13 @@ async fn draft_delete_emits_removed_event() {
     use axum::Extension;
     use axum::extract::Path;
     let gcx = make_gcx_with_buddy().await;
-    let draft_id = add_draft_to_gcx(&gcx, DraftKind::Skill, "Skill", "---\nname: skill\n---\nBody").await;
+    let draft_id = add_draft_to_gcx(
+        &gcx,
+        DraftKind::Skill,
+        "Skill",
+        "---\nname: skill\n---\nBody",
+    )
+    .await;
     let mut rx = {
         let buddy_arc = gcx.read().await.buddy.clone();
         let lock = buddy_arc.lock().await;
@@ -4100,7 +4142,7 @@ async fn draft_delete_emits_removed_event() {
 fn draft_expiry_emits_removed_event() {
     let mut svc = make_service();
     let mut rx = svc.events_tx.subscribe();
-    let mut draft = svc
+    let draft = svc
         .create_draft(
             DraftKind::PulseReport,
             "Report".to_string(),
@@ -4110,9 +4152,7 @@ fn draft_expiry_emits_removed_event() {
         .expect("draft must be created");
     let _ = rx.try_recv();
     let draft_id = draft.id.clone();
-    draft.expires_at = chrono::Utc::now() - Duration::seconds(1);
-    svc.draft_store.insert(draft);
-    let expired = svc.expire_drafts(chrono::Utc::now());
+    let expired = svc.expire_drafts(chrono::Utc::now() + Duration::hours(3));
     assert_eq!(expired, vec![draft_id.clone()]);
     let event = rx.try_recv().expect("must receive DraftRemoved event");
     match event {
@@ -4434,8 +4474,8 @@ async fn add_draft_to_gcx(
     let buddy_arc = gcx.read().await.buddy.clone();
     let mut lock = buddy_arc.lock().await;
     let svc = lock.as_mut().expect("buddy service must exist");
-    svc.draft_store
-        .create(kind, title.to_string(), content.to_string(), String::new())
+    svc.create_draft(kind, title.to_string(), content.to_string(), String::new())
+        .expect("draft must be created")
         .id
 }
 
@@ -5220,9 +5260,14 @@ async fn humor_attach_does_not_hold_buddy_lock() {
     let humor_task = tokio::spawn(async move {
         let mut humor = humor_clone.lock().await;
         let mut opp = make_opportunity("h1", "ck-h1");
-        humor
-            .attach_humor(&mut opp, BuddyFactKind::TaskStuck, &pulse_clone, gcx_clone)
-            .await;
+        apply_humor_plan(
+            &mut humor,
+            &mut opp,
+            BuddyFactKind::TaskStuck,
+            &pulse_clone,
+            gcx_clone,
+        )
+        .await;
     });
 
     // Wait until SlowGen starts running.
@@ -5829,7 +5874,7 @@ fn accepted_opportunity_does_not_become_expired() {
     let mut opp = make_opportunity("opp-accepted-expire", "ck-accepted-expire");
     opp.created_at = now - Duration::hours(25);
     opp.expires_at = now - Duration::hours(24);
-    q.push(opp);
+    push_opportunity(&mut q, opp);
     q.mark_status("opp-accepted-expire", OpportunityStatus::Accepted);
     q.expire_old(now);
     assert_eq!(
@@ -5842,10 +5887,10 @@ fn accepted_opportunity_does_not_become_expired() {
 fn accepted_opportunity_has_resolved_at() {
     use super::opportunities::OpportunityQueue;
     let mut q = OpportunityQueue::new();
-    q.push(make_opportunity(
-        "opp-accepted-resolved",
-        "ck-accepted-resolved",
-    ));
+    push_opportunity(
+        &mut q,
+        make_opportunity("opp-accepted-resolved", "ck-accepted-resolved"),
+    );
     q.mark_status("opp-accepted-resolved", OpportunityStatus::Accepted);
     assert!(q
         .get("opp-accepted-resolved")
@@ -5870,7 +5915,7 @@ async fn accept_route_terminal_status_returns_409() {
     opp.proposed_actions = vec![BuddyAction::OpenPage {
         page: BuddyPage::Buddy,
     }];
-    svc.opportunity_queue.push(opp);
+    push_opportunity(&mut svc.opportunity_queue, opp);
     *gcx.read().await.buddy.lock().await = Some(svc);
 
     let err = handle_v1_buddy_opportunity_accept(
@@ -5941,7 +5986,7 @@ async fn expired_opportunity_cannot_be_accepted() {
     opp.proposed_actions = vec![BuddyAction::OpenPage {
         page: BuddyPage::Buddy,
     }];
-    svc.opportunity_queue.push(opp);
+    push_opportunity(&mut svc.opportunity_queue, opp);
     *gcx.read().await.buddy.lock().await = Some(svc);
 
     let err = handle_v1_buddy_opportunity_accept(
@@ -7360,7 +7405,7 @@ fn fact_store_ingest_updates_kind_and_source_on_duplicate() {
     });
 
     let fact = store.iter().next().unwrap();
-    assert_eq!(store.len(), 1);
+    assert_eq!(store.iter().count(), 1);
     assert_eq!(fact.kind, BuddyFactKind::TaskAbandoned);
     assert_eq!(fact.source, "new_source");
     assert_eq!(fact.payload, serde_json::json!({"new": true}));

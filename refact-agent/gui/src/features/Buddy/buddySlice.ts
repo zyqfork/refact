@@ -501,6 +501,7 @@ export const buddySlice = createSlice({
       state.activeDrafts = state.activeDrafts.filter(
         (d) => d.id !== action.payload,
       );
+      syncSnapshotDrafts(state);
     },
     replaceOpportunities: (
       state,

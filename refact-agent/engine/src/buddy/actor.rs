@@ -400,11 +400,6 @@ impl BuddyService {
         Ok(draft)
     }
 
-    pub fn add_draft(&mut self, draft: BuddyDraft) {
-        self.draft_store.insert(draft.clone());
-        let _ = self.events_tx.send(BuddyEvent::DraftCreated { draft });
-    }
-
     pub fn delete_draft(&mut self, id: &str) -> Option<BuddyDraft> {
         let draft = self.draft_store.delete(id)?;
         let _ = self.events_tx.send(BuddyEvent::DraftRemoved {
