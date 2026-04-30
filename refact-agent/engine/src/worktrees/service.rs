@@ -874,6 +874,7 @@ mod worktree_registry_tests {
     use std::process::Command;
 
     use super::*;
+    use crate::worktrees::types::WorktreeMergeStrategy;
 
     fn run_git(cwd: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
