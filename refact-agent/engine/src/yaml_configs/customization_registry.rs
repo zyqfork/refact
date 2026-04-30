@@ -605,9 +605,9 @@ mod tests {
             "---\nname: Registry Reviewer\ndescription: Reviews imported registry behavior\ntools:\n  - Read\n  - Grep\n  - Edit\ndenied-tools:\n  - Edit\nmaxTurns: 7\nmodel: sonnet\n---\nUse registry context to review {{task}}.",
         );
 
-        let summary = crate::ext::competitor_import::run_project_import_with_paths(&[
-            workspace.path().to_path_buf(),
-        ])
+        let summary = crate::ext::competitor_import::run_project_import_with_paths(&[workspace
+            .path()
+            .to_path_buf()])
         .await;
         let registry = load_registry_from_dir(&workspace.path().join(".refact")).await;
 
@@ -622,7 +622,10 @@ mod tests {
         assert_eq!(subagent.description, "Reviews imported registry behavior");
         assert_eq!(subagent.subchat.max_steps, Some(7));
         assert_eq!(subagent.subchat.model.as_deref(), Some("sonnet"));
-        assert_eq!(subagent.messages.user_template.as_deref(), Some("{{task}}\n"));
+        assert_eq!(
+            subagent.messages.user_template.as_deref(),
+            Some("{{task}}\n")
+        );
         assert_eq!(subagent.tools, vec!["cat", "search_pattern"]);
         let tool = subagent.tool.as_ref().unwrap();
         assert!(tool.agentic);
