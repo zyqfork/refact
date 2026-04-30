@@ -373,7 +373,7 @@ export const BuddyHome: React.FC = () => {
       runtimeQueue,
       activeSuggestion,
       activeOpportunities: unreadOpportunities,
-    }).filter((speech) => seenNotificationIds[speech.id] == null);
+    }).filter((speech) => !(speech.id in seenNotificationIds));
   }, [
     activeSpeech,
     activeSuggestion,

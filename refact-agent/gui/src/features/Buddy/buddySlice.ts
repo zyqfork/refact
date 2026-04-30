@@ -51,7 +51,9 @@ function persistSeenNotificationIds(seen: Record<string, number>): void {
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(BUDDY_SEEN_STORAGE_KEY, JSON.stringify(seen));
-  } catch {}
+  } catch {
+    return;
+  }
 }
 
 function pruneSeenNotificationIds(
