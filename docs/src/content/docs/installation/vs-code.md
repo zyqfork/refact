@@ -1,22 +1,35 @@
 ---
 title: VS Code
-description: Install and configure Refact for VS Code.
+description: Install Refact for VS Code and complete local-first setup.
 ---
 
 ## Install
 
-Install the Refact extension from the VS Code Marketplace or from a local extension build.
+Install Refact from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=smallcloud.codify). You can also install a local extension build if you are developing Refact from source.
 
-## First Run
+## Open Refact
 
-Open the Refact sidebar. The first-run screen opens **Provider Setup**.
+After installation, open the Refact activity bar view or command palette entry. The extension starts the local `refact-lsp` engine and opens the Refact UI inside VS Code.
 
-1. Add a BYOK provider such as OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, or a custom OpenAI-compatible endpoint.
-2. Or add a local provider such as Ollama, LM Studio, or vLLM.
-3. Pick default models in **Default Models**.
+## Complete First-Run Setup
 
-No hosted account, managed inference URL, legacy Refact server, or Refact-issued API key is required.
+1. Open **Provider Setup**.
+2. Add a hosted provider, local runtime, or custom endpoint.
+3. Enter the provider key, complete OAuth if required, or confirm the local endpoint URL.
+4. Enable the models you want to use.
+5. Open **Default Models** and choose defaults for chat, agent work, reasoning, completion, and embeddings as needed.
 
-## Local Engine
+Refact works with BYOK providers such as Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Gemini, xAI, Qwen, Kimi, Zhipu, MiniMax, GitHub Copilot, Claude Code, and custom OpenAI-compatible endpoints. Local runtimes include Ollama, LM Studio, and vLLM.
 
-The extension starts the local `refact-lsp` engine automatically and communicates with it over localhost.
+## Start Using Refact In VS Code
+
+- Open Chat and ask about the current workspace.
+- Switch to an agent mode for multi-step tasks that can search, edit, run commands, and use integrations.
+- Enable inline completion with a completion-capable model source.
+- Add project knowledge, task context, and integration settings as your workflow grows.
+
+## Local Engine Notes
+
+The VS Code extension communicates with the engine over localhost. Project trajectories, task state, knowledge, and provider settings stay in local Refact directories unless you configure providers or integrations that need network access.
+
+A hosted Refact login, Refact-issued model key, or separate backend deployment is not required.

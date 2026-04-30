@@ -1,32 +1,55 @@
 ---
 title: Quickstart
-description: Get started with Refact as a BYOK/local-only coding assistant.
+description: Install Refact, configure a provider, and start chat, agent, and completion workflows.
 ---
 
-Refact runs locally in your IDE and connects only to providers you configure. There is no hosted account, managed Refact inference runtime, team workspace, or app-level balance.
+Refact runs a local engine in your IDE and sends model requests only to providers or runtimes that you configure. A hosted Refact account, plan, or model credit wallet is not required.
 
-## 1. Install Refact
+## 1. Install The IDE Extension
+
+Choose the IDE you use most:
 
 - [VS Code](/installation/vs-code/)
 - [JetBrains IDEs](/installation/jetbrains/)
 
-## 2. Configure A Provider
+After installation, open the Refact sidebar or tool window. The extension starts the local `refact-lsp` engine automatically.
 
-Open **Provider Setup** in the Refact UI and add at least one provider:
+## 2. Add A Provider Or Local Runtime
 
-- BYOK providers such as OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, Groq, xAI, or custom OpenAI-compatible endpoints.
-- Local providers such as Ollama, LM Studio, or vLLM.
+Open **Provider Setup** and add at least one model source:
 
-Refact uses your provider credentials directly from your local configuration. Provider billing, quotas, and availability are controlled by that provider.
+- Hosted BYOK providers: Anthropic, OpenAI, OpenAI Responses, OpenAI Codex, OpenRouter, Groq, DeepSeek, Doubao, xAI, Gemini, Qwen, Kimi, Zhipu, MiniMax, GitHub Copilot, Claude Code, or a custom OpenAI-compatible endpoint.
+- Local or self-managed runtimes: Ollama, LM Studio, vLLM, or a compatible endpoint you run yourself.
 
-## 3. Choose Defaults
+Provider keys, OAuth tokens, endpoints, and enabled models are stored in your local Refact configuration. Billing, quotas, model availability, and data retention are controlled by the provider or runtime you choose.
 
-After adding a provider, open **Default Models** and select models for chat, light chat, thinking, buddy, and code completion as needed.
+## 3. Choose Default Models
 
-## 4. Start Coding
+Open **Default Models** and select the models Refact should use for common roles:
 
-Use chat, agent modes, code completion, integrations, and local knowledge features from your IDE. Usage statistics are local token/provider-cost summaries only.
+- Chat and agent work.
+- Fast or light chat.
+- Reasoning or thinking workflows, when your model supports them.
+- Buddy/background suggestions, if enabled.
+- Code completion, if your provider or local runtime supports completion.
+- Embeddings, when you use semantic search or knowledge features.
 
-## Privacy
+You can change these defaults later without reinstalling Refact.
 
-Requests are sent only to the model providers or local runtimes you configure.
+## 4. Start A Chat
+
+Open Refact Chat in your IDE and ask a question about the current project. Attach files or selected code when useful. Refact can combine your message with local project context and enabled tools.
+
+## 5. Try Agent Mode
+
+Switch to an agent-capable mode when you want Refact to search, edit, run commands, inspect integrations, or iterate on a task. Tool confirmations and rollback features are available for workflows that change files.
+
+## 6. Enable Code Completion
+
+Use a completion-capable provider or local runtime for inline suggestions. Local runtimes usually need the model downloaded and reachable before Refact can use it.
+
+## 7. Review Privacy Expectations
+
+Project trajectories, task data, knowledge, provider settings, and usage summaries are stored locally. Network requests go only to configured providers, local endpoints that you point Refact at, and integrations you enable.
+
+Next: read [Configure Providers](/byok/) and [Supported Models](/supported-models/) for provider-specific setup details.
