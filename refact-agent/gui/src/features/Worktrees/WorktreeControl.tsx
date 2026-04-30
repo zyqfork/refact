@@ -24,6 +24,7 @@ import {
 } from "./CreateWorktreeModal";
 import { WorktreeMenu } from "./WorktreeMenu";
 import { WorktreeStatusBadge } from "./WorktreeStatusBadge";
+import { worktreeErrorText } from "./worktreeError";
 import styles from "./Worktrees.module.css";
 
 const EMPTY_WORKTREE_RECORDS: WorktreeRecordView[] = [];
@@ -59,10 +60,6 @@ function defaultBranchName(chatId: string): string {
   const seedComponent = sanitizeBranchComponent(chatId).slice(0, 12);
   const seed = seedComponent.length > 0 ? seedComponent : "chat";
   return `refact/chat/${seed}`;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export const WorktreeControl: React.FC = () => {
@@ -121,7 +118,7 @@ export const WorktreeControl: React.FC = () => {
         );
       } catch (error) {
         dispatch(setThreadWorktree({ chatId, worktree: previousWorktree }));
-        setFeedback(`Worktree update failed: ${errorText(error)}`);
+        setFeedback(`Worktree update failed: ${worktreeErrorText(error)}`);
       }
     },
     [apiKey, chatId, currentWorktree, dispatch, lspPort],
@@ -155,7 +152,7 @@ export const WorktreeControl: React.FC = () => {
         setCreateOpen(false);
         setMenuOpen(false);
       } catch (error) {
-        setCreateError(errorText(error));
+        setCreateError(worktreeErrorText(error));
       }
     },
     [attachWorktree, chatId, createWorktree],
@@ -185,7 +182,7 @@ export const WorktreeControl: React.FC = () => {
         setFeedback("Path copied to clipboard.");
       }
     } catch (error) {
-      setFeedback(`Open failed: ${errorText(error)}`);
+      setFeedback(`Open failed: ${worktreeErrorText(error)}`);
     }
   }, [
     copyToClipboard,

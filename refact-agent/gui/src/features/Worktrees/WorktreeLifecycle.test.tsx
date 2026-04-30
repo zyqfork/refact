@@ -340,6 +340,40 @@ describe("Worktree lifecycle GUI", () => {
     );
   });
 
+  test("merge modal displays structured backend error text", async () => {
+    const record = makeRecord();
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/worktrees/:id/merge", () =>
+        HttpResponse.json(
+          {
+            code: "conflict",
+            error:
+              "Worktree has uncommitted changes; include them or commit first.",
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+
+    const { user } = render(
+      <MergeWorktreeModal
+        open
+        worktreeId={record.meta.id}
+        record={record}
+        onOpenChange={() => undefined}
+      />,
+      { preloadedState: { config: configState() } },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    expect(
+      await screen.findByText(
+        "Worktree has uncommitted changes; include them or commit first.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   test("merge conflict path lists files and exposes Ask Refact action", async () => {
     const record = makeRecord();
     const askRefact = vi.fn();

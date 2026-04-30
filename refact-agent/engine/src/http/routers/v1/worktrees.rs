@@ -44,7 +44,13 @@ pub struct DeleteWorktreeQuery {
 }
 
 fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
-    (status, Json(json!({ "error": message.into() })))
+    let code = match status {
+        StatusCode::BAD_REQUEST => "bad_request",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::CONFLICT => "conflict",
+        _ => "worktree_error",
+    };
+    (status, Json(json!({ "code": code, "error": message.into() })))
 }
 
 fn status_for_error(error: &str) -> StatusCode {

@@ -11,3 +11,4 @@ export {
   buildWorktreeConflictPrompt,
   mergeConflictFiles,
 } from "./worktreeConflict";
+export { worktreeErrorText } from "./worktreeError";

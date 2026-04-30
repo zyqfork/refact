@@ -123,6 +123,13 @@ export default defineConfig({
                     'aria-label': 'Learn about agent rollback',
                   },
                 },
+                {
+                  label: 'Worktrees',
+                  link: '/features/autonomous-agent/worktrees/',
+                  attrs: {
+                    'aria-label': 'Learn about agent worktrees',
+                  },
+                },
               ],
             },
             {

@@ -192,8 +192,13 @@
   white-space: nowrap;
 }
 
+.menuHint,
 .feedback {
   padding: 0 var(--space-1);
+}
+
+.menuHint {
+  line-height: var(--line-height-1);
 }
 
 .modalFields {

@@ -140,7 +140,7 @@ export type MergeWorktreeRequest = {
   commit_message?: string;
 };
 
-export type WorktreeCleanupResult = {
+export type WorktreeRemovalResult = {
   worktree_deleted: boolean;
   branch_deleted: boolean;
   registry_deleted: boolean;
@@ -164,7 +164,7 @@ export type MergeWorktreeResponse = {
   target_branch?: string;
   committed_uncommitted?: string | null;
   merge_commit?: string | null;
-  cleanup?: WorktreeCleanupResult | null;
+  cleanup?: WorktreeRemovalResult | null;
   conflict?: WorktreeConflictState | null;
   success?: boolean;
   message?: string;
@@ -315,7 +315,7 @@ export type WorktreeCleanupPlan = {
   skipped: WorktreeCleanupSkipped[];
 };
 
-export type WorktreeCleanupRunResult = {
+export type WorktreeCleanupResult = {
   generated_at: string;
   request: WorktreeCleanupRequest;
   deleted: WorktreeCleanupDeleted[];
@@ -419,7 +419,7 @@ export const worktreesApi = createApi({
       },
     }),
     cleanupWorktrees: builder.mutation<
-      WorktreeCleanupRunResult,
+      WorktreeCleanupResult,
       WorktreeCleanupRequest
     >({
       queryFn: async (body, api, _opts, baseQuery) => {
@@ -431,7 +431,7 @@ export const worktreesApi = createApi({
           body,
         });
         if (result.error) return { error: result.error };
-        return { data: result.data as WorktreeCleanupRunResult };
+        return { data: result.data as WorktreeCleanupResult };
       },
       invalidatesTags: [
         { type: "Worktrees", id: "LIST" },

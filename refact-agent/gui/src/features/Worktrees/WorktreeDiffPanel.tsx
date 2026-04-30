@@ -6,6 +6,7 @@ import {
   type WorktreeRecordView,
   type WorktreeStatus,
 } from "../../services/refact";
+import { worktreeErrorText } from "./worktreeError";
 import styles from "./Worktrees.module.css";
 
 type WorktreeDiffPanelProps = {
@@ -62,14 +63,6 @@ function fileDelta(
   if (typeof additions === "number") parts.push(`+${additions}`);
   if (typeof deletions === "number") parts.push(`-${deletions}`);
   return parts.join(" ");
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "error" in error) {
-    return String((error as { error: unknown }).error);
-  }
-  return String(error);
 }
 
 export const WorktreeDiffPanel: React.FC<WorktreeDiffPanelProps> = ({
@@ -136,7 +129,7 @@ export const WorktreeDiffPanel: React.FC<WorktreeDiffPanelProps> = ({
                 Could not load worktree diff.
               </Text>
               <Text size="1" color="gray">
-                {errorText(error)}
+                {worktreeErrorText(error)}
               </Text>
               <Button
                 type="button"

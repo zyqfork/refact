@@ -20,6 +20,7 @@ import {
 } from "../../services/refact";
 import { tasksApi } from "../../services/refact/tasks";
 import { mergeConflictFiles } from "./worktreeConflict";
+import { worktreeErrorText } from "./worktreeError";
 import styles from "./Worktrees.module.css";
 
 type MergeWorktreeModalProps = {
@@ -58,21 +59,6 @@ function initialTargetBranch(
     worktree?.base_branch ??
     "main"
   );
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "data" in error) {
-    const data = (error as { data: unknown }).data;
-    if (typeof data === "string") return data;
-    if (typeof data === "object" && data !== null && "detail" in data) {
-      return String((data as { detail: unknown }).detail);
-    }
-  }
-  if (typeof error === "object" && error !== null && "error" in error) {
-    return String((error as { error: unknown }).error);
-  }
-  return String(error);
 }
 
 function hasMergeConflict(response: MergeWorktreeResponse): boolean {
@@ -174,7 +160,7 @@ export const MergeWorktreeModal: React.FC<MergeWorktreeModalProps> = ({
         onMerged?.(response);
       }
     } catch (mergeError) {
-      setError(errorText(mergeError));
+      setError(worktreeErrorText(mergeError));
     }
   }, [
     deleteAfterMerge,
@@ -195,7 +181,7 @@ export const MergeWorktreeModal: React.FC<MergeWorktreeModalProps> = ({
       await onAskRefact(conflictFiles, result);
       setActionFeedback("Conflict resolution request sent to Refact.");
     } catch (askError) {
-      setActionFeedback(`Could not ask Refact: ${errorText(askError)}`);
+      setActionFeedback(`Could not ask Refact: ${worktreeErrorText(askError)}`);
     }
   }, [conflictFiles, onAskRefact, result]);
 
@@ -205,7 +191,9 @@ export const MergeWorktreeModal: React.FC<MergeWorktreeModalProps> = ({
     try {
       await onOpenWorktree();
     } catch (openError) {
-      setActionFeedback(`Could not open worktree: ${errorText(openError)}`);
+      setActionFeedback(
+        `Could not open worktree: ${worktreeErrorText(openError)}`,
+      );
     }
   }, [onOpenWorktree]);
 

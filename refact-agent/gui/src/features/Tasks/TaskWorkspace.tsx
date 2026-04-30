@@ -73,6 +73,7 @@ import {
   MergeWorktreeModal,
   WorktreeStatusBadge,
   buildWorktreeConflictPrompt,
+  worktreeErrorText,
 } from "../Worktrees";
 
 type ActiveChat =
@@ -154,21 +155,6 @@ function resolveCardWorktree(
       meta?.stale === true,
     referenceCount: record?.reference_count ?? meta?.reference_count,
   };
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "data" in error) {
-    const data = (error as { data: unknown }).data;
-    if (typeof data === "string") return data;
-    if (typeof data === "object" && data !== null && "detail" in data) {
-      return String((data as { detail: unknown }).detail);
-    }
-  }
-  if (typeof error === "object" && error !== null && "error" in error) {
-    return String((error as { error: unknown }).error);
-  }
-  return String(error);
 }
 
 interface PlannerPanelProps {
@@ -1030,7 +1016,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
           showNotification("Worktree path copied to clipboard.");
         }
       } catch (error) {
-        showNotification(`Open failed: ${errorText(error)}`);
+        showNotification(`Open failed: ${worktreeErrorText(error)}`);
       }
     },
     [
@@ -1073,7 +1059,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
       invalidateTaskQueries();
       showNotification("Worktree deleted.");
     } catch (error) {
-      showNotification(`Delete failed: ${errorText(error)}`);
+      showNotification(`Delete failed: ${worktreeErrorText(error)}`);
     }
   }, [
     deleteBranch,

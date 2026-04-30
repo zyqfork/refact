@@ -31,6 +31,7 @@ import { WorktreeStatusBadge } from "./WorktreeStatusBadge";
 import { WorktreeDiffPanel } from "./WorktreeDiffPanel";
 import { MergeWorktreeModal } from "./MergeWorktreeModal";
 import { buildWorktreeConflictPrompt } from "./worktreeConflict";
+import { worktreeErrorText } from "./worktreeError";
 import styles from "./Worktrees.module.css";
 
 type WorktreeMenuProps = {
@@ -124,21 +125,6 @@ function referenceCount(
   return record?.reference_count ?? worktree?.reference_count ?? 0;
 }
 
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "data" in error) {
-    const data = (error as { data: unknown }).data;
-    if (typeof data === "string") return data;
-    if (typeof data === "object" && data !== null && "detail" in data) {
-      return String((data as { detail: unknown }).detail);
-    }
-  }
-  if (typeof error === "object" && error !== null && "error" in error) {
-    return String((error as { error: unknown }).error);
-  }
-  return String(error);
-}
-
 export const WorktreeMenu: React.FC<WorktreeMenuProps> = ({
   currentWorktree,
   currentRecord,
@@ -204,7 +190,7 @@ export const WorktreeMenu: React.FC<WorktreeMenuProps> = ({
         onDetach();
       }
     } catch (error) {
-      setLocalFeedback(`Delete failed: ${errorText(error)}`);
+      setLocalFeedback(`Delete failed: ${worktreeErrorText(error)}`);
     }
   }, [
     chatId,
@@ -239,6 +225,9 @@ export const WorktreeMenu: React.FC<WorktreeMenuProps> = ({
               />
             )}
           </Flex>
+          <Text size="1" color="gray" className={styles.menuHint}>
+            Paths warn/remap; shell uses scoped cwd; shared refs affect all chats.
+          </Text>
 
           {hasFeedback && (
             <Flex direction="column" gap="1" className={styles.feedback}>
