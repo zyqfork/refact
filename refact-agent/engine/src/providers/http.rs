@@ -1371,8 +1371,14 @@ async fn merge_provider_settings_preserving_secrets(
         .join("providers.d")
         .join(format!("{}.yaml", provider_name));
 
-    // If no existing config, just return new settings (but strip "***" values)
     if !config_path.exists() {
+        if provider_name == "custom" {
+            return Ok(merge_yaml_preserving_secrets_for_provider(
+                provider_name,
+                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+                new_settings,
+            ));
+        }
         return Ok(strip_masked_secrets(new_settings));
     }
 
@@ -1393,11 +1399,15 @@ async fn merge_provider_settings_preserving_secrets(
         )
     })?;
 
-    Ok(merge_yaml_preserving_secrets(existing, new_settings))
+    Ok(merge_yaml_preserving_secrets_for_provider(
+        provider_name,
+        existing,
+        new_settings,
+    ))
 }
 
-/// Recursively merge YAML, preserving existing values when new value is "***"
-fn merge_yaml_preserving_secrets(
+fn merge_yaml_preserving_secrets_for_provider(
+    provider_name: &str,
     existing: serde_yaml::Value,
     new: serde_yaml::Value,
 ) -> serde_yaml::Value {
@@ -1406,8 +1416,17 @@ fn merge_yaml_preserving_secrets(
     match (existing, new) {
         (Value::Mapping(mut existing_map), Value::Mapping(new_map)) => {
             for (key, new_value) in new_map {
-                let merged_value = if let Some(existing_value) = existing_map.remove(&key) {
-                    merge_yaml_preserving_secrets(existing_value, new_value)
+                let replace_custom_extra_headers =
+                    provider_name == "custom" && key.as_str() == Some("extra_headers");
+                let existing_value = existing_map.remove(&key);
+                let merged_value = if replace_custom_extra_headers {
+                    merge_custom_extra_headers_replace(existing_value.as_ref(), &new_value)
+                } else if let Some(existing_value) = existing_value {
+                    merge_yaml_preserving_secrets_for_provider(
+                        provider_name,
+                        existing_value,
+                        new_value,
+                    )
                 } else {
                     strip_masked_secrets(new_value)
                 };
@@ -1415,12 +1434,50 @@ fn merge_yaml_preserving_secrets(
             }
             Value::Mapping(existing_map)
         }
-        (existing, Value::String(s)) if s == "***" => {
-            // Keep existing value when new is "***"
-            existing
-        }
+        (existing, Value::String(s)) if s == "***" => existing,
         (_, new) => strip_masked_secrets(new),
     }
+}
+
+fn merge_custom_extra_headers_replace(
+    existing: Option<&serde_yaml::Value>,
+    incoming: &serde_yaml::Value,
+) -> serde_yaml::Value {
+    use serde_yaml::{Mapping, Value};
+
+    let Some(incoming_map) = incoming.as_mapping() else {
+        return Value::Mapping(Mapping::new());
+    };
+    let existing_map = existing.and_then(Value::as_mapping);
+    let mut out = Mapping::new();
+
+    for (key, value) in incoming_map {
+        let Some(key) = key.as_str() else {
+            continue;
+        };
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if value == "***" {
+            let lookup_key = Value::String(key.to_string());
+            if let Some(existing_value) = existing_map
+                .and_then(|map| map.get(&lookup_key))
+                .and_then(Value::as_str)
+            {
+                out.insert(
+                    Value::String(key.to_string()),
+                    Value::String(existing_value.to_string()),
+                );
+            }
+        } else {
+            out.insert(
+                Value::String(key.to_string()),
+                Value::String(value.to_string()),
+            );
+        }
+    }
+
+    Value::Mapping(out)
 }
 
 /// Remove "***" values from a YAML tree (for new configs without existing values)
@@ -2584,6 +2641,193 @@ async fn save_provider_oauth_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn merged_settings_json(
+        provider_name: &str,
+        existing: &str,
+        incoming: &str,
+    ) -> serde_json::Value {
+        let existing = serde_yaml::from_str(existing).unwrap();
+        let incoming = serde_yaml::from_str(incoming).unwrap();
+        serde_json::to_value(merge_yaml_preserving_secrets_for_provider(
+            provider_name,
+            existing,
+            incoming,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn custom_provider_merge_replaces_extra_headers_map() {
+        let merged = merged_settings_json(
+            "custom",
+            r#"
+api_key: sk-old
+extra_headers:
+  X-Keep: keep-secret
+  X-Replace: old-value
+  X-Remove-Null: old-null
+  X-Remove-Number: old-number
+  X-Absent: old-absent
+"#,
+            r#"
+api_key: "***"
+extra_headers:
+  X-Keep: "***"
+  X-Replace: new-value
+  X-Remove-Null:
+  X-Remove-Number: 7
+"#,
+        );
+
+        assert_eq!(merged["api_key"], "sk-old");
+        assert_eq!(merged["extra_headers"]["X-Keep"], "keep-secret");
+        assert_eq!(merged["extra_headers"]["X-Replace"], "new-value");
+        assert!(merged["extra_headers"].get("X-Remove-Null").is_none());
+        assert!(merged["extra_headers"].get("X-Remove-Number").is_none());
+        assert!(merged["extra_headers"].get("X-Absent").is_none());
+    }
+
+    #[test]
+    fn custom_provider_merge_empty_extra_headers_clears_all() {
+        let merged = merged_settings_json(
+            "custom",
+            r#"
+extra_headers:
+  X-Secret: old-secret
+"#,
+            r#"
+extra_headers: {}
+"#,
+        );
+
+        assert!(merged["extra_headers"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_merge_null_extra_headers_clears_all() {
+        let merged = merged_settings_json(
+            "custom",
+            r#"
+extra_headers:
+  X-Secret: old-secret
+"#,
+            r#"
+extra_headers:
+"#,
+        );
+
+        assert!(merged["extra_headers"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_merge_absent_extra_headers_preserves_existing() {
+        let merged = merged_settings_json(
+            "custom",
+            r#"
+api_key: sk-old
+extra_headers:
+  X-Secret: old-secret
+"#,
+            r#"
+api_key: "***"
+"#,
+        );
+
+        assert_eq!(merged["api_key"], "sk-old");
+        assert_eq!(merged["extra_headers"]["X-Secret"], "old-secret");
+    }
+
+    #[test]
+    fn non_custom_provider_merge_preserves_nested_omitted_keys() {
+        let merged = merged_settings_json(
+            "openai_codex",
+            r#"
+oauth_tokens:
+  access_token: old-access
+  refresh_token: old-refresh
+"#,
+            r#"
+oauth_tokens:
+  access_token: new-access
+"#,
+        );
+
+        assert_eq!(merged["oauth_tokens"]["access_token"], "new-access");
+        assert_eq!(merged["oauth_tokens"]["refresh_token"], "old-refresh");
+    }
+
+    #[tokio::test]
+    async fn custom_provider_update_removes_deleted_extra_headers_on_disk_and_runtime() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("custom.yaml"),
+            r#"
+api_key: sk-old
+chat_endpoint: https://example.com/v1/chat/completions
+enabled: true
+enabled_models:
+  - custom-model
+custom_models:
+  custom-model:
+    n_ctx: 4096
+extra_headers:
+  X-Keep: keep-secret
+  X-Replace: old-value
+  X-Remove: remove-me
+"#,
+        )
+        .await
+        .unwrap();
+
+        let body = serde_json::to_vec(&json!({
+            "api_key": "***",
+            "extra_headers": {
+                "X-Keep": "***",
+                "X-Replace": "new-value"
+            }
+        }))
+        .unwrap();
+        let response = handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "custom".to_string(),
+            }),
+            hyper::body::Bytes::from(body),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content = tokio::fs::read_to_string(providers_dir.join("custom.yaml"))
+            .await
+            .unwrap();
+        let saved: serde_json::Value =
+            serde_json::to_value(serde_yaml::from_str::<serde_yaml::Value>(&content).unwrap())
+                .unwrap();
+        assert_eq!(saved["api_key"], "sk-old");
+        assert_eq!(saved["extra_headers"]["X-Keep"], "keep-secret");
+        assert_eq!(saved["extra_headers"]["X-Replace"], "new-value");
+        assert!(saved["extra_headers"].get("X-Remove").is_none());
+
+        let runtime = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            registry.get("custom").unwrap().build_runtime().unwrap()
+        };
+        assert_eq!(
+            runtime.extra_headers.get("X-Keep").map(String::as_str),
+            Some("keep-secret")
+        );
+        assert_eq!(
+            runtime.extra_headers.get("X-Replace").map(String::as_str),
+            Some("new-value")
+        );
+        assert!(runtime.extra_headers.get("X-Remove").is_none());
+    }
 
     #[tokio::test]
     async fn openai_codex_oauth_callback_html_escapes_interpolated_values() {

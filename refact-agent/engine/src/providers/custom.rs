@@ -105,6 +105,11 @@ fields:
     f_label: "Enable Cache Control"
     f_default: false
     f_extra: true
+  extra_headers:
+    f_type: string_long
+    f_desc: "Advanced JSON/YAML object of additional HTTP headers. Values are redacted as *** when read back; send *** to preserve an existing header and omit or null a key to remove it."
+    f_label: "Extra Headers"
+    f_extra: true
 description: |
   Custom OpenAI-compatible endpoint.
 available:
@@ -143,24 +148,28 @@ available:
         {
             self.supports_cache_control = supports_cache_control;
         }
-        if let Some(headers) = yaml.get("extra_headers").and_then(|v| v.as_mapping()) {
-            let mut next_headers = HashMap::new();
-            for (key, value) in headers {
-                let Some(key) = key.as_str() else {
-                    continue;
-                };
-                let Some(value) = value.as_str() else {
-                    continue;
-                };
-                if value == "***" {
-                    if let Some(existing) = self.extra_headers.get(key) {
-                        next_headers.insert(key.to_string(), existing.clone());
+        if let Some(headers_value) = yaml.get("extra_headers") {
+            if let Some(headers) = headers_value.as_mapping() {
+                let mut next_headers = HashMap::new();
+                for (key, value) in headers {
+                    let Some(key) = key.as_str() else {
+                        continue;
+                    };
+                    let Some(value) = value.as_str() else {
+                        continue;
+                    };
+                    if value == "***" {
+                        if let Some(existing) = self.extra_headers.get(key) {
+                            next_headers.insert(key.to_string(), existing.clone());
+                        }
+                    } else {
+                        next_headers.insert(key.to_string(), value.to_string());
                     }
-                } else {
-                    next_headers.insert(key.to_string(), value.to_string());
                 }
+                self.extra_headers = next_headers;
+            } else {
+                self.extra_headers.clear();
             }
-            self.extra_headers = next_headers;
         }
         parse_enabled_models(&yaml, &mut self.enabled_models);
         parse_custom_models(&yaml, &mut self.custom_models);
@@ -324,5 +333,57 @@ extra_headers:
         assert!(settings["extra_headers"].get("X-Remove-Null").is_none());
         assert!(settings["extra_headers"].get("X-Remove-Number").is_none());
         assert!(settings["extra_headers"].get("X-Absent").is_none());
+    }
+
+    #[test]
+    fn custom_provider_extra_headers_empty_map_clears_all() {
+        let mut provider = CustomProvider::default();
+        provider
+            .extra_headers
+            .insert("X-Secret".to_string(), "old-secret".to_string());
+
+        provider
+            .provider_settings_apply(serde_yaml::from_str("extra_headers: {}").unwrap())
+            .unwrap();
+
+        assert!(provider.extra_headers.is_empty());
+    }
+
+    #[test]
+    fn custom_provider_extra_headers_null_clears_all() {
+        let mut provider = CustomProvider::default();
+        provider
+            .extra_headers
+            .insert("X-Secret".to_string(), "old-secret".to_string());
+
+        provider
+            .provider_settings_apply(serde_yaml::from_str("extra_headers:").unwrap())
+            .unwrap();
+
+        assert!(provider.extra_headers.is_empty());
+    }
+
+    #[test]
+    fn custom_provider_extra_headers_absent_preserves_existing() {
+        let mut provider = CustomProvider::default();
+        provider
+            .extra_headers
+            .insert("X-Secret".to_string(), "old-secret".to_string());
+
+        provider
+            .provider_settings_apply(serde_yaml::from_str("enabled: true").unwrap())
+            .unwrap();
+
+        assert_eq!(
+            provider.extra_headers.get("X-Secret").map(String::as_str),
+            Some("old-secret")
+        );
+    }
+
+    #[test]
+    fn custom_provider_schema_exposes_extra_headers() {
+        let schema = CustomProvider::default().provider_schema();
+        assert!(schema.contains("extra_headers:"));
+        assert!(schema.contains("f_label: \"Extra Headers\""));
     }
 }
