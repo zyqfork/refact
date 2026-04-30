@@ -89,6 +89,14 @@ function randomBubblePosition(previous?: BubblePosition): BubblePosition {
   return choices[Math.floor(Math.random() * choices.length)] ?? "top";
 }
 
+function ellipsizeMiddle(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const edgeLength = Math.floor((maxLength - 1) / 2);
+  const start = text.slice(0, edgeLength).trimEnd();
+  const end = text.slice(text.length - edgeLength).trimStart();
+  return `${start}…${end}`;
+}
+
 interface BubbleView {
   text: string;
   position: BubblePosition;
@@ -247,12 +255,13 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         const walkOffsetPx = Math.round(
           (anim.walkOffsetX / CANVAS_SIZE) * displaySize,
         );
+        const compactBubble = displaySize <= 180;
         const overrideText = speechOverrideRef.current ?? "";
-        const text = overrideText || anim.statusText || "";
+        const rawText = overrideText || anim.statusText || "";
+        const text = ellipsizeMiddle(rawText, compactBubble ? 120 : 170);
         const opacity = overrideText ? 1 : anim.statusOpacity;
         const visible = opacity > 0.02 && text.length > 0;
         const hasControls = speechControlCount > 0;
-        const compactBubble = displaySize <= 180;
         const isVeryLongText = text.length > 130;
         const isLongText = text.length > 72;
         const isMediumText = text.length > 34;
@@ -277,7 +286,9 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         const whiteSpace: BubbleView["whiteSpace"] =
           fixedWidth || isMediumText ? "normal" : "nowrap";
         const previousFixedWidth =
-          previous.width !== "max-content" && previous.width !== "220px";
+          previous.width !== "max-content" &&
+          previous.width !== "200px" &&
+          previous.width !== "220px";
         const position =
           text !== previous.text || fixedWidth !== previousFixedWidth
             ? randomizeBubblePosition
@@ -456,9 +467,9 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
                   };
           const compactSideContainer: React.CSSProperties = compactBubble
             ? bubbleView.position === "left"
-              ? { right: "calc(66% - var(--buddy-walk-x, 0px))" }
+              ? { right: "calc(86% - var(--buddy-walk-x, 0px))" }
               : bubbleView.position === "right"
-                ? { left: "calc(66% + var(--buddy-walk-x, 0px))" }
+                ? { left: "calc(86% + var(--buddy-walk-x, 0px))" }
                 : {}
             : {};
           const bubbleStyle: BubbleStyle = {
