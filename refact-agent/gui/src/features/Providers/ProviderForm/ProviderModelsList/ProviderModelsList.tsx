@@ -134,9 +134,7 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
   }
 
   const totalModels = providerModels.length;
-  const enabledCount = providerModels.filter(
-    (model) => model.enabled,
-  ).length;
+  const enabledCount = providerModels.filter((model) => model.enabled).length;
 
   return (
     <Flex direction="column" gap="3" mt="4">
