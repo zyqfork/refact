@@ -773,12 +773,17 @@ mod tests {
     async fn write_manifest_entry(scope_root: &Path, entry: ImportManifestEntry) {
         let mut manifest = ImportManifest::default();
         manifest.entries.push(entry);
-        manifest.write_to_path(&manifest_path_for_scope_root(scope_root))
+        manifest
+            .write_to_path(&manifest_path_for_scope_root(scope_root))
             .await
             .unwrap();
     }
 
-    fn subagent_candidate(source_path: PathBuf, dest_path: PathBuf, content: &str) -> ImportCandidate {
+    fn subagent_candidate(
+        source_path: PathBuf,
+        dest_path: PathBuf,
+        content: &str,
+    ) -> ImportCandidate {
         if let Some(parent) = source_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -877,7 +882,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(outcome_status(&summary, 0), Some(ImportStatus::Updated));
-        assert_eq!(tokio::fs::read_to_string(&dest_path).await.unwrap(), new_yaml);
+        assert_eq!(
+            tokio::fs::read_to_string(&dest_path).await.unwrap(),
+            new_yaml
+        );
         assert_eq!(manifest.entries[0].importer_version, IMPORTER_VERSION);
     }
 
@@ -918,8 +926,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(outcome_status(&summary, 0), Some(ImportStatus::UserModified));
-        assert_eq!(tokio::fs::read_to_string(&dest_path).await.unwrap(), "user edit");
+        assert_eq!(
+            outcome_status(&summary, 0),
+            Some(ImportStatus::UserModified)
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&dest_path).await.unwrap(),
+            "user edit"
+        );
         assert_eq!(manifest.entries[0].importer_version, "competitor_import_v1");
     }
 
@@ -960,8 +974,14 @@ mod tests {
         assert_eq!(outcome_status(&summary, 0), Some(ImportStatus::Unchanged));
         assert!(!summary.has_imported_changes());
         assert_eq!(manifest.entries[0].importer_version, IMPORTER_VERSION);
-        assert_eq!(manifest.entries[0].source_hash, hash_file(&source_path).unwrap());
-        assert_eq!(manifest.entries[0].dest_hash, hash_file(&dest_path).unwrap());
+        assert_eq!(
+            manifest.entries[0].source_hash,
+            hash_file(&source_path).unwrap()
+        );
+        assert_eq!(
+            manifest.entries[0].dest_hash,
+            hash_file(&dest_path).unwrap()
+        );
         assert!(manifest.entries[0].metadata.is_some());
     }
 
@@ -1333,7 +1353,11 @@ mod tests {
         let new_dest_path = scope_root.join(&new_dest_rel);
         write_candidates(
             &scope_root,
-            &[file_candidate(source_path.clone(), old_dest_rel.clone(), "hello")],
+            &[file_candidate(
+                source_path.clone(),
+                old_dest_rel.clone(),
+                "hello",
+            )],
         )
         .await;
 
@@ -1351,8 +1375,14 @@ mod tests {
                 && outcome.message
                     == "source now maps to a different destination; generated destination preserved"
         }));
-        assert_eq!(tokio::fs::read_to_string(old_dest_path).await.unwrap(), "hello");
-        assert_eq!(tokio::fs::read_to_string(new_dest_path).await.unwrap(), "hello");
+        assert_eq!(
+            tokio::fs::read_to_string(old_dest_path).await.unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(new_dest_path).await.unwrap(),
+            "hello"
+        );
     }
 
     #[tokio::test]

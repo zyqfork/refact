@@ -233,9 +233,13 @@ async fn write_candidates_and_merge(
     candidates: &[ImportCandidate],
 ) {
     let existing_issues = summary.issues.clone();
-    let writer_summary =
-        writer::write_candidates_for_scope_with_issues(scope_root, scope, candidates, &existing_issues)
-            .await;
+    let writer_summary = writer::write_candidates_for_scope_with_issues(
+        scope_root,
+        scope,
+        candidates,
+        &existing_issues,
+    )
+    .await;
     summary.merge(writer_summary);
 }
 
@@ -785,7 +789,10 @@ mod tests {
         assert_eq!(status_count(&blocked, ImportStatus::Unsupported), 1);
         assert_eq!(status_count(&blocked, ImportStatus::Stale), 0);
         assert!(source_path.exists());
-        assert_eq!(fs::read_to_string(dest_path).unwrap(), "Private command body.");
+        assert_eq!(
+            fs::read_to_string(dest_path).unwrap(),
+            "Private command body."
+        );
     }
 
     #[tokio::test]
