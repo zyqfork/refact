@@ -15,6 +15,7 @@ import {
 } from "./types";
 import type { ToolConfirmationPauseReason } from "../../../services/refact";
 import { type ChatMessages } from "../../../services/refact/types";
+import type { WorktreeMeta } from "../../../services/refact/worktrees";
 import type { AppDispatch, RootState } from "../../../app/store";
 import { type SystemPrompts } from "../../../services/refact/prompts";
 import { ChatHistoryItem } from "../../History/historySlice";
@@ -164,6 +165,7 @@ export const createChatWithId = createAction<{
   model?: string;
   parentId?: string;
   linkType?: string;
+  worktree?: WorktreeMeta | null;
 }>("chatThread/createWithId");
 
 const SETUP_START_MESSAGES: Record<string, string> = {

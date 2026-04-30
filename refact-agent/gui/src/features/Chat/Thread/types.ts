@@ -1,6 +1,7 @@
 import { ToolConfirmationPauseReason, Usage } from "../../../services/refact";
 import { SystemPrompts } from "../../../services/refact/prompts";
 import { ChatMessages } from "../../../services/refact/types";
+import type { WorktreeMeta } from "../../../services/refact/worktrees";
 import { parseOrElse } from "../../../utils/parseOrElse";
 import { BuddyThreadMeta } from "../../Buddy/types";
 
@@ -137,6 +138,7 @@ export type ChatThread = {
   active_skill?: string | null;
 
   auto_enrichment_enabled?: boolean;
+  worktree?: WorktreeMeta | null;
 
   buddy_meta?: BuddyThreadMeta;
 };

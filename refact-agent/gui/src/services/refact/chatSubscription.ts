@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./types";
+import type { WorktreeMeta } from "./worktrees";
 
 export type SessionState =
   | "idle"
@@ -39,6 +40,7 @@ export type ThreadParams = {
 
   previous_response_id?: string;
   auto_enrichment_enabled?: boolean | null;
+  worktree?: WorktreeMeta | null;
 };
 
 export type PauseReason = {
@@ -89,6 +91,7 @@ export type EventEnvelope =
       chat_id: string;
       seq: string;
       type: "thread_updated";
+      worktree?: WorktreeMeta | null;
       [key: string]: unknown;
     }
   | {

@@ -77,6 +77,7 @@ import {
   newBuddyChatAction,
 } from "./actions";
 import { applyDeltaOps } from "../../../services/refact/chatSubscription";
+import type { WorktreeMeta } from "../../../services/refact/worktrees";
 import {
   AssistantMessage,
   ChatMessages,
@@ -243,6 +244,19 @@ function parseEventSeq(seq: string): bigint | null {
   }
 }
 
+function isWorktreeMeta(value: unknown): value is WorktreeMeta {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.kind === "string" &&
+    typeof record.root === "string" &&
+    typeof record.source_workspace_root === "string" &&
+    typeof record.repo_root === "string" &&
+    typeof record.enforce === "boolean"
+  );
+}
+
 export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(setToolUse, (state, action) => {
     state.tool_use = action.payload;
@@ -335,7 +349,8 @@ export const chatReducer = createReducer(initialState, (builder) => {
   });
 
   builder.addCase(createChatWithId, (state, action) => {
-    const { id, title, isTaskChat, mode, taskMeta, model } = action.payload;
+    const { id, title, isTaskChat, mode, taskMeta, model, worktree } =
+      action.payload;
     const existingRt = state.threads[id];
 
     if (existingRt) {
@@ -356,6 +371,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
       }
       if (model && !existingRt.thread.model) {
         existingRt.thread.model = model;
+      }
+      if (worktree !== undefined) {
+        existingRt.thread.worktree = worktree;
       }
       state.current_thread_id = id;
       return;
@@ -394,6 +412,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
     }
     if (taskMeta) {
       newRuntime.thread.task_meta = taskMeta;
+    }
+    if (worktree !== undefined) {
+      newRuntime.thread.worktree = worktree;
     }
 
     state.threads[id] = newRuntime;
@@ -1046,6 +1067,12 @@ export const chatReducer = createReducer(initialState, (builder) => {
             typeof event.thread.auto_enrichment_enabled === "boolean"
               ? (event.thread.auto_enrichment_enabled as boolean)
               : existing?.auto_enrichment_enabled ?? false,
+          worktree:
+            event.thread.worktree == null
+              ? event.thread.worktree
+              : isWorktreeMeta(event.thread.worktree)
+                ? event.thread.worktree
+                : undefined,
           buddy_meta: snapshotBuddyMeta,
         };
 
@@ -1197,6 +1224,14 @@ export const chatReducer = createReducer(initialState, (builder) => {
           const rawAe = params.auto_enrichment_enabled;
           rt.thread.auto_enrichment_enabled =
             rawAe == null ? undefined : (rawAe as boolean);
+        }
+        if ("worktree" in params) {
+          const rawWorktree = params.worktree;
+          if (rawWorktree == null) {
+            rt.thread.worktree = null;
+          } else if (isWorktreeMeta(rawWorktree)) {
+            rt.thread.worktree = rawWorktree;
+          }
         }
         if ("task_meta" in params && params.task_meta != null) {
           rt.thread.task_meta = params.task_meta as ChatThread["task_meta"];

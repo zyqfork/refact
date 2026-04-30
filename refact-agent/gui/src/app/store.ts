@@ -28,6 +28,7 @@ import {
   trajectoryApi,
   tasksApi,
   browserApi,
+  worktreesApi,
 } from "../services/refact";
 import { chatModesApi } from "../services/refact/chatModes";
 import { customizationApi } from "../services/refact/customization";
@@ -108,6 +109,7 @@ const rootReducer = combineSlices(
     [trajectoryApi.reducerPath]: trajectoryApi.reducer,
     [tasksApi.reducerPath]: tasksApi.reducer,
     [browserApi.reducerPath]: browserApi.reducer,
+    [worktreesApi.reducerPath]: worktreesApi.reducer,
     [skillsStatusApi.reducerPath]: skillsStatusApi.reducer,
     [mcpServerInfoApi.reducerPath]: mcpServerInfoApi.reducer,
     [chatModesApi.reducerPath]: chatModesApi.reducer,
@@ -202,6 +204,7 @@ export function setUpStore(preloadedState?: Partial<RootState>) {
           trajectoryApi.middleware,
           tasksApi.middleware,
           browserApi.middleware,
+          worktreesApi.middleware,
           skillsStatusApi.middleware,
           chatModesApi.middleware,
           customizationApi.middleware,
