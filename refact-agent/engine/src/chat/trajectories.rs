@@ -823,7 +823,6 @@ pub async fn save_trajectory_snapshot(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
     let messages_json: Vec<serde_json::Value> = snapshot
         .messages
         .iter()
@@ -836,9 +835,8 @@ pub async fn save_trajectory_snapshot(
         "model": snapshot.model,
         "mode": snapshot.mode,
         "tool_use": snapshot.tool_use,
-        "messages": messages_json,
+        "messages": messages_json.clone(),
         "created_at": snapshot.created_at,
-        "updated_at": now,
         "boost_reasoning": snapshot.boost_reasoning,
         "checkpoints_enabled": snapshot.checkpoints_enabled,
         "context_tokens_cap": snapshot.context_tokens_cap,
@@ -925,6 +923,29 @@ pub async fn save_trajectory_snapshot(
         trajectories_dir.join(format!("{}.json", snapshot.chat_id))
     };
 
+    let now = chrono::Utc::now().to_rfc3339();
+    let updated_at = match tokio::fs::read_to_string(&file_path).await {
+        Ok(existing_content) => match serde_json::from_str::<serde_json::Value>(&existing_content) {
+            Ok(existing) => {
+                let existing_messages = existing.get("messages");
+                let same_messages = existing_messages
+                    == Some(&serde_json::Value::Array(messages_json.clone()));
+                if same_messages {
+                    existing
+                        .get("updated_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&now)
+                        .to_string()
+                } else {
+                    now.clone()
+                }
+            }
+            Err(_) => now.clone(),
+        },
+        Err(_) => now.clone(),
+    };
+    trajectory["updated_at"] = serde_json::Value::String(updated_at.clone());
+
     let tmp_path = file_path.with_extension("json.tmp");
     let json_str = serde_json::to_string_pretty(&trajectory)
         .map_err(|e| format!("Failed to serialize trajectory: {}", e))?;
@@ -964,7 +985,7 @@ pub async fn save_trajectory_snapshot(
             let event = TrajectoryEvent {
                 event_type: "updated".to_string(),
                 id: snapshot.chat_id.clone(),
-                updated_at: Some(now),
+                updated_at: Some(updated_at),
                 title: Some(snapshot.title.clone()),
                 is_title_generated: Some(snapshot.is_title_generated),
                 session_state: Some(session_state),
@@ -1660,9 +1681,8 @@ fn spawn_title_generation_task(
             info!("Title already generated for {}, skipping", id);
             return;
         }
-        let now = chrono::Utc::now().to_rfc3339();
+        let updated_at = data.updated_at.clone();
         data.title = title.clone();
-        data.updated_at = now.clone();
         data.extra
             .insert("isTitleGenerated".to_string(), serde_json::json!(true));
         if let Err(e) = atomic_write_json(&file_path, &data).await {
@@ -1675,7 +1695,7 @@ fn spawn_title_generation_task(
         let event = TrajectoryEvent {
             event_type: "updated".to_string(),
             id: id.clone(),
-            updated_at: Some(now),
+            updated_at: Some(updated_at),
             title: Some(title.clone()),
             is_title_generated: Some(true),
             session_state: Some(session_state),
@@ -3417,6 +3437,86 @@ mod tests {
 
         let loaded = load_trajectory_for_chat(gcx, &chat_id).await.unwrap();
         assert_eq!(loaded.thread.worktree, Some(worktree));
+    }
+
+    #[tokio::test]
+    async fn save_trajectory_preserves_updated_at_when_messages_do_not_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+                vec![dir.path().to_path_buf()];
+        }
+
+        fn snapshot(chat_id: &str, title: &str, messages: Vec<ChatMessage>) -> TrajectorySnapshot {
+            TrajectorySnapshot {
+                chat_id: chat_id.to_string(),
+                title: title.to_string(),
+                model: "model".to_string(),
+                mode: "agent".to_string(),
+                tool_use: "agent".to_string(),
+                messages,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                boost_reasoning: false,
+                checkpoints_enabled: true,
+                context_tokens_cap: None,
+                include_project_info: true,
+                is_title_generated: true,
+                auto_approve_editing_tools: false,
+                auto_approve_dangerous_commands: false,
+                version: 1,
+                task_meta: None,
+                worktree: None,
+                parent_id: None,
+                link_type: None,
+                root_chat_id: None,
+                reasoning_effort: None,
+                thinking_budget: None,
+                temperature: None,
+                frequency_penalty: None,
+                max_tokens: None,
+                parallel_tool_calls: None,
+                previous_response_id: None,
+                active_skill: None,
+                auto_enrichment_enabled: None,
+                buddy_meta: None,
+            }
+        }
+
+        let chat_id = "updated-at-message-activity";
+        let messages = vec![ChatMessage::new("user".to_string(), "Hello".to_string())];
+        save_trajectory_snapshot(gcx.clone(), snapshot(chat_id, "First", messages.clone()))
+            .await
+            .unwrap();
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{}.json", chat_id));
+        let first_raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        let first_updated_at = first_raw["updated_at"].as_str().unwrap().to_string();
+
+        save_trajectory_snapshot(gcx.clone(), snapshot(chat_id, "Retitled", messages.clone()))
+            .await
+            .unwrap();
+        let retitled_raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(retitled_raw["updated_at"].as_str().unwrap(), first_updated_at);
+
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let mut changed_messages = messages;
+        changed_messages.push(ChatMessage::new(
+            "assistant".to_string(),
+            "Generated".to_string(),
+        ));
+        save_trajectory_snapshot(gcx, snapshot(chat_id, "Retitled", changed_messages))
+            .await
+            .unwrap();
+        let changed_raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_ne!(changed_raw["updated_at"].as_str().unwrap(), first_updated_at);
     }
 
     #[tokio::test]

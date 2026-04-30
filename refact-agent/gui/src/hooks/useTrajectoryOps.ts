@@ -156,6 +156,8 @@ export function useTrajectoryOps() {
             isTaskChat: true,
             mode: "TASK_PLANNER",
             taskMeta: { task_id: taskId, role: "planner" },
+            parentId: oldChatId,
+            linkType: "handoff",
           }),
         );
 
@@ -191,7 +193,13 @@ export function useTrajectoryOps() {
         }
       } else {
         dispatch(closeThread({ id: oldChatId, force: true }));
-        dispatch(createChatWithId({ id: result.new_chat_id }));
+        dispatch(
+          createChatWithId({
+            id: result.new_chat_id,
+            parentId: oldChatId,
+            linkType: "handoff",
+          }),
+        );
         dispatch(requestSseRefresh({ chatId: result.new_chat_id }));
         dispatch(push({ name: "chat" }));
         setHandoffPreview(null);

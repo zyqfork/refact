@@ -3,6 +3,7 @@ import {
   buildHistoryTree,
   type ChatHistoryItem,
 } from "../features/History/historySlice";
+import { buildDotTrail } from "../features/Dashboard/components/DotTrail/buildDotTrail";
 
 const createItem = (
   id: string,
@@ -128,7 +129,7 @@ describe("buildHistoryTree", () => {
   });
 
   describe("subagent links", () => {
-    it("should handle subagent as child of parent", () => {
+    it("should hide subagent rows and expose them as parent bubbles", () => {
       const chats = {
         a: createItem("a", { updatedAt: "2024-01-01T00:00:00Z" }),
         b: createItem("b", {
@@ -141,8 +142,27 @@ describe("buildHistoryTree", () => {
 
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe("a");
-      expect(result[0].children).toHaveLength(1);
-      expect(result[0].children[0].id).toBe("b");
+      expect(result[0].children).toHaveLength(0);
+      expect(result[0].bubbleChildren).toHaveLength(1);
+      expect(result[0].bubbleChildren[0].id).toBe("b");
+    });
+
+    it("should hide gather-files rows and expose them as parent bubbles", () => {
+      const chats = {
+        a: createItem("a", { updatedAt: "2024-01-01T00:00:00Z" }),
+        b: createItem("b", {
+          parent_id: "a",
+          link_type: "gather_files",
+          title: "Strategic Planning: Gathering Files",
+          updatedAt: "2024-01-02T00:00:00Z",
+        }),
+      };
+      const result = buildHistoryTree(chats);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("a");
+      expect(result[0].children).toHaveLength(0);
+      expect(result[0].bubbleChildren.map((child) => child.id)).toEqual(["b"]);
     });
   });
 
@@ -165,9 +185,40 @@ describe("buildHistoryTree", () => {
 
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe("b");
-      expect(result[0].children).toHaveLength(2);
+      expect(result[0].children).toHaveLength(1);
+      expect(result[0].bubbleChildren).toHaveLength(1);
       const childIds = result[0].children.map((c) => c.id).sort();
-      expect(childIds).toEqual(["a", "c"]);
+      expect(childIds).toEqual(["a"]);
+      expect(result[0].bubbleChildren[0].id).toBe("c");
+    });
+
+    it("should build bubbles only for subagents of the displayed trajectory", () => {
+      const chats = {
+        a: createItem("a", { updatedAt: "2024-01-01T00:00:00Z" }),
+        b: createItem("b", {
+          parent_id: "a",
+          link_type: "handoff",
+          updatedAt: "2024-01-02T00:00:00Z",
+        }),
+        c: createItem("c", {
+          parent_id: "a",
+          link_type: "subagent",
+          updatedAt: "2024-01-03T00:00:00Z",
+        }),
+        d: createItem("d", {
+          parent_id: "b",
+          link_type: "gather_files",
+          updatedAt: "2024-01-04T00:00:00Z",
+        }),
+      };
+      const result = buildHistoryTree(chats);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("b");
+      expect(buildDotTrail(result[0]).map((dot) => dot.chatId)).toEqual(["d"]);
+      expect(buildDotTrail(result[0].children[0]).map((dot) => dot.chatId)).toEqual([
+        "c",
+      ]);
     });
   });
 
@@ -256,7 +307,33 @@ describe("buildHistoryTree", () => {
       expect(result[2].id).toBe("a");
     });
 
-    it("should sort children by updatedAt descending", () => {
+    it("should sort visible children by updatedAt descending", () => {
+      const chats = {
+        a: createItem("a", { updatedAt: "2024-01-04T00:00:00Z" }),
+        b: createItem("b", {
+          parent_id: "a",
+          link_type: "branch",
+          updatedAt: "2024-01-01T00:00:00Z",
+        }),
+        c: createItem("c", {
+          parent_id: "a",
+          link_type: "branch",
+          updatedAt: "2024-01-03T00:00:00Z",
+        }),
+        d: createItem("d", {
+          parent_id: "a",
+          link_type: "branch",
+          updatedAt: "2024-01-02T00:00:00Z",
+        }),
+      };
+      const result = buildHistoryTree(chats);
+
+      expect(result[0].children[0].id).toBe("c");
+      expect(result[0].children[1].id).toBe("d");
+      expect(result[0].children[2].id).toBe("b");
+    });
+
+    it("should sort bubble children by updatedAt descending", () => {
       const chats = {
         a: createItem("a", { updatedAt: "2024-01-04T00:00:00Z" }),
         b: createItem("b", {
@@ -266,20 +343,21 @@ describe("buildHistoryTree", () => {
         }),
         c: createItem("c", {
           parent_id: "a",
-          link_type: "subagent",
+          link_type: "gather_files",
           updatedAt: "2024-01-03T00:00:00Z",
         }),
         d: createItem("d", {
           parent_id: "a",
-          link_type: "subagent",
+          link_type: "code_review",
           updatedAt: "2024-01-02T00:00:00Z",
         }),
       };
       const result = buildHistoryTree(chats);
 
-      expect(result[0].children[0].id).toBe("c");
-      expect(result[0].children[1].id).toBe("d");
-      expect(result[0].children[2].id).toBe("b");
+      expect(result[0].children).toHaveLength(0);
+      expect(result[0].bubbleChildren[0].id).toBe("c");
+      expect(result[0].bubbleChildren[1].id).toBe("d");
+      expect(result[0].bubbleChildren[2].id).toBe("b");
     });
   });
 

@@ -40,6 +40,10 @@
   background: var(--green-8);
 }
 
+.subagent {
+  background: var(--purple-8);
+}
+
 .fork {
   background: var(--amber-8);
 }

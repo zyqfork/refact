@@ -672,6 +672,8 @@ startListening({
         id: new_chat_id,
         isTaskChat,
         taskMeta,
+        parentId: event.chat_id,
+        linkType: "mode_transition",
         mode:
           isTaskChat && taskMeta?.role === "planner"
             ? "TASK_PLANNER"

@@ -241,6 +241,7 @@ export const RecentItem: React.FC<RecentItemProps> = ({
 
   const statusState = getStatusFromSessionState(node.session_state);
   const hasChildren = node.children.length > 0;
+  const hasTrail = hasChildren || node.bubbleChildren.length > 0;
   const messageCount = node.message_count ?? 0;
   const relation = getRelationInfo(node, depth);
 
@@ -400,7 +401,7 @@ export const RecentItem: React.FC<RecentItemProps> = ({
         {titleElement}
       </div>
       <div className={styles.right}>
-        {hasChildren && (
+        {hasTrail && (
           <DotTrail
             node={node}
             breakpoint={breakpoint}

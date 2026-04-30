@@ -227,7 +227,7 @@ describe("getHistoryTree", () => {
     expect(result[0].children[0].id).toBe("original");
   });
 
-  it("keeps subagent as child of parent", () => {
+  it("keeps subagent hidden from rows and available as a bubble", () => {
     const state: HistoryState = {
       chats: {
         parent: createHistoryItem("parent", "Parent Chat", {
@@ -248,8 +248,9 @@ describe("getHistoryTree", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("parent");
-    expect(result[0].children).toHaveLength(1);
-    expect(result[0].children[0].id).toBe("subagent");
+    expect(result[0].children).toHaveLength(0);
+    expect(result[0].bubbleChildren).toHaveLength(1);
+    expect(result[0].bubbleChildren[0].id).toBe("subagent");
   });
 });
 

@@ -38,7 +38,9 @@ const GROUP_ORDER = ["Today", "Yesterday", "Earlier"] as const;
 function treeMatchesQuery(node: HistoryTreeNode, query: string): boolean {
   if (node.title.toLowerCase().includes(query)) return true;
   if (node.mode?.toLowerCase().includes(query)) return true;
-  return node.children.some((child) => treeMatchesQuery(child, query));
+  return [...node.children, ...node.bubbleChildren].some((child) =>
+    treeMatchesQuery(child, query),
+  );
 }
 
 type FlatItem =
@@ -138,7 +140,8 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
       if (item) {
         dispatch(restoreChat(item));
       } else {
-        const { children: _, ...historyItem } = node;
+        const { children: _, bubbleChildren: _bubbleChildren, ...historyItem } =
+          node;
         dispatch(restoreChat(historyItem as ChatHistoryItem));
       }
       dispatch(push({ name: "chat" }));

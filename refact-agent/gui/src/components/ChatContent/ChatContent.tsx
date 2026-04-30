@@ -136,6 +136,8 @@ export const ChatContent: React.FC<ChatContentProps> = ({
         createChatWithId({
           id: newChatId,
           title,
+          parentId: renderChatId,
+          linkType: "branch",
         }),
       );
 

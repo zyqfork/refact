@@ -23,7 +23,7 @@ function buildNodeMap(
   map: Map<string, HistoryTreeNode>,
 ): void {
   map.set(node.id, node);
-  for (const child of node.children) {
+  for (const child of [...node.children, ...node.bubbleChildren]) {
     buildNodeMap(child, map);
   }
 }
@@ -131,7 +131,7 @@ export const DotTrail: React.FC<DotTrailProps> = ({
 
   const dots = useMemo(() => buildDotTrail(node, maxDots), [node, maxDots]);
 
-  if (dots.length <= 1) return null;
+  if (dots.length === 0) return null;
 
   const dotSize = DOT_SIZE[breakpoint];
 

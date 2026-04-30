@@ -3,7 +3,7 @@ import type { HistoryTreeNode } from "../../../History/historySlice";
 export type TrailDot = {
   id: string;
   chatId: string;
-  type: "user" | "assistant" | "fork" | "active" | "completed";
+  type: "user" | "assistant" | "subagent" | "fork" | "active" | "completed";
   label?: string;
   depth: number;
   hasBranch: boolean;
@@ -14,35 +14,26 @@ export function buildDotTrail(node: HistoryTreeNode, maxDots = 8): TrailDot[] {
 
   function addDot(n: HistoryTreeNode, depth: number) {
     if (dots.length >= maxDots) return;
-
-    const isActive =
-      n.session_state === "generating" || n.session_state === "executing_tools";
-    const isCompleted = n.session_state === "completed";
-    const hasBranch = n.children.length > 1;
-
-    let dotType: TrailDot["type"];
-    if (isActive) dotType = "active";
-    else if (isCompleted) dotType = "completed";
-    else if (hasBranch) dotType = "fork";
-    else if (n.link_type === "handoff" || n.link_type === "subagent")
-      dotType = "assistant";
-    else dotType = "user";
+    const hasBranch = n.bubbleChildren.length > 0;
 
     dots.push({
       id: n.id,
       chatId: n.id,
-      type: dotType,
+      type: "subagent",
       label: n.link_type ?? undefined,
       depth,
       hasBranch,
     });
 
-    for (const child of n.children) {
+    for (const child of n.bubbleChildren) {
       if (dots.length >= maxDots) break;
       addDot(child, depth + 1);
     }
   }
 
-  addDot(node, 0);
+  for (const child of node.bubbleChildren) {
+    if (dots.length >= maxDots) break;
+    addDot(child, 0);
+  }
   return dots;
 }

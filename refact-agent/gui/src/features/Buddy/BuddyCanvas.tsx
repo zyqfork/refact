@@ -30,8 +30,8 @@ const BUBBLE_STYLES: Record<
 > = {
   top: {
     container: {
-      bottom: "70%",
-      left: "50%",
+      bottom: "60%",
+      left: "calc(50% + var(--buddy-walk-x, 0px))",
       transform: "translateX(-50%)",
     },
     tail: {
@@ -45,7 +45,7 @@ const BUBBLE_STYLES: Record<
   },
   left: {
     container: {
-      right: "62%",
+      right: "calc(56% - var(--buddy-walk-x, 0px))",
       top: "42%",
       marginRight: "-6px",
       transform: "translateY(-50%)",
@@ -61,7 +61,7 @@ const BUBBLE_STYLES: Record<
   },
   right: {
     container: {
-      left: "62%",
+      left: "calc(56% + var(--buddy-walk-x, 0px))",
       top: "42%",
       marginLeft: "-6px",
       transform: "translateY(-50%)",
@@ -157,6 +157,13 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         renderFrame(ctx, animRef.current, sem);
         if (bubbleRef.current) {
           const anim = animRef.current;
+          const walkOffsetPx = Math.round(
+            (anim.walkOffsetX / CANVAS_SIZE) * displaySize,
+          );
+          bubbleRef.current.style.setProperty(
+            "--buddy-walk-x",
+            `${walkOffsetPx}px`,
+          );
           const overrideText = speechOverrideRef.current ?? "";
           const rawText = overrideText || anim.statusText || "";
           const text =
@@ -166,9 +173,25 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
           const opacity = overrideText ? 1 : anim.statusOpacity;
           if (text !== bubbleTextRef.current) {
             bubbleTextRef.current = text;
-            const nextPosition = randomizeBubblePosition
-              ? randomBubblePosition(activeBubblePositionRef.current)
-              : bubblePositionRef.current;
+            const hasControls = Boolean(speechControls?.length);
+            const isLongText = text.length > 72;
+            const isMediumText = text.length > 34;
+            const fixedWidth = hasControls || isLongText;
+            bubbleRef.current.style.width = fixedWidth
+              ? "270px"
+              : isMediumText
+                ? "220px"
+                : "max-content";
+            bubbleRef.current.style.whiteSpace = fixedWidth
+              ? "normal"
+              : isMediumText
+                ? "normal"
+                : "nowrap";
+            const nextPosition = fixedWidth
+              ? "top"
+              : randomizeBubblePosition
+                ? randomBubblePosition(activeBubblePositionRef.current)
+                : bubblePositionRef.current;
             if (nextPosition !== activeBubblePositionRef.current) {
               activeBubblePositionRef.current = nextPosition;
               setActiveBubblePosition(nextPosition);
@@ -190,7 +213,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
     };
     frameIdRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameIdRef.current);
-  }, [emit, randomizeBubblePosition]);
+  }, [displaySize, emit, randomizeBubblePosition, speechControls?.length]);
 
   const toCanvasCoords = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -332,8 +355,11 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
                   "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
                 fontWeight: 700,
                 letterSpacing: "0.1px",
+                lineHeight: 1.3,
                 whiteSpace: speechControls?.length ? "normal" : "nowrap",
                 width: speechControls?.length ? "270px" : "max-content",
+                maxWidth: "270px",
+                overflowWrap: "break-word",
                 pointerEvents: speechControls?.length ? "auto" : "none",
                 color: palette.light,
                 boxShadow: `0 8px 22px rgba(0, 0, 0, 0.26), 0 0 18px ${palette.dark}44`,

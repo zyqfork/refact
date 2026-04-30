@@ -50,7 +50,7 @@ export const OpenTabCard: React.FC<OpenTabCardProps> = ({
           </Badge>
         )}
       </div>
-      {showDotTrail && tab.treeNode && tab.treeNode.children.length > 0 && (
+      {showDotTrail && tab.treeNode && tab.treeNode.bubbleChildren.length > 0 && (
         <DotTrail node={tab.treeNode} breakpoint={breakpoint} />
       )}
       {showTodos && tab.todos.length > 0 && (

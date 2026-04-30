@@ -140,6 +140,10 @@ export type ChatThread = {
   auto_enrichment_enabled?: boolean;
   worktree?: WorktreeMeta | null;
 
+  parent_id?: string;
+  link_type?: string;
+  root_chat_id?: string;
+
   buddy_meta?: BuddyThreadMeta;
 };
 

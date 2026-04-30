@@ -349,8 +349,17 @@ export const chatReducer = createReducer(initialState, (builder) => {
   });
 
   builder.addCase(createChatWithId, (state, action) => {
-    const { id, title, isTaskChat, mode, taskMeta, model, worktree } =
-      action.payload;
+    const {
+      id,
+      title,
+      isTaskChat,
+      mode,
+      taskMeta,
+      model,
+      parentId,
+      linkType,
+      worktree,
+    } = action.payload;
     const existingRt = state.threads[id];
 
     if (existingRt) {
@@ -374,6 +383,12 @@ export const chatReducer = createReducer(initialState, (builder) => {
       }
       if (worktree !== undefined) {
         existingRt.thread.worktree = worktree;
+      }
+      if (parentId !== undefined) {
+        existingRt.thread.parent_id = parentId;
+      }
+      if (linkType !== undefined) {
+        existingRt.thread.link_type = linkType;
       }
       state.current_thread_id = id;
       return;
@@ -415,6 +430,12 @@ export const chatReducer = createReducer(initialState, (builder) => {
     }
     if (worktree !== undefined) {
       newRuntime.thread.worktree = worktree;
+    }
+    if (parentId !== undefined) {
+      newRuntime.thread.parent_id = parentId;
+    }
+    if (linkType !== undefined) {
+      newRuntime.thread.link_type = linkType;
     }
 
     state.threads[id] = newRuntime;
@@ -1073,6 +1094,9 @@ export const chatReducer = createReducer(initialState, (builder) => {
               : isWorktreeMeta(event.thread.worktree)
                 ? event.thread.worktree
                 : undefined,
+          parent_id: event.thread.parent_id ?? existing?.parent_id,
+          link_type: event.thread.link_type ?? existing?.link_type,
+          root_chat_id: event.thread.root_chat_id ?? existing?.root_chat_id,
           buddy_meta: snapshotBuddyMeta,
         };
 

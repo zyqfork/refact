@@ -18,6 +18,8 @@ function findNodeInList(
     if (n.id === id) return n;
     const found = findNodeInList(n.children, id);
     if (found) return found;
+    const bubbleFound = findNodeInList(n.bubbleChildren, id);
+    if (bubbleFound) return bubbleFound;
   }
   return undefined;
 }

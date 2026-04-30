@@ -73,6 +73,16 @@ export function isBuddyChatLike(
   return Boolean(x.buddy_meta?.is_buddy_chat);
 }
 
+const MAIN_CHAT_LINK_TYPES = new Set(["handoff", "mode_transition", "branch"]);
+
+export function isSubagenticChatLike(
+  x: Partial<Pick<ChatHistoryItem, "parent_id" | "link_type">>,
+): boolean {
+  return Boolean(
+    x.parent_id && x.link_type && !MAIN_CHAT_LINK_TYPES.has(x.link_type),
+  );
+}
+
 export type HistoryMeta = Pick<
   ChatHistoryItem,
   "id" | "title" | "createdAt" | "model" | "updatedAt"
@@ -99,6 +109,7 @@ export type TrajectoryWithMeta = TrajectoryData & {
 
 export type HistoryTreeNode = ChatHistoryItem & {
   children: HistoryTreeNode[];
+  bubbleChildren: HistoryTreeNode[];
 };
 
 export function buildHistoryTree(
@@ -106,10 +117,15 @@ export function buildHistoryTree(
 ): HistoryTreeNode[] {
   const nodes = Object.values(chats)
     .filter((x) => !isTaskChatLike(x) && !isBuddyChatLike(x))
-    .map((x) => ({ ...x, children: [] as HistoryTreeNode[] }));
+    .map((x) => ({
+      ...x,
+      children: [] as HistoryTreeNode[],
+      bubbleChildren: [] as HistoryTreeNode[],
+    }));
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const parentByChild = new Map<string, string>();
+  const bubbleParentByChild = new Map<string, string>();
 
   const ordered = [...nodes].sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt),
@@ -134,10 +150,21 @@ export function buildHistoryTree(
     parent.children.push(child);
   };
 
+  const attachBubble = (parentId: string, childId: string) => {
+    if (bubbleParentByChild.has(childId)) return;
+    const parent = byId.get(parentId);
+    const child = byId.get(childId);
+    if (!parent || !child || parent.id === child.id) return;
+    bubbleParentByChild.set(childId, parentId);
+    parent.bubbleChildren.push(child);
+  };
+
   for (const node of ordered) {
     const pid = node.parent_id;
     if (!pid || !byId.has(pid)) continue;
-    if (node.link_type === "handoff" || node.link_type === "mode_transition") {
+    if (isSubagenticChatLike(node)) {
+      attachBubble(pid, node.id);
+    } else if (MAIN_CHAT_LINK_TYPES.has(node.link_type ?? "")) {
       attach(node.id, pid);
     } else {
       attach(pid, node.id);
@@ -146,10 +173,15 @@ export function buildHistoryTree(
 
   const sortTree = (xs: HistoryTreeNode[]) => {
     xs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    for (const x of xs) sortTree(x.children);
+    for (const x of xs) {
+      sortTree(x.children);
+      sortTree(x.bubbleChildren);
+    }
   };
 
-  const roots = nodes.filter((n) => !parentByChild.has(n.id));
+  const roots = nodes.filter(
+    (n) => !parentByChild.has(n.id) && !isSubagenticChatLike(n),
+  );
   sortTree(roots);
   return roots;
 }
