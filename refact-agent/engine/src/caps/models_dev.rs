@@ -21,6 +21,7 @@ const MODELS_DEV_CACHE_FILE: &str = "api.json";
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const MODELS_DEV_MAX_CATALOG_BYTES: usize = 25 * 1024 * 1024;
 const MODELS_DEV_SNAPSHOT: &str = include_str!("models_dev_snapshot.json");
+const REASONING_CONTROLS: &str = include_str!("reasoning_controls.json");
 const REQUIRED_MODELS_DEV_PROVIDERS: &[&str] = &[
     "openai",
     "anthropic",
@@ -33,6 +34,30 @@ const REQUIRED_MODELS_DEV_PROVIDERS: &[&str] = &[
 const REQUIRED_ZAI_PROVIDER_ALIASES: &[&str] = &["zai", "zhipuai"];
 static MODELS_DEV_CACHE_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static MODELS_DEV_CACHE_WRITE_MUTEX: OnceLock<AMutex<()>> = OnceLock::new();
+static REASONING_CONTROL_RULES: OnceLock<Vec<ReasoningControlRule>> = OnceLock::new();
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReasoningControlRule {
+    #[serde(default)]
+    provider_ids: Vec<String>,
+    #[serde(default)]
+    family_prefixes: Vec<String>,
+    #[serde(default)]
+    model_prefixes: Vec<String>,
+    #[serde(default)]
+    reasoning_effort_options: Option<Vec<String>>,
+    #[serde(default)]
+    supports_thinking_budget: bool,
+    #[serde(default)]
+    supports_adaptive_thinking_budget: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReasoningControls {
+    reasoning_effort_options: Option<Vec<String>>,
+    supports_thinking_budget: bool,
+    supports_adaptive_thinking_budget: bool,
+}
 
 pub type ModelsDevCatalog = HashMap<String, ModelsDevProvider>;
 
@@ -382,12 +407,7 @@ fn models_dev_model_to_model_caps(
         .as_ref()
         .map(|modalities| modalities.input.as_slice())
         .unwrap_or(&[]);
-    let supports_reasoning = model.reasoning == Some(true);
-    let reasoning_effort_options = supports_openai_reasoning_effort(provider_key, provider, model)
-        .then(|| vec!["low".to_string(), "medium".to_string(), "high".to_string()]);
-    let supports_thinking_budget = supports_reasoning
-        && reasoning_effort_options.is_none()
-        && supports_anthropic_thinking_budget(provider_key, provider, model);
+    let reasoning_controls = reasoning_controls_for_model(provider_key, provider, model);
     ModelCapabilities {
         n_ctx: limit.and_then(|limit| limit.context).unwrap_or_default(),
         max_output_tokens: limit.and_then(|limit| limit.output).unwrap_or_default(),
@@ -399,8 +419,9 @@ fn models_dev_model_to_model_caps(
         supports_audio: has_modality(input_modalities, "audio"),
         supports_pdf: has_modality(input_modalities, "pdf"),
         supports_temperature: model.temperature.unwrap_or(true),
-        reasoning_effort_options,
-        supports_thinking_budget,
+        reasoning_effort_options: reasoning_controls.reasoning_effort_options,
+        supports_thinking_budget: reasoning_controls.supports_thinking_budget,
+        supports_adaptive_thinking_budget: reasoning_controls.supports_adaptive_thinking_budget,
         tokenizer: "fake".to_string(),
         pricing: model_cost_to_pricing(model),
         raw_cost: model
@@ -412,40 +433,44 @@ fn models_dev_model_to_model_caps(
     }
 }
 
-fn supports_openai_reasoning_effort(
-    provider_key: &str,
-    provider: &ModelsDevProvider,
-    model: &ModelsDevModel,
-) -> bool {
-    if model.reasoning != Some(true) {
-        return false;
-    }
-
-    let model_id = model.id.to_ascii_lowercase();
-    let provider_id = provider.id.to_ascii_lowercase();
-    let provider_key = provider_key.to_ascii_lowercase();
-
-    provider_key == "openai"
-        || provider_id == "openai"
-        || provider_key == "openrouter"
-        || provider_id == "openrouter"
-        || model_id.starts_with("gpt-")
-        || model_id.starts_with("o1")
-        || model_id.starts_with("o3")
-        || model_id.starts_with("o4")
-        || model_id.starts_with("o5")
+fn reasoning_control_rules() -> &'static [ReasoningControlRule] {
+    REASONING_CONTROL_RULES
+        .get_or_init(|| {
+            serde_json::from_str(REASONING_CONTROLS)
+                .expect("reasoning_controls.json must be valid ReasoningControlRule[]")
+        })
+        .as_slice()
 }
 
-fn supports_anthropic_thinking_budget(
+fn reasoning_controls_for_model(
+    provider_key: &str,
+    provider: &ModelsDevProvider,
+    model: &ModelsDevModel,
+) -> ReasoningControls {
+    if model.reasoning != Some(true) {
+        return ReasoningControls::default();
+    }
+
+    reasoning_control_rules()
+        .iter()
+        .find(|rule| reasoning_rule_matches(rule, provider_key, provider, model))
+        .map(|rule| ReasoningControls {
+            reasoning_effort_options: rule.reasoning_effort_options.clone(),
+            supports_thinking_budget: rule.supports_thinking_budget,
+            supports_adaptive_thinking_budget: rule.supports_adaptive_thinking_budget,
+        })
+        .unwrap_or_default()
+}
+
+fn reasoning_rule_matches(
+    rule: &ReasoningControlRule,
     provider_key: &str,
     provider: &ModelsDevProvider,
     model: &ModelsDevModel,
 ) -> bool {
-    if model.reasoning != Some(true) {
-        return false;
-    }
-
     let model_id = model.id.to_ascii_lowercase();
+    let model_name = model.name.to_ascii_lowercase();
+    let family = model.family.as_deref().unwrap_or_default().to_ascii_lowercase();
     let provider_key = provider_key.to_ascii_lowercase();
     let provider_id = provider.id.to_ascii_lowercase();
     let provider_npm = provider
@@ -466,13 +491,54 @@ fn supports_anthropic_thinking_budget(
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    provider_key == "anthropic"
-        || provider_id == "anthropic"
-        || provider_npm.contains("anthropic")
-        || model_npm.contains("anthropic")
-        || model_api.contains("/anthropic/")
-        || model_api.ends_with("/messages")
-        || model_id.starts_with("claude-")
+    let provider_matches = rule.provider_ids.is_empty()
+        || rule.provider_ids.iter().any(|expected| {
+            let expected = expected.to_ascii_lowercase();
+            provider_key == expected
+                || provider_id == expected
+                || provider_npm.contains(&expected)
+                || model_npm.contains(&expected)
+                || model_api.contains(&format!("/{expected}/"))
+                || (expected == "anthropic" && model_id.starts_with("claude-"))
+                || (expected == "google" && model_id.starts_with("gemini-"))
+                || (expected == "openai" && is_openai_reasoning_model_id(&model_id))
+        });
+
+    if !provider_matches {
+        return false;
+    }
+
+    let model_matches = rule.model_prefixes.is_empty()
+        || rule
+            .model_prefixes
+            .iter()
+            .any(|prefix| model_id_or_last_segment_starts_with(&model_id, &model_name, prefix));
+    let family_matches = rule.family_prefixes.is_empty()
+        || rule.family_prefixes.iter().any(|prefix| {
+            family.starts_with(&prefix.to_ascii_lowercase())
+                || model_id_or_last_segment_starts_with(&model_id, &model_name, prefix)
+        });
+
+    model_matches && family_matches
+}
+
+fn model_id_or_last_segment_starts_with(model_id: &str, model_name: &str, prefix: &str) -> bool {
+    let prefix = prefix.to_ascii_lowercase();
+    let model_last_segment = model_id.rsplit('/').next().unwrap_or(model_id);
+    let name_last_segment = model_name.rsplit('/').next().unwrap_or(model_name);
+    model_id.starts_with(&prefix)
+        || model_last_segment.starts_with(&prefix)
+        || model_name.starts_with(&prefix)
+        || name_last_segment.starts_with(&prefix)
+}
+
+fn is_openai_reasoning_model_id(model_id: &str) -> bool {
+    let model_id = model_id.rsplit('/').next().unwrap_or(model_id);
+    model_id.starts_with("gpt-")
+        || model_id.starts_with("o1")
+        || model_id.starts_with("o3")
+        || model_id.starts_with("o4")
+        || model_id.starts_with("o5")
 }
 
 fn is_active_chat_model(model: &ModelsDevModel) -> bool {

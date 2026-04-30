@@ -1187,6 +1187,7 @@ fn apply_registry_caps_to_chat_model(record: &mut ChatModelRecord, caps: &ModelC
 
     record.reasoning_effort_options = caps.reasoning_effort_options.clone();
     record.supports_thinking_budget = caps.supports_thinking_budget;
+    record.supports_adaptive_thinking_budget = caps.supports_adaptive_thinking_budget;
     record.base.supports_cache_control =
         record.base.supports_cache_control && caps.supports_cache_control;
     record.supports_agent = record.supports_tools;

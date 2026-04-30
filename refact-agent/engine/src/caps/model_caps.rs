@@ -546,25 +546,48 @@ mod tests {
     }
 
     #[test]
-    fn test_models_dev_reasoning_maps_openai_effort_and_anthropic_budget() {
+    fn test_models_dev_reasoning_uses_provider_family_metadata() {
         let catalog = catalog_with_providers(vec![
             (
                 "openai",
                 vec![(
-                    "gpt-5.1",
+                    "gpt-5.5",
                     ModelsDevModel {
                         reasoning: Some(true),
-                        ..models_dev_model("gpt-5.1")
+                        family: Some("gpt".to_string()),
+                        ..models_dev_model("gpt-5.5")
                     },
                 )],
             ),
             (
                 "anthropic",
+                vec![
+                    (
+                        "claude-opus-4-7",
+                        ModelsDevModel {
+                            reasoning: Some(true),
+                            family: Some("claude-opus".to_string()),
+                            ..models_dev_model("claude-opus-4-7")
+                        },
+                    ),
+                    (
+                        "claude-opus-4-5",
+                        ModelsDevModel {
+                            reasoning: Some(true),
+                            family: Some("claude-opus".to_string()),
+                            ..models_dev_model("claude-opus-4-5")
+                        },
+                    ),
+                ],
+            ),
+            (
+                "google",
                 vec![(
-                    "claude-opus-4-6",
+                    "gemini-2.5-pro",
                     ModelsDevModel {
                         reasoning: Some(true),
-                        ..models_dev_model("claude-opus-4-6")
+                        family: Some("gemini".to_string()),
+                        ..models_dev_model("gemini-2.5-pro")
                     },
                 )],
             ),
@@ -582,28 +605,55 @@ mod tests {
 
         let caps = model_caps_from_models_dev_catalog(&catalog).unwrap();
 
-        let openai = resolve_model_caps(&caps, "openai/gpt-5.1").unwrap().caps;
+        let openai = resolve_model_caps(&caps, "openai/gpt-5.5").unwrap().caps;
         assert_eq!(
             openai.reasoning_effort_options,
             Some(vec![
+                "minimal".to_string(),
                 "low".to_string(),
                 "medium".to_string(),
-                "high".to_string()
+                "high".to_string(),
+                "xhigh".to_string()
             ])
         );
         assert!(!openai.supports_thinking_budget);
+        assert!(!openai.supports_adaptive_thinking_budget);
 
-        let anthropic = resolve_model_caps(&caps, "anthropic/claude-opus-4-6")
+        let opus_47 = resolve_model_caps(&caps, "anthropic/claude-opus-4-7")
             .unwrap()
             .caps;
-        assert!(anthropic.reasoning_effort_options.is_none());
-        assert!(anthropic.supports_thinking_budget);
+        assert_eq!(
+            opus_47.reasoning_effort_options,
+            Some(vec![
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string(),
+                "max".to_string()
+            ])
+        );
+        assert!(opus_47.supports_adaptive_thinking_budget);
+        assert!(!opus_47.supports_thinking_budget);
+
+        let opus_45 = resolve_model_caps(&caps, "anthropic/claude-opus-4-5")
+            .unwrap()
+            .caps;
+        assert!(opus_45.supports_thinking_budget);
+        assert!(!opus_45.supports_adaptive_thinking_budget);
+
+        let gemini = resolve_model_caps(&caps, "google/gemini-2.5-pro")
+            .unwrap()
+            .caps;
+        assert!(gemini.reasoning_effort_options.is_none());
+        assert!(gemini.supports_thinking_budget);
+        assert!(!gemini.supports_adaptive_thinking_budget);
 
         let unknown = resolve_model_caps(&caps, "provider-a/unknown-thinking")
             .unwrap()
             .caps;
         assert!(unknown.reasoning_effort_options.is_none());
         assert!(!unknown.supports_thinking_budget);
+        assert!(!unknown.supports_adaptive_thinking_budget);
     }
 
     #[test]
