@@ -32,10 +32,14 @@ fn new_codex_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn is_codex_model(id: &str) -> bool {
-    let normalized = id.trim().to_ascii_lowercase();
+fn normalized_model_id(id: &str) -> String {
+    id.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn is_codex_named_model(id: &str) -> bool {
+    let normalized = normalized_model_id(id);
     let parts: Vec<&str> = normalized
-        .split(|c| c == '-' || c == '_')
+        .split('-')
         .filter(|part| !part.is_empty())
         .collect();
     if parts.len() < 3 || parts.first() != Some(&"gpt") {
@@ -47,9 +51,41 @@ fn is_codex_model(id: &str) -> bool {
     if codex_index < 2 {
         return false;
     }
-    parts[codex_index + 1..]
-        .iter()
-        .all(|part| matches!(*part, "latest" | "preview" | "mini"))
+    let suffixes = &parts[codex_index + 1..];
+    suffixes.is_empty()
+        || (suffixes.len() == 1
+            && matches!(suffixes[0], "latest" | "preview" | "mini" | "spark" | "max"))
+}
+
+fn is_gpt5_subscription_model(id: &str) -> bool {
+    let normalized = normalized_model_id(id);
+    if normalized == "gpt-5" {
+        return true;
+    }
+    let Some(rest) = normalized.strip_prefix("gpt-5.") else {
+        return false;
+    };
+    let mut parts = rest.split('-');
+    let Some(version) = parts.next() else {
+        return false;
+    };
+    if version.is_empty() || !version.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let suffixes: Vec<&str> = parts.collect();
+    matches!(suffixes.as_slice(), [] | ["mini"])
+}
+
+fn is_openai_codex_catalog_model(id: &str) -> bool {
+    is_codex_named_model(id) || is_gpt5_subscription_model(id)
+}
+
+fn is_chatgpt_codex_live_model(id: &str) -> bool {
+    is_openai_codex_catalog_model(id)
+}
+
+fn is_openai_api_codex_live_model(id: &str) -> bool {
+    is_codex_named_model(id)
 }
 
 fn openai_codex_catalog_model_id(capability_key: &str) -> Option<&str> {
@@ -734,7 +770,7 @@ impl OpenAICodexProvider {
             let Some(id) = Self::live_model_id(model) else {
                 continue;
             };
-            if !is_codex_model(id) || !Self::live_model_is_supported(model) {
+            if !is_openai_api_codex_live_model(id) || !Self::live_model_is_supported(model) {
                 continue;
             }
             let enabled = enabled_set.contains(id);
@@ -781,7 +817,7 @@ impl OpenAICodexProvider {
             let Some(model_id) = openai_codex_catalog_model_id(capability_key) else {
                 continue;
             };
-            if !is_codex_model(model_id) {
+            if !is_openai_codex_catalog_model(model_id) {
                 continue;
             }
             let enabled =
@@ -809,7 +845,7 @@ impl OpenAICodexProvider {
             let Some(slug) = Self::live_model_id(model) else {
                 continue;
             };
-            if !is_codex_model(slug) || !Self::live_model_is_supported(model) {
+            if !is_chatgpt_codex_live_model(slug) || !Self::live_model_is_supported(model) {
                 continue;
             }
             let enabled = enabled_set.contains(slug);
@@ -1215,7 +1251,9 @@ impl ProviderTrait for OpenAICodexProvider {
     }
 
     fn model_filter_regex(&self) -> Option<&'static str> {
-        Some(r"(?i)^gpt[-_][a-z0-9.]+(?:[-_][a-z0-9.]+)*[-_]codex(?:[-_](?:latest|preview|mini))?$")
+        Some(
+            r"(?i)^(?:gpt[-_]5(?:\.[0-9]+)?(?:[-_]mini)?|gpt[-_][a-z0-9.]+(?:[-_][a-z0-9.]+)*[-_]codex(?:[-_](?:latest|preview|mini|spark|max))?)$",
+        )
     }
 
     fn provider_schema(&self) -> &'static str {
@@ -1233,7 +1271,7 @@ oauth:
       label: "ChatGPT Plus/Pro"
       description: "Login with your ChatGPT Plus or Pro subscription"
 description: |
-  Use your ChatGPT Plus/Pro subscription to access OpenAI Codex models (GPT-5-Codex family).
+  Use your ChatGPT Plus/Pro subscription to access OpenAI Codex and GPT-5 subscription models.
 
   **Setup:** Click **Login with OpenAI** below, or install Codex CLI and run `codex login`.
 available:
@@ -1541,6 +1579,14 @@ mod tests {
 
     fn caps_map() -> HashMap<String, ModelCapabilities> {
         HashMap::from([
+            ("openai/gpt-5.2".to_string(), codex_caps(402_000)),
+            ("openai/gpt-5.3-codex".to_string(), codex_caps(253_000)),
+            (
+                "openai/gpt-5.3-codex-spark".to_string(),
+                codex_caps(128_000),
+            ),
+            ("openai-codex/gpt-5.4".to_string(), codex_caps(404_000)),
+            ("openai_codex/gpt-5.5".to_string(), codex_caps(405_000)),
             ("openai/gpt-5.6-codex".to_string(), codex_caps(256_000)),
             (
                 "openai-codex/gpt-5.8-codex".to_string(),
@@ -1747,19 +1793,39 @@ mod tests {
     }
 
     #[test]
-    fn is_codex_model_matches_codex_named_models_only() {
-        assert!(super::is_codex_model("gpt-5.3-codex"));
-        assert!(super::is_codex_model("GPT-5.3-CODEX"));
-        assert!(super::is_codex_model("gpt-5-codex-preview"));
-        assert!(!super::is_codex_model("not-codex-compatible"));
-        assert!(!super::is_codex_model("gpt-5-codex-api-off"));
-        assert!(!super::is_codex_model("gpt-5.4"));
-        assert!(!super::is_codex_model("gpt-5.5"));
-        assert!(!super::is_codex_model("gpt-4o"));
+    fn codex_model_predicates_separate_catalog_and_live_scopes() {
+        assert!(super::is_codex_named_model("gpt-5.3-codex"));
+        assert!(super::is_codex_named_model("GPT-5.3-CODEX"));
+        assert!(super::is_codex_named_model("gpt-5-codex-preview"));
+        assert!(super::is_codex_named_model("gpt-5.1-codex-max"));
+        assert!(super::is_codex_named_model("gpt-5.3-codex-spark"));
+        assert!(!super::is_codex_named_model("not-codex-compatible"));
+        assert!(!super::is_codex_named_model("gpt-5-codex-api-off"));
+        assert!(!super::is_codex_named_model("gpt-5.4"));
+        assert!(!super::is_codex_named_model("gpt-5.5"));
+        assert!(!super::is_codex_named_model("gpt-4o"));
+
+        assert!(super::is_openai_codex_catalog_model("gpt-5"));
+        assert!(super::is_openai_codex_catalog_model("gpt-5.2"));
+        assert!(super::is_openai_codex_catalog_model("gpt-5.4"));
+        assert!(super::is_openai_codex_catalog_model("gpt-5.4-mini"));
+        assert!(super::is_openai_codex_catalog_model("gpt-5.5"));
+        assert!(!super::is_openai_codex_catalog_model("gpt-4o"));
+        assert!(!super::is_openai_codex_catalog_model("gpt-5-codex-api-off"));
+
+        assert!(super::is_chatgpt_codex_live_model("gpt-5.4"));
+        assert!(super::is_chatgpt_codex_live_model("gpt-5-codex"));
+        assert!(!super::is_chatgpt_codex_live_model("not-codex-compatible"));
+        assert!(!super::is_chatgpt_codex_live_model("gpt-5-codex-api-off"));
+        assert!(super::is_openai_api_codex_live_model("gpt-5-codex"));
+        assert!(!super::is_openai_api_codex_live_model("gpt-5.4"));
+        assert!(!super::is_openai_api_codex_live_model(
+            "gpt-5-codex-api-off"
+        ));
     }
 
     #[test]
-    fn model_filter_regex_matches_codex_named_only() {
+    fn model_filter_regex_matches_codex_and_subscription_names() {
         let p = provider_with_api_key("sk-test");
         let pattern = p.model_filter_regex().expect("filter regex must be set");
         let re = regex::Regex::new(pattern).unwrap();
@@ -1767,9 +1833,14 @@ mod tests {
         assert!(re.is_match("gpt-5.3-codex"));
         assert!(re.is_match("GPT-5.3-CODEX"));
         assert!(re.is_match("gpt-5-codex-preview"));
+        assert!(re.is_match("gpt-5.1-codex-max"));
+        assert!(re.is_match("gpt-5.3-codex-spark"));
+        assert!(re.is_match("gpt-5.2"));
+        assert!(re.is_match("gpt-5.4"));
+        assert!(re.is_match("gpt-5.4-mini"));
+        assert!(re.is_match("gpt-5.5"));
         assert!(!re.is_match("not-codex-compatible"));
         assert!(!re.is_match("gpt-5-codex-api-off"));
-        assert!(!re.is_match("gpt-5.4"));
         assert!(!re.is_match("gpt-4o"));
     }
 
@@ -1782,17 +1853,40 @@ mod tests {
     }
 
     #[test]
-    fn catalog_fallback_uses_models_dev_caps_without_hardcoded_ids() {
+    fn catalog_fallback_uses_provider_scoped_codex_and_subscription_caps() {
         let p = provider_with_oauth("tok", "acct-123");
         let models = p.fetch_models_from_catalog(&caps_map());
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
 
-        assert_eq!(ids, vec!["gpt-5.6-codex", "gpt-5.8-codex", "gpt-5.9-codex"]);
-        assert!(!ids.contains(&"gpt-5.3-codex"));
+        assert_eq!(
+            ids,
+            vec![
+                "gpt-5.2",
+                "gpt-5.3-codex",
+                "gpt-5.3-codex-spark",
+                "gpt-5.4",
+                "gpt-5.5",
+                "gpt-5.6-codex",
+                "gpt-5.8-codex",
+                "gpt-5.9-codex"
+            ]
+        );
         assert!(!ids.contains(&"gpt-4o"));
         assert!(!ids.contains(&"gpt-5.7-codex"));
         assert!(!ids.contains(&"gpt-5.10-codex"));
         assert!(!ids.contains(&"gpt-5.11-codex"));
+        assert_eq!(
+            models.iter().find(|m| m.id == "gpt-5.2").unwrap().n_ctx,
+            402_000
+        );
+        assert_eq!(
+            models.iter().find(|m| m.id == "gpt-5.4").unwrap().n_ctx,
+            404_000
+        );
+        assert_eq!(
+            models.iter().find(|m| m.id == "gpt-5.5").unwrap().n_ctx,
+            405_000
+        );
         assert_eq!(
             models
                 .iter()
@@ -1853,11 +1947,14 @@ mod tests {
     }
 
     #[test]
-    fn openai_codex_live_chatgpt_models_filter_non_codex_and_disabled() {
+    fn openai_codex_live_chatgpt_models_filter_supported_subscription_slugs() {
         let p = provider_with_oauth("tok", "acct-123");
         let live_models = vec![
             json!({"slug": "gpt-5-codex", "supported_in_api": true}),
+            json!({"slug": "gpt-5.4", "supported_in_api": true}),
+            json!({"slug": "gpt-5.5", "supported_in_api": true}),
             json!({"slug": "gpt-4o", "supported_in_api": true}),
+            json!({"slug": "not-codex-compatible", "supported_in_api": true}),
             json!({"slug": "gpt-5-codex-api-off", "supported_in_api": false}),
             json!({"slug": "gpt-5-codex-disabled", "disabled": true}),
             json!({"slug": "gpt-5-codex-unsupported", "status": "unsupported"}),
@@ -1872,7 +1969,7 @@ mod tests {
         let models = p.available_models_from_live_chatgpt_models(&live_models, &HashMap::new());
         let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
 
-        assert_eq!(ids, vec!["gpt-5-codex"]);
+        assert_eq!(ids, vec!["gpt-5-codex", "gpt-5.4", "gpt-5.5"]);
     }
 
     #[test]
