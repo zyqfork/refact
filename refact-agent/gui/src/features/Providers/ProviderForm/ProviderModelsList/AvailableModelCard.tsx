@@ -34,7 +34,7 @@ export type AvailableModelCardProps = {
   model: AvailableModel;
   providerName: string;
   isReadonlyProvider: boolean;
-  onEditCustomModel?: (model: AvailableModel) => void;
+  onEditModel?: (model: AvailableModel) => void;
 };
 
 /**
@@ -44,7 +44,7 @@ export const AvailableModelCard: FC<AvailableModelCardProps> = ({
   model,
   providerName,
   isReadonlyProvider,
-  onEditCustomModel,
+  onEditModel,
 }) => {
   const [toggleModel, { isLoading: isToggling }] = useToggleModelMutation();
   const [setModelProvider, { isLoading: isSettingProvider }] =
@@ -138,9 +138,9 @@ export const AvailableModelCard: FC<AvailableModelCardProps> = ({
   const handleEdit = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
-      onEditCustomModel?.(model);
+      onEditModel?.(model);
     },
-    [model, onEditCustomModel],
+    [model, onEditModel],
   );
 
   const handleProviderSelect = useCallback(
@@ -476,8 +476,14 @@ export const AvailableModelCard: FC<AvailableModelCardProps> = ({
         </Flex>
 
         <Flex align="center" gap="2">
-          {model.is_custom && !isReadonlyProvider && (
-            <Tooltip content="Edit custom model">
+          {!isReadonlyProvider && (
+            <Tooltip
+              content={
+                model.is_custom
+                  ? "Edit custom model"
+                  : "Edit model capabilities"
+              }
+            >
               <IconButton
                 size="1"
                 variant="ghost"

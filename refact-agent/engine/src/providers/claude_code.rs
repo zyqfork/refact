@@ -11,7 +11,7 @@ use crate::llm::adapter::WireFormat;
 use crate::providers::claude_code_oauth::OAuthTokens;
 use crate::providers::traits::{
     AvailableModel, CustomModelConfig, ModelSource, ProviderRuntime, ProviderTrait,
-    parse_enabled_models, parse_custom_models, set_model_enabled_impl,
+    merge_custom_models, parse_enabled_models, parse_custom_models, set_model_enabled_impl,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -535,22 +535,22 @@ available:
         http_client: &reqwest::Client,
         model_caps: &HashMap<String, ModelCapabilities>,
     ) -> Vec<AvailableModel> {
-        let mut models = self.get_available_models_from_caps(model_caps);
+        let fallback_models = || self.get_available_models_from_caps(model_caps);
         let auth_token = match self.resolve_auth() {
             Ok(token) => token,
             Err(e) => {
                 tracing::warn!("Claude Code: cannot fetch models, auth failed: {}", e);
-                return models;
+                return fallback_models();
             }
         };
 
-        let api_model_ids = fetch_claude_code_model_ids(http_client, &auth_token).await;
-        if api_model_ids.is_empty() {
-            tracing::warn!(
-                "Claude Code: API returned no models, falling back to model capabilities catalog"
-            );
-            return models;
-        }
+        let api_model_ids = match fetch_claude_code_model_ids(http_client, &auth_token).await {
+            Ok(models) => models,
+            Err(e) => {
+                tracing::warn!("Claude Code: cannot fetch models from API: {}", e);
+                return fallback_models();
+            }
+        };
 
         tracing::info!("Claude Code: API returned {} models", api_model_ids.len());
 
@@ -561,6 +561,7 @@ available:
             .and_then(|p| regex::Regex::new(p).ok());
 
         let date_regex = regex::Regex::new(r"^(.+?)-\d{8}$").expect("valid static regex");
+        let mut models: Vec<AvailableModel> = Vec::new();
         for api_id in &api_model_ids {
             let matches_filter = match &regex_opt {
                 Some(regex) => regex.is_match(api_id),
@@ -569,17 +570,13 @@ available:
             if !matches_filter {
                 continue;
             }
-            if models.iter().any(|model| model.id == *api_id) {
-                continue;
-            }
             let api_id_without_date = date_regex
                 .captures(api_id)
                 .and_then(|caps| caps.get(1))
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_else(|| api_id.clone());
 
-            if let Some(caps) =
-                crate::caps::model_caps::resolve_model_caps(model_caps, &api_id_without_date)
+            if let Some(caps) = resolve_claude_code_api_model_caps(model_caps, &api_id_without_date)
             {
                 let enabled = enabled_set.contains(api_id.as_str());
                 let pricing = self.custom_model_pricing(api_id);
@@ -588,8 +585,17 @@ available:
                     model.display_name = Some(api_id.clone());
                 }
                 models.push(model);
+            } else {
+                tracing::warn!(
+                    "Claude Code: model '{}' is missing model capabilities metadata; using API defaults",
+                    api_id
+                );
+                let enabled = enabled_set.contains(api_id.as_str());
+                models.push(claude_code_api_model_without_caps(api_id, enabled));
             }
         }
+
+        merge_custom_models(&mut models, &self.custom_models, &enabled_set);
 
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models
@@ -654,6 +660,41 @@ available:
     }
 }
 
+fn claude_code_api_model_without_caps(model_id: &str, enabled: bool) -> AvailableModel {
+    AvailableModel {
+        id: model_id.to_string(),
+        display_name: None,
+        n_ctx: 200000,
+        supports_tools: true,
+        supports_parallel_tools: true,
+        supports_strict_tools: false,
+        supports_multimodality: true,
+        reasoning_effort_options: None,
+        supports_thinking_budget: true,
+        supports_adaptive_thinking_budget: false,
+        tokenizer: Some("claude".to_string()),
+        enabled,
+        is_custom: false,
+        pricing: None,
+        available_providers: Vec::new(),
+        selected_provider: None,
+        max_output_tokens: None,
+        provider_variants: Vec::new(),
+        wire_format_override: None,
+        endpoint_override: None,
+        base_model: None,
+    }
+}
+
+fn resolve_claude_code_api_model_caps(
+    model_caps: &HashMap<String, ModelCapabilities>,
+    model_id: &str,
+) -> Option<crate::caps::model_caps::ResolvedCaps> {
+    crate::caps::model_caps::resolve_model_caps(model_caps, model_id).or_else(|| {
+        crate::caps::model_caps::resolve_model_caps(model_caps, &format!("anthropic/{model_id}"))
+    })
+}
+
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -662,9 +703,9 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub async fn fetch_claude_code_model_ids(
     http_client: &reqwest::Client,
     auth_token: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     if auth_token.is_empty() {
-        return vec![];
+        return Err("empty auth token".to_string());
     }
 
     let betas = crate::llm::adapters::claude_code_compat::CC_OAUTH_BETAS.join(",");
@@ -682,11 +723,13 @@ pub async fn fetch_claude_code_model_ids(
     match request.send().await {
         Ok(response) => {
             if !response.status().is_success() {
-                tracing::warn!(
-                    "Claude Code models API returned status {}",
-                    response.status()
-                );
-                return vec![];
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let truncated: String = body.chars().take(512).collect();
+                return Err(format!(
+                    "Claude Code models API returned status {}: {}",
+                    status, truncated
+                ));
             }
             match response.json::<serde_json::Value>().await {
                 Ok(json) => json
@@ -699,16 +742,39 @@ pub async fn fetch_claude_code_model_ids(
                             })
                             .collect()
                     })
-                    .unwrap_or_default(),
-                Err(e) => {
-                    tracing::warn!("Failed to parse Claude Code models response: {}", e);
-                    vec![]
-                }
+                    .ok_or_else(|| "Claude Code models response missing data array".to_string()),
+                Err(e) => Err(format!("Failed to parse Claude Code models response: {}", e)),
             }
         }
-        Err(e) => {
-            tracing::warn!("Failed to fetch Claude Code models: {}", e);
-            vec![]
+        Err(e) => Err(format!("Failed to fetch Claude Code models: {}", e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_code_resolves_real_api_ids_from_models_dev_snapshot() {
+        let catalog = crate::caps::models_dev::load_models_dev_snapshot_catalog().unwrap();
+        let model_caps = crate::caps::model_caps::model_caps_from_models_dev_catalog(&catalog)
+            .unwrap();
+
+        for model_id in [
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-opus-4-5-20251101",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+        ] {
+            assert!(
+                resolve_claude_code_api_model_caps(&model_caps, model_id).is_some(),
+                "models.dev snapshot should resolve Claude Code API id {model_id}"
+            );
         }
     }
 }

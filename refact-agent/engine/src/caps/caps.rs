@@ -603,10 +603,7 @@ fn build_chat_model_record(
                 .map(|r| r.caps.supports_web_search)
                 .unwrap_or(false),
             supports_cache_control: runtime_supports_cache_control
-                && resolved_caps
-                    .as_ref()
-                    .map(|r| r.caps.supports_cache_control)
-                    .unwrap_or(true),
+                && model.supports_cache_control,
             removable: model.is_custom,
             user_configured: model.is_custom,
         },

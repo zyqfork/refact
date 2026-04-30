@@ -21,6 +21,7 @@ export type ProviderModel = {
   reasoning_effort_options?: string[] | null;
   supports_thinking_budget?: boolean;
   supports_adaptive_thinking_budget?: boolean;
+  supports_cache_control?: boolean;
   supports_agent: boolean;
   wire_format_override: WireFormat | null;
   endpoint_override: string | null;

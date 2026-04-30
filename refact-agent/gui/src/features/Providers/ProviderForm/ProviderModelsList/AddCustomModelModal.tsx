@@ -19,6 +19,7 @@ export type AddCustomModelModalProps = {
   isOpen: boolean;
   onClose: () => void;
   initialModel?: AvailableModel;
+  isEditingCustomModel?: boolean;
 };
 
 const DEFAULT_CONTEXT_LENGTH = "4096";
@@ -53,6 +54,7 @@ export const AddCustomModelModal: FC<AddCustomModelModalProps> = ({
   isOpen,
   onClose,
   initialModel,
+  isEditingCustomModel = false,
 }) => {
   const [addCustomModel, { isLoading }] = useAddCustomModelMutation();
 
@@ -194,11 +196,15 @@ export const AddCustomModelModal: FC<AddCustomModelModalProps> = ({
     <Dialog.Root open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Content style={{ maxWidth: 450 }}>
         <Dialog.Title>
-          {isEditing ? "Edit Custom Model" : "Add Custom Model"}
+          {isEditing
+            ? isEditingCustomModel
+              ? "Edit Custom Model"
+              : "Edit Model Capabilities"
+            : "Add Custom Model"}
         </Dialog.Title>
         <Dialog.Description size="2" mb="4">
           {isEditing
-            ? `Adjust the saved overrides for ${
+            ? `Adjust the saved capability overrides for ${
                 initialModel?.display_name ?? initialModel?.id ?? "this model"
               }.`
             : `Define a custom model for ${providerName}. You can set its capabilities manually.`}
@@ -215,6 +221,12 @@ export const AddCustomModelModal: FC<AddCustomModelModalProps> = ({
               onChange={(e) => setModelId(e.target.value)}
               disabled={isEditing}
             />
+            {isEditing && !isEditingCustomModel && (
+              <Text as="span" size="1" color="gray">
+                This saves overrides for the provider/model.dev model without
+                changing its ID.
+              </Text>
+            )}
           </Flex>
 
           <Flex direction="column" gap="1">

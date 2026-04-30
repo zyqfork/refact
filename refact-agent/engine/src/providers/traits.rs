@@ -112,6 +112,8 @@ pub struct CustomModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_adaptive_thinking_budget: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_cache_control: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokenizer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
@@ -159,6 +161,8 @@ pub struct AvailableModel {
     pub supports_thinking_budget: bool,
     #[serde(default)]
     pub supports_adaptive_thinking_budget: bool,
+    #[serde(default = "default_true")]
+    pub supports_cache_control: bool,
     pub tokenizer: Option<String>,
     pub enabled: bool,
     pub is_custom: bool,
@@ -204,6 +208,7 @@ impl AvailableModel {
             reasoning_effort_options: caps.reasoning_effort_options.clone(),
             supports_thinking_budget: caps.supports_thinking_budget,
             supports_adaptive_thinking_budget: caps.supports_adaptive_thinking_budget,
+            supports_cache_control: caps.supports_cache_control,
             tokenizer: if caps.tokenizer.is_empty() {
                 None
             } else {
@@ -236,6 +241,7 @@ impl AvailableModel {
             supports_adaptive_thinking_budget: config
                 .supports_adaptive_thinking_budget
                 .unwrap_or(false),
+            supports_cache_control: config.supports_cache_control.unwrap_or(true),
             tokenizer: config.tokenizer.clone(),
             enabled,
             is_custom: true,
@@ -632,6 +638,7 @@ pub fn merge_custom_models(
                 || config.reasoning_effort_options.is_some()
                 || config.supports_thinking_budget.is_some()
                 || config.supports_adaptive_thinking_budget.is_some()
+                || config.supports_cache_control.is_some()
                 || config.tokenizer.is_some()
                 || config.max_output_tokens.is_some();
             if let Some(n_ctx) = config.n_ctx {
@@ -657,6 +664,9 @@ pub fn merge_custom_models(
             }
             if let Some(v) = config.supports_adaptive_thinking_budget {
                 existing.supports_adaptive_thinking_budget = v;
+            }
+            if let Some(v) = config.supports_cache_control {
+                existing.supports_cache_control = v;
             }
             if config.tokenizer.is_some() {
                 existing.tokenizer = config.tokenizer.clone();

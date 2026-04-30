@@ -31,6 +31,7 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
   provider,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
+  const isCustomProvider = provider.name === "custom";
   const {
     data: modelsData,
     isSuccess,
@@ -65,16 +66,22 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
     setEditingModel(undefined);
   };
 
-  const filteredModels = useMemo(() => {
+  const providerModels = useMemo(() => {
     if (!modelsData?.models) return [];
+    if (!isCustomProvider) return modelsData.models;
+
+    return modelsData.models.filter((model) => model.is_custom);
+  }, [isCustomProvider, modelsData?.models]);
+
+  const filteredModels = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return modelsData.models;
-    return modelsData.models.filter((model) => {
+    if (!query) return providerModels;
+    return providerModels.filter((model) => {
       const name = (model.display_name ?? model.id).toLowerCase();
       const id = model.id.toLowerCase();
       return name.includes(query) || id.includes(query);
     });
-  }, [modelsData?.models, searchQuery]);
+  }, [providerModels, searchQuery]);
 
   const groupedByFamily = useMemo(() => {
     if (provider.name !== "openrouter") return null;
@@ -126,8 +133,8 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
     );
   }
 
-  const totalModels = modelsData.models.length;
-  const enabledCount = modelsData.models.filter(
+  const totalModels = providerModels.length;
+  const enabledCount = providerModels.filter(
     (model) => model.enabled,
   ).length;
 
@@ -141,15 +148,19 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
             Available Models
           </Heading>
           <Badge size="1" color="gray">
-            {enabledCount}/{totalModels} enabled
+            {isCustomProvider && totalModels === 0
+              ? "None"
+              : `${enabledCount}/${totalModels} enabled`}
           </Badge>
-          <TextField.Root
-            size="1"
-            placeholder="Search models"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            style={{ minWidth: 180 }}
-          />
+          {totalModels > 0 && (
+            <TextField.Root
+              size="1"
+              placeholder="Search models"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              style={{ minWidth: 180 }}
+            />
+          )}
         </Flex>
 
         {!provider.readonly && (
@@ -189,7 +200,9 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
         <Flex direction="column" align="center" gap="2" py="4">
           <Text as="span" size="2" color="gray">
             {totalModels === 0
-              ? "No models available for this provider."
+              ? isCustomProvider
+                ? "No custom models configured."
+                : "No models available for this provider."
               : "No models match your search."}
           </Text>
           {!provider.readonly && (
@@ -212,7 +225,7 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
                       model={model}
                       providerName={provider.name}
                       isReadonlyProvider={provider.readonly}
-                      onEditCustomModel={handleOpenEditModal}
+                      onEditModel={handleOpenEditModal}
                     />
                   ))}
                 </Flex>
@@ -223,7 +236,7 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
                   model={model}
                   providerName={provider.name}
                   isReadonlyProvider={provider.readonly}
-                  onEditCustomModel={handleOpenEditModal}
+                  onEditModel={handleOpenEditModal}
                 />
               ))}
         </Flex>
@@ -234,6 +247,7 @@ export const ProviderModelsList: FC<ProviderModelsListProps> = ({
         isOpen={isAddModalOpen}
         onClose={handleCloseModal}
         initialModel={editingModel}
+        isEditingCustomModel={editingModel?.is_custom ?? false}
       />
     </Flex>
   );
