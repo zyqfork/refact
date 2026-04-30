@@ -125,7 +125,7 @@ impl VLLMProvider {
 mod tests {
     use serde_json::json;
 
-    use super::VLLMProvider;
+    use super::*;
 
     #[test]
     fn parse_openai_model_keeps_root_only_as_base_model() {
@@ -142,6 +142,13 @@ mod tests {
         assert_eq!(model.id, "served-alias");
         assert_eq!(model.display_name.as_deref(), Some("Served Alias"));
         assert_eq!(model.base_model.as_deref(), Some("Qwen/Qwen3.6-27B-FP8"));
+    }
+
+    #[test]
+    fn vllm_runtime_disables_cache_control() {
+        let runtime = VLLMProvider::default().build_runtime().unwrap();
+
+        assert!(!runtime.supports_cache_control);
     }
 }
 

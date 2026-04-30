@@ -21,6 +21,8 @@ pub struct CustomProvider {
     pub wire_format: Option<WireFormat>,
     pub enabled: bool,
     #[serde(default)]
+    pub supports_cache_control: bool,
+    #[serde(default)]
     pub extra_headers: HashMap<String, String>,
     #[serde(default)]
     pub enabled_models: Vec<String>,
@@ -97,6 +99,12 @@ fields:
     f_default: "openai_chat_completions"
     f_label: "Wire Format"
     f_extra: true
+  supports_cache_control:
+    f_type: boolean
+    f_desc: "Send Anthropic-style cache-control fields to the custom endpoint"
+    f_label: "Enable Cache Control"
+    f_default: false
+    f_extra: true
 description: |
   Custom OpenAI-compatible endpoint.
 available:
@@ -130,20 +138,29 @@ available:
         if let Some(enabled) = yaml.get("enabled").and_then(|v| v.as_bool()) {
             self.enabled = enabled;
         }
+        if let Some(supports_cache_control) =
+            yaml.get("supports_cache_control").and_then(|v| v.as_bool())
+        {
+            self.supports_cache_control = supports_cache_control;
+        }
         if let Some(headers) = yaml.get("extra_headers").and_then(|v| v.as_mapping()) {
+            let mut next_headers = HashMap::new();
             for (key, value) in headers {
-                if let (Some(k), Some(v)) = (key.as_str(), value.as_str()) {
-                    // Skip "***" values to preserve existing secrets
-                    if v != "***" {
-                        self.extra_headers.insert(k.to_string(), v.to_string());
+                let Some(key) = key.as_str() else {
+                    continue;
+                };
+                let Some(value) = value.as_str() else {
+                    continue;
+                };
+                if value == "***" {
+                    if let Some(existing) = self.extra_headers.get(key) {
+                        next_headers.insert(key.to_string(), existing.clone());
                     }
+                } else {
+                    next_headers.insert(key.to_string(), value.to_string());
                 }
             }
-            // Remove headers that are no longer in the new config (but preserve "***" ones)
-            let new_keys: std::collections::HashSet<&str> =
-                headers.keys().filter_map(|k| k.as_str()).collect();
-            self.extra_headers
-                .retain(|k, _| new_keys.contains(k.as_str()));
+            self.extra_headers = next_headers;
         }
         parse_enabled_models(&yaml, &mut self.enabled_models);
         parse_custom_models(&yaml, &mut self.custom_models);
@@ -165,6 +182,7 @@ available:
             "embedding_endpoint": self.embedding_endpoint,
             "wire_format": self.wire_format,
             "enabled": self.enabled,
+            "supports_cache_control": self.supports_cache_control,
             "extra_headers": redacted_headers,
             "enabled_models": self.enabled_models,
             "custom_models": self.custom_models
@@ -189,7 +207,7 @@ available:
             auth_token: String::new(),
             tokenizer_api_key: String::new(),
             extra_headers: self.extra_headers.clone(),
-            supports_cache_control: true,
+            supports_cache_control: self.supports_cache_control,
             chat_models: Vec::new(),
             completion_models: Vec::new(),
             embedding_model: None,
@@ -228,5 +246,83 @@ available:
         self.custom_models
             .get(model_id)
             .and_then(|c| c.pricing.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_provider_cache_control_defaults_false_and_can_enable() {
+        let mut provider = CustomProvider::default();
+
+        assert!(!provider.supports_cache_control);
+        assert!(!provider.build_runtime().unwrap().supports_cache_control);
+
+        provider
+            .provider_settings_apply(serde_yaml::from_str("supports_cache_control: true").unwrap())
+            .unwrap();
+
+        assert!(provider.supports_cache_control);
+        assert!(provider.build_runtime().unwrap().supports_cache_control);
+        assert_eq!(
+            provider.provider_settings_as_json()["supports_cache_control"],
+            true
+        );
+    }
+
+    #[test]
+    fn custom_provider_extra_headers_replace_preserve_and_remove() {
+        let mut provider = CustomProvider::default();
+        provider
+            .extra_headers
+            .insert("X-Secret".to_string(), "old-secret".to_string());
+        provider
+            .extra_headers
+            .insert("X-Replaced".to_string(), "old-value".to_string());
+        provider
+            .extra_headers
+            .insert("X-Remove-Null".to_string(), "old-null".to_string());
+        provider
+            .extra_headers
+            .insert("X-Remove-Number".to_string(), "old-number".to_string());
+        provider
+            .extra_headers
+            .insert("X-Absent".to_string(), "old-absent".to_string());
+
+        provider
+            .provider_settings_apply(
+                serde_yaml::from_str(
+                    r#"
+extra_headers:
+  X-Secret: "***"
+  X-Replaced: new-value
+  X-Remove-Null:
+  X-Remove-Number: 7
+"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            provider.extra_headers.get("X-Secret").unwrap(),
+            "old-secret"
+        );
+        assert_eq!(
+            provider.extra_headers.get("X-Replaced").unwrap(),
+            "new-value"
+        );
+        assert!(!provider.extra_headers.contains_key("X-Remove-Null"));
+        assert!(!provider.extra_headers.contains_key("X-Remove-Number"));
+        assert!(!provider.extra_headers.contains_key("X-Absent"));
+
+        let settings = provider.provider_settings_as_json();
+        assert_eq!(settings["extra_headers"]["X-Secret"], "***");
+        assert_eq!(settings["extra_headers"]["X-Replaced"], "***");
+        assert!(settings["extra_headers"].get("X-Remove-Null").is_none());
+        assert!(settings["extra_headers"].get("X-Remove-Number").is_none());
+        assert!(settings["extra_headers"].get("X-Absent").is_none());
     }
 }

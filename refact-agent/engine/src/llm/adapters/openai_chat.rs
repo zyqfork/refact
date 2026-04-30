@@ -1676,6 +1676,27 @@ mod tests {
     }
 
     #[test]
+    fn test_build_http_omits_cache_control_when_unsupported() {
+        let adapter = OpenAiChatAdapter;
+        let req = LlmRequest::new(
+            "local-model".to_string(),
+            vec![
+                ChatMessage::new("system".to_string(), "You are helpful".to_string()),
+                ChatMessage::new("user".to_string(), "Hello".to_string()),
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral);
+        let mut settings = default_settings();
+        settings.model_name = "local-model".to_string();
+        settings.supports_cache_control = false;
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert!(http.body.get("cache_control").is_none());
+        assert!(!http.body.to_string().contains("cache_control"));
+    }
+
+    #[test]
     fn test_non_openrouter_keeps_explicit_block_level_cache_control() {
         let mut messages = vec![
             json!({"role": "system", "content": "You are a helpful assistant"}),

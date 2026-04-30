@@ -32,6 +32,8 @@ pub struct OllamaProvider {
     pub api_key: String,
     pub enabled: bool,
     #[serde(default)]
+    pub supports_cache_control: bool,
+    #[serde(default)]
     pub enabled_models: Vec<String>,
     #[serde(default)]
     pub custom_models: HashMap<String, CustomModelConfig>,
@@ -43,6 +45,7 @@ impl Default for OllamaProvider {
             endpoint: "http://localhost:11434".to_string(),
             api_key: String::new(),
             enabled: false,
+            supports_cache_control: false,
             enabled_models: Vec::new(),
             custom_models: HashMap::new(),
         }
@@ -367,6 +370,12 @@ fields:
     f_placeholder: ""
     f_label: "API Key"
     f_default: ""
+  supports_cache_control:
+    f_type: boolean
+    f_desc: "Send Anthropic-style cache-control fields to the Ollama server"
+    f_label: "Enable Cache Control"
+    f_default: false
+    f_extra: true
 description: |
   Local Ollama server for running open-source models.
 available:
@@ -391,6 +400,11 @@ available:
         if let Some(enabled) = yaml.get("enabled").and_then(|v| v.as_bool()) {
             self.enabled = enabled;
         }
+        if let Some(supports_cache_control) =
+            yaml.get("supports_cache_control").and_then(|v| v.as_bool())
+        {
+            self.supports_cache_control = supports_cache_control;
+        }
         parse_enabled_models(&yaml, &mut self.enabled_models);
         parse_custom_models(&yaml, &mut self.custom_models);
         Ok(())
@@ -401,6 +415,7 @@ available:
             "endpoint": self.endpoint,
             "api_key": if self.api_key.is_empty() { "" } else { "***" },
             "enabled": self.enabled,
+            "supports_cache_control": self.supports_cache_control,
             "enabled_models": self.enabled_models,
             "custom_models": self.custom_models
         })
@@ -422,7 +437,7 @@ available:
             auth_token: String::new(),
             tokenizer_api_key: String::new(),
             extra_headers: HashMap::new(),
-            supports_cache_control: true,
+            supports_cache_control: self.supports_cache_control,
             chat_models: Vec::new(),
             completion_models: Vec::new(),
             embedding_model: None,
@@ -529,6 +544,24 @@ available:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ollama_runtime_disables_cache_control_by_default() {
+        let runtime = OllamaProvider::default().build_runtime().unwrap();
+
+        assert!(!runtime.supports_cache_control);
+    }
+
+    #[test]
+    fn ollama_runtime_can_enable_cache_control() {
+        let mut provider = OllamaProvider::default();
+        provider
+            .provider_settings_apply(serde_yaml::from_str("supports_cache_control: true").unwrap())
+            .unwrap();
+        let runtime = provider.build_runtime().unwrap();
+
+        assert!(runtime.supports_cache_control);
+    }
 
     #[test]
     fn ollama_show_model_info_context_length_sets_n_ctx() {
