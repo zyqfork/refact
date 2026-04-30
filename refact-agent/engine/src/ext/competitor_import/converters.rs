@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Error, ErrorKind, Result as IoResult};
+use std::io::{Error, ErrorKind, Read, Result as IoResult, Write};
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -7,7 +7,7 @@ use serde_yaml::{Mapping, Value as YamlValue};
 
 use crate::yaml_configs::customization_types::SubagentConfig;
 
-use super::manifest::{hash_directory, hash_string};
+use super::manifest::{hash_directory, hash_string, MAX_SCAN_ENTRIES};
 use super::markdown::{
     first_useful_line_or_heading, frontmatter_mapping, parse_markdown_frontmatter,
     render_markdown_with_frontmatter, sanitize_command_name, sanitize_skill_id,
@@ -24,6 +24,7 @@ pub(crate) const MAX_MARKDOWN_FILE_BYTES: u64 = 1024 * 1024;
 pub(crate) const MAX_CONFIG_FILE_BYTES: u64 = 1024 * 1024;
 pub(crate) const MAX_SKILL_PACKAGE_FILES: usize = 128;
 pub(crate) const MAX_SKILL_PACKAGE_BYTES: u64 = 4 * 1024 * 1024;
+const COPY_BUFFER_BYTES: usize = 16 * 1024;
 
 pub(crate) fn read_markdown_file_limited(path: &Path) -> IoResult<String> {
     read_text_file_limited(path, MAX_MARKDOWN_FILE_BYTES, "markdown file")
@@ -402,12 +403,21 @@ pub(crate) fn validate_skill_package_privacy(
             skill_dir.display()
         ));
     }
+    let mut entry_count = 0usize;
     for entry in walkdir::WalkDir::new(skill_dir)
         .follow_links(false)
         .sort_by_file_name()
     {
         let entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path();
+        if path != skill_dir {
+            entry_count += 1;
+            if entry_count > MAX_SCAN_ENTRIES {
+                return Err(format!(
+                    "skill package scan capped after {MAX_SCAN_ENTRIES} filesystem entries"
+                ));
+            }
+        }
         if path == skill_dir || !entry.file_type().is_file() {
             continue;
         }
@@ -434,12 +444,24 @@ fn validate_skill_package_limits(skill_dir: &Path) -> IoResult<()> {
     }
     let mut file_count = 0usize;
     let mut total_bytes = 0u64;
+    let mut entry_count = 0usize;
     for entry in walkdir::WalkDir::new(skill_dir)
         .follow_links(false)
         .sort_by_file_name()
     {
         let entry = entry.map_err(|err| Error::new(ErrorKind::Other, err.to_string()))?;
         let path = entry.path();
+        if path != skill_dir {
+            entry_count += 1;
+            if entry_count > MAX_SCAN_ENTRIES {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "skill package scan capped after {MAX_SCAN_ENTRIES} filesystem entries"
+                    ),
+                ));
+            }
+        }
         if path == skill_dir || !entry.file_type().is_file() {
             continue;
         }
@@ -456,8 +478,12 @@ fn validate_skill_package_limits(skill_dir: &Path) -> IoResult<()> {
                 ),
             ));
         }
+        let remaining = MAX_SKILL_PACKAGE_BYTES
+            .checked_sub(total_bytes)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "skill package size overflow"))?;
+        let read = count_file_bytes_limited(path, remaining)?;
         total_bytes = total_bytes
-            .checked_add(metadata.len())
+            .checked_add(read)
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "skill package size overflow"))?;
         if total_bytes > MAX_SKILL_PACKAGE_BYTES {
             return Err(Error::new(
@@ -467,8 +493,40 @@ fn validate_skill_package_limits(skill_dir: &Path) -> IoResult<()> {
                 ),
             ));
         }
+        if read != metadata.len() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "skill package file changed while reading: {} expected {} bytes, read {read} bytes",
+                    path.display(),
+                    metadata.len()
+                ),
+            ));
+        }
     }
     Ok(())
+}
+
+fn count_file_bytes_limited(path: &Path, max_bytes: u64) -> IoResult<u64> {
+    let mut file = fs::File::open(path)?;
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    let mut total = 0u64;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(read as u64)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "skill package size overflow"))?;
+        if total > max_bytes {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("skill package exceeds {MAX_SKILL_PACKAGE_BYTES} byte limit"),
+            ));
+        }
+    }
+    Ok(total)
 }
 
 fn stage_skill_package(
@@ -602,6 +660,9 @@ fn copy_directory_contents(source_dir: &Path, target_dir: &Path) -> IoResult<()>
         ));
     }
     fs::create_dir_all(target_dir)?;
+    let mut entry_count = 0usize;
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
     for entry in walkdir::WalkDir::new(source_dir)
         .follow_links(false)
         .sort_by_file_name()
@@ -610,6 +671,13 @@ fn copy_directory_contents(source_dir: &Path, target_dir: &Path) -> IoResult<()>
         let source_path = entry.path();
         if source_path == source_dir {
             continue;
+        }
+        entry_count += 1;
+        if entry_count > MAX_SCAN_ENTRIES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("skill package copy capped after {MAX_SCAN_ENTRIES} filesystem entries"),
+            ));
         }
         if entry.file_type().is_symlink() {
             continue;
@@ -621,13 +689,90 @@ fn copy_directory_contents(source_dir: &Path, target_dir: &Path) -> IoResult<()>
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target_path)?;
         } else if entry.file_type().is_file() {
+            file_count += 1;
+            if file_count > MAX_SKILL_PACKAGE_FILES {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "skill package exceeds {MAX_SKILL_PACKAGE_FILES} file limit: {file_count} files"
+                    ),
+                ));
+            }
             if let Some(parent) = target_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(source_path, target_path)?;
+            let remaining = MAX_SKILL_PACKAGE_BYTES
+                .checked_sub(total_bytes)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "skill package size overflow"))?;
+            let copied = copy_file_limited_sync(source_path, &target_path, remaining)?;
+            total_bytes = total_bytes
+                .checked_add(copied)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "skill package size overflow"))?;
+            if total_bytes > MAX_SKILL_PACKAGE_BYTES {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "skill package exceeds {MAX_SKILL_PACKAGE_BYTES} byte limit: {total_bytes} bytes"
+                    ),
+                ));
+            }
         }
     }
     Ok(())
+}
+
+fn copy_file_limited_sync(source_path: &Path, target_path: &Path, max_bytes: u64) -> IoResult<u64> {
+    let metadata = fs::symlink_metadata(source_path)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "copy source is not a regular file: {}",
+                source_path.display()
+            ),
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("skill package exceeds {MAX_SKILL_PACKAGE_BYTES} byte limit"),
+        ));
+    }
+    let mut source = fs::File::open(source_path)?;
+    let mut target = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target_path)?;
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    let mut copied = 0u64;
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        copied = copied
+            .checked_add(read as u64)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "skill package size overflow"))?;
+        if copied > max_bytes {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("skill package exceeds {MAX_SKILL_PACKAGE_BYTES} byte limit while copying"),
+            ));
+        }
+        target.write_all(&buffer[..read])?;
+    }
+    target.flush()?;
+    if copied != metadata.len() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "skill package file changed while copying: {} expected {} bytes, copied {copied} bytes",
+                source_path.display(),
+                metadata.len()
+            ),
+        ));
+    }
+    Ok(copied)
 }
 
 fn frontmatter_fields_to_metadata(

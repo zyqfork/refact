@@ -4,10 +4,13 @@ use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::manifest::{
     hash_directory, hash_file, is_hash_limit_error, manifest_path_for_scope_root,
     write_string_atomic, ImportManifest, ImportManifestEntry, IMPORTER_VERSION,
+    MAX_HASH_DIRECTORY_BYTES, MAX_HASH_DIRECTORY_DEPTH, MAX_HASH_DIRECTORY_ENTRIES,
+    MAX_HASH_DIRECTORY_FILES, MAX_HASH_FILE_BYTES,
 };
 use super::types::{
     ImportArtifact, ImportCandidate, ImportCandidateSummary, ImportIssue, ImportOutcome,
@@ -666,14 +669,35 @@ async fn copy_directory_atomically(source_dir: &Path, dest_path: &Path) -> Resul
 
 async fn copy_directory_contents(source_dir: &Path, staging: &Path) -> Result<()> {
     tokio::fs::create_dir_all(staging).await?;
-    for entry in walkdir::WalkDir::new(source_dir)
+    let mut entry_count = 0usize;
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
+    let mut entries = walkdir::WalkDir::new(source_dir)
         .follow_links(false)
         .sort_by_file_name()
-    {
+        .max_depth(MAX_HASH_DIRECTORY_DEPTH + 1)
+        .into_iter();
+    while let Some(entry) = entries.next() {
         let entry = entry.map_err(|err| Error::new(ErrorKind::Other, err.to_string()))?;
         let source_path = entry.path();
         if source_path == source_dir {
             continue;
+        }
+        entry_count += 1;
+        if entry_count > MAX_HASH_DIRECTORY_ENTRIES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("directory copy exceeds {MAX_HASH_DIRECTORY_ENTRIES} entry limit"),
+            ));
+        }
+        if entry.depth() > MAX_HASH_DIRECTORY_DEPTH {
+            if entry.file_type().is_dir() {
+                entries.skip_current_dir();
+            }
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("directory copy exceeds {MAX_HASH_DIRECTORY_DEPTH} depth limit"),
+            ));
         }
         let file_type = entry.file_type();
         if file_type.is_symlink() {
@@ -686,14 +710,110 @@ async fn copy_directory_contents(source_dir: &Path, staging: &Path) -> Result<()
         if file_type.is_dir() {
             tokio::fs::create_dir_all(&target_path).await?;
         } else if file_type.is_file() {
+            file_count += 1;
+            if file_count > MAX_HASH_DIRECTORY_FILES {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("directory copy exceeds {MAX_HASH_DIRECTORY_FILES} file limit"),
+                ));
+            }
             if let Some(parent) = target_path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            let content = tokio::fs::read(source_path).await?;
-            tokio::fs::write(&target_path, content).await?;
+            let remaining = MAX_HASH_DIRECTORY_BYTES
+                .checked_sub(total_bytes)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "directory copy byte count overflow")
+                })?;
+            let copied =
+                copy_file_limited(source_path, &target_path, MAX_HASH_FILE_BYTES, remaining)
+                    .await?;
+            total_bytes = total_bytes.checked_add(copied).ok_or_else(|| {
+                Error::new(ErrorKind::InvalidData, "directory copy byte count overflow")
+            })?;
+            if total_bytes > MAX_HASH_DIRECTORY_BYTES {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("directory copy exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit"),
+                ));
+            }
         }
     }
     Ok(())
+}
+
+async fn copy_file_limited(
+    source_path: &Path,
+    target_path: &Path,
+    per_file_limit: u64,
+    total_remaining: u64,
+) -> Result<u64> {
+    let metadata = tokio::fs::symlink_metadata(source_path).await?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "copy source is not a regular file: {}",
+                source_path.display()
+            ),
+        ));
+    }
+    if metadata.len() > per_file_limit {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("directory copy file exceeds {per_file_limit} byte limit"),
+        ));
+    }
+    if metadata.len() > total_remaining {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("directory copy exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit"),
+        ));
+    }
+    let mut source = tokio::fs::File::open(source_path).await?;
+    let mut target = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target_path)
+        .await?;
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut copied = 0u64;
+    loop {
+        let read = source.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        copied = copied.checked_add(read as u64).ok_or_else(|| {
+            Error::new(ErrorKind::InvalidData, "directory copy byte count overflow")
+        })?;
+        if copied > per_file_limit {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("directory copy file exceeds {per_file_limit} byte limit while reading"),
+            ));
+        }
+        if copied > total_remaining {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "directory copy exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit while reading"
+                ),
+            ));
+        }
+        target.write_all(&buffer[..read]).await?;
+    }
+    target.flush().await?;
+    if copied != metadata.len() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "directory copy source changed while reading: {} expected {} bytes, copied {copied} bytes",
+                source_path.display(),
+                metadata.len()
+            ),
+        ));
+    }
+    Ok(copied)
 }
 
 async fn remove_existing_path(path: &Path) -> Result<()> {
@@ -753,7 +873,8 @@ mod tests {
     use super::*;
     use super::super::converters::convert_skill_package;
     use super::super::manifest::{
-        hash_directory, hash_file, hash_string, manifest_path_for_scope_root, MAX_HASH_FILE_BYTES,
+        hash_directory, hash_file, hash_string, manifest_path_for_scope_root,
+        MAX_HASH_DIRECTORY_BYTES, MAX_HASH_FILE_BYTES,
     };
     use super::super::types::{Competitor, ImportKind, ImportScope};
 
@@ -1276,6 +1397,41 @@ mod tests {
             hash_directory(&source_dir).unwrap(),
             hash_directory(&dest_path).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_directory_copy_fails_without_writing_partial_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let scope_root = temp.path().join("refact");
+        let source_dir = temp.path().join("source_skill");
+        tokio::fs::create_dir_all(&source_dir).await.unwrap();
+        tokio::fs::write(source_dir.join("SKILL.md"), "skill")
+            .await
+            .unwrap();
+        std::fs::File::create(source_dir.join("huge.bin"))
+            .unwrap()
+            .set_len(MAX_HASH_DIRECTORY_BYTES + 1)
+            .unwrap();
+        let dest_rel = PathBuf::from("skills").join("skill");
+        let dest_path = scope_root.join(&dest_rel);
+        let candidate = ImportCandidate {
+            competitor: Competitor::ClaudeCode,
+            kind: ImportKind::Skill,
+            scope: ImportScope::Global,
+            source_root: source_dir.parent().unwrap().to_path_buf(),
+            source_path: source_dir.clone(),
+            dest_name: "skill".to_string(),
+            destination_path: dest_rel,
+            source_hash: hash_string("source"),
+            artifact_hash: hash_string("artifact"),
+            artifact: ImportArtifact::DirectoryCopy { source_dir },
+            metadata: serde_json::json!({"original_name": "skill"}),
+        };
+
+        let summary = write_candidates(&scope_root, &[candidate]).await;
+
+        assert_eq!(outcome_status(&summary, 0), Some(ImportStatus::Error));
+        assert!(!dest_path.exists());
     }
 
     #[tokio::test]

@@ -10,7 +10,10 @@ use super::super::converters::{
     convert_subagent_with_source_hash, read_config_file_limited, read_markdown_file_limited,
     validate_skill_package_privacy,
 };
-use super::super::manifest::{hash_string, MAX_SCAN_DEPTH, MAX_SCAN_MARKDOWN_FILES};
+use super::super::manifest::{
+    hash_string, MAX_SCAN_DEPTH, MAX_SCAN_DIRECT_CHILD_DIRS, MAX_SCAN_ENTRIES,
+    MAX_SCAN_MARKDOWN_FILES,
+};
 use super::super::markdown::{
     parse_markdown_frontmatter, render_markdown_with_frontmatter, set_yaml_string,
     set_yaml_string_list, yaml_string,
@@ -926,6 +929,14 @@ fn direct_child_dirs(root: &Path) -> IoResult<Vec<PathBuf>> {
             Err(err) => return Err(err),
         };
         if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            if dirs.len() >= MAX_SCAN_DIRECT_CHILD_DIRS {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "direct child directory scan capped after {MAX_SCAN_DIRECT_CHILD_DIRS} directories"
+                    ),
+                ));
+            }
             dirs.push(path);
         }
     }
@@ -938,6 +949,7 @@ struct MarkdownFileScan {
     paths: Vec<PathBuf>,
     depth_capped: bool,
     file_capped: bool,
+    entry_capped: bool,
 }
 
 fn recursive_markdown_files(root: &Path) -> IoResult<MarkdownFileScan> {
@@ -950,6 +962,7 @@ fn recursive_markdown_files(root: &Path) -> IoResult<MarkdownFileScan> {
         return Ok(MarkdownFileScan::default());
     }
     let mut scan = MarkdownFileScan::default();
+    let mut entry_count = 0usize;
     let mut entries = walkdir::WalkDir::new(root)
         .follow_links(false)
         .sort_by_file_name()
@@ -958,6 +971,11 @@ fn recursive_markdown_files(root: &Path) -> IoResult<MarkdownFileScan> {
         .into_iter();
     while let Some(entry) = entries.next() {
         let entry = entry.map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?;
+        entry_count += 1;
+        if entry_count > MAX_SCAN_ENTRIES {
+            scan.entry_capped = true;
+            break;
+        }
         if entry.depth() > MAX_SCAN_DEPTH {
             scan.depth_capped = true;
             if entry.file_type().is_dir() {
@@ -1010,6 +1028,16 @@ fn report_markdown_scan_caps(
             root,
             format!(
                 "{display_name} {label} scan capped after {MAX_SCAN_MARKDOWN_FILES} markdown files"
+            ),
+        ));
+    }
+    if markdown_scan.entry_capped {
+        scan.push_issue(error_issue(
+            context,
+            kind,
+            root,
+            format!(
+                "{display_name} {label} scan capped after {MAX_SCAN_ENTRIES} filesystem entries"
             ),
         ));
     }
@@ -1628,6 +1656,23 @@ mod tests {
         assert_eq!(scan.candidates.len(), MAX_SCAN_MARKDOWN_FILES);
         assert!(scan.issues.iter().any(|issue| {
             issue.status == ImportStatus::Error && issue.message.contains("scan capped")
+        }));
+    }
+
+    #[test]
+    fn markdown_command_scan_caps_total_entries_non_fatally() {
+        let temp = tempfile::tempdir().unwrap();
+        let command_root = temp.path().join(".opencode").join("commands");
+        fs::create_dir_all(&command_root).unwrap();
+        for index in 0..=MAX_SCAN_ENTRIES {
+            fs::write(command_root.join(format!("note-{index}.txt")), "ignore").unwrap();
+        }
+
+        let scan = scan_project_root_with_staging(temp.path(), &temp.path().join("staging"));
+
+        assert!(scan.candidates.is_empty());
+        assert!(scan.issues.iter().any(|issue| {
+            issue.status == ImportStatus::Error && issue.message.contains("filesystem entries")
         }));
     }
 

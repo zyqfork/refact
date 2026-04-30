@@ -12,7 +12,11 @@ pub const IMPORTER_VERSION: &str = "competitor_import_v2";
 pub const MAX_HASH_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_HASH_DIRECTORY_FILES: usize = 256;
 pub const MAX_HASH_DIRECTORY_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_HASH_DIRECTORY_ENTRIES: usize = 1024;
+pub const MAX_HASH_DIRECTORY_DEPTH: usize = 16;
 pub const MAX_SCAN_MARKDOWN_FILES: usize = 256;
+pub const MAX_SCAN_ENTRIES: usize = 4096;
+pub const MAX_SCAN_DIRECT_CHILD_DIRS: usize = 512;
 pub const MAX_SCAN_DEPTH: usize = 8;
 pub const MAX_UNSUPPORTED_RULE_REPORTS: usize = 64;
 const MANIFEST_VERSION: u32 = 1;
@@ -134,7 +138,13 @@ pub fn hash_file(path: &Path) -> Result<String> {
     }
 
     let mut hasher = Sha256::new();
-    hash_file_content_into(path, &mut hasher)?;
+    let read = hash_file_content_into_limited(path, &mut hasher, MAX_HASH_FILE_BYTES)?;
+    if read != metadata.len() {
+        return Err(hash_limit_error(format!(
+            "hash file changed while hashing: expected {} bytes, read {read} bytes",
+            metadata.len()
+        )));
+    }
     Ok(hex::encode(hasher.finalize()))
 }
 
@@ -150,15 +160,31 @@ pub fn hash_directory(path: &Path) -> Result<String> {
 
     let mut files = Vec::new();
     let mut file_count = 0usize;
-    let mut total_bytes = 0u64;
-    for entry in walkdir::WalkDir::new(path)
+    let mut entry_count = 0usize;
+    let mut entries = walkdir::WalkDir::new(path)
         .follow_links(false)
         .sort_by_file_name()
-    {
+        .max_depth(MAX_HASH_DIRECTORY_DEPTH + 1)
+        .into_iter();
+    while let Some(entry) = entries.next() {
         let entry = entry.map_err(|err| Error::new(ErrorKind::Other, err.to_string()))?;
         let entry_path = entry.path();
         if entry_path == path {
             continue;
+        }
+        entry_count += 1;
+        if entry_count > MAX_HASH_DIRECTORY_ENTRIES {
+            return Err(hash_limit_error(format!(
+                "hash directory exceeds {MAX_HASH_DIRECTORY_ENTRIES} entry limit: {entry_count} entries"
+            )));
+        }
+        if entry.depth() > MAX_HASH_DIRECTORY_DEPTH {
+            if entry.file_type().is_dir() {
+                entries.skip_current_dir();
+            }
+            return Err(hash_limit_error(format!(
+                "hash directory exceeds {MAX_HASH_DIRECTORY_DEPTH} depth limit"
+            )));
         }
         let metadata = std::fs::symlink_metadata(entry_path)?;
         let file_type = metadata.file_type();
@@ -171,14 +197,6 @@ pub fn hash_directory(path: &Path) -> Result<String> {
                 "hash directory exceeds {MAX_HASH_DIRECTORY_FILES} file limit: {file_count} files"
             )));
         }
-        total_bytes = total_bytes
-            .checked_add(metadata.len())
-            .ok_or_else(|| hash_limit_error("hash directory byte count overflow"))?;
-        if total_bytes > MAX_HASH_DIRECTORY_BYTES {
-            return Err(hash_limit_error(format!(
-                "hash directory exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit: {total_bytes} bytes"
-            )));
-        }
         let relative_path = entry_path
             .strip_prefix(path)
             .map_err(|err| Error::new(ErrorKind::InvalidData, err.to_string()))?
@@ -188,13 +206,47 @@ pub fn hash_directory(path: &Path) -> Result<String> {
     files.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut hasher = Sha256::new();
+    let mut total_bytes = 0u64;
     for (relative_path, entry_path, len) in files {
+        let next_total = total_bytes
+            .checked_add(len)
+            .ok_or_else(|| hash_limit_error("hash directory byte count overflow"))?;
+        if next_total > MAX_HASH_DIRECTORY_BYTES {
+            return Err(hash_limit_error(format!(
+                "hash directory exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit: {next_total} bytes"
+            )));
+        }
         let relative = relative_path.to_string_lossy().replace('\\', "/");
         hasher.update(relative.as_bytes());
         hasher.update([0]);
         hasher.update(len.to_le_bytes());
         hasher.update([0]);
-        hash_file_content_into(&entry_path, &mut hasher)?;
+        let remaining = MAX_HASH_DIRECTORY_BYTES - total_bytes;
+        let read =
+            hash_file_content_into_limited(&entry_path, &mut hasher, remaining).map_err(|err| {
+                if is_hash_limit_error(&err) {
+                    hash_limit_error(format!(
+                    "hash directory exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit while reading {}",
+                    entry_path.display()
+                ))
+                } else {
+                    err
+                }
+            })?;
+        if read != len {
+            return Err(hash_limit_error(format!(
+                "hash directory file changed while hashing: {} expected {len} bytes, read {read} bytes",
+                entry_path.display()
+            )));
+        }
+        total_bytes = total_bytes
+            .checked_add(read)
+            .ok_or_else(|| hash_limit_error("hash directory byte count overflow"))?;
+        if total_bytes > MAX_HASH_DIRECTORY_BYTES {
+            return Err(hash_limit_error(format!(
+                "hash directory exceeds {MAX_HASH_DIRECTORY_BYTES} byte limit: {total_bytes} bytes"
+            )));
+        }
         hasher.update([0]);
     }
     Ok(hex::encode(hasher.finalize()))
@@ -204,17 +256,26 @@ pub fn is_hash_limit_error(err: &Error) -> bool {
     err.kind() == ErrorKind::InvalidData && err.to_string().starts_with("hash ")
 }
 
-fn hash_file_content_into(path: &Path, hasher: &mut Sha256) -> Result<()> {
+fn hash_file_content_into_limited(path: &Path, hasher: &mut Sha256, max_bytes: u64) -> Result<u64> {
     let mut file = std::fs::File::open(path)?;
     let mut buffer = [0u8; HASH_BUFFER_BYTES];
+    let mut total = 0u64;
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
         }
+        total = total
+            .checked_add(read as u64)
+            .ok_or_else(|| hash_limit_error("hash file byte count overflow"))?;
+        if total > max_bytes {
+            return Err(hash_limit_error(format!(
+                "hash file exceeds {max_bytes} byte limit while reading: {total} bytes"
+            )));
+        }
         hasher.update(&buffer[..read]);
     }
-    Ok(())
+    Ok(total)
 }
 
 fn hash_limit_error(message: impl Into<String>) -> Error {
@@ -295,6 +356,19 @@ mod tests {
     }
 
     #[test]
+    fn hash_file_content_limit_is_enforced_while_reading() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("growing.bin");
+        std::fs::write(&path, vec![b'x'; 32]).unwrap();
+        let mut hasher = Sha256::new();
+
+        let err = hash_file_content_into_limited(&path, &mut hasher, 16).unwrap_err();
+
+        assert!(is_hash_limit_error(&err));
+        assert!(err.to_string().contains("while reading"));
+    }
+
+    #[test]
     fn hash_directory_rejects_file_count_and_byte_caps() {
         let too_many = tempfile::tempdir().unwrap();
         for index in 0..=MAX_HASH_DIRECTORY_FILES {
@@ -316,6 +390,31 @@ mod tests {
 
         assert!(is_hash_limit_error(&err));
         assert!(err.to_string().contains("byte limit"));
+    }
+
+    #[test]
+    fn hash_directory_rejects_entry_count_and_depth_caps() {
+        let too_many_entries = tempfile::tempdir().unwrap();
+        for index in 0..=MAX_HASH_DIRECTORY_ENTRIES {
+            std::fs::create_dir(too_many_entries.path().join(format!("dir-{index}"))).unwrap();
+        }
+
+        let err = hash_directory(too_many_entries.path()).unwrap_err();
+
+        assert!(is_hash_limit_error(&err));
+        assert!(err.to_string().contains("entry limit"));
+
+        let too_deep = tempfile::tempdir().unwrap();
+        let mut current = too_deep.path().to_path_buf();
+        for index in 0..=MAX_HASH_DIRECTORY_DEPTH {
+            current = current.join(format!("d{index}"));
+            std::fs::create_dir(&current).unwrap();
+        }
+
+        let err = hash_directory(too_deep.path()).unwrap_err();
+
+        assert!(is_hash_limit_error(&err));
+        assert!(err.to_string().contains("depth limit"));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use super::opencode::{scan_compatible_roots_with_filter, CompatibleScanRoots, OpenCodeScan};
-use super::super::manifest::{MAX_SCAN_DEPTH, MAX_UNSUPPORTED_RULE_REPORTS};
+use super::super::manifest::{MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_UNSUPPORTED_RULE_REPORTS};
 use super::super::types::{
     Competitor, ConversionContext, ImportIssue, ImportKind, ImportPrivacyFilter, ImportScope,
     ImportStatus,
@@ -343,8 +343,14 @@ fn report_prefixed_rule_dirs(
         Err(err) if err.kind() == ErrorKind::NotFound => return,
         Err(_) => return,
     };
+    let mut entry_count = 0usize;
     for entry in entries.filter_map(Result::ok) {
         if limiter.is_capped() {
+            return;
+        }
+        entry_count += 1;
+        if entry_count > MAX_SCAN_ENTRIES {
+            limiter.push_entry_cap(scan, context, root);
             return;
         }
         let path = entry.path();
@@ -379,6 +385,7 @@ fn report_rule_root(
             return;
         }
     }
+    let mut entry_count = 0usize;
     let mut entries = walkdir::WalkDir::new(rule_root)
         .follow_links(false)
         .sort_by_file_name()
@@ -389,6 +396,11 @@ fn report_rule_root(
         let Ok(entry) = entry else {
             continue;
         };
+        entry_count += 1;
+        if entry_count > MAX_SCAN_ENTRIES {
+            limiter.push_entry_cap(scan, context, rule_root);
+            break;
+        }
         if entry.depth() > MAX_SCAN_DEPTH {
             limiter.push_cap(scan, context, rule_root);
             if entry.file_type().is_dir() {
@@ -431,6 +443,23 @@ impl RuleReportLimiter {
         }
         self.capped = true;
         scan.issues.push(unsupported_rule_cap_issue(context, path));
+    }
+
+    fn push_entry_cap(&mut self, scan: &mut KiloScan, context: &ConversionContext, path: &Path) {
+        if self.capped {
+            return;
+        }
+        self.capped = true;
+        scan.issues.push(ImportIssue {
+            competitor: Some(context.competitor),
+            kind: Some(ImportKind::UnsupportedRules),
+            scope: Some(context.scope.clone()),
+            path: Some(path.to_path_buf()),
+            status: ImportStatus::Unsupported,
+            message: format!(
+                "Kilo Code rules scan capped after {MAX_SCAN_ENTRIES} filesystem entries"
+            ),
+        });
     }
 }
 

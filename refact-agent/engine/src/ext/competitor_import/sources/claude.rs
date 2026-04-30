@@ -8,7 +8,10 @@ use super::super::converters::{
     convert_command_markdown, convert_skill_package, convert_subagent_with_source_hash,
     read_markdown_file_limited, validate_skill_package_privacy,
 };
-use super::super::manifest::{hash_string, MAX_SCAN_DEPTH, MAX_SCAN_MARKDOWN_FILES};
+use super::super::manifest::{
+    hash_string, MAX_SCAN_DEPTH, MAX_SCAN_DIRECT_CHILD_DIRS, MAX_SCAN_ENTRIES,
+    MAX_SCAN_MARKDOWN_FILES,
+};
 use super::super::markdown::{
     first_useful_line_or_heading, sanitize_subagent_id, yaml_string, yaml_string_any,
     yaml_string_list_any,
@@ -161,8 +164,8 @@ fn collect_skill_candidates(
             return;
         }
     }
-    let mut entries = match fs::read_dir(skills_root) {
-        Ok(entries) => entries.filter_map(Result::ok).collect::<Vec<_>>(),
+    let entries = match direct_child_dirs(skills_root) {
+        Ok(entries) => entries,
         Err(err) => {
             issues.push(issue(
                 context,
@@ -173,13 +176,8 @@ fn collect_skill_candidates(
             return;
         }
     };
-    entries.sort_by_key(|entry| entry.path());
 
-    for entry in entries {
-        let skill_dir = entry.path();
-        if !is_regular_dir(&skill_dir) {
-            continue;
-        }
+    for skill_dir in entries {
         let skill_md = skill_dir.join("SKILL.md");
         if !is_regular_file(&skill_md) {
             continue;
@@ -343,6 +341,8 @@ fn markdown_files(
     let mut paths = Vec::new();
     let mut depth_capped = false;
     let mut file_capped = false;
+    let mut entry_capped = false;
+    let mut entry_count = 0usize;
     let mut entries = walkdir::WalkDir::new(root)
         .follow_links(false)
         .sort_by_file_name()
@@ -365,6 +365,11 @@ fn markdown_files(
                 continue;
             }
         };
+        entry_count += 1;
+        if entry_count > MAX_SCAN_ENTRIES {
+            entry_capped = true;
+            break;
+        }
         if entry.depth() > MAX_SCAN_DEPTH {
             depth_capped = true;
             if entry.file_type().is_dir() {
@@ -398,6 +403,14 @@ fn markdown_files(
             kind,
             root,
             format!("markdown scan capped after {MAX_SCAN_MARKDOWN_FILES} markdown files"),
+        ));
+    }
+    if entry_capped {
+        issues.push(issue(
+            context,
+            kind,
+            root,
+            format!("markdown scan capped after {MAX_SCAN_ENTRIES} filesystem entries"),
         ));
     }
     paths
@@ -541,10 +554,30 @@ fn insert_string(metadata: &mut JsonMap<String, JsonValue>, key: &str, value: &s
     }
 }
 
-fn is_regular_dir(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-        .unwrap_or(false)
+fn direct_child_dirs(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            if dirs.len() >= MAX_SCAN_DIRECT_CHILD_DIRS {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "direct child directory scan capped after {MAX_SCAN_DIRECT_CHILD_DIRS} directories"
+                    ),
+                ));
+            }
+            dirs.push(path);
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
 }
 
 fn is_regular_file(path: &Path) -> bool {

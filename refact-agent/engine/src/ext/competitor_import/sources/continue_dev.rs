@@ -8,7 +8,8 @@ use super::super::converters::{
     read_markdown_file_limited, validate_skill_package_privacy,
 };
 use super::super::manifest::{
-    hash_string, MAX_SCAN_DEPTH, MAX_SCAN_MARKDOWN_FILES, MAX_UNSUPPORTED_RULE_REPORTS,
+    hash_string, MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_SCAN_MARKDOWN_FILES,
+    MAX_UNSUPPORTED_RULE_REPORTS,
 };
 use super::super::markdown::{first_useful_line_or_heading, yaml_string};
 use super::super::types::{
@@ -451,6 +452,7 @@ struct CollectedFiles {
     paths: Vec<PathBuf>,
     depth_capped: bool,
     file_capped: bool,
+    entry_capped: bool,
 }
 
 fn collect_markdown_files(root: &Path, max_files: usize) -> CollectedFiles {
@@ -478,6 +480,7 @@ fn collect_files(root: &Path, max_files: usize, keep: impl Fn(&Path) -> bool) ->
         return CollectedFiles::default();
     }
     let mut collected = CollectedFiles::default();
+    let mut entry_count = 0usize;
     let mut entries = WalkDir::new(root)
         .follow_links(false)
         .sort_by_file_name()
@@ -487,6 +490,11 @@ fn collect_files(root: &Path, max_files: usize, keep: impl Fn(&Path) -> bool) ->
         let Ok(entry) = entry else {
             continue;
         };
+        entry_count += 1;
+        if entry_count > MAX_SCAN_ENTRIES {
+            collected.entry_capped = true;
+            break;
+        }
         if entry.depth() > MAX_SCAN_DEPTH {
             collected.depth_capped = true;
             if entry.file_type().is_dir() {
@@ -535,6 +543,14 @@ fn report_scan_caps(
             format!("{label} scan capped after {max_files} markdown files"),
         ));
     }
+    if files.entry_capped {
+        result.add_issue(error_issue(
+            context,
+            kind,
+            root,
+            format!("{label} scan capped after {MAX_SCAN_ENTRIES} filesystem entries"),
+        ));
+    }
 }
 
 fn report_rule_scan_caps(
@@ -543,7 +559,7 @@ fn report_rule_scan_caps(
     files: &CollectedFiles,
     result: &mut ContinueScanResult,
 ) {
-    if files.depth_capped || files.file_capped {
+    if files.depth_capped || files.file_capped || files.entry_capped {
         result.add_issue(unsupported_issue(
             context,
             ImportKind::UnsupportedRules,
