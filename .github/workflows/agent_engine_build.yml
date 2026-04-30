@@ -146,8 +146,9 @@ jobs:
       - name: build linux-like artifacts
         if: matrix.cross
         env:
-          # Limit parallel codegen/link jobs to reduce peak RAM (LTO + whisper-rs is very memory-hungry)
-          CARGO_BUILD_JOBS: 2
+          # Limit parallel jobs and use ThinLTO for ARM64: full LTO + whisper-rs exceeds runner RAM.
+          CARGO_BUILD_JOBS: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '1' || '2' }}
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'thin' || 'true' }}
         run: |
           CROSS_NO_WARNINGS=0 cross test --release --target ${{ matrix.target }} || exit 1
           CROSS_NO_WARNINGS=0 cross build --release --target ${{ matrix.target }} || exit 1
