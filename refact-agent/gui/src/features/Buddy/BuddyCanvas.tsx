@@ -30,7 +30,7 @@ const BUBBLE_STYLES: Record<
 > = {
   top: {
     container: {
-      bottom: "58%",
+      bottom: "70%",
       left: "50%",
       transform: "translateX(-50%)",
     },
@@ -38,38 +38,40 @@ const BUBBLE_STYLES: Record<
       top: "100%",
       left: "50%",
       transform: "translateX(-50%)",
-      borderLeft: "7px solid transparent",
-      borderRight: "7px solid transparent",
+      borderLeft: "11px solid transparent",
+      borderRight: "11px solid transparent",
       /* borderTop set dynamically via palette */
     },
   },
   left: {
     container: {
-      right: "56%",
-      top: "18%",
-      marginRight: "-8px",
+      right: "62%",
+      top: "42%",
+      marginRight: "-6px",
+      transform: "translateY(-50%)",
     },
     tail: {
       left: "100%",
       top: "50%",
       transform: "translateY(-50%)",
-      borderTop: "7px solid transparent",
-      borderBottom: "7px solid transparent",
+      borderTop: "11px solid transparent",
+      borderBottom: "11px solid transparent",
       /* borderLeft set dynamically via palette */
     },
   },
   right: {
     container: {
-      left: "56%",
-      top: "18%",
-      marginLeft: "-8px",
+      left: "62%",
+      top: "42%",
+      marginLeft: "-6px",
+      transform: "translateY(-50%)",
     },
     tail: {
       right: "100%",
       top: "50%",
       transform: "translateY(-50%)",
-      borderTop: "7px solid transparent",
-      borderBottom: "7px solid transparent",
+      borderTop: "11px solid transparent",
+      borderBottom: "11px solid transparent",
       /* borderRight set dynamically via palette */
     },
   },
@@ -157,9 +159,6 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
           const anim = animRef.current;
           const overrideText = speechOverrideRef.current ?? "";
           const rawText = overrideText || anim.statusText || "";
-          // Cap speech-bubble text length so a runaway error message or
-          // a long backend speech_text cannot blow out the hero layout.
-          // 140 chars matches roughly two short lines at our default size.
           const text =
             rawText.length > 140
               ? `${rawText.slice(0, 137).trimEnd()}…`
@@ -313,10 +312,10 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
           const pos = BUBBLE_STYLES[activeBubblePosition];
           const tailColor: React.CSSProperties =
             activeBubblePosition === "left"
-              ? { borderLeft: `8px solid ${palette.body}` }
+              ? { borderLeft: `13px solid ${palette.body}` }
               : activeBubblePosition === "right"
-                ? { borderRight: `8px solid ${palette.body}` }
-                : { borderTop: `8px solid ${palette.body}` };
+                ? { borderRight: `13px solid ${palette.body}` }
+                : { borderTop: `13px solid ${palette.body}` };
           return (
             <div
               ref={bubbleRef}
@@ -324,20 +323,20 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
               style={{
                 position: "absolute",
                 ...pos.container,
-                background: "rgba(13, 18, 30, 0.9)",
-                border: `1px solid ${palette.body}`,
-                borderRadius: "10px",
-                padding: "6px 11px",
+                background: "rgba(12, 20, 34, 0.88)",
+                border: `2px solid ${palette.body}`,
+                borderRadius: "14px",
+                padding: "7px 12px",
                 fontSize: "11px",
                 fontFamily:
                   "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
                 fontWeight: 700,
                 letterSpacing: "0.1px",
                 whiteSpace: speechControls?.length ? "normal" : "nowrap",
-                width: speechControls?.length ? "260px" : "max-content",
+                width: speechControls?.length ? "270px" : "max-content",
                 pointerEvents: speechControls?.length ? "auto" : "none",
                 color: palette.light,
-                boxShadow: `0 6px 18px rgba(0, 0, 0, 0.3), 0 0 18px ${palette.dark}55`,
+                boxShadow: `0 8px 22px rgba(0, 0, 0, 0.26), 0 0 18px ${palette.dark}44`,
                 zIndex: 5,
                 visibility: "hidden",
                 opacity: 0,
@@ -348,9 +347,9 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
                 <div
                   style={{
                     display: "flex",
-                    gap: "4px",
+                    gap: "5px",
                     flexWrap: "wrap",
-                    marginTop: "6px",
+                    marginTop: "7px",
                   }}
                 >
                   {speechControls.map((ctrl) => (
@@ -364,17 +363,18 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
                         background:
                           ctrl.style === "primary"
                             ? palette.body
-                            : "transparent",
-                        border: `2px solid ${palette.body}`,
-                        borderRadius: "2px",
+                            : "rgba(255, 255, 255, 0.08)",
+                        border: `1px solid ${palette.body}`,
+                        borderRadius: "999px",
                         color:
                           ctrl.style === "primary" ? "#0d0d16" : palette.light,
-                        fontFamily: "'Courier New', Courier, monospace",
+                        fontFamily:
+                          "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
                         fontWeight: 700,
-                        fontSize: "9px",
-                        padding: "2px 6px",
+                        fontSize: "10px",
+                        padding: "3px 8px",
                         cursor: "pointer",
-                        letterSpacing: "0.3px",
+                        letterSpacing: "0.1px",
                       }}
                     >
                       {ctrl.label}
@@ -389,6 +389,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
                   height: 0,
                   ...pos.tail,
                   ...tailColor,
+                  filter: `drop-shadow(0 0 3px ${palette.dark})`,
                 }}
               />
             </div>

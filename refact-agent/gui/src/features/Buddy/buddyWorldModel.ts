@@ -173,7 +173,7 @@ function buildObjects(
       page: { type: "tasks_list" },
       tone: toneFromCount(pulse.tasks.stuck + pulse.tasks.abandoned, 1, 3),
       x: 18,
-      y: 70,
+      y: 68,
       size: 16,
     },
     {
@@ -202,8 +202,8 @@ function buildObjects(
           : "Model stars are aligned.",
       page: { type: "default_models" },
       tone: toneFromCount(providerIssues, 1, 3),
-      x: 69,
-      y: 66,
+      x: 72,
+      y: 67,
       size: 18,
     },
     {
@@ -232,8 +232,8 @@ function buildObjects(
           : "No diff winds right now.",
       page: { type: "stats" },
       tone: toneFromCount(pulse.git.uncommitted_files, 8, 20),
-      x: 38,
-      y: 76,
+      x: 29,
+      y: 78,
       size: 12,
     },
     {
@@ -246,8 +246,8 @@ function buildObjects(
       description: `${pulse.customization.modes} modes · ${pulse.customization.subagents} delegates · ${pulse.customization.hooks} hooks.`,
       page: { type: "marketplace_hub" },
       tone: "neutral",
-      x: 45,
-      y: 32,
+      x: 36,
+      y: 38,
       size: 13,
     },
   ];
@@ -277,8 +277,8 @@ function weatherFromState(
       weather: "busy",
       weatherLabel: "Busy currents",
       weatherDescription: nowPlaying.title,
-      weatherX: 40,
-      weatherY: 28,
+      weatherX: 50,
+      weatherY: 61,
     };
   }
 

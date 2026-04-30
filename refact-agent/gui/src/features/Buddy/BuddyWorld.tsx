@@ -218,16 +218,16 @@ function drawWeather(
   }
 
   if (world.weather === "busy") {
-    ctx.strokeStyle = "rgba(96,165,250,0.38)";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(96,165,250,0.18)";
+    ctx.lineWidth = 1;
     for (let i = 0; i < 3; i += 1) {
       ctx.beginPath();
       ctx.arc(
         x,
         y,
-        12 + i * 10 + Math.sin(frame / 20 + i) * 2,
+        8 + i * 8 + Math.sin(frame / 22 + i) * 1.2,
         0,
-        Math.PI * 1.5,
+        Math.PI * 1.35,
       );
       ctx.stroke();
     }
@@ -273,30 +273,56 @@ function drawGround(
   width: number,
   height: number,
 ): void {
-  const baseY = height * 0.735;
-  const darkGround = "rgba(20,83,45,0.88)";
-  const midGround = "rgba(22,101,52,0.72)";
+  const baseY = height * 0.745;
 
-  for (let x = 0; x < width; x += 4) {
-    const ridge = Math.sin(x / 34 + frame / 90) * 2 + Math.sin(x / 17) * 1.5;
-    fillPixelRect(ctx, x, baseY + ridge, 4, height - baseY - ridge, darkGround);
-    if (x % 24 === 0) {
-      fillPixelRect(ctx, x, baseY + ridge + 8, 14, 3, midGround);
+  ctx.save();
+  ctx.fillStyle = "rgba(22, 101, 52, 0.46)";
+  ctx.beginPath();
+  ctx.moveTo(0, baseY + 10);
+  for (let x = 0; x <= width; x += 18) {
+    const hill = Math.sin(x / 48 + frame / 150) * 7 + Math.sin(x / 19) * 2;
+    ctx.lineTo(x, baseY + hill);
+  }
+  ctx.lineTo(width, height);
+  ctx.lineTo(0, height);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  for (let x = 0; x < width; x += 8) {
+    const ridge = Math.sin(x / 39 + frame / 110) * 3 + Math.sin(x / 23) * 2;
+    fillPixelRect(
+      ctx,
+      x,
+      baseY + ridge,
+      8,
+      height - baseY - ridge,
+      "rgba(20,83,45,0.88)",
+    );
+    if ((x / 8) % 11 === 0) {
+      fillPixelRect(
+        ctx,
+        x + 2,
+        baseY + ridge + 11,
+        7,
+        2,
+        "rgba(74,222,128,0.2)",
+      );
     }
   }
 
   for (let x = 0; x < width; ) {
-    const offset = (x * 19) % 29;
+    const offset = (x * 17) % 43;
     const clumpX = x + offset;
-    const clumpY = baseY + 7 + ((x * 7) % 18);
-    const grassHeight = 3 + ((x + frame + offset) % 7);
+    const clumpY = baseY + 12 + ((x * 11) % 22);
+    const grassHeight = 4 + ((x + frame + offset) % 9);
     fillPixelRect(
       ctx,
       clumpX,
       clumpY - grassHeight,
       3,
       grassHeight,
-      "rgba(187,247,208,0.42)",
+      "rgba(187,247,208,0.28)",
     );
     fillPixelRect(
       ctx,
@@ -304,9 +330,9 @@ function drawGround(
       clumpY - grassHeight + 2,
       2,
       Math.max(2, grassHeight - 1),
-      "rgba(74,222,128,0.36)",
+      "rgba(74,222,128,0.24)",
     );
-    x += 18 + offset;
+    x += 52 + offset;
   }
 }
 
@@ -322,13 +348,19 @@ function drawBuddyLandingPad(
   ctx.save();
   ctx.fillStyle = "rgba(4, 20, 18, 0.32)";
   ctx.beginPath();
-  ctx.ellipse(x, y + 18, 54, 12, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + 18, 62, 13, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = "rgba(74, 222, 128, 0.16)";
   ctx.beginPath();
-  ctx.ellipse(x, y + 14, 38, 7, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + 14, 44, 8, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  ctx.strokeStyle = "rgba(187,247,208,0.22)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(x, y + 13, 33, 6, 0, 0, Math.PI * 2);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -341,23 +373,38 @@ function drawBuddyHomeDoor(
 ): void {
   const x = pctX(width, HOME_HOTSPOT.x);
   const y = pctY(height, HOME_HOTSPOT.y);
-  const glow = 0.25 + Math.sin(frame / 32) * 0.08;
+  const glow = 0.28 + Math.sin(frame / 32) * 0.08;
 
   ctx.save();
-  ctx.fillStyle = `rgba(96,165,250,${glow})`;
+  ctx.fillStyle = `rgba(251,191,36,${glow})`;
   ctx.beginPath();
-  ctx.ellipse(x, y + 15, 36, 16, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + 14, 35, 15, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  fillPixelRect(ctx, x - 21, y - 5, 42, 28, "#78350F");
-  fillPixelRect(ctx, x - 17, y - 21, 34, 18, palette.dark);
-  fillPixelRect(ctx, x - 11, y - 13, 22, 22, palette.body);
-  fillPixelRect(ctx, x - 7, y - 4, 14, 27, "#1E293B");
-  fillPixelRect(ctx, x + 5, y + 8, 3, 3, "#FDE68A");
-  fillPixelRect(ctx, x - 25, y + 23, 50, 4, "rgba(15,23,42,0.42)");
+  const pathGlow = 0.36 + Math.sin(frame / 40) * 0.04;
+  for (let i = 0; i < 6; i += 1) {
+    const stepX = x + i * 9 + Math.sin(i * 1.7) * 4;
+    const stepY = y + 32 + i * 5;
+    ctx.fillStyle = `rgba(180,83,9,${pathGlow - i * 0.035})`;
+    ctx.beginPath();
+    ctx.ellipse(stepX, stepY, 8 - i * 0.45, 3.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  fillPixelRect(ctx, x - 23, y - 32, 46, 10, "rgba(15,23,42,0.72)");
-  drawPixelText(ctx, "HOME", x, y - 27, palette.light);
+  fillPixelRect(ctx, x - 23, y - 1, 46, 30, "#92400E");
+  fillPixelRect(ctx, x - 28, y + 25, 56, 5, "rgba(15,23,42,0.36)");
+  fillPixelRect(ctx, x - 17, y - 15, 34, 8, palette.dark);
+  fillPixelRect(ctx, x - 22, y - 7, 44, 8, palette.dark);
+  fillPixelRect(ctx, x - 14, y - 29, 7, 12, "#475569");
+  fillPixelRect(ctx, x - 7, y + 6, 14, 23, "#1E293B");
+  fillPixelRect(ctx, x - 4, y + 10, 8, 19, "#0F172A");
+  fillPixelRect(ctx, x + 7, y + 7, 8, 8, "#FDE68A");
+  fillPixelRect(ctx, x + 9, y + 9, 4, 4, palette.light);
+  fillPixelRect(ctx, x - 12, y + 31, 24, 3, "#FBBF24");
+
+  const sparkleY = y - 7 + Math.sin(frame / 18) * 2;
+  fillPixelRect(ctx, x + 27, sparkleY, 3, 3, "#FDE68A");
+  fillPixelRect(ctx, x + 30, sparkleY + 3, 3, 3, palette.light);
   ctx.restore();
 }
 
@@ -375,14 +422,16 @@ function drawObject(
 
   ctx.fillStyle = `${tone}1F`;
   ctx.beginPath();
-  ctx.arc(x, y + 14, item.size + 12, 0, Math.PI * 2);
+  ctx.arc(x, y + 12, item.size + 9, 0, Math.PI * 2);
   ctx.fill();
 
   switch (item.sprite) {
     case "task_grove":
-      fillPixelRect(ctx, x - 5, y - 3, 10, 32, "#7C2D12");
-      fillPixelRect(ctx, x - 20, y - 20 + pulse, 40, 24, tone);
-      fillPixelRect(ctx, x - 13, y - 30 + pulse, 26, 16, "#86EFAC");
+      fillPixelRect(ctx, x - 5, y - 4, 10, 32, "#7C2D12");
+      fillPixelRect(ctx, x - 17, y - 22 + pulse, 34, 18, "#22C55E");
+      fillPixelRect(ctx, x - 10, y - 31 + pulse, 22, 14, "#86EFAC");
+      fillPixelRect(ctx, x + 11, y - 11 + pulse, 9, 7, "#BBF7D0");
+      fillPixelRect(ctx, x + 14, y - 8 + pulse, 6, 3, tone);
       break;
     case "memory_fireflies":
       for (let i = 0; i < 6; i += 1) {
@@ -390,13 +439,16 @@ function drawObject(
         const fy = y + Math.cos(frame / 15 + i) * 12;
         fillPixelRect(ctx, fx, fy, 4, 4, i % 2 === 0 ? "#FDE68A" : tone);
       }
-      fillPixelRect(ctx, x - 12, y + 16, 24, 10, "#854D0E");
+      fillPixelRect(ctx, x - 14, y + 15, 28, 11, "#854D0E");
+      fillPixelRect(ctx, x - 9, y + 10, 18, 6, "#F59E0B");
       break;
     case "observatory":
-      fillPixelRect(ctx, x - 24, y + 12, 48, 20, "#334155");
-      fillPixelRect(ctx, x - 18, y, 36, 18, "#64748B");
-      fillPixelRect(ctx, x - 4, y - 17, 8, 17, tone);
-      fillPixelRect(ctx, x + 4, y - 12, 26, 7, "#CBD5E1");
+      fillPixelRect(ctx, x - 24, y + 13, 48, 18, "#334155");
+      fillPixelRect(ctx, x - 18, y + 4, 36, 15, "#64748B");
+      fillPixelRect(ctx, x - 10, y - 3, 20, 8, "#94A3B8");
+      fillPixelRect(ctx, x - 4, y - 19, 8, 18, tone);
+      fillPixelRect(ctx, x + 4, y - 14, 26, 6, "#CBD5E1");
+      fillPixelRect(ctx, x + 27, y - 15, 5, 8, "#FDE68A");
       break;
     case "satellite":
       fillPixelRect(ctx, x - 8, y - 5 + pulse, 16, 10, "#CBD5E1");
@@ -406,14 +458,18 @@ function drawObject(
       break;
     case "git_vane":
       fillPixelRect(ctx, x - 2, y - 18, 4, 42, "#94A3B8");
-      fillPixelRect(ctx, x - 14, y - 14, 12, 4, tone);
-      fillPixelRect(ctx, x + 2, y - 5, 16, 4, tone);
-      fillPixelRect(ctx, x - 8, y + 10, 20, 4, tone);
+      fillPixelRect(ctx, x - 14, y - 9, 28, 3, "#CBD5E1");
+      fillPixelRect(ctx, x - 1, y - 22, 3, 30, "#CBD5E1");
+      fillPixelRect(ctx, x - 18, y - 13, 8, 8, tone);
+      fillPixelRect(ctx, x + 10, y - 13, 8, 8, "#86EFAC");
+      fillPixelRect(ctx, x - 5, y - 26, 8, 8, "#F8FAFC");
+      fillPixelRect(ctx, x - 4, y + 4, 8, 8, "#FDE68A");
       break;
     case "market_comet":
-      fillPixelRect(ctx, x - 10, y - 8 + pulse, 20, 16, "#A855F7");
-      fillPixelRect(ctx, x - 6, y - 4 + pulse, 12, 8, "#FDE68A");
-      fillPixelRect(ctx, x - 34, y + pulse, 20, 4, "rgba(253,186,116,0.7)");
+      fillPixelRect(ctx, x - 10, y - 7 + pulse, 20, 14, "#A855F7");
+      fillPixelRect(ctx, x - 5, y - 3 + pulse, 10, 7, "#FDE68A");
+      fillPixelRect(ctx, x - 29, y + pulse, 17, 3, "rgba(253,186,116,0.52)");
+      fillPixelRect(ctx, x - 40, y + 3 + pulse, 9, 2, "rgba(253,186,116,0.32)");
       break;
     case "seed":
       fillPixelRect(ctx, x - 3, y, 6, 20, "#15803D");
@@ -433,36 +489,47 @@ function drawVitality(
   const groundY = height * 0.8;
 
   if (world.vitality === "lush") {
-    for (let i = 0; i < width; i += 46) {
-      const bloomY = groundY + 18 + Math.sin(frame / 28 + i) * 2;
+    for (let i = 8; i < width; ) {
+      const offset = (i * 11) % 37;
+      const bloomY = groundY + 16 + Math.sin(frame / 30 + i) * 2;
       fillPixelRect(ctx, i + 10, bloomY, 4, 4, "#FDE68A");
       fillPixelRect(ctx, i + 14, bloomY - 4, 4, 4, "#F9A8D4");
       fillPixelRect(ctx, i + 14, bloomY + 4, 4, 4, "#86EFAC");
+      i += 56 + offset;
     }
     return;
   }
 
   if (world.vitality === "growing") {
-    for (let i = 20; i < width; i += 62) {
+    for (let i = 20; i < width; ) {
+      const offset = (i * 13) % 41;
       const sway = Math.sin(frame / 32 + i) * 2;
       fillPixelRect(ctx, i + sway, groundY + 12, 4, 18, "#16A34A");
       fillPixelRect(ctx, i - 9 + sway, groundY + 14, 12, 5, "#86EFAC");
       fillPixelRect(ctx, i + 3 + sway, groundY + 8, 14, 5, "#4ADE80");
+      i += 66 + offset;
     }
     return;
   }
 
-  for (let i = 0; i < width; ) {
-    const offset = (i * 13) % 31;
+  for (let i = 18; i < width; ) {
+    const offset = (i * 13) % 47;
     const x = i + offset;
     const sway = Math.sin(frame / 36 + x) * 3;
     const heightOffset = (i * 7) % 10;
-    fillPixelRect(ctx, x + sway, groundY + 10 - heightOffset, 4, 24, "#365314");
-    fillPixelRect(ctx, x - 7 + sway, groundY + 15, 14, 3, "#854D0E");
-    if (i % 3 === 0) {
-      fillPixelRect(ctx, x + 7 + sway, groundY + 24, 3, 3, "#EF4444");
+    fillPixelRect(ctx, x + sway, groundY + 10 - heightOffset, 4, 18, "#365314");
+    fillPixelRect(ctx, x - 6 + sway, groundY + 16, 12, 3, "#854D0E");
+    if (i % 5 === 0) {
+      fillPixelRect(
+        ctx,
+        x + 8 + sway,
+        groundY + 22,
+        3,
+        3,
+        "rgba(239,68,68,0.58)",
+      );
     }
-    i += 48 + offset;
+    i += 104 + offset;
   }
 }
 
@@ -704,7 +771,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         state={state}
         stage={stage}
         palette={palette}
-        displaySize={compact ? 170 : 220}
+        displaySize={compact ? 210 : 252}
         speechText={speechOverride}
         speechControls={activeSpeech ? activeSpeech.controls : undefined}
         randomizeBubblePosition
