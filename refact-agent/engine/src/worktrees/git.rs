@@ -79,9 +79,26 @@ pub fn repo_root(repo: &Repository) -> Result<PathBuf, String> {
 }
 
 pub fn current_branch(repo: &Repository) -> Option<String> {
-    repo.head()
-        .ok()
-        .and_then(|head| head.shorthand().map(|s| s.to_string()))
+    let head = repo.head().ok()?;
+    if !head.is_branch() {
+        return None;
+    }
+    head.shorthand().map(|s| s.to_string())
+}
+
+pub fn local_branches(repo: &Repository) -> Vec<String> {
+    let mut branches = Vec::new();
+    let Ok(iter) = repo.branches(Some(git2::BranchType::Local)) else {
+        return branches;
+    };
+    for item in iter.flatten() {
+        if let Ok(Some(name)) = item.0.name() {
+            branches.push(name.to_string());
+        }
+    }
+    branches.sort();
+    branches.dedup();
+    branches
 }
 
 pub fn head_commit(repo: &Repository) -> Result<String, String> {
@@ -140,7 +157,12 @@ pub fn create_worktree(
 
     let ref_name = format!("refs/heads/{}", branch_name);
     let (branch_ref, branch_was_created) = match repo.find_reference(&ref_name) {
-        Ok(reference) => (reference, false),
+        Ok(_) => {
+            return Err(format!(
+                "Branch '{}' already exists; choose a new worktree branch name or attach the existing worktree",
+                branch_name
+            ));
+        }
         Err(e) if e.code() == git2::ErrorCode::NotFound => {
             let reference = repo
                 .branch(branch_name, &commit, false)
@@ -153,8 +175,17 @@ pub fn create_worktree(
 
     let mut options = git2::WorktreeAddOptions::new();
     options.reference(Some(&branch_ref));
-    repo.worktree(worktree_name, worktree_path, Some(&mut options))
-        .map_err(|e| format!("Failed to create worktree '{}': {}", worktree_name, e))?;
+    if let Err(e) = repo.worktree(worktree_name, worktree_path, Some(&mut options)) {
+        if branch_was_created {
+            let _ = repo
+                .find_branch(branch_name, git2::BranchType::Local)
+                .and_then(|mut branch| branch.delete());
+        }
+        return Err(format!(
+            "Failed to create worktree '{}': {}",
+            worktree_name, e
+        ));
+    }
 
     Ok(WorktreeCreateResult {
         branch_was_created,

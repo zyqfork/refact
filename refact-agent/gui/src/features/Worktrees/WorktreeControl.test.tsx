@@ -70,11 +70,13 @@ function makeWorktreeRecord(
 function makeWorktreeList(
   records: WorktreeRecordView[],
   sourceCurrentBranch: string | null = "dev",
+  sourceBranches: string[] = sourceCurrentBranch ? [sourceCurrentBranch] : [],
 ): WorktreeListResponse {
   return {
     project_hash: "project-hash",
     source_workspace_root: "/repo",
     source_current_branch: sourceCurrentBranch,
+    source_branches: sourceBranches,
     worktrees: records,
   };
 }
@@ -82,9 +84,12 @@ function makeWorktreeList(
 function worktreesList(
   records: WorktreeRecordView[],
   sourceCurrentBranch: string | null = "dev",
+  sourceBranches?: string[],
 ) {
   return http.get("http://127.0.0.1:8001/v1/worktrees", () =>
-    HttpResponse.json(makeWorktreeList(records, sourceCurrentBranch)),
+    HttpResponse.json(
+      makeWorktreeList(records, sourceCurrentBranch, sourceBranches),
+    ),
   );
 }
 
@@ -252,8 +257,9 @@ function renderControl(
   worktree?: WorktreeMeta | null,
   host: Host = "web",
   sourceCurrentBranch: string | null = "dev",
+  sourceBranches?: string[],
 ) {
-  server.use(worktreesList(records, sourceCurrentBranch));
+  server.use(worktreesList(records, sourceCurrentBranch, sourceBranches));
   return render(<WorktreeControl />, {
     preloadedState: {
       chat: makeChatState("chat-1", worktree),
@@ -328,12 +334,12 @@ describe("WorktreeControl", () => {
     });
   });
 
-  test("no-worktree label falls back to main without source branch", async () => {
+  test("no-worktree label shows no branch without source branch", async () => {
     renderControl([], null, "web", null);
 
     await waitFor(() => {
       expect(screen.getByTestId("worktree-control-trigger")).toHaveTextContent(
-        "Main",
+        "No branch",
       );
     });
   });
@@ -408,9 +414,9 @@ describe("WorktreeControl", () => {
     await waitFor(() => expect(createCalls).toHaveLength(1));
     expect(createCalls[0]).toMatchObject({
       branch: "refact/chat/new",
+      base_branch: "dev",
       kind: "chat",
     });
-    expect(createCalls[0]).not.toHaveProperty("base_branch");
     expect(createCalls[0]).not.toHaveProperty("chat_id");
     await waitFor(() => expect(commandCalls).toHaveLength(1));
     expect(commandCalls[0]).toMatchObject({
@@ -424,16 +430,19 @@ describe("WorktreeControl", () => {
     });
   });
 
-  test("create modal sends base branch only after explicit text entry", async () => {
+  test("create modal requires and sends selected base branch", async () => {
     const created = makeWorktreeRecord("wt-explicit-base", "refact/chat/base");
     const createCalls: JsonObject[] = [];
     server.use(
-      worktreesList([], null),
+      worktreesList([], "dev", ["dev", "feature/base"]),
       createWorktreeHandler(created, createCalls),
       commandCapture([]),
     );
 
-    const { user } = renderControl([], null, "web", null);
+    const { user } = renderControl([], null, "web", "dev", [
+      "dev",
+      "feature/base",
+    ]);
 
     await user.click(screen.getByTestId("worktree-control-trigger"));
     await user.click(
@@ -441,7 +450,9 @@ describe("WorktreeControl", () => {
         name: "Create worktree",
       }),
     );
-    await user.type(screen.getByPlaceholderText("main"), "feature/base");
+    const baseBranchInput = screen.getByLabelText("Base branch");
+    await user.clear(baseBranchInput);
+    await user.type(baseBranchInput, "feature/base");
     await user.click(screen.getByRole("button", { name: /^Create$/ }));
 
     await waitFor(() => expect(createCalls).toHaveLength(1));

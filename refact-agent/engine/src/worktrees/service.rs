@@ -39,6 +39,7 @@ pub struct WorktreeService {
 
 impl WorktreeService {
     pub fn new(cache_dir: PathBuf, source_workspace_root: PathBuf) -> Result<Self, String> {
+        let cache_dir = normalize_existing_or_parent(&cache_dir);
         let source_workspace_root = canonicalize_existing_dir(&source_workspace_root)?;
         let project_hash = project_hash_for_path(&source_workspace_root);
         Ok(Self {
@@ -91,13 +92,16 @@ impl WorktreeService {
             .map(|record| self.record_view(record))
             .collect::<Result<Vec<_>, _>>()?;
         worktrees.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-        let source_current_branch = git::discover_repo(&self.source_workspace_root)
-            .ok()
-            .and_then(|repo| git::current_branch(&repo));
+        let (source_current_branch, source_branches) =
+            match git::discover_repo(&self.source_workspace_root) {
+                Ok(repo) => (git::current_branch(&repo), git::local_branches(&repo)),
+                Err(_) => (None, Vec::new()),
+            };
         Ok(WorktreeListResponse {
             project_hash: self.project_hash.clone(),
             source_workspace_root: self.source_workspace_root.clone(),
             source_current_branch,
+            source_branches,
             worktrees,
         })
     }
@@ -1294,6 +1298,14 @@ fn validate_registry_root(registry_dir: &Path, id: &str, root: &Path) -> Result<
             expected.display()
         ));
     }
+    if let Ok(metadata) = std::fs::symlink_metadata(&expected) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Worktree root '{}' must not be a symlink",
+                expected.display()
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1312,6 +1324,22 @@ fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(canonical)
+}
+
+fn normalize_existing_or_parent(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return dunce::simplified(&canonical).to_path_buf();
+    }
+    let Some(parent) = path.parent() else {
+        return normalize_lexical(path).unwrap_or_else(|_| path.to_path_buf());
+    };
+    let Some(file_name) = path.file_name() else {
+        return normalize_lexical(path).unwrap_or_else(|_| path.to_path_buf());
+    };
+    match std::fs::canonicalize(parent) {
+        Ok(canonical_parent) => dunce::simplified(&canonical_parent).join(file_name),
+        Err(_) => normalize_lexical(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
 }
 
 fn normalized_path_key(path: &Path) -> Result<PathBuf, String> {
@@ -1865,6 +1893,69 @@ mod worktree_registry_tests {
             Some(dev_head.as_str())
         );
         assert!(created.worktree.meta.root.join("dev_only.txt").is_file());
+    }
+
+    #[tokio::test]
+    async fn worktree_registry_create_rejects_existing_branch_reuse() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        let cache = temp.path().join("cache");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        run_git(&source, &["branch", "refact/chat/reused"]);
+        run_git(&source, &["checkout", "-b", "dev"]);
+        commit_file(&source, "dev_only.txt", "only on dev\n", "dev-only");
+        let service = WorktreeService::new(cache, source).unwrap();
+
+        let error = service
+            .create_worktree(CreateWorktreeRequest {
+                branch: Some("refact/chat/reused".to_string()),
+                kind: Some("chat".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn worktree_registry_create_cleans_branch_after_worktree_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let invalid_worktree_path = source.join("file.txt");
+
+        let error = match git::create_worktree(
+            &source,
+            &invalid_worktree_path,
+            "cleanup-failure",
+            "refact/chat/cleanup-failure",
+            None,
+        ) {
+            Ok(_) => panic!("worktree creation unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("Failed to create worktree"));
+        assert!(!branch_exists(&source, "refact/chat/cleanup-failure"));
+    }
+
+    #[tokio::test]
+    async fn worktree_registry_list_detached_head_has_no_source_branch() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        let cache = temp.path().join("cache");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let head = run_git(&source, &["rev-parse", "HEAD"]);
+        run_git(&source, &["checkout", "--detach", head.trim()]);
+        let service = WorktreeService::new(cache, source).unwrap();
+
+        let list = service.list_worktrees().await.unwrap();
+
+        assert!(list.source_current_branch.is_none());
     }
 
     #[tokio::test]
@@ -2889,5 +2980,25 @@ mod worktree_registry_tests {
         let error = service.save_registry(&registry).await.unwrap_err();
 
         assert!(error.contains("must exactly match registry path"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_registry_rejects_expected_root_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let service = WorktreeService::new(cache, source).unwrap();
+        std::fs::create_dir_all(service.registry_dir()).unwrap();
+        std::os::unix::fs::symlink(&outside, service.registry_dir().join("wt_1")).unwrap();
+        let mut registry = service.load_registry().await.unwrap();
+        registry.records.push(sample_record(&service, "wt_1"));
+
+        let error = service.save_registry(&registry).await.unwrap_err();
+
+        assert!(error.contains("must not be a symlink"));
     }
 }

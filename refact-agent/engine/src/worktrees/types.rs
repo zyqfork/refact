@@ -152,6 +152,8 @@ pub struct WorktreeListResponse {
     pub source_workspace_root: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_current_branch: Option<String>,
+    #[serde(default)]
+    pub source_branches: Vec<String>,
     pub worktrees: Vec<WorktreeRecordView>,
 }
 

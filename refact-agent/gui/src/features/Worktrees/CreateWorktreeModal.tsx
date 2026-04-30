@@ -1,12 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Button,
-  Dialog,
-  Flex,
-  Select,
-  Text,
-  TextField,
-} from "@radix-ui/themes";
+import { Button, Dialog, Flex, Text, TextField } from "@radix-ui/themes";
 import styles from "./Worktrees.module.css";
 
 export type CreateWorktreeValues = {
@@ -65,6 +58,8 @@ export const CreateWorktreeModal: React.FC<CreateWorktreeModalProps> = ({
     });
   }, [baseBranch, branchName, onCreate]);
 
+  const canCreate = !isCreating && baseBranch.trim().length > 0;
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Content maxWidth="420px">
@@ -91,28 +86,23 @@ export const CreateWorktreeModal: React.FC<CreateWorktreeModalProps> = ({
             <Text size="2" weight="medium">
               Base branch
             </Text>
-            {normalizedBaseOptions.length > 0 ? (
-              <Select.Root
-                value={baseBranch || normalizedBaseOptions[0]}
-                onValueChange={setBaseBranch}
-                disabled={isCreating}
-              >
-                <Select.Trigger aria-label="Base branch" />
-                <Select.Content>
-                  {normalizedBaseOptions.map((branch) => (
-                    <Select.Item key={branch} value={branch}>
-                      {branch}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-            ) : (
-              <TextField.Root
-                value={baseBranch}
-                placeholder="main"
-                onChange={(event) => setBaseBranch(event.target.value)}
-                disabled={isCreating}
-              />
+            <Text size="1" color="gray">
+              Worktree will be created from this branch.
+            </Text>
+            <TextField.Root
+              aria-label="Base branch"
+              list="worktree-base-branch-options"
+              value={baseBranch}
+              placeholder="Current branch unavailable"
+              onChange={(event) => setBaseBranch(event.target.value)}
+              disabled={isCreating}
+            />
+            {normalizedBaseOptions.length > 0 && (
+              <datalist id="worktree-base-branch-options">
+                {normalizedBaseOptions.map((branch) => (
+                  <option key={branch} value={branch} />
+                ))}
+              </datalist>
             )}
           </div>
 
@@ -137,7 +127,7 @@ export const CreateWorktreeModal: React.FC<CreateWorktreeModalProps> = ({
           <Button
             type="button"
             onClick={() => void handleCreate()}
-            disabled={isCreating}
+            disabled={!canCreate}
           >
             {isCreating ? "Creating..." : "Create"}
           </Button>

@@ -84,7 +84,11 @@ export const WorktreeControl: React.FC = () => {
   const [createError, setCreateError] = useState<string | null>(null);
   const copyToClipboard = useCopyToClipboard();
   const { openFolderInNewWindow } = useEventsBusForIDE();
-  const { data, isLoading } = useListWorktreesQuery(undefined);
+  const { data, isLoading } = useListWorktreesQuery(undefined, {
+    pollingInterval: 5000,
+    refetchOnFocus: true,
+    refetchOnReconnect: true,
+  });
   const [createWorktree, createState] = useCreateWorktreeMutation();
   const [deleteWorktree] = useDeleteWorktreeMutation();
   const [openWorktree] = useOpenWorktreeMutation();
@@ -97,7 +101,9 @@ export const WorktreeControl: React.FC = () => {
   const mainWorkspacePath = data?.source_workspace_root;
   const copyPath = currentWorktree?.root ?? mainWorkspacePath ?? null;
   const sourceBranch = data?.source_current_branch?.trim();
-  const mainLabel = sourceBranch ? compactWorktreeLabel(sourceBranch) : "Main";
+  const mainLabel = sourceBranch
+    ? compactWorktreeLabel(sourceBranch)
+    : "No branch";
   const label = currentWorktree ? worktreeLabel(currentWorktree) : mainLabel;
   const branchLabel = currentWorktree?.branch?.trim();
   const fullLabel = currentWorktree
@@ -106,30 +112,27 @@ export const WorktreeControl: React.FC = () => {
       : currentWorktree.root
     : sourceBranch
       ? `Main workspace · ${sourceBranch}`
-      : "Main workspace";
-  const hasTriggerLabel =
-    currentWorktree !== null
-      ? true
-      : sourceBranch !== undefined && sourceBranch.length > 0;
-  const triggerLabel = hasTriggerLabel ? fullLabel : "Main workspace";
+      : "Main workspace · no branch detected";
+  const triggerLabel = fullLabel;
   const hostCanOpenFolder =
     host === "vscode" || host === "jetbrains" || host === "ide";
   const branchSuggestion = useMemo(
     () => defaultBranchName(chatId || DEFAULT_MODE),
     [chatId],
   );
-  const baseBranch =
-    currentWorktree?.branch ??
-    currentWorktree?.base_branch ??
-    sourceBranch ??
-    "";
+  const baseBranch = sourceBranch ?? "";
   const baseBranchOptions = useMemo(() => {
-    const branches = records.flatMap((record) => [
-      record.meta.base_branch,
-      record.meta.branch,
-    ]);
+    const sourceBranches = data?.source_branches ?? [];
+    const branches = [
+      sourceBranch,
+      ...sourceBranches,
+      ...records.flatMap((record) => [
+        record.meta.base_branch,
+        record.meta.branch,
+      ]),
+    ];
     return branches.filter((branch): branch is string => Boolean(branch));
-  }, [records]);
+  }, [data?.source_branches, records, sourceBranch]);
 
   const attachWorktree = useCallback(
     async (worktree: WorktreeMeta | null): Promise<boolean> => {
