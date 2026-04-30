@@ -210,7 +210,7 @@ export const worktreesApi = createApi({
   endpoints: (builder) => ({
     listWorktrees: builder.query<
       WorktreeListResponse,
-      { source_workspace_root?: string } | void
+      { source_workspace_root?: string } | undefined
     >({
       queryFn: async (args, api, _opts, baseQuery) => {
         const state = api.getState() as RootState;

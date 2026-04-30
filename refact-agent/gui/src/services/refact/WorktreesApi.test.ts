@@ -80,11 +80,8 @@ function jsonResponse(data: unknown): Response {
 }
 
 function firstRequest(fetchMock: ReturnType<typeof vi.fn<FetchLike>>): Request {
-  const call = fetchMock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected fetch call");
-  }
-  const [input, init] = call;
+  expect(fetchMock).toHaveBeenCalled();
+  const [input, init] = fetchMock.mock.calls[0];
   return input instanceof Request ? input : new Request(input, init);
 }
 
