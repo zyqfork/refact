@@ -4,7 +4,7 @@ use axum::http::{Response, StatusCode};
 use hyper::Body;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock as ARwLock;
 
@@ -42,11 +42,13 @@ async fn invalidate_caps(gcx: Arc<ARwLock<GlobalContext>>) {
     gcx_locked.caps_last_attempted_ts = 0;
 }
 use crate::providers::config::ProviderDefaults;
+use crate::providers::identity::{provider_identity_from_yaml, validate_provider_instance_id};
+use crate::providers::instance::ProviderInstance;
 use crate::providers::registry::{
     create_provider, delete_provider_config, save_provider_config, PROVIDER_NAMES,
 };
 use crate::providers::traits::{
-    AvailableModel, CustomModelConfig, ModelSource, ProviderModel, ProviderRuntime,
+    AvailableModel, CustomModelConfig, ModelSource, ProviderModel, ProviderRuntime, ProviderTrait,
     extra_headers_mapping_to_hash_map, parse_extra_headers_value,
 };
 use super::openrouter::OpenRouterProvider;
@@ -62,9 +64,348 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+#[derive(Clone)]
+struct HttpProviderIdentity {
+    instance_id: String,
+    base_provider: String,
+    display_name: String,
+}
+
+fn validate_instance_id_for_http(instance_id: &str) -> Result<(), ScratchError> {
+    validate_provider_instance_id(instance_id)
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))
+}
+
+fn yaml_string_field(
+    value: &serde_yaml::Value,
+    key: &str,
+    allow_empty: bool,
+) -> Result<Option<String>, ScratchError> {
+    let Some(field) = value.get(key) else {
+        return Ok(None);
+    };
+    let Some(text) = field.as_str() else {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Provider field '{key}' must be a string"),
+        ));
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        if allow_empty {
+            return Ok(None);
+        }
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Provider field '{key}' cannot be empty"),
+        ));
+    }
+    Ok(Some(text.to_string()))
+}
+
+fn ensure_settings_mapping(
+    settings: serde_yaml::Value,
+) -> Result<serde_yaml::Mapping, ScratchError> {
+    match settings {
+        serde_yaml::Value::Mapping(map) => Ok(map),
+        _ => Err(ScratchError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Provider settings must be a YAML mapping".to_string(),
+        )),
+    }
+}
+
+fn provider_display_name(base_provider: &str) -> Result<String, ScratchError> {
+    create_provider(base_provider)
+        .map(|provider| provider.display_name().to_string())
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Unknown base provider '{base_provider}'"),
+            )
+        })
+}
+
+async fn identity_for_model_management(
+    config_dir: &std::path::Path,
+    provider_name: &str,
+) -> Result<HttpProviderIdentity, ScratchError> {
+    validate_instance_id_for_http(provider_name)?;
+    if let Some(existing_settings) =
+        read_existing_provider_settings(config_dir, provider_name).await?
+    {
+        let identity = provider_identity_from_yaml(provider_name, &existing_settings)
+            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+        let display_name = identity
+            .display_name
+            .clone()
+            .unwrap_or(provider_display_name(&identity.base_provider)?);
+        return Ok(HttpProviderIdentity {
+            instance_id: identity.instance_id,
+            base_provider: identity.base_provider,
+            display_name,
+        });
+    }
+    if create_provider(provider_name).is_none() {
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            format!("Provider '{}' not found or not configured", provider_name),
+        ));
+    }
+    Ok(HttpProviderIdentity {
+        instance_id: provider_name.to_string(),
+        base_provider: provider_name.to_string(),
+        display_name: provider_display_name(provider_name)?,
+    })
+}
+
+async fn ensure_provider_for_model_management(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
+) -> Result<(), ScratchError> {
+    let (config_dir, already_registered) = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        (
+            gcx_locked.config_dir.clone(),
+            registry.get(provider_name).is_some(),
+        )
+    };
+    if already_registered {
+        return Ok(());
+    }
+    if provider_file_exists(&config_dir, provider_name) {
+        reload_provider_from_disk(gcx, provider_name, &config_dir).await
+    } else {
+        let identity = identity_for_model_management(&config_dir, provider_name).await?;
+        let provider = create_provider(&identity.base_provider).ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::NOT_FOUND,
+                format!("Provider '{}' not found or not configured", provider_name),
+            )
+        })?;
+        let provider: Box<dyn ProviderTrait> = if identity.instance_id == identity.base_provider {
+            provider
+        } else {
+            Box::new(ProviderInstance::new(
+                identity.instance_id,
+                identity.base_provider,
+                identity.display_name,
+                provider,
+            ))
+        };
+        let gcx_locked = gcx.read().await;
+        let mut registry = gcx_locked.providers.write().await;
+        registry.add(provider);
+        Ok(())
+    }
+}
+
+fn settings_with_identity(provider: &dyn ProviderTrait) -> serde_json::Value {
+    let mut settings = provider.provider_settings_as_json();
+    if let serde_json::Value::Object(map) = &mut settings {
+        map.insert(
+            "base_provider".to_string(),
+            serde_json::Value::String(provider.base_provider_name().to_string()),
+        );
+        map.insert(
+            "display_name".to_string(),
+            serde_json::Value::String(provider.display_name().to_string()),
+        );
+    }
+    settings
+}
+
+fn provider_list_item(provider: &dyn ProviderTrait) -> ProviderListItem {
+    let (enabled, readonly) = match provider.build_runtime() {
+        Ok(runtime) => (runtime.enabled, provider.is_readonly()),
+        Err(_) => (false, provider.is_readonly()),
+    };
+    let has_creds = provider.has_credentials();
+    let model_count = provider.selected_model_count();
+    let status = if has_creds && model_count > 0 && enabled {
+        "active"
+    } else if has_creds {
+        "configured"
+    } else {
+        "not_configured"
+    };
+    ProviderListItem {
+        name: provider.name().to_string(),
+        base_provider: provider.base_provider_name().to_string(),
+        display_name: provider.display_name().to_string(),
+        enabled,
+        readonly,
+        has_credentials: has_creds,
+        status,
+        model_count,
+    }
+}
+
+fn provider_file_path(config_dir: &std::path::Path, instance_id: &str) -> std::path::PathBuf {
+    config_dir
+        .join("providers.d")
+        .join(format!("{}.yaml", instance_id))
+}
+
+fn provider_file_exists(config_dir: &std::path::Path, instance_id: &str) -> bool {
+    provider_file_path(config_dir, instance_id).exists()
+}
+
+async fn read_existing_provider_settings(
+    config_dir: &std::path::Path,
+    instance_id: &str,
+) -> Result<Option<serde_yaml::Value>, ScratchError> {
+    let config_path = provider_file_path(config_dir, instance_id);
+    if !provider_file_exists(config_dir, instance_id) {
+        return Ok(None);
+    }
+    let content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read config: {e}"),
+        )
+    })?;
+    let value = serde_yaml::from_str(&content).map_err(|e| {
+        ScratchError::new(
+            StatusCode::CONFLICT,
+            format!("Existing config is invalid YAML: {e}. Fix manually or delete the file."),
+        )
+    })?;
+    Ok(Some(value))
+}
+
+async fn resolve_provider_update_identity(
+    config_dir: &std::path::Path,
+    instance_id: &str,
+    registry_identity: Option<HttpProviderIdentity>,
+    settings: &serde_yaml::Value,
+) -> Result<HttpProviderIdentity, ScratchError> {
+    validate_instance_id_for_http(instance_id)?;
+    let request_base = yaml_string_field(settings, "base_provider", false)?;
+    let request_display = yaml_string_field(settings, "display_name", true)?;
+    let existing_settings = read_existing_provider_settings(config_dir, instance_id).await?;
+    let disk_identity = existing_settings
+        .as_ref()
+        .and_then(|value| provider_identity_from_yaml(instance_id, value).ok());
+    let disk_display = existing_settings.as_ref().and_then(|value| {
+        yaml_string_field(value, "display_name", true)
+            .ok()
+            .flatten()
+    });
+
+    let base_provider = if let Some(existing) = registry_identity.as_ref() {
+        if let Some(request_base) = request_base.as_ref() {
+            if request_base != &existing.base_provider {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Provider instance '{}' already uses base_provider '{}'",
+                        instance_id, existing.base_provider
+                    ),
+                ));
+            }
+        }
+        existing.base_provider.clone()
+    } else if let Some(identity) = disk_identity.as_ref() {
+        if let Some(request_base) = request_base.as_ref() {
+            if request_base != &identity.base_provider {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Provider instance '{}' already uses base_provider '{}'",
+                        instance_id, identity.base_provider
+                    ),
+                ));
+            }
+        }
+        identity.base_provider.clone()
+    } else if let Some(request_base) = request_base {
+        request_base
+    } else if create_provider(instance_id).is_some() {
+        instance_id.to_string()
+    } else {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Provider instance '{}' must include base_provider",
+                instance_id
+            ),
+        ));
+    };
+
+    if create_provider(&base_provider).is_none() {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Unknown base provider '{base_provider}'"),
+        ));
+    }
+
+    let display_name = request_display
+        .or_else(|| registry_identity.map(|identity| identity.display_name))
+        .or(disk_display)
+        .or_else(|| disk_identity.and_then(|identity| identity.display_name))
+        .unwrap_or(provider_display_name(&base_provider)?);
+
+    Ok(HttpProviderIdentity {
+        instance_id: instance_id.to_string(),
+        base_provider,
+        display_name,
+    })
+}
+
+fn settings_with_forced_identity(
+    settings: serde_yaml::Value,
+    identity: &HttpProviderIdentity,
+) -> Result<serde_yaml::Value, ScratchError> {
+    let mut map = ensure_settings_mapping(settings)?;
+    map.insert(
+        serde_yaml::Value::String("base_provider".to_string()),
+        serde_yaml::Value::String(identity.base_provider.clone()),
+    );
+    map.insert(
+        serde_yaml::Value::String("display_name".to_string()),
+        serde_yaml::Value::String(identity.display_name.clone()),
+    );
+    Ok(serde_yaml::Value::Mapping(map))
+}
+
+fn provider_from_yaml(
+    instance_id: &str,
+    yaml: serde_yaml::Value,
+) -> Result<Box<dyn ProviderTrait>, ScratchError> {
+    let identity = provider_identity_from_yaml(instance_id, &yaml)
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+    let mut provider = create_provider(&identity.base_provider).ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Unknown base provider '{}'", identity.base_provider),
+        )
+    })?;
+    provider.provider_settings_apply(yaml).map_err(|e| {
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to apply settings: {e}"),
+        )
+    })?;
+    if identity.wrap_instance {
+        provider = match identity.display_name {
+            Some(display_name) => Box::new(ProviderInstance::new(
+                identity.instance_id,
+                identity.base_provider,
+                display_name,
+                provider,
+            )),
+            None => Box::new(ProviderInstance::from_inner(identity.instance_id, provider)),
+        };
+    }
+    Ok(provider)
+}
+
 #[derive(Serialize)]
 struct ProviderListItem {
     name: String,
+    base_provider: String,
     display_name: String,
     enabled: bool,
     readonly: bool,
@@ -85,48 +426,24 @@ pub async fn handle_v1_providers_list(
     let registry = gcx_locked.providers.read().await;
 
     let mut providers = Vec::new();
+    let mut seen = HashSet::new();
+    for (_, provider) in registry.iter() {
+        seen.insert(provider.name().to_string());
+        providers.push(provider_list_item(provider));
+    }
     for name in PROVIDER_NAMES {
-        if let Some(provider) = registry.get(name) {
-            if provider.is_hidden_from_list() {
-                continue;
-            }
-            let (enabled, readonly) = match provider.build_runtime() {
-                Ok(runtime) => (runtime.enabled, provider.is_readonly()),
-                Err(_) => (false, provider.is_readonly()),
-            };
-            let has_creds = provider.has_credentials();
-            let model_count = provider.selected_model_count();
-            let status = if has_creds && model_count > 0 && enabled {
-                "active"
-            } else if has_creds {
-                "configured"
-            } else {
-                "not_configured"
-            };
-            providers.push(ProviderListItem {
-                name: provider.name().to_string(),
-                display_name: provider.display_name().to_string(),
-                enabled,
-                readonly,
-                has_credentials: has_creds,
-                status,
-                model_count,
-            });
-        } else if let Some(default_provider) = create_provider(name) {
+        if seen.contains(*name) {
+            continue;
+        }
+        if let Some(default_provider) = create_provider(name) {
             if default_provider.is_hidden_from_list() {
                 continue;
             }
-            providers.push(ProviderListItem {
-                name: default_provider.name().to_string(),
-                display_name: default_provider.display_name().to_string(),
-                enabled: false,
-                readonly: default_provider.is_readonly(),
-                has_credentials: false,
-                status: "not_configured",
-                model_count: 0,
-            });
+            seen.insert((*name).to_string());
+            providers.push(provider_list_item(default_provider.as_ref()));
         }
     }
+    providers.sort_by(|a, b| a.name.cmp(&b.name));
 
     let response = ProviderListResponse { providers };
     json_response(StatusCode::OK, &response)
@@ -152,6 +469,7 @@ pub struct OpenRouterModelEndpointsResponse {
 #[derive(Serialize)]
 struct ProviderDetailResponse {
     name: String,
+    base_provider: String,
     display_name: String,
     enabled: bool,
     readonly: bool,
@@ -166,20 +484,20 @@ pub async fn handle_v1_provider_get(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let gcx_locked = gcx.read().await;
     let registry = gcx_locked.providers.read().await;
 
-    let provider: Box<dyn crate::providers::traits::ProviderTrait> =
-        if let Some(p) = registry.get(&params.name) {
-            p.clone_box()
-        } else if let Some(p) = create_provider(&params.name) {
-            p
-        } else {
-            return Err(ScratchError::new(
-                StatusCode::NOT_FOUND,
-                format!("Provider '{}' not found", params.name),
-            ));
-        };
+    let provider: Box<dyn ProviderTrait> = if let Some(p) = registry.get(&params.name) {
+        p.clone_box()
+    } else if let Some(p) = create_provider(&params.name) {
+        p
+    } else {
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            format!("Provider '{}' not found", params.name),
+        ));
+    };
 
     let runtime = provider.build_runtime().ok();
     let has_creds = provider.has_credentials();
@@ -194,13 +512,14 @@ pub async fn handle_v1_provider_get(
     };
     let response = ProviderDetailResponse {
         name: provider.name().to_string(),
+        base_provider: provider.base_provider_name().to_string(),
         display_name: provider.display_name().to_string(),
         enabled,
         readonly: provider.is_readonly(),
         has_credentials: has_creds,
         selected_models_count: selected_count,
         status,
-        settings: provider.provider_settings_as_json(),
+        settings: settings_with_identity(provider.as_ref()),
         runtime: runtime.map(|r| r.redacted()),
     };
 
@@ -217,6 +536,7 @@ pub async fn handle_v1_provider_schema(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let schema = {
         let gcx_locked = gcx.read().await;
         let registry = gcx_locked.providers.read().await;
@@ -246,6 +566,7 @@ pub async fn handle_v1_provider_update(
     Path(params): Path<ProviderPathParams>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let settings: serde_yaml::Value =
         if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
             serde_yaml::to_value(json_val).map_err(|e| {
@@ -263,74 +584,46 @@ pub async fn handle_v1_provider_update(
             })?
         };
 
-    let config_dir = {
+    let (config_dir, registry_identity) = {
         let gcx_locked = gcx.read().await;
         let registry = gcx_locked.providers.read().await;
-        if let Some(provider) = registry.get(&params.name) {
+        let registry_identity = if let Some(provider) = registry.get(&params.name) {
             if provider.is_readonly() {
                 return Err(ScratchError::new(
                     StatusCode::FORBIDDEN,
                     format!("Provider '{}' is readonly", params.name),
                 ));
             }
-        }
-        gcx_locked.config_dir.clone()
+            Some(HttpProviderIdentity {
+                instance_id: provider.name().to_string(),
+                base_provider: provider.base_provider_name().to_string(),
+                display_name: provider.display_name().to_string(),
+            })
+        } else {
+            None
+        };
+        (gcx_locked.config_dir.clone(), registry_identity)
     };
 
-    if create_provider(&params.name).is_none() {
-        return Err(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("Unknown provider type '{}'", params.name),
-        ));
-    }
-
     let settings = strip_derived_fields(settings);
-    let merged_settings =
-        merge_provider_settings_preserving_secrets(&config_dir, &params.name, settings).await?;
+    let identity =
+        resolve_provider_update_identity(&config_dir, &params.name, registry_identity, &settings)
+            .await?;
+    let settings = settings_with_forced_identity(settings, &identity)?;
+    let merged_settings = merge_provider_settings_preserving_secrets(
+        &config_dir,
+        &identity.instance_id,
+        &identity.base_provider,
+        settings,
+    )
+    .await?;
+    let merged_settings = settings_with_forced_identity(merged_settings, &identity)?;
 
-    save_provider_config(&config_dir, &params.name, merged_settings)
+    save_provider_config(&config_dir, &identity.instance_id, merged_settings)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    {
-        let gcx_locked = gcx.read().await;
-        let mut registry = gcx_locked.providers.write().await;
-
-        let provider_path = config_dir
-            .join("providers.d")
-            .join(format!("{}.yaml", params.name));
-        let content = tokio::fs::read_to_string(&provider_path)
-            .await
-            .map_err(|e| {
-                ScratchError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to reload config: {}", e),
-                )
-            })?;
-
-        let yaml: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Invalid YAML after save: {}", e),
-            )
-        })?;
-
-        let mut provider = create_provider(&params.name).ok_or_else(|| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create provider".to_string(),
-            )
-        })?;
-
-        provider.provider_settings_apply(yaml).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to apply settings: {}", e),
-            )
-        })?;
-
-        registry.add(provider);
-    }
+    reload_provider_from_disk(gcx.clone(), &identity.instance_id, &config_dir).await?;
 
     invalidate_caps(gcx).await;
 
@@ -341,12 +634,7 @@ pub async fn handle_v1_provider_delete(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
-    if create_provider(&params.name).is_none() {
-        return Err(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("Unknown provider type '{}'", params.name),
-        ));
-    }
+    validate_instance_id_for_http(&params.name)?;
 
     let config_dir = {
         let gcx_locked = gcx.read().await;
@@ -356,6 +644,13 @@ pub async fn handle_v1_provider_delete(
                 return Err(ScratchError::new(
                     StatusCode::FORBIDDEN,
                     format!("Provider '{}' is readonly", params.name),
+                ));
+            }
+        } else if create_provider(&params.name).is_none() {
+            if !provider_file_exists(&gcx_locked.config_dir, &params.name) {
+                return Err(ScratchError::new(
+                    StatusCode::NOT_FOUND,
+                    format!("Provider '{}' not found", params.name),
                 ));
             }
         }
@@ -369,9 +664,7 @@ pub async fn handle_v1_provider_delete(
     {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
-        if let Some(default_provider) = create_provider(&params.name) {
-            registry.add(default_provider);
-        }
+        registry.remove(&params.name);
     }
 
     invalidate_caps(gcx).await;
@@ -388,6 +681,7 @@ pub async fn handle_v1_provider_models(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let gcx_locked = gcx.read().await;
     let registry = gcx_locked.providers.read().await;
 
@@ -608,6 +902,7 @@ pub async fn handle_v1_models(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Query(params): Query<ModelsQueryParams>,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.provider_name)?;
     let gcx_locked = gcx.read().await;
     let registry = gcx_locked.providers.read().await;
 
@@ -678,6 +973,7 @@ pub async fn handle_v1_provider_available_models(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let (provider, http_client) = {
         let gcx_locked = gcx.read().await;
         let registry = gcx_locked.providers.read().await;
@@ -758,6 +1054,7 @@ pub async fn handle_v1_provider_model_toggle(
     Path(params): Path<ProviderPathParams>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let request: ModelToggleRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -790,6 +1087,7 @@ pub async fn handle_v1_provider_model_provider_update(
     Path(params): Path<ProviderPathParams>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let request: ModelProviderRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1006,21 +1304,11 @@ async fn update_model_enabled_state(
     model_id: &str,
     enabled: bool,
 ) -> Result<Response<Body>, ScratchError> {
+    ensure_provider_for_model_management(gcx.clone(), provider_name).await?;
     // Capture previous state for rollback
     let (config_dir, previous_enabled_models, previous_disabled_models) = {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
-
-        // Auto-create default provider if not yet configured (e.g. first model toggle on Ollama)
-        if registry.get(provider_name).is_none() {
-            let default_provider = create_provider(provider_name).ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    format!("Unknown provider type '{}'", provider_name),
-                )
-            })?;
-            registry.add(default_provider);
-        }
 
         let provider = registry.get_mut(provider_name).ok_or_else(|| {
             ScratchError::new(
@@ -1086,19 +1374,10 @@ async fn update_model_selected_provider_state(
     model_id: &str,
     selected_provider: Option<String>,
 ) -> Result<Response<Body>, ScratchError> {
+    ensure_provider_for_model_management(gcx.clone(), provider_name).await?;
     let (config_dir, previous_selected_provider) = {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
-
-        if registry.get(provider_name).is_none() {
-            let default_provider = create_provider(provider_name).ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    format!("Unknown provider type '{}'", provider_name),
-                )
-            })?;
-            registry.add(default_provider);
-        }
 
         let provider = registry.get_mut(provider_name).ok_or_else(|| {
             ScratchError::new(
@@ -1128,6 +1407,8 @@ async fn update_model_selected_provider_state(
         return Err(e);
     }
 
+    reload_provider_from_disk(gcx.clone(), provider_name, &config_dir).await?;
+
     invalidate_caps(gcx).await;
 
     json_response(
@@ -1154,6 +1435,7 @@ pub async fn handle_v1_provider_add_custom_model(
     Path(params): Path<ProviderPathParams>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
     let request: AddCustomModelRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1169,19 +1451,10 @@ pub async fn handle_v1_provider_add_custom_model(
         ));
     }
 
+    ensure_provider_for_model_management(gcx.clone(), &params.name).await?;
     let (config_dir, previous_config) = {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
-
-        if registry.get(&params.name).is_none() {
-            let default_provider = create_provider(&params.name).ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    format!("Unknown provider type '{}'", params.name),
-                )
-            })?;
-            registry.add(default_provider);
-        }
 
         let provider = registry.get_mut(&params.name).ok_or_else(|| {
             ScratchError::new(
@@ -1214,6 +1487,8 @@ pub async fn handle_v1_provider_add_custom_model(
         }
         return Err(e);
     }
+
+    reload_provider_from_disk(gcx.clone(), &params.name, &config_dir).await?;
 
     invalidate_caps(gcx).await;
 
@@ -1256,6 +1531,7 @@ async fn handle_v1_provider_remove_custom_model_impl(
     provider_name: &str,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(provider_name)?;
     let request: RemoveCustomModelRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1333,6 +1609,8 @@ async fn handle_v1_provider_remove_custom_model_impl(
         return Err(e);
     }
 
+    reload_provider_from_disk(gcx.clone(), provider_name, &config_dir).await?;
+
     invalidate_caps(gcx).await;
 
     json_response(
@@ -1365,17 +1643,16 @@ fn strip_derived_fields(value: serde_yaml::Value) -> serde_yaml::Value {
 
 async fn merge_provider_settings_preserving_secrets(
     config_dir: &std::path::Path,
-    provider_name: &str,
+    instance_id: &str,
+    base_provider: &str,
     new_settings: serde_yaml::Value,
 ) -> Result<serde_yaml::Value, ScratchError> {
-    let config_path = config_dir
-        .join("providers.d")
-        .join(format!("{}.yaml", provider_name));
+    let config_path = provider_file_path(config_dir, instance_id);
 
-    if !config_path.exists() {
-        if provider_name == "custom" {
+    if !provider_file_exists(config_dir, instance_id) {
+        if base_provider == "custom" {
             return merge_yaml_preserving_secrets_for_provider(
-                provider_name,
+                base_provider,
                 serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
                 new_settings,
             )
@@ -1401,7 +1678,7 @@ async fn merge_provider_settings_preserving_secrets(
         )
     })?;
 
-    merge_yaml_preserving_secrets_for_provider(provider_name, existing, new_settings)
+    merge_yaml_preserving_secrets_for_provider(base_provider, existing, new_settings)
         .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, e))
 }
 
@@ -1479,6 +1756,28 @@ fn strip_masked_secrets(value: serde_yaml::Value) -> serde_yaml::Value {
     }
 }
 
+fn identity_from_provider(provider: &dyn ProviderTrait) -> HttpProviderIdentity {
+    HttpProviderIdentity {
+        instance_id: provider.name().to_string(),
+        base_provider: provider.base_provider_name().to_string(),
+        display_name: provider.display_name().to_string(),
+    }
+}
+
+fn ensure_yaml_identity_fields(
+    yaml_map: &mut serde_yaml::Mapping,
+    identity: &HttpProviderIdentity,
+) {
+    yaml_map.insert(
+        serde_yaml::Value::String("base_provider".to_string()),
+        serde_yaml::Value::String(identity.base_provider.clone()),
+    );
+    yaml_map.insert(
+        serde_yaml::Value::String("display_name".to_string()),
+        serde_yaml::Value::String(identity.display_name.clone()),
+    );
+}
+
 /// Helper function to patch provider config - only updates enabled_models/disabled_models and custom_models
 /// while preserving secrets and other fields.
 ///
@@ -1489,7 +1788,8 @@ async fn patch_provider_model_config(
     config_dir: &std::path::Path,
     provider_name: &str,
 ) -> Result<(), ScratchError> {
-    let (enabled_models, disabled_models, custom_models, selected_providers) = {
+    validate_instance_id_for_http(provider_name)?;
+    let (identity, enabled_models, disabled_models, custom_models, selected_providers) = {
         let gcx_locked = gcx.read().await;
         let registry = gcx_locked.providers.read().await;
         let provider = registry.get(provider_name).ok_or_else(|| {
@@ -1499,6 +1799,7 @@ async fn patch_provider_model_config(
             )
         })?;
         (
+            identity_from_provider(provider),
             provider.enabled_models().to_vec(),
             provider.disabled_models().to_vec(),
             provider.custom_models().clone(),
@@ -1507,10 +1808,10 @@ async fn patch_provider_model_config(
     };
 
     let providers_dir = config_dir.join("providers.d");
-    let config_path = providers_dir.join(format!("{}.yaml", provider_name));
+    let config_path = provider_file_path(config_dir, provider_name);
 
     // Load existing YAML - DO NOT use unwrap_or_default() to avoid destroying config on parse error
-    let mut yaml_map: serde_yaml::Mapping = if config_path.exists() {
+    let mut yaml_map: serde_yaml::Mapping = if provider_file_exists(config_dir, provider_name) {
         let content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
             ScratchError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1533,6 +1834,8 @@ async fn patch_provider_model_config(
     } else {
         serde_yaml::Mapping::new()
     };
+
+    ensure_yaml_identity_fields(&mut yaml_map, &identity);
 
     // Update only the model-related fields, preserving everything else (including secrets)
     // Always persist enabled_models (even empty) so clearing all models is reflected on reload
@@ -1634,13 +1937,12 @@ async fn reload_provider_from_disk(
     provider_name: &str,
     config_dir: &std::path::Path,
 ) -> Result<(), ScratchError> {
-    let provider_path = config_dir
-        .join("providers.d")
-        .join(format!("{}.yaml", provider_name));
-    if !provider_path.exists() {
+    validate_instance_id_for_http(provider_name)?;
+    if !provider_file_exists(config_dir, provider_name) {
         return Ok(());
     }
 
+    let provider_path = provider_file_path(config_dir, provider_name);
     let content = tokio::fs::read_to_string(&provider_path)
         .await
         .map_err(|e| {
@@ -1660,28 +1962,8 @@ async fn reload_provider_from_disk(
     let gcx_locked = gcx.read().await;
     let mut registry = gcx_locked.providers.write().await;
 
-    if let Some(existing) = registry.get_mut(provider_name) {
-        existing.provider_settings_apply(yaml).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to apply settings: {}", e),
-            )
-        })?;
-    } else {
-        let mut provider = create_provider(provider_name).ok_or_else(|| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create provider".to_string(),
-            )
-        })?;
-        provider.provider_settings_apply(yaml).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to apply settings: {}", e),
-            )
-        })?;
-        registry.add(provider);
-    }
+    let provider = provider_from_yaml(provider_name, yaml)?;
+    registry.add(provider);
 
     Ok(())
 }
@@ -2499,7 +2781,7 @@ async fn save_provider_oauth_tokens(
         None
     };
     let providers_dir = config_dir.join("providers.d");
-    let config_path = providers_dir.join(format!("{}.yaml", provider_name));
+    let config_path = provider_file_path(config_dir, provider_name);
 
     tokio::fs::create_dir_all(&providers_dir)
         .await
@@ -2510,7 +2792,7 @@ async fn save_provider_oauth_tokens(
             )
         })?;
 
-    let mut yaml_map: serde_yaml::Mapping = if config_path.exists() {
+    let mut yaml_map: serde_yaml::Mapping = if provider_file_exists(config_dir, provider_name) {
         let content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
             ScratchError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2620,6 +2902,21 @@ async fn save_provider_oauth_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn response_json(response: Response<Body>) -> serde_json::Value {
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn provider_config_json(
+        config_dir: &std::path::Path,
+        provider_name: &str,
+    ) -> serde_json::Value {
+        let content = tokio::fs::read_to_string(provider_file_path(&config_dir, provider_name))
+            .await
+            .unwrap();
+        serde_json::to_value(serde_yaml::from_str::<serde_yaml::Value>(&content).unwrap()).unwrap()
+    }
 
     fn merged_settings_json(
         provider_name: &str,
@@ -2791,6 +3088,279 @@ oauth_tokens:
 
         assert_eq!(merged["oauth_tokens"]["access_token"], "new-access");
         assert_eq!(merged["oauth_tokens"]["refresh_token"], "old-refresh");
+    }
+
+    #[tokio::test]
+    async fn provider_update_openai_alias_writes_instance_file_with_identity() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let response = handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "openai",
+                    "display_name": "Work OpenAI",
+                    "api_key": "sk-two",
+                    "enabled": true,
+                    "enabled_models": ["gpt-4.1"]
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert!(provider_file_exists(&config_dir, "openai_2"));
+        assert!(!provider_file_exists(&config_dir, "openai"));
+        let saved = provider_config_json(&config_dir, "openai_2").await;
+        assert_eq!(saved["base_provider"], "openai");
+        assert_eq!(saved["display_name"], "Work OpenAI");
+        assert_eq!(saved["api_key"], "sk-two");
+
+        let (name, base, display, enabled_models) = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            let provider = registry.get("openai_2").unwrap();
+            (
+                provider.name().to_string(),
+                provider.base_provider_name().to_string(),
+                provider.display_name().to_string(),
+                provider.enabled_models().to_vec(),
+            )
+        };
+        assert_eq!(name, "openai_2");
+        assert_eq!(base, "openai");
+        assert_eq!(display, "Work OpenAI");
+        assert_eq!(enabled_models, vec!["gpt-4.1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn provider_get_openai_alias_returns_identity_fields() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "openai",
+                    "display_name": "Work OpenAI",
+                    "api_key": "sk-two"
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let response = handle_v1_provider_get(
+            Extension(gcx),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+
+        assert_eq!(body["name"], "openai_2");
+        assert_eq!(body["base_provider"], "openai");
+        assert_eq!(body["display_name"], "Work OpenAI");
+        assert_eq!(body["settings"]["base_provider"], "openai");
+        assert_eq!(body["settings"]["display_name"], "Work OpenAI");
+    }
+
+    #[tokio::test]
+    async fn provider_model_toggle_updates_only_alias_file_and_preserves_identity() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("openai.yaml"),
+            "base_provider: openai\ndisplay_name: Main OpenAI\napi_key: sk-main\nenabled_models:\n  - gpt-4.1\n",
+        )
+        .await
+        .unwrap();
+        reload_provider_from_disk(gcx.clone(), "openai", &config_dir)
+            .await
+            .unwrap();
+        handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "openai",
+                    "display_name": "Work OpenAI",
+                    "api_key": "sk-two",
+                    "enabled_models": ["gpt-4.1-mini"]
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let response = handle_v1_provider_model_toggle(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+            hyper::body::Bytes::from(r#"{"model_id":"gpt-4.1","enabled":true}"#),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let main = provider_config_json(&config_dir, "openai").await;
+        let alias = provider_config_json(&config_dir, "openai_2").await;
+        assert_eq!(main["enabled_models"], json!(["gpt-4.1"]));
+        assert_eq!(alias["base_provider"], "openai");
+        assert_eq!(alias["display_name"], "Work OpenAI");
+        assert_eq!(alias["enabled_models"], json!(["gpt-4.1-mini", "gpt-4.1"]));
+    }
+
+    #[tokio::test]
+    async fn custom_alias_update_preserves_masked_api_key_and_replaces_extra_headers() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("custom_2.yaml"),
+            r#"
+base_provider: custom
+display_name: Work Custom
+api_key: sk-old
+chat_endpoint: https://example.com/v1/chat/completions
+enabled: true
+enabled_models:
+  - custom-model
+custom_models:
+  custom-model:
+    n_ctx: 4096
+extra_headers:
+  X-Keep: keep-secret
+  X-Replace: old-value
+  X-Remove: remove-me
+"#,
+        )
+        .await
+        .unwrap();
+
+        let response = handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "custom_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "custom",
+                    "display_name": "Work Custom",
+                    "api_key": "***",
+                    "extra_headers": {
+                        "X-Keep": "***",
+                        "X-Replace": "new-value"
+                    }
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let saved = provider_config_json(&config_dir, "custom_2").await;
+        assert_eq!(saved["base_provider"], "custom");
+        assert_eq!(saved["display_name"], "Work Custom");
+        assert_eq!(saved["api_key"], "sk-old");
+        assert_eq!(saved["extra_headers"]["X-Keep"], "keep-secret");
+        assert_eq!(saved["extra_headers"]["X-Replace"], "new-value");
+        assert!(saved["extra_headers"].get("X-Remove").is_none());
+
+        let runtime = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            registry.get("custom_2").unwrap().build_runtime().unwrap()
+        };
+        assert_eq!(runtime.name, "custom_2");
+        assert_eq!(runtime.display_name, "Work Custom");
+        assert_eq!(runtime.api_key, "sk-old");
+        assert_eq!(
+            runtime.extra_headers.get("X-Keep").map(String::as_str),
+            Some("keep-secret")
+        );
+        assert_eq!(
+            runtime.extra_headers.get("X-Replace").map(String::as_str),
+            Some("new-value")
+        );
+        assert!(runtime.extra_headers.get("X-Remove").is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_delete_instance_removes_only_that_instance() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("openai.yaml"),
+            "base_provider: openai\ndisplay_name: Main OpenAI\napi_key: sk-main\n",
+        )
+        .await
+        .unwrap();
+        reload_provider_from_disk(gcx.clone(), "openai", &config_dir)
+            .await
+            .unwrap();
+        handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "openai",
+                    "display_name": "Work OpenAI",
+                    "api_key": "sk-two"
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let response = handle_v1_provider_delete(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert!(provider_file_exists(&config_dir, "openai"));
+        assert!(!provider_file_exists(&config_dir, "openai_2"));
+        let main = provider_config_json(&config_dir, "openai").await;
+        assert_eq!(main["api_key"], "sk-main");
+        let (has_main, has_alias) = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            (
+                registry.get("openai").is_some(),
+                registry.get("openai_2").is_some(),
+            )
+        };
+        assert!(has_main);
+        assert!(!has_alias);
     }
 
     #[tokio::test]
@@ -3010,10 +3580,9 @@ extra_headers:
             .await
             .unwrap();
 
-        let content =
-            tokio::fs::read_to_string(config_dir.join("providers.d").join("openai_codex.yaml"))
-                .await
-                .unwrap();
+        let content = tokio::fs::read_to_string(provider_file_path(&config_dir, "openai_codex"))
+            .await
+            .unwrap();
         let yaml: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
         assert_eq!(
             yaml.get("OPENAI_API_KEY").and_then(|value| value.as_str()),
@@ -3043,10 +3612,9 @@ extra_headers:
             .await
             .unwrap();
 
-        let content =
-            tokio::fs::read_to_string(config_dir.join("providers.d").join("github_copilot.yaml"))
-                .await
-                .unwrap();
+        let content = tokio::fs::read_to_string(provider_file_path(&config_dir, "github_copilot"))
+            .await
+            .unwrap();
         let yaml: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
         assert_eq!(
             yaml.get("oauth_tokens")
@@ -3143,13 +3711,9 @@ extra_headers:
         assert!(!enabled_models.iter().any(|model| model == "stale-custom"));
         assert!(!has_custom_model);
 
-        let content = tokio::fs::read_to_string(
-            config_dir
-                .join("providers.d")
-                .join(format!("{provider_name}.yaml")),
-        )
-        .await
-        .unwrap();
+        let content = tokio::fs::read_to_string(provider_file_path(&config_dir, provider_name))
+            .await
+            .unwrap();
         let yaml: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
         assert!(yaml
             .get("enabled_models")
