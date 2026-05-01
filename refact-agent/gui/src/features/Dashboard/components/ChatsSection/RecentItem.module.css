@@ -71,6 +71,35 @@
   flex-shrink: 0;
 }
 
+.worktreeBadge {
+  min-width: 0;
+  max-width: 180px;
+  flex-shrink: 1;
+}
+
+.worktreeName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.diffStatsBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: var(--space-1);
+  flex-shrink: 0;
+}
+
+.diffStatsAdd {
+  color: var(--green-11);
+}
+
+.diffStatsRemove {
+  color: var(--red-11);
+}
+
 .actions {
   display: flex;
   align-items: center;

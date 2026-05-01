@@ -64,6 +64,62 @@ type RelationInfo = {
 
 const ICON_SIZE = 10;
 
+function compactWorktreeLabel(label: string): string {
+  const normalized = label.replace(/[\\/]+$/, "");
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 3) return normalized || label;
+  return parts.slice(-3).join("/");
+}
+
+function worktreeLabel(node: HistoryTreeNode): string | null {
+  const branch = node.worktree?.branch?.trim();
+  const label =
+    branch !== undefined && branch.length > 0 ? branch : node.worktree?.root;
+  return label ? compactWorktreeLabel(label) : null;
+}
+
+function hasDiffStats(node: HistoryTreeNode): boolean {
+  return (
+    (node.total_lines_added ?? 0) > 0 || (node.total_lines_removed ?? 0) > 0
+  );
+}
+
+function WorktreeBadge({ node }: { node: HistoryTreeNode }) {
+  const label = worktreeLabel(node);
+  if (!label) return null;
+
+  const added = node.total_lines_added ?? 0;
+  const removed = node.total_lines_removed ?? 0;
+  const branch = node.worktree?.branch?.trim();
+  const fullLabel =
+    branch !== undefined && branch.length > 0
+      ? branch
+      : node.worktree?.root !== undefined && node.worktree.root.length > 0
+        ? node.worktree.root
+        : label;
+
+  return (
+    <Tooltip content={`Worktree: ${fullLabel}`}>
+      <Badge
+        size="1"
+        color="green"
+        variant="soft"
+        className={styles.worktreeBadge}
+      >
+        <span className={styles.worktreeName}>{label}</span>
+        {hasDiffStats(node) && (
+          <span className={styles.diffStatsBadge}>
+            <span>(</span>
+            <span className={styles.diffStatsAdd}>+{added}</span>
+            <span className={styles.diffStatsRemove}>-{removed}</span>
+            <span>)</span>
+          </span>
+        )}
+      </Badge>
+    </Tooltip>
+  );
+}
+
 function getRelationInfo(
   node: HistoryTreeNode,
   depth: number,
@@ -126,6 +182,7 @@ function ItemHoverContent({
   relation: RelationInfo | null;
 }) {
   const messageCount = node.message_count ?? 0;
+  const label = worktreeLabel(node);
   return (
     <Flex direction="column" gap="2">
       <Text size="2" weight="bold" truncate>
@@ -161,6 +218,15 @@ function ItemHoverContent({
             {relation.icon}
             <Text size="1">{relation.label}</Text>
           </Flex>
+        </Flex>
+      )}
+
+      {label && (
+        <Flex gap="1" align="center">
+          <Text size="1" color="gray">
+            Worktree:
+          </Text>
+          <Text size="1">{label}</Text>
         </Flex>
       )}
 
@@ -249,7 +315,7 @@ export const RecentItem: React.FC<RecentItemProps> = ({
     messageCount > 0 ||
     (node.total_lines_added ?? 0) > 0 ||
     (node.total_lines_removed ?? 0) > 0;
-  const showHover = hasStats || !!relation;
+  const showHover = hasStats || !!relation || !!node.worktree;
 
   const handleStartEdit = useCallback(
     (e: React.MouseEvent) => {
@@ -413,6 +479,7 @@ export const RecentItem: React.FC<RecentItemProps> = ({
             {node.mode}
           </Badge>
         )}
+        <WorktreeBadge node={node} />
         <Text size="1" color="gray" className={styles.time}>
           {formatRelativeTime(node.updatedAt)}
         </Text>

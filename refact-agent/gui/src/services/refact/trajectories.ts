@@ -2,6 +2,7 @@ import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { ChatThread } from "../../features/Chat/Thread/types";
 import { ChatMessages } from "./types";
 import { RootState } from "../../app/store";
+import type { WorktreeMeta } from "./worktrees";
 
 export type TrajectoryMeta = {
   id: string;
@@ -27,6 +28,7 @@ export type TrajectoryMeta = {
     | "completed"
     | "error";
   root_chat_id?: string;
+  worktree?: WorktreeMeta | null;
   total_prompt_tokens?: number;
   total_completion_tokens?: number;
   total_tokens?: number;
@@ -47,6 +49,7 @@ export type TrajectoryData = {
   mode: string;
   tool_use: string;
   messages: ChatMessages;
+  worktree?: WorktreeMeta | null;
   boost_reasoning?: boolean;
   context_tokens_cap?: number;
   include_project_info?: boolean;
@@ -75,6 +78,7 @@ export type TrajectoryEvent = {
   parent_id?: string;
   link_type?: string;
   root_chat_id?: string;
+  worktree?: WorktreeMeta | null;
   model?: string;
   mode?: string;
   total_lines_added?: number;
@@ -110,6 +114,7 @@ export function chatThreadToTrajectoryData(
     mode: thread.mode ?? "AGENT",
     tool_use: thread.tool_use ?? "agent",
     messages: thread.messages,
+    worktree: thread.worktree,
     boost_reasoning: thread.boost_reasoning,
     context_tokens_cap: thread.context_tokens_cap,
     include_project_info: thread.include_project_info,
@@ -127,6 +132,7 @@ export function trajectoryDataToChatThread(data: TrajectoryData): ChatThread {
     mode: data.mode as ChatThread["mode"],
     tool_use: data.tool_use as ChatThread["tool_use"],
     messages: data.messages,
+    worktree: data.worktree,
     boost_reasoning: data.boost_reasoning ?? false,
     context_tokens_cap: data.context_tokens_cap,
     include_project_info: data.include_project_info ?? true,

@@ -22,6 +22,7 @@ import {
   TrajectoryMeta,
   trajectoryDataToChatThread,
 } from "../../services/refact";
+import type { WorktreeMeta } from "../../services/refact/worktrees";
 import { AppDispatch, RootState } from "../../app/store";
 import { ideToolCallResponse } from "../../hooks/useEventBusForIDE";
 
@@ -37,6 +38,7 @@ export type ChatHistoryItem = Omit<ChatThread, "new_chat_suggested"> & {
   task_role?: string;
   agent_id?: string;
   card_id?: string;
+  worktree?: WorktreeMeta | null;
   session_state?:
     | "idle"
     | "generating"
@@ -301,6 +303,7 @@ function trajectoryMetaToHistoryItem(meta: TrajectoryMeta): ChatHistoryItem {
     tasks_total: meta.tasks_total,
     tasks_done: meta.tasks_done,
     tasks_failed: meta.tasks_failed,
+    worktree: meta.worktree,
   };
 }
 
@@ -378,6 +381,7 @@ export const historySlice = createSlice({
           existing.task_role = meta.task_role;
           existing.agent_id = meta.agent_id;
           existing.card_id = meta.card_id;
+          existing.worktree = meta.worktree;
           existing.session_state = meta.session_state;
           existing.message_count = meta.message_count;
           existing.root_chat_id = meta.root_chat_id;
@@ -413,6 +417,7 @@ export const historySlice = createSlice({
           existing.task_role = meta.task_role;
           existing.agent_id = meta.agent_id;
           existing.card_id = meta.card_id;
+          existing.worktree = meta.worktree;
           existing.session_state = meta.session_state;
           existing.message_count = meta.message_count;
           existing.root_chat_id = meta.root_chat_id;
@@ -507,6 +512,7 @@ export const historySlice = createSlice({
         root_chat_id?: string;
         total_lines_added?: number;
         total_lines_removed?: number;
+        worktree?: WorktreeMeta | null;
         model?: string;
         mode?: string;
         tasks_total?: number;
@@ -545,6 +551,9 @@ export const historySlice = createSlice({
       }
       if (action.payload.total_lines_removed !== undefined) {
         chat.total_lines_removed = action.payload.total_lines_removed;
+      }
+      if (action.payload.worktree !== undefined) {
+        chat.worktree = action.payload.worktree;
       }
       if (action.payload.model !== undefined) {
         chat.model = action.payload.model;

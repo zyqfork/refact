@@ -143,6 +143,7 @@ export function useSidebarSubscription() {
         event.error !== undefined ||
         event.model !== undefined ||
         event.mode !== undefined ||
+        event.worktree !== undefined ||
         event.total_lines_added !== undefined ||
         event.total_lines_removed !== undefined ||
         event.tasks_total !== undefined ||
@@ -166,6 +167,7 @@ export function useSidebarSubscription() {
           metaPatch.link_type = event.link_type;
         if (event.root_chat_id !== undefined)
           metaPatch.root_chat_id = event.root_chat_id;
+        if (event.worktree !== undefined) metaPatch.worktree = event.worktree;
         if (event.total_lines_added !== undefined)
           metaPatch.total_lines_added = event.total_lines_added;
         if (event.total_lines_removed !== undefined)
@@ -231,6 +233,7 @@ export function useSidebarSubscription() {
               parent_id: event.parent_id,
               link_type: event.link_type,
               root_chat_id: event.root_chat_id,
+              worktree: event.worktree,
               total_lines_added: event.total_lines_added ?? 0,
               total_lines_removed: event.total_lines_removed ?? 0,
               tasks_total: 0,
@@ -370,6 +373,7 @@ export function useSidebarSubscription() {
         parent_id: t.parent_id,
         link_type: t.link_type,
         root_chat_id: t.root_chat_id,
+        worktree: t.worktree,
         total_lines_added: t.total_lines_added,
         total_lines_removed: t.total_lines_removed,
         tasks_total: t.tasks_total,
