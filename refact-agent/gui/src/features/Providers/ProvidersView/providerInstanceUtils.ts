@@ -6,8 +6,10 @@ export type ProviderBaseOption = {
   label: string;
 };
 
-const INSTANCE_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
-const PROVIDER_ID_PREFIX = /^[a-z]/;
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const PROVIDER_ID_PREFIX = /^[A-Za-z0-9]/;
+const RESERVED_INSTANCE_IDS = new Set(["defaults", "refact"]);
+const MAX_INSTANCE_ID_LENGTH = 64;
 
 function titleCaseProviderId(providerId: string) {
   return providerId
@@ -67,13 +69,31 @@ export function validateProviderInstanceId(
 ) {
   const trimmedInstanceId = instanceId.trim();
   if (!trimmedInstanceId) return "Instance id is required.";
+  if (trimmedInstanceId.length > MAX_INSTANCE_ID_LENGTH) {
+    return "Instance id must be 64 characters or fewer.";
+  }
+  if (RESERVED_INSTANCE_IDS.has(trimmedInstanceId.toLowerCase())) {
+    return "This instance id is reserved.";
+  }
   if (!PROVIDER_ID_PREFIX.test(trimmedInstanceId)) {
-    return "Instance id must start with a lowercase letter.";
+    return "Instance id must start with an ASCII letter or digit.";
+  }
+  if (
+    trimmedInstanceId.includes(".") ||
+    trimmedInstanceId.includes("/") ||
+    trimmedInstanceId.includes("\\")
+  ) {
+    return "Instance id must not contain path characters.";
   }
   if (!INSTANCE_ID_PATTERN.test(trimmedInstanceId)) {
-    return "Use lowercase letters, numbers, and underscores only.";
+    return "Use ASCII letters, numbers, underscores, and hyphens only.";
   }
-  if (providerNames.includes(trimmedInstanceId)) {
+  if (
+    providerNames.some(
+      (providerName) =>
+        providerName.toLowerCase() === trimmedInstanceId.toLowerCase(),
+    )
+  ) {
     return "A provider with this id already exists.";
   }
   return null;

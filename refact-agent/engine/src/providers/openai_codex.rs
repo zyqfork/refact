@@ -1,6 +1,5 @@
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -212,93 +211,72 @@ impl OpenAICodexProvider {
         config_dir: &std::path::Path,
         instance_id: &str,
     ) -> Result<(), String> {
-        let providers_dir = config_dir.join("providers.d");
-        let config_path = providers_dir.join(format!("{}.yaml", instance_id));
+        let tokens = self.oauth_tokens.clone();
+        let session_id = self.session_id.clone();
+        crate::providers::config_store::update_provider_config(
+            config_dir,
+            instance_id,
+            |existing| {
+                let mut yaml_map = match existing {
+                    Some(value) => value.as_mapping().cloned().ok_or_else(|| {
+                        "Config file root is not a YAML mapping. Cannot safely patch.".to_string()
+                    })?,
+                    None => serde_yaml::Mapping::new(),
+                };
 
-        tokio::fs::create_dir_all(&providers_dir)
-            .await
-            .map_err(|e| format!("Failed to create providers.d: {}", e))?;
+                let mut tokens_map = yaml_map
+                    .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
+                    .and_then(|v| v.as_mapping())
+                    .cloned()
+                    .unwrap_or_default();
 
-        let mut yaml_map: serde_yaml::Mapping = if config_path.exists() {
-            let content = tokio::fs::read_to_string(&config_path)
-                .await
-                .map_err(|e| format!("Failed to read config: {}", e))?;
-            let value: serde_yaml::Value = serde_yaml::from_str(&content)
-                .map_err(|e| format!("Failed to parse YAML: {}", e))?;
-            value.as_mapping().cloned().ok_or_else(|| {
-                "Config file root is not a YAML mapping. Cannot safely patch.".to_string()
-            })?
-        } else {
-            serde_yaml::Mapping::new()
-        };
+                tokens_map.insert(
+                    serde_yaml::Value::String("access_token".to_string()),
+                    serde_yaml::Value::String(tokens.access_token),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("refresh_token".to_string()),
+                    serde_yaml::Value::String(tokens.refresh_token),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("expires_at".to_string()),
+                    serde_yaml::Value::Number(serde_yaml::Number::from(tokens.expires_at)),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("openai_api_key".to_string()),
+                    serde_yaml::Value::String(tokens.openai_api_key.clone()),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("chatgpt_account_id".to_string()),
+                    serde_yaml::Value::String(tokens.chatgpt_account_id),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("api_key_exchange_error".to_string()),
+                    serde_yaml::Value::String(tokens.api_key_exchange_error),
+                );
 
-        let mut tokens_map = yaml_map
-            .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
-            .and_then(|v| v.as_mapping())
-            .cloned()
-            .unwrap_or_default();
+                yaml_map.insert(
+                    serde_yaml::Value::String("oauth_tokens".to_string()),
+                    serde_yaml::Value::Mapping(tokens_map),
+                );
+                if tokens.openai_api_key.is_empty() {
+                    yaml_map.remove(serde_yaml::Value::String("OPENAI_API_KEY".to_string()));
+                } else {
+                    yaml_map.insert(
+                        serde_yaml::Value::String("OPENAI_API_KEY".to_string()),
+                        serde_yaml::Value::String(tokens.openai_api_key),
+                    );
+                }
+                yaml_map.insert(
+                    serde_yaml::Value::String("session_id".to_string()),
+                    serde_yaml::Value::String(session_id),
+                );
 
-        tokens_map.insert(
-            serde_yaml::Value::String("access_token".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.access_token.clone()),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("refresh_token".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.refresh_token.clone()),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("expires_at".to_string()),
-            serde_yaml::Value::Number(serde_yaml::Number::from(self.oauth_tokens.expires_at)),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("openai_api_key".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.openai_api_key.clone()),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("chatgpt_account_id".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.chatgpt_account_id.clone()),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("api_key_exchange_error".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.api_key_exchange_error.clone()),
-        );
-
-        yaml_map.insert(
-            serde_yaml::Value::String("oauth_tokens".to_string()),
-            serde_yaml::Value::Mapping(tokens_map),
-        );
-        if self.oauth_tokens.openai_api_key.is_empty() {
-            yaml_map.remove(serde_yaml::Value::String("OPENAI_API_KEY".to_string()));
-        } else {
-            yaml_map.insert(
-                serde_yaml::Value::String("OPENAI_API_KEY".to_string()),
-                serde_yaml::Value::String(self.oauth_tokens.openai_api_key.clone()),
-            );
-        }
-        yaml_map.insert(
-            serde_yaml::Value::String("session_id".to_string()),
-            serde_yaml::Value::String(self.session_id.clone()),
-        );
-
-        let content = serde_yaml::to_string(&yaml_map)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let unique_id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temp_path = config_path.with_extension(format!(
-            "yaml.tmp.oauth.{}.{}",
-            std::process::id(),
-            unique_id
-        ));
-
-        tokio::fs::write(&temp_path, &content)
-            .await
-            .map_err(|e| format!("Failed to write temp config: {}", e))?;
-        tokio::fs::rename(&temp_path, &config_path)
-            .await
-            .map_err(|e| format!("Failed to rename config: {}", e))?;
-
-        Ok(())
+                Ok(serde_yaml::Value::Mapping(yaml_map))
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     fn resolve_auth(&self) -> (AuthSource, CodexAuth) {

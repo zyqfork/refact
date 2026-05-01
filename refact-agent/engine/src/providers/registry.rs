@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::providers::config_store;
 use crate::providers::identity::{provider_identity_from_yaml, validate_provider_instance_id};
 use crate::providers::instance::ProviderInstance;
 use crate::providers::traits::ProviderTrait;
@@ -240,25 +241,13 @@ pub async fn load_providers_from_config(
     Ok(registry)
 }
 
+#[allow(dead_code)]
 pub async fn save_provider_config(
     config_dir: &Path,
     name: &str,
     settings: serde_yaml::Value,
 ) -> Result<(), String> {
-    validate_provider_instance_id(name)?;
-
-    let providers_dir = config_dir.join("providers.d");
-    tokio::fs::create_dir_all(&providers_dir)
-        .await
-        .map_err(|e| format!("Failed to create providers.d: {}", e))?;
-
-    let path = providers_dir.join(format!("{}.yaml", name));
-    let content = serde_yaml::to_string(&settings)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-    tokio::fs::write(&path, content)
-        .await
-        .map_err(|e| format!("Failed to write config: {}", e))
+    config_store::write_provider_config(config_dir, name, settings).await
 }
 
 pub async fn delete_provider_config(config_dir: &Path, name: &str) -> Result<(), String> {

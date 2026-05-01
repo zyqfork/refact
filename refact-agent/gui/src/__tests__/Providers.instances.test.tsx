@@ -10,6 +10,7 @@ import { AddProviderInstanceModal } from "../features/Providers/ProvidersView/Ad
 import {
   nextInstanceId,
   providerBaseOptions,
+  validateProviderInstanceId,
 } from "../features/Providers/ProvidersView/providerInstanceUtils";
 import {
   isProviderDetailResponse,
@@ -78,6 +79,31 @@ describe("Providers provider instances", () => {
         },
       ]),
     ).toEqual([{ id: "openai", label: "OpenAI" }]);
+  });
+
+  test("provider instance id validation matches backend shape", () => {
+    for (const id of ["1openai", "OpenAI-Work", "openai_2"]) {
+      expect(validateProviderInstanceId(id, [])).toBeNull();
+    }
+
+    expect(validateProviderInstanceId("_openai", [])).toBe(
+      "Instance id must start with an ASCII letter or digit.",
+    );
+    expect(validateProviderInstanceId("openai.2", [])).toBe(
+      "Instance id must not contain path characters.",
+    );
+    expect(validateProviderInstanceId("openai 2", [])).toBe(
+      "Use ASCII letters, numbers, underscores, and hyphens only.",
+    );
+    expect(validateProviderInstanceId("defaults", [])).toBe(
+      "This instance id is reserved.",
+    );
+    expect(validateProviderInstanceId("a".repeat(65), [])).toBe(
+      "Instance id must be 64 characters or fewer.",
+    );
+    expect(validateProviderInstanceId("OPENAI", ["openai"])).toBe(
+      "A provider with this id already exists.",
+    );
   });
 
   test("getProviderName prefers display name", () => {
@@ -184,6 +210,56 @@ describe("Providers provider instances", () => {
         display_name: "Work OpenAI",
         api_key: "new-key",
       });
+    } finally {
+      store.dispatch(providersApi.util.resetApiState());
+    }
+  });
+
+  test("provider update invalidates available models cache", async () => {
+    let availableModelsRequests = 0;
+
+    server.use(
+      http.get(
+        "http://127.0.0.1:8001/v1/providers/openai_work/available-models",
+        () => {
+          availableModelsRequests += 1;
+          return HttpResponse.json({
+            models: [],
+            source: "model_caps",
+          });
+        },
+      ),
+      http.post("http://127.0.0.1:8001/v1/providers/openai_work", () =>
+        HttpResponse.json({ success: true }),
+      ),
+    );
+
+    const store = setUpStore(preloadedState);
+
+    try {
+      await store
+        .dispatch(
+          providersApi.endpoints.getAvailableModels.initiate({
+            providerName: "openai_work",
+          }),
+        )
+        .unwrap();
+      expect(availableModelsRequests).toBe(1);
+
+      await store
+        .dispatch(
+          providersApi.endpoints.updateProvider.initiate({
+            providerName: "openai_work",
+            settings: {
+              base_provider: "openai",
+              display_name: "Work OpenAI",
+              api_key: "new-key",
+            },
+          }),
+        )
+        .unwrap();
+
+      await waitFor(() => expect(availableModelsRequests).toBe(2));
     } finally {
       store.dispatch(providersApi.util.resetApiState());
     }

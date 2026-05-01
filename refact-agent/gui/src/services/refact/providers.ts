@@ -960,6 +960,7 @@ export const providersApi = createApi({
       invalidatesTags: (_result, _error, { providerName }) => [
         { type: "PROVIDER", id: providerName },
         { type: "PROVIDER_MODELS", id: providerName },
+        { type: "AVAILABLE_MODELS", id: providerName },
         { type: "PROVIDERS", id: "LIST" },
       ],
       queryFn: async (args, api, extraOptions, baseQuery) => {

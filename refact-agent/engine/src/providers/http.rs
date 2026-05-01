@@ -42,11 +42,10 @@ async fn invalidate_caps(gcx: Arc<ARwLock<GlobalContext>>) {
     gcx_locked.caps_last_attempted_ts = 0;
 }
 use crate::providers::config::ProviderDefaults;
+use crate::providers::config_store;
 use crate::providers::identity::{provider_identity_from_yaml, validate_provider_instance_id};
 use crate::providers::instance::ProviderInstance;
-use crate::providers::registry::{
-    create_provider, delete_provider_config, save_provider_config, PROVIDER_NAMES,
-};
+use crate::providers::registry::{create_provider, delete_provider_config, PROVIDER_NAMES};
 use crate::providers::traits::{
     AvailableModel, CustomModelConfig, ModelSource, ProviderModel, ProviderRuntime, ProviderTrait,
     extra_headers_mapping_to_hash_map, parse_extra_headers_value,
@@ -377,9 +376,7 @@ fn provider_list_item(provider: &dyn ProviderTrait) -> ProviderListItem {
 }
 
 fn provider_file_path(config_dir: &std::path::Path, instance_id: &str) -> std::path::PathBuf {
-    config_dir
-        .join("providers.d")
-        .join(format!("{}.yaml", instance_id))
+    config_store::provider_config_path(config_dir, instance_id)
 }
 
 fn provider_file_exists(config_dir: &std::path::Path, instance_id: &str) -> bool {
@@ -409,16 +406,24 @@ async fn read_existing_provider_settings(
     Ok(Some(value))
 }
 
-async fn resolve_provider_update_identity(
-    config_dir: &std::path::Path,
+fn provider_config_store_error(error: String) -> ScratchError {
+    let status = if error.contains("invalid YAML") || error.contains("root is not a YAML mapping") {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    ScratchError::new(status, error)
+}
+
+fn resolve_provider_update_identity_from_existing(
     instance_id: &str,
     registry_identity: Option<HttpProviderIdentity>,
     settings: &serde_yaml::Value,
+    existing_settings: Option<&serde_yaml::Value>,
 ) -> Result<HttpProviderIdentity, ScratchError> {
     validate_instance_id_for_http(instance_id)?;
     let request_base = yaml_string_field(settings, "base_provider", false)?;
     let request_display = yaml_string_field(settings, "display_name", true)?;
-    let existing_settings = read_existing_provider_settings(config_dir, instance_id).await?;
     let disk_identity = existing_settings
         .as_ref()
         .and_then(|value| provider_identity_from_yaml(instance_id, value).ok());
@@ -751,22 +756,51 @@ pub async fn handle_v1_provider_update(
     };
 
     let settings = strip_derived_fields(settings);
-    let identity =
-        resolve_provider_update_identity(&config_dir, &params.name, registry_identity, &settings)
-            .await?;
-    let settings = settings_with_forced_identity(settings, &identity)?;
-    let merged_settings = merge_provider_settings_preserving_secrets(
-        &config_dir,
-        &identity.instance_id,
-        &identity.base_provider,
-        settings,
+    let identity_cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let identity_out = identity_cell.clone();
+    let config_dir_for_update = config_dir.clone();
+    let params_name = params.name.clone();
+    config_store::update_provider_config_with(
+        &config_dir_for_update,
+        &params.name,
+        provider_config_store_error,
+        move |existing_settings| {
+            let identity = resolve_provider_update_identity_from_existing(
+                &params_name,
+                registry_identity,
+                &settings,
+                existing_settings.as_ref(),
+            )?;
+            let settings = settings_with_forced_identity(settings, &identity)?;
+            let had_existing = existing_settings.is_some();
+            let existing = existing_settings
+                .unwrap_or_else(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            let merged_settings = if had_existing || identity.base_provider == "custom" {
+                merge_yaml_preserving_secrets_for_provider(
+                    &identity.base_provider,
+                    existing,
+                    settings,
+                )
+                .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, e))?
+            } else {
+                strip_masked_secrets(settings)
+            };
+            let merged_settings = settings_with_forced_identity(merged_settings, &identity)?;
+            *identity_cell.lock().expect("identity lock poisoned") = Some(identity);
+            Ok(merged_settings)
+        },
     )
     .await?;
-    let merged_settings = settings_with_forced_identity(merged_settings, &identity)?;
-
-    save_provider_config(&config_dir, &identity.instance_id, merged_settings)
-        .await
-        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let identity = identity_out
+        .lock()
+        .expect("identity lock poisoned")
+        .clone()
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Provider identity was not resolved".to_string(),
+            )
+        })?;
 
     reload_provider_from_disk(gcx.clone(), &identity.instance_id, &config_dir).await?;
 
@@ -1761,6 +1795,7 @@ fn strip_derived_fields(value: serde_yaml::Value) -> serde_yaml::Value {
     }
 }
 
+#[allow(dead_code)]
 async fn merge_provider_settings_preserving_secrets(
     config_dir: &std::path::Path,
     instance_id: &str,
@@ -1927,127 +1962,78 @@ async fn patch_provider_model_config(
         )
     };
 
-    let providers_dir = config_dir.join("providers.d");
-    let config_path = provider_file_path(config_dir, provider_name);
+    config_store::update_provider_config_with(
+        config_dir,
+        provider_name,
+        provider_config_store_error,
+        |existing| {
+            let mut yaml_map = match existing {
+                Some(value) => value.as_mapping().cloned().ok_or_else(|| {
+                    ScratchError::new(
+                        StatusCode::CONFLICT,
+                        "Config file root is not a YAML mapping. Cannot safely patch.".to_string(),
+                    )
+                })?,
+                None => serde_yaml::Mapping::new(),
+            };
 
-    // Load existing YAML - DO NOT use unwrap_or_default() to avoid destroying config on parse error
-    let mut yaml_map: serde_yaml::Mapping = if provider_file_exists(config_dir, provider_name) {
-        let content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read config: {}", e),
-            )
-        })?;
+            ensure_yaml_identity_fields(&mut yaml_map, &identity);
 
-        let value: serde_yaml::Value = serde_yaml::from_str(&content)
-            .map_err(|e| ScratchError::new(
-                StatusCode::CONFLICT,
-                format!("Config file is invalid YAML and cannot be safely patched: {}. Please fix the file manually.", e)
-            ))?;
+            yaml_map.insert(
+                serde_yaml::Value::String("enabled_models".to_string()),
+                serde_yaml::to_value(&enabled_models).map_err(|e| {
+                    ScratchError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to serialize enabled_models: {}", e),
+                    )
+                })?,
+            );
+            if !enabled_models.is_empty() {
+                yaml_map.insert(
+                    serde_yaml::Value::String("enabled".to_string()),
+                    serde_yaml::Value::Bool(true),
+                );
+            }
+            if !disabled_models.is_empty() {
+                yaml_map.insert(
+                    serde_yaml::Value::String("disabled_models".to_string()),
+                    serde_yaml::to_value(&disabled_models).map_err(|e| {
+                        ScratchError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to serialize disabled_models: {}", e),
+                        )
+                    })?,
+                );
+            } else {
+                yaml_map.remove(serde_yaml::Value::String("disabled_models".to_string()));
+            }
+            yaml_map.insert(
+                serde_yaml::Value::String("custom_models".to_string()),
+                serde_yaml::to_value(&custom_models).map_err(|e| {
+                    ScratchError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to serialize custom_models: {}", e),
+                    )
+                })?,
+            );
+            if selected_providers.is_empty() {
+                yaml_map.remove(serde_yaml::Value::String("selected_providers".to_string()));
+            } else {
+                yaml_map.insert(
+                    serde_yaml::Value::String("selected_providers".to_string()),
+                    serde_yaml::to_value(&selected_providers).map_err(|e| {
+                        ScratchError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to serialize selected_providers: {}", e),
+                        )
+                    })?,
+                );
+            }
 
-        value.as_mapping().cloned().ok_or_else(|| {
-            ScratchError::new(
-                StatusCode::CONFLICT,
-                "Config file root is not a YAML mapping. Cannot safely patch.".to_string(),
-            )
-        })?
-    } else {
-        serde_yaml::Mapping::new()
-    };
-
-    ensure_yaml_identity_fields(&mut yaml_map, &identity);
-
-    // Update only the model-related fields, preserving everything else (including secrets)
-    // Always persist enabled_models (even empty) so clearing all models is reflected on reload
-    yaml_map.insert(
-        serde_yaml::Value::String("enabled_models".to_string()),
-        serde_yaml::to_value(&enabled_models).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to serialize enabled_models: {}", e),
-            )
-        })?,
-    );
-    if !enabled_models.is_empty() {
-        yaml_map.insert(
-            serde_yaml::Value::String("enabled".to_string()),
-            serde_yaml::Value::Bool(true),
-        );
-    }
-    // Always persist disabled_models for denylist providers
-    if !disabled_models.is_empty() {
-        yaml_map.insert(
-            serde_yaml::Value::String("disabled_models".to_string()),
-            serde_yaml::to_value(&disabled_models).map_err(|e| {
-                ScratchError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to serialize disabled_models: {}", e),
-                )
-            })?,
-        );
-    } else {
-        yaml_map.remove(serde_yaml::Value::String("disabled_models".to_string()));
-    }
-    yaml_map.insert(
-        serde_yaml::Value::String("custom_models".to_string()),
-        serde_yaml::to_value(&custom_models).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to serialize custom_models: {}", e),
-            )
-        })?,
-    );
-    if selected_providers.is_empty() {
-        yaml_map.remove(serde_yaml::Value::String("selected_providers".to_string()));
-    } else {
-        yaml_map.insert(
-            serde_yaml::Value::String("selected_providers".to_string()),
-            serde_yaml::to_value(&selected_providers).map_err(|e| {
-                ScratchError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to serialize selected_providers: {}", e),
-                )
-            })?,
-        );
-    }
-
-    // Ensure directory exists
-    tokio::fs::create_dir_all(&providers_dir)
-        .await
-        .map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create providers.d: {}", e),
-            )
-        })?;
-
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique_id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path =
-        config_path.with_extension(format!("yaml.tmp.{}.{}", std::process::id(), unique_id));
-    let content = serde_yaml::to_string(&yaml_map).map_err(|e| {
-        ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to serialize config: {}", e),
-        )
-    })?;
-
-    tokio::fs::write(&temp_path, &content).await.map_err(|e| {
-        ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write temp config: {}", e),
-        )
-    })?;
-
-    tokio::fs::rename(&temp_path, &config_path)
-        .await
-        .map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to rename config: {}", e),
-            )
-        })?;
+            Ok(serde_yaml::Value::Mapping(yaml_map))
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -2063,7 +2049,7 @@ async fn reload_provider_from_disk(
     }
 
     let provider_path = provider_file_path(config_dir, provider_name);
-    let content = tokio::fs::read_to_string(&provider_path)
+    let content = tokio::fs::read_to_string(provider_path)
         .await
         .map_err(|e| {
             ScratchError::new(
@@ -2088,7 +2074,7 @@ async fn reload_provider_from_disk(
     Ok(())
 }
 
-async fn ensure_oauth_identity_for_instance(
+fn ensure_oauth_identity_for_instance_sync(
     config_dir: &std::path::Path,
     provider_name: &str,
     base_provider: &str,
@@ -2159,7 +2145,8 @@ pub async fn handle_v1_provider_oauth_start(
         "claude_code" => {
             let mode = crate::providers::claude_code_oauth::OAuthMode::Max;
             let (session_id, authorize_url) =
-                crate::providers::claude_code_oauth::start_oauth_session(mode).await;
+                crate::providers::claude_code_oauth::start_oauth_session(mode, params.name.clone())
+                    .await;
             json_response(
                 StatusCode::OK,
                 &json!({
@@ -2295,18 +2282,29 @@ pub async fn handle_v1_provider_oauth_exchange(
 
     match base_provider.as_str() {
         "claude_code" => {
-            let tokens = crate::providers::claude_code_oauth::exchange_code(
-                &http_client,
-                &request.session_id,
-                &request.code,
-            )
-            .await
-            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+            let (tokens, session_provider_name) =
+                crate::providers::claude_code_oauth::exchange_code(
+                    &http_client,
+                    &request.session_id,
+                    &request.code,
+                    &params.name,
+                )
+                .await
+                .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+            if session_provider_name != params.name {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "OAuth session belongs to provider '{}'",
+                        session_provider_name
+                    ),
+                ));
+            }
 
             save_provider_oauth_tokens(
                 &gcx,
                 &config_dir,
-                &params.name,
+                &session_provider_name,
                 "claude_code",
                 &serde_yaml::to_value(&tokens).map_err(|e| {
                     ScratchError::new(
@@ -2980,112 +2978,55 @@ async fn save_provider_oauth_tokens(
     } else {
         None
     };
-    let providers_dir = config_dir.join("providers.d");
-    let config_path = provider_file_path(config_dir, provider_name);
+    config_store::update_provider_config_with(
+        config_dir,
+        provider_name,
+        provider_config_store_error,
+        |existing| {
+            let mut yaml_map = match existing {
+                Some(value) => value.as_mapping().cloned().ok_or_else(|| {
+                    ScratchError::new(
+                        StatusCode::CONFLICT,
+                        "Config file root is not a YAML mapping. Cannot safely patch.".to_string(),
+                    )
+                })?,
+                None => serde_yaml::Mapping::new(),
+            };
 
-    tokio::fs::create_dir_all(&providers_dir)
-        .await
-        .map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create providers.d: {}", e),
-            )
-        })?;
+            ensure_oauth_identity_for_instance_sync(
+                config_dir,
+                provider_name,
+                base_provider,
+                &mut yaml_map,
+            )?;
 
-    let mut yaml_map: serde_yaml::Mapping = if provider_file_exists(config_dir, provider_name) {
-        let content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read config: {}", e),
-            )
-        })?;
-        let value: serde_yaml::Value = serde_yaml::from_str(&content)
-            .map_err(|e| ScratchError::new(
-                StatusCode::CONFLICT,
-                format!("Config file is invalid YAML and cannot be safely patched: {}. Please fix the file manually.", e),
-            ))?;
-        value.as_mapping().cloned().ok_or_else(|| {
-            ScratchError::new(
-                StatusCode::CONFLICT,
-                "Config file root is not a YAML mapping. Cannot safely patch.".to_string(),
-            )
-        })?
-    } else {
-        serde_yaml::Mapping::new()
-    };
-
-    ensure_oauth_identity_for_instance(config_dir, provider_name, base_provider, &mut yaml_map)
-        .await?;
-
-    yaml_map.insert(
-        serde_yaml::Value::String("oauth_tokens".to_string()),
-        tokens_value.clone(),
-    );
-
-    if base_provider == "openai_codex" {
-        if let Some(api_key) = tokens_value
-            .get("openai_api_key")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
             yaml_map.insert(
-                serde_yaml::Value::String("OPENAI_API_KEY".to_string()),
-                serde_yaml::Value::String(api_key.to_string()),
+                serde_yaml::Value::String("oauth_tokens".to_string()),
+                tokens_value.clone(),
             );
-        } else {
-            yaml_map.remove(serde_yaml::Value::String("OPENAI_API_KEY".to_string()));
-        }
-        ensure_openai_codex_session_id(&mut yaml_map);
-    }
 
-    let content = serde_yaml::to_string(&yaml_map).map_err(|e| {
-        ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to serialize config: {}", e),
-        )
-    })?;
+            if base_provider == "openai_codex" {
+                if let Some(api_key) = tokens_value
+                    .get("openai_api_key")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    yaml_map.insert(
+                        serde_yaml::Value::String("OPENAI_API_KEY".to_string()),
+                        serde_yaml::Value::String(api_key.to_string()),
+                    );
+                } else {
+                    yaml_map.remove(serde_yaml::Value::String("OPENAI_API_KEY".to_string()));
+                }
+                ensure_openai_codex_session_id(&mut yaml_map);
+            }
 
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static OAUTH_COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique_id = OAUTH_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path =
-        config_path.with_extension(format!("yaml.tmp.{}.{}", std::process::id(), unique_id));
+            Ok(serde_yaml::Value::Mapping(yaml_map))
+        },
+    )
+    .await?;
 
-    tokio::fs::write(&temp_path, &content).await.map_err(|e| {
-        ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write temp config: {}", e),
-        )
-    })?;
-    tokio::fs::rename(&temp_path, &config_path)
-        .await
-        .map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to rename config: {}", e),
-            )
-        })?;
-
-    {
-        let gcx_locked = gcx.read().await;
-        let mut registry = gcx_locked.providers.write().await;
-
-        let full_content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to reload config: {}", e),
-            )
-        })?;
-        let yaml: serde_yaml::Value = serde_yaml::from_str(&full_content).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Invalid YAML after save: {}", e),
-            )
-        })?;
-
-        let provider = provider_from_yaml(provider_name, yaml)?;
-        registry.add(provider);
-    }
+    reload_provider_from_disk(gcx.clone(), provider_name, config_dir).await?;
 
     invalidate_caps(gcx.clone()).await;
     Ok(())
@@ -3944,6 +3885,190 @@ extra_headers:
                 "Work Codex".to_string()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_oauth_save_and_model_toggle_preserve_auth_and_models() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("openai_codex_2.yaml"),
+            "base_provider: openai_codex\ndisplay_name: Work Codex\noauth_tokens:\n  access_token: old\n",
+        )
+        .await
+        .unwrap();
+        reload_provider_from_disk(gcx.clone(), "openai_codex_2", &config_dir)
+            .await
+            .unwrap();
+        let tokens = crate::providers::openai_codex_oauth::OAuthTokens {
+            access_token: "alias-access".to_string(),
+            refresh_token: "alias-refresh".to_string(),
+            openai_api_key: "sk-alias".to_string(),
+            expires_at: i64::MAX,
+            ..Default::default()
+        };
+        let tokens_value = serde_yaml::to_value(&tokens).unwrap();
+
+        let save = save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "openai_codex_2",
+            "openai_codex",
+            &tokens_value,
+        );
+        let toggle =
+            update_model_enabled_state(gcx.clone(), "openai_codex_2", "gpt-5.6-codex", true);
+        let (save_result, toggle_result) = tokio::join!(save, toggle);
+        save_result.unwrap();
+        toggle_result.unwrap();
+
+        let saved = provider_config_json(&config_dir, "openai_codex_2").await;
+        assert_eq!(saved["oauth_tokens"]["access_token"], "alias-access");
+        assert_eq!(saved["oauth_tokens"]["refresh_token"], "alias-refresh");
+        assert_eq!(saved["OPENAI_API_KEY"], "sk-alias");
+        assert!(saved["enabled_models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model.as_str() == Some("gpt-5.6-codex")));
+    }
+
+    #[tokio::test]
+    async fn concurrent_refresh_save_and_custom_model_update_preserve_auth_and_models() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("claude_code_2.yaml"),
+            "base_provider: claude_code\ndisplay_name: Work Claude\noauth_tokens:\n  access_token: old\n  refresh_token: old-refresh\n  expires_at: 1\n",
+        )
+        .await
+        .unwrap();
+        reload_provider_from_disk(gcx.clone(), "claude_code_2", &config_dir)
+            .await
+            .unwrap();
+        {
+            let gcx_locked = gcx.read().await;
+            let mut registry = gcx_locked.providers.write().await;
+            registry.get_mut("claude_code_2").unwrap().add_custom_model(
+                "claude-custom".to_string(),
+                CustomModelConfig {
+                    n_ctx: Some(4096),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let refresh_save = crate::providers::oauth_refresh::save_refreshed_tokens(
+            &gcx,
+            &config_dir,
+            "claude_code_2",
+            "claude_code",
+            "Work Claude",
+            "new-access",
+            "new-refresh",
+            i64::MAX,
+        );
+        let patch_model = patch_provider_model_config(gcx.clone(), &config_dir, "claude_code_2");
+        let (refresh_result, model_result) = tokio::join!(refresh_save, patch_model);
+        refresh_result.unwrap();
+        model_result.unwrap();
+
+        let saved = provider_config_json(&config_dir, "claude_code_2").await;
+        assert_eq!(saved["oauth_tokens"]["access_token"], "new-access");
+        assert_eq!(saved["oauth_tokens"]["refresh_token"], "new-refresh");
+        assert_eq!(saved["custom_models"]["claude-custom"]["n_ctx"], 4096);
+    }
+
+    #[tokio::test]
+    async fn concurrent_token_save_and_custom_model_update_preserve_auth_and_models() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "custom_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "custom",
+                    "display_name": "Work Custom",
+                    "api_key": "sk-old",
+                    "chat_endpoint": "https://example.com/v1/chat/completions",
+                    "enabled": true,
+                    "enabled_models": []
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        {
+            let gcx_locked = gcx.read().await;
+            let mut registry = gcx_locked.providers.write().await;
+            registry.get_mut("custom_2").unwrap().add_custom_model(
+                "my-custom".to_string(),
+                CustomModelConfig {
+                    n_ctx: Some(4096),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let update_auth = handle_v1_provider_update(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "custom_2".to_string(),
+            }),
+            hyper::body::Bytes::from(
+                serde_json::to_vec(&json!({
+                    "base_provider": "custom",
+                    "display_name": "Work Custom",
+                    "api_key": "sk-new"
+                }))
+                .unwrap(),
+            ),
+        );
+        let patch_model = patch_provider_model_config(gcx.clone(), &config_dir, "custom_2");
+        let (auth_result, model_result) = tokio::join!(update_auth, patch_model);
+        auth_result.unwrap();
+        model_result.unwrap();
+
+        let saved = provider_config_json(&config_dir, "custom_2").await;
+        assert_eq!(saved["api_key"], "sk-new");
+        assert_eq!(saved["custom_models"]["my-custom"]["n_ctx"], 4096);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn provider_secret_writes_are_private_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let tokens = crate::providers::openai_codex_oauth::OAuthTokens {
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            openai_api_key: "sk-secret".to_string(),
+            expires_at: i64::MAX,
+            ..Default::default()
+        };
+
+        save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "openai_codex",
+            "openai_codex",
+            &serde_yaml::to_value(&tokens).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let metadata = std::fs::metadata(provider_file_path(&config_dir, "openai_codex")).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
     }
 
     #[tokio::test]

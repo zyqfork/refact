@@ -1,4 +1,5 @@
 pub mod config;
+pub(crate) mod config_store;
 pub mod http;
 pub mod identity;
 pub mod instance;

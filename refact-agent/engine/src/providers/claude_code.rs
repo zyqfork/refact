@@ -1,7 +1,5 @@
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -60,69 +58,47 @@ impl ClaudeCodeProvider {
         config_dir: &std::path::Path,
         instance_id: &str,
     ) -> Result<(), String> {
-        let providers_dir = config_dir.join("providers.d");
-        let config_path = providers_dir.join(format!("{}.yaml", instance_id));
+        let tokens = self.oauth_tokens.clone();
+        crate::providers::config_store::update_provider_config(
+            config_dir,
+            instance_id,
+            |existing| {
+                let mut yaml_map = match existing {
+                    Some(value) => value.as_mapping().cloned().ok_or_else(|| {
+                        "Config file root is not a YAML mapping. Cannot safely patch.".to_string()
+                    })?,
+                    None => serde_yaml::Mapping::new(),
+                };
 
-        tokio::fs::create_dir_all(&providers_dir)
-            .await
-            .map_err(|e| format!("Failed to create providers.d: {}", e))?;
+                let mut tokens_map = yaml_map
+                    .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
+                    .and_then(|v| v.as_mapping())
+                    .cloned()
+                    .unwrap_or_default();
 
-        let mut yaml_map: serde_yaml::Mapping = if config_path.exists() {
-            let content = tokio::fs::read_to_string(&config_path)
-                .await
-                .map_err(|e| format!("Failed to read config: {}", e))?;
-            let value: serde_yaml::Value = serde_yaml::from_str(&content)
-                .map_err(|e| format!("Failed to parse YAML: {}", e))?;
-            value.as_mapping().cloned().ok_or_else(|| {
-                "Config file root is not a YAML mapping. Cannot safely patch.".to_string()
-            })?
-        } else {
-            serde_yaml::Mapping::new()
-        };
+                tokens_map.insert(
+                    serde_yaml::Value::String("access_token".to_string()),
+                    serde_yaml::Value::String(tokens.access_token),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("refresh_token".to_string()),
+                    serde_yaml::Value::String(tokens.refresh_token),
+                );
+                tokens_map.insert(
+                    serde_yaml::Value::String("expires_at".to_string()),
+                    serde_yaml::Value::Number(serde_yaml::Number::from(tokens.expires_at)),
+                );
 
-        let mut tokens_map = yaml_map
-            .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
-            .and_then(|v| v.as_mapping())
-            .cloned()
-            .unwrap_or_default();
+                yaml_map.insert(
+                    serde_yaml::Value::String("oauth_tokens".to_string()),
+                    serde_yaml::Value::Mapping(tokens_map),
+                );
 
-        tokens_map.insert(
-            serde_yaml::Value::String("access_token".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.access_token.clone()),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("refresh_token".to_string()),
-            serde_yaml::Value::String(self.oauth_tokens.refresh_token.clone()),
-        );
-        tokens_map.insert(
-            serde_yaml::Value::String("expires_at".to_string()),
-            serde_yaml::Value::Number(serde_yaml::Number::from(self.oauth_tokens.expires_at)),
-        );
-
-        yaml_map.insert(
-            serde_yaml::Value::String("oauth_tokens".to_string()),
-            serde_yaml::Value::Mapping(tokens_map),
-        );
-
-        let content = serde_yaml::to_string(&yaml_map)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let unique_id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temp_path = config_path.with_extension(format!(
-            "yaml.tmp.oauth.{}.{}",
-            std::process::id(),
-            unique_id
-        ));
-
-        tokio::fs::write(&temp_path, &content)
-            .await
-            .map_err(|e| format!("Failed to write temp config: {}", e))?;
-        tokio::fs::rename(&temp_path, &config_path)
-            .await
-            .map_err(|e| format!("Failed to rename config: {}", e))?;
-
-        Ok(())
+                Ok(serde_yaml::Value::Mapping(yaml_map))
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     fn detect_cli_path(&self) -> Option<String> {

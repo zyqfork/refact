@@ -15,6 +15,7 @@ const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
 const TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const SCOPE: &str = "org:create_api_key user:profile user:inference";
+const SESSION_TTL_SECS: i64 = 600;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +31,8 @@ pub struct PkceSession {
     pub authorize_url: String,
     #[allow(dead_code)]
     pub mode: OAuthMode,
+    pub provider_instance_id: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,6 +84,16 @@ lazy_static::lazy_static! {
         Arc::new(AMutex::new(HashMap::new()));
 }
 
+#[cfg(test)]
+lazy_static::lazy_static! {
+    static ref PENDING_SESSIONS_TEST_LOCK: AMutex<()> = AMutex::new(());
+}
+
+#[cfg(test)]
+pub async fn pending_sessions_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    PENDING_SESSIONS_TEST_LOCK.lock().await
+}
+
 fn generate_code_verifier() -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     let mut rng = rand::thread_rng();
@@ -113,7 +126,15 @@ fn build_authorize_url(_mode: &OAuthMode, code_challenge: &str, verifier: &str) 
     url.to_string()
 }
 
-pub async fn start_oauth_session(mode: OAuthMode) -> (String, String) {
+fn prune_expired_sessions(sessions: &mut HashMap<String, PkceSession>) {
+    let now = chrono::Utc::now().timestamp();
+    sessions.retain(|_, session| now - session.created_at < SESSION_TTL_SECS);
+}
+
+pub async fn start_oauth_session(
+    mode: OAuthMode,
+    provider_instance_id: impl Into<String>,
+) -> (String, String) {
     let verifier = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
     let authorize_url = build_authorize_url(&mode, &challenge, &verifier);
@@ -123,9 +144,12 @@ pub async fn start_oauth_session(mode: OAuthMode) -> (String, String) {
         verifier,
         authorize_url: authorize_url.clone(),
         mode,
+        provider_instance_id: provider_instance_id.into(),
+        created_at: chrono::Utc::now().timestamp(),
     };
 
     let mut sessions = PENDING_SESSIONS.lock().await;
+    prune_expired_sessions(&mut sessions);
     sessions.insert(session_id.clone(), session);
 
     (session_id, authorize_url)
@@ -135,13 +159,21 @@ pub async fn exchange_code(
     http_client: &reqwest::Client,
     session_id: &str,
     code_raw: &str,
-) -> Result<OAuthTokens, String> {
+    expected_provider_instance_id: &str,
+) -> Result<(OAuthTokens, String), String> {
     let session = {
         let mut sessions = PENDING_SESSIONS.lock().await;
+        prune_expired_sessions(&mut sessions);
         sessions
             .remove(session_id)
             .ok_or_else(|| "Invalid or expired OAuth session".to_string())?
     };
+    if session.provider_instance_id != expected_provider_instance_id {
+        return Err(format!(
+            "OAuth session belongs to provider '{}'",
+            session.provider_instance_id
+        ));
+    }
 
     let parts: Vec<&str> = code_raw.split('#').collect();
     let code = parts[0];
@@ -177,11 +209,14 @@ pub async fn exchange_code(
 
     let expires_at = chrono::Utc::now().timestamp_millis() + token_resp.expires_in * 1000;
 
-    Ok(OAuthTokens {
-        access_token: token_resp.access_token,
-        refresh_token: token_resp.refresh_token,
-        expires_at,
-    })
+    Ok((
+        OAuthTokens {
+            access_token: token_resp.access_token,
+            refresh_token: token_resp.refresh_token,
+            expires_at,
+        },
+        session.provider_instance_id,
+    ))
 }
 
 pub async fn refresh_access_token(
@@ -223,6 +258,28 @@ pub async fn refresh_access_token(
 }
 
 #[cfg(test)]
+pub async fn pending_session_provider_instance_id(session_id: &str) -> Option<String> {
+    let sessions = PENDING_SESSIONS.lock().await;
+    sessions
+        .get(session_id)
+        .map(|session| session.provider_instance_id.clone())
+}
+
+#[cfg(test)]
+pub async fn clear_pending_sessions_for_test() {
+    let mut sessions = PENDING_SESSIONS.lock().await;
+    sessions.clear();
+}
+
+#[cfg(test)]
+pub async fn expire_pending_session_for_test(session_id: &str) {
+    let mut sessions = PENDING_SESSIONS.lock().await;
+    if let Some(session) = sessions.get_mut(session_id) {
+        session.created_at = chrono::Utc::now().timestamp() - SESSION_TTL_SECS - 1;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -246,5 +303,54 @@ mod tests {
                 .unwrap(),
             "true"
         );
+    }
+
+    #[tokio::test]
+    async fn pending_oauth_session_tracks_provider_instance_id() {
+        let _guard = pending_sessions_test_guard().await;
+        clear_pending_sessions_for_test().await;
+        let (session_id, _) = start_oauth_session(OAuthMode::Max, "claude_code_work").await;
+
+        let provider_instance_id = pending_session_provider_instance_id(&session_id).await;
+        assert_eq!(provider_instance_id.as_deref(), Some("claude_code_work"));
+
+        clear_pending_sessions_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn mismatched_provider_exchange_rejects_and_removes_session() {
+        let _guard = pending_sessions_test_guard().await;
+        clear_pending_sessions_for_test().await;
+        let (session_id, _) = start_oauth_session(OAuthMode::Max, "claude_code_work").await;
+        let client = reqwest::Client::new();
+
+        let err = exchange_code(&client, &session_id, "code#state", "claude_code")
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("claude_code_work"));
+        assert!(pending_session_provider_instance_id(&session_id)
+            .await
+            .is_none());
+        clear_pending_sessions_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn expired_oauth_session_is_rejected_and_pruned() {
+        let _guard = pending_sessions_test_guard().await;
+        clear_pending_sessions_for_test().await;
+        let (session_id, _) = start_oauth_session(OAuthMode::Max, "claude_code_work").await;
+        expire_pending_session_for_test(&session_id).await;
+        let client = reqwest::Client::new();
+
+        let err = exchange_code(&client, &session_id, "code#state", "claude_code_work")
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("Invalid or expired OAuth session"));
+        assert!(pending_session_provider_instance_id(&session_id)
+            .await
+            .is_none());
+        clear_pending_sessions_for_test().await;
     }
 }

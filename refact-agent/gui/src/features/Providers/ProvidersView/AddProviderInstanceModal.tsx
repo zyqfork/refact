@@ -175,6 +175,7 @@ export const AddProviderInstanceModal: React.FC<
           { type: "PROVIDERS", id: "LIST" },
           { type: "PROVIDER", id: trimmedInstanceId },
           { type: "PROVIDER_MODELS", id: trimmedInstanceId },
+          { type: "AVAILABLE_MODELS", id: trimmedInstanceId },
         ]),
       );
       onOpenChange(false);

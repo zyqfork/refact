@@ -5,6 +5,7 @@ use tokio::sync::RwLock as ARwLock;
 
 use crate::global_context::GlobalContext;
 use crate::providers::create_provider;
+use crate::providers::config_store;
 
 const REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const REFRESH_BEFORE_EXPIRY_MS: i64 = 5 * 60 * 1000;
@@ -17,7 +18,30 @@ lazy_static::lazy_static! {
 }
 
 pub fn is_permanent_refresh_error(error: &str) -> bool {
-    error.contains("invalid_grant")
+    if let Some(value) = extract_json_object(error) {
+        if json_contains_invalid_grant(&value) {
+            return true;
+        }
+    }
+    error.to_ascii_lowercase().contains("invalid_grant")
+}
+
+fn extract_json_object(text: &str) -> Option<serde_json::Value> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end < start {
+        return None;
+    }
+    serde_json::from_str(&text[start..=end]).ok()
+}
+
+fn json_contains_invalid_grant(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.eq_ignore_ascii_case("invalid_grant"),
+        serde_json::Value::Array(values) => values.iter().any(json_contains_invalid_grant),
+        serde_json::Value::Object(map) => map.values().any(json_contains_invalid_grant),
+        _ => false,
+    }
 }
 
 pub fn mark_invalid_refresh_token(provider_name: &str, refresh_token: &str) {
@@ -456,7 +480,7 @@ fn needs_refresh(expires_at: i64) -> bool {
     now_ms >= expires_at - REFRESH_BEFORE_EXPIRY_MS
 }
 
-async fn save_refreshed_tokens(
+pub(crate) async fn save_refreshed_tokens(
     gcx: &Arc<ARwLock<GlobalContext>>,
     config_dir: &std::path::Path,
     provider_name: &str,
@@ -466,92 +490,59 @@ async fn save_refreshed_tokens(
     refresh_token: &str,
     expires_at: i64,
 ) -> Result<(), String> {
-    let providers_dir = config_dir.join("providers.d");
-    let config_path = providers_dir.join(format!("{}.yaml", provider_name));
+    let updated = config_store::update_provider_config(config_dir, provider_name, |existing| {
+        let mut yaml_map = match existing {
+            Some(value) => value.as_mapping().cloned().ok_or_else(|| {
+                "Config file root is not a YAML mapping. Cannot safely patch.".to_string()
+            })?,
+            None => serde_yaml::Mapping::new(),
+        };
 
-    tokio::fs::create_dir_all(&providers_dir)
-        .await
-        .map_err(|e| format!("Failed to create providers.d: {}", e))?;
+        yaml_map.insert(
+            serde_yaml::Value::String("base_provider".to_string()),
+            serde_yaml::Value::String(base_provider.to_string()),
+        );
+        yaml_map.insert(
+            serde_yaml::Value::String("display_name".to_string()),
+            serde_yaml::Value::String(display_name.to_string()),
+        );
 
-    let mut yaml_map: serde_yaml::Mapping = if config_path.exists() {
-        let content = tokio::fs::read_to_string(&config_path)
-            .await
-            .map_err(|e| format!("Failed to read config: {}", e))?;
-        let value: serde_yaml::Value =
-            serde_yaml::from_str(&content).map_err(|e| format!("Failed to parse YAML: {}", e))?;
-        value.as_mapping().cloned().ok_or_else(|| {
-            "Config file root is not a YAML mapping. Cannot safely patch.".to_string()
-        })?
-    } else {
-        serde_yaml::Mapping::new()
-    };
+        let mut tokens_map = yaml_map
+            .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
+            .and_then(|v| v.as_mapping())
+            .cloned()
+            .unwrap_or_default();
 
-    yaml_map.insert(
-        serde_yaml::Value::String("base_provider".to_string()),
-        serde_yaml::Value::String(base_provider.to_string()),
-    );
-    yaml_map.insert(
-        serde_yaml::Value::String("display_name".to_string()),
-        serde_yaml::Value::String(display_name.to_string()),
-    );
+        tokens_map.insert(
+            serde_yaml::Value::String("access_token".to_string()),
+            serde_yaml::Value::String(access_token.to_string()),
+        );
+        tokens_map.insert(
+            serde_yaml::Value::String("refresh_token".to_string()),
+            serde_yaml::Value::String(refresh_token.to_string()),
+        );
+        tokens_map.insert(
+            serde_yaml::Value::String("expires_at".to_string()),
+            serde_yaml::Value::Number(serde_yaml::Number::from(expires_at)),
+        );
 
-    let mut tokens_map = yaml_map
-        .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
-        .and_then(|v| v.as_mapping())
-        .cloned()
-        .unwrap_or_default();
+        yaml_map.insert(
+            serde_yaml::Value::String("oauth_tokens".to_string()),
+            serde_yaml::Value::Mapping(tokens_map),
+        );
 
-    tokens_map.insert(
-        serde_yaml::Value::String("access_token".to_string()),
-        serde_yaml::Value::String(access_token.to_string()),
-    );
-    tokens_map.insert(
-        serde_yaml::Value::String("refresh_token".to_string()),
-        serde_yaml::Value::String(refresh_token.to_string()),
-    );
-    tokens_map.insert(
-        serde_yaml::Value::String("expires_at".to_string()),
-        serde_yaml::Value::Number(serde_yaml::Number::from(expires_at)),
-    );
-
-    yaml_map.insert(
-        serde_yaml::Value::String("oauth_tokens".to_string()),
-        serde_yaml::Value::Mapping(tokens_map),
-    );
-
-    let content = serde_yaml::to_string(&yaml_map)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static REFRESH_COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique_id = REFRESH_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = config_path.with_extension(format!(
-        "yaml.tmp.refresh.{}.{}",
-        std::process::id(),
-        unique_id
-    ));
-
-    tokio::fs::write(&temp_path, &content)
-        .await
-        .map_err(|e| format!("Failed to write temp config: {}", e))?;
-    tokio::fs::rename(&temp_path, &config_path)
-        .await
-        .map_err(|e| format!("Failed to rename config: {}", e))?;
+        Ok(serde_yaml::Value::Mapping(yaml_map))
+    })
+    .await?;
 
     {
         let gcx_locked = gcx.read().await;
         let mut registry = gcx_locked.providers.write().await;
 
-        let full_content = tokio::fs::read_to_string(&config_path)
-            .await
-            .map_err(|e| format!("Failed to reload config: {}", e))?;
-        let yaml: serde_yaml::Value = serde_yaml::from_str(&full_content)
-            .map_err(|e| format!("Invalid YAML after save: {}", e))?;
-
         let mut provider = create_provider(base_provider)
             .ok_or_else(|| format!("Failed to create provider '{}'", base_provider))?;
         provider
-            .provider_settings_apply(yaml)
+            .provider_settings_apply(updated)
             .map_err(|e| format!("Failed to apply settings: {}", e))?;
         if provider_name == base_provider {
             registry.add(provider);
@@ -591,13 +582,22 @@ mod tests {
         assert!(super::is_permanent_refresh_error(
             r#"Token refresh failed (400 Bad Request): {"error":"invalid_grant"}"#
         ));
+        assert!(super::is_permanent_refresh_error("INVALID_GRANT"));
+        assert!(super::is_permanent_refresh_error("Invalid_Grant"));
+        assert!(super::is_permanent_refresh_error(
+            r#"Token refresh failed (400 Bad Request): {"error":{"code":"Invalid_Grant"}}"#
+        ));
     }
 
     #[test]
     fn permanent_refresh_error_ignores_transient_failure() {
-        assert!(!super::is_permanent_refresh_error(
-            "Token refresh request failed: operation timed out"
-        ));
+        for error in [
+            "Token refresh request failed: operation timed out",
+            "Token refresh failed (500 Internal Server Error)",
+            "network connection reset by peer",
+        ] {
+            assert!(!super::is_permanent_refresh_error(error), "{error}");
+        }
     }
 
     #[test]
