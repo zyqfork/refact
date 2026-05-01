@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use chrono::Utc;
@@ -12,9 +12,7 @@ use uuid::Uuid;
 use crate::buddy::actor::{make_runtime_event, redact_sensitive, validate_workflow_id};
 use crate::buddy::diagnostics::{DiagnosticContext, DiagnosticSeverity};
 use crate::buddy::scheduler::{BuddyJob, BuddyJobContext, BuddyJobResult};
-use crate::buddy::types::{
-    BuddyActivity, BuddyFact, BuddyFactKind, BuddyRuntimeEvent, BuddyThreadMeta,
-};
+use crate::buddy::types::{BuddyActivity, BuddyFact, BuddyFactKind, BuddyRuntimeEvent, BuddyThreadMeta};
 use crate::call_validation::ChatMessage;
 use crate::global_context::GlobalContext;
 use crate::stats::event::LlmCallEvent;
@@ -37,6 +35,9 @@ const MAX_SECURITY_FINDINGS: usize = 20;
 const MAX_PATH_EVIDENCE: usize = 40;
 const MAX_MANIFEST_WALK_FILES: usize = 5_000;
 const MAX_UNTRACKED_CONTENT_BYTES: u64 = 64 * 1024;
+const MAX_BEHAVIOR_TRAJECTORY_BYTES: u64 = 1_024 * 1_024;
+const MAX_BEHAVIOR_TRAJECTORY_META_BYTES: u64 = 32 * 1024;
+const MODEL_COST_RECENT_EVENT_LIMIT: usize = 500;
 const ERROR_DETECTIVE_WORKFLOW_ID: &str = "buddy_error_detective";
 const SECURITY_WHISPERER_WORKFLOW_ID: &str = "buddy_security_whisperer";
 const SETUP_COACH_WORKFLOW_ID: &str = "buddy_setup_coach";
@@ -181,6 +182,12 @@ pub struct BuddyBehaviorLearnerJob;
 pub struct BuddyUserHabitCoachJob;
 pub struct BuddyModelCostOptimizerJob;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemoryRouting {
+    MemoryGardener,
+    KnowledgeConflictResolver,
+}
+
 const MEMORY_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 const BEHAVIOR_COOLDOWN_SECS: u64 = 4 * 60 * 60;
 const MAX_FACT_EVIDENCE_ITEMS: usize = 12;
@@ -285,36 +292,51 @@ fn memory_fact_to_evidence_line(fact: &BuddyFact) -> String {
     parts.join("; ")
 }
 
+fn stable_facts<'a>(facts: impl Iterator<Item = &'a BuddyFact>) -> Vec<&'a BuddyFact> {
+    let mut facts = facts.collect::<Vec<_>>();
+    facts.sort_by(|a, b| {
+        fact_kind_name(a.kind)
+            .cmp(fact_kind_name(b.kind))
+            .then_with(|| a.key.cmp(&b.key))
+            .then_with(|| a.source.cmp(b.source))
+            .then_with(|| a.seen_at.cmp(&b.seen_at))
+    });
+    facts
+}
+
+fn memory_route_for_fact_kind(kind: BuddyFactKind) -> Option<MemoryRouting> {
+    match kind {
+        BuddyFactKind::MemoryOrphan | BuddyFactKind::MemoryRecurringLesson => {
+            Some(MemoryRouting::MemoryGardener)
+        }
+        BuddyFactKind::MemoryStaleConflict => Some(MemoryRouting::KnowledgeConflictResolver),
+        _ => None,
+    }
+}
+
 fn memory_gardener_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
     let mut lines = Vec::new();
-    if ctx.pulse.memory.total > 0
-        || ctx.pulse.memory.orphan > 0
-        || ctx.pulse.memory.stale_conflicts > 0
-    {
+    if ctx.pulse.memory.total > 0 || ctx.pulse.memory.orphan > 0 {
         lines.push(format!(
-            "memory_pulse total={} orphan={} stale_conflicts={}",
-            ctx.pulse.memory.total, ctx.pulse.memory.orphan, ctx.pulse.memory.stale_conflicts
+            "memory_pulse total={} orphan={}",
+            ctx.pulse.memory.total, ctx.pulse.memory.orphan
         ));
     }
-    for fact in ctx
-        .facts
-        .iter()
-        .filter(|fact| {
-            matches!(
-                fact.kind,
-                BuddyFactKind::MemoryOrphan | BuddyFactKind::MemoryRecurringLesson
-            ) || fact.source == "memory_garden"
-        })
-        .take(MAX_FACT_EVIDENCE_ITEMS)
+    for fact in stable_facts(ctx.facts.iter().filter(|fact| {
+        matches!(
+            memory_route_for_fact_kind(fact.kind),
+            Some(MemoryRouting::MemoryGardener)
+        )
+    }))
+    .into_iter()
+    .take(MAX_FACT_EVIDENCE_ITEMS)
     {
         lines.push(memory_fact_to_evidence_line(fact));
     }
     if ctx.pulse.memory.orphan == 0
-        && !lines.iter().any(|line| {
-            line.contains("memory_orphan")
-                || line.contains("memory_recurring_lesson")
-                || line.contains("source=memory_garden")
-        })
+        && !lines
+            .iter()
+            .any(|line| line.contains("memory_orphan") || line.contains("memory_recurring_lesson"))
     {
         return None;
     }
@@ -332,18 +354,20 @@ fn knowledge_conflict_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEviden
             ctx.pulse.memory.stale_conflicts
         ));
     }
-    for fact in ctx
-        .facts
-        .iter()
-        .filter(|fact| fact.kind == BuddyFactKind::MemoryStaleConflict)
-        .take(MAX_FACT_EVIDENCE_ITEMS)
+    for fact in stable_facts(ctx.facts.iter().filter(|fact| {
+        matches!(
+            memory_route_for_fact_kind(fact.kind),
+            Some(MemoryRouting::KnowledgeConflictResolver)
+        )
+    }))
+    .into_iter()
+    .take(MAX_FACT_EVIDENCE_ITEMS)
     {
         lines.push(memory_fact_to_evidence_line(fact));
     }
-    if !lines
-        .iter()
-        .any(|line| line.contains("memory_stale_conflict"))
-    {
+    if !lines.iter().any(|line| {
+        line.contains("memory_stale_conflict") || line.starts_with("memory_pulse stale_conflicts=")
+    }) {
         return None;
     }
     Some(AutonomousEvidence {
@@ -582,24 +606,153 @@ fn extract_text_from_trajectory_content(content: &serde_json::Value) -> Option<S
     None
 }
 
+async fn read_bounded_trajectory_json(path: &Path, max_bytes: u64) -> Option<serde_json::Value> {
+    let metadata = tokio::fs::metadata(path).await.ok()?;
+    if metadata.len() > max_bytes {
+        return None;
+    }
+    let content = tokio::fs::read_to_string(path).await.ok()?;
+    serde_json::from_str::<serde_json::Value>(&content).ok()
+}
+
+#[derive(Debug, Clone)]
+struct BehaviorTrajectoryMeta {
+    id: String,
+    title: String,
+    mode: String,
+    updated_at: String,
+    path: PathBuf,
+}
+
+fn extract_json_string_field(content: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{}\"", field);
+    let start = content.find(&needle)?;
+    let after_field = &content[start + needle.len()..];
+    let colon = after_field.find(':')?;
+    let after_colon = after_field[colon + 1..].trim_start();
+    let value = after_colon.strip_prefix('"')?;
+    let mut escaped = false;
+    for (idx, ch) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            let raw = &value[..idx];
+            return serde_json::from_str::<String>(&format!("\"{}\"", raw)).ok();
+        }
+    }
+    None
+}
+
+fn parse_behavior_trajectory_meta(content: &str, path: PathBuf) -> Option<BehaviorTrajectoryMeta> {
+    let id = extract_json_string_field(content, "id")?;
+    let updated_at = extract_json_string_field(content, "updated_at")?;
+    Some(BehaviorTrajectoryMeta {
+        id,
+        title: extract_json_string_field(content, "title").unwrap_or_default(),
+        mode: extract_json_string_field(content, "mode").unwrap_or_default(),
+        updated_at,
+        path,
+    })
+}
+
+fn collect_behavior_trajectory_metas_from_dir(
+    dir: &Path,
+    metas: &mut Vec<BehaviorTrajectoryMeta>,
+    seen: &mut HashSet<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_behavior_trajectory_metas_from_dir(&path, metas, seen);
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if metadata.len() > MAX_BEHAVIOR_TRAJECTORY_BYTES {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        let mut content = String::new();
+        let mut reader = std::io::Read::take(file, MAX_BEHAVIOR_TRAJECTORY_META_BYTES);
+        if std::io::Read::read_to_string(&mut reader, &mut content).is_err() {
+            continue;
+        }
+        let Some(meta) = parse_behavior_trajectory_meta(&content, path) else {
+            continue;
+        };
+        if seen.insert(meta.id.clone()) {
+            metas.push(meta);
+        }
+    }
+}
+
+async fn collect_behavior_trajectory_metas(
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> Vec<BehaviorTrajectoryMeta> {
+    let mut dirs = crate::chat::trajectories::get_all_trajectories_dirs(gcx.clone()).await;
+    let tasks_dirs = crate::tasks::storage::get_all_tasks_dirs(gcx).await;
+    tokio::task::spawn_blocking(move || {
+        for tasks_dir in tasks_dirs {
+            if !tasks_dir.exists() {
+                continue;
+            }
+            let Ok(task_entries) = std::fs::read_dir(&tasks_dir) else {
+                continue;
+            };
+            for task_entry in task_entries.flatten() {
+                let task_dir = task_entry.path();
+                if !task_dir.is_dir() {
+                    continue;
+                }
+                for role in ["planner", "agents"] {
+                    let role_dir = task_dir.join("trajectories").join(role);
+                    if role_dir.exists() {
+                        dirs.push(role_dir);
+                    }
+                }
+            }
+        }
+        let mut metas = Vec::new();
+        let mut seen = HashSet::new();
+        for dir in dirs {
+            collect_behavior_trajectory_metas_from_dir(&dir, &mut metas, &mut seen);
+        }
+        metas.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        metas
+    })
+    .await
+    .unwrap_or_default()
+}
+
 async fn collect_recent_user_snippets(
     gcx: Arc<ARwLock<GlobalContext>>,
     max_snippets: usize,
 ) -> Vec<TrajectoryUserSnippet> {
-    let metas = crate::chat::trajectories::list_all_trajectories_meta(gcx.clone())
-        .await
-        .unwrap_or_default();
+    let metas = collect_behavior_trajectory_metas(gcx).await;
     let mut snippets = Vec::new();
     for meta in metas.into_iter().take(30) {
-        let Some(path) =
-            crate::chat::trajectories::find_trajectory_path(gcx.clone(), &meta.id).await
+        let Some(value) =
+            read_bounded_trajectory_json(&meta.path, MAX_BEHAVIOR_TRAJECTORY_BYTES).await
         else {
-            continue;
-        };
-        let Ok(content) = tokio::fs::read_to_string(&path).await else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
             continue;
         };
         let Some(messages) = value.get("messages").and_then(|v| v.as_array()) else {
@@ -698,18 +851,22 @@ fn habit_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
         ctx.pulse.diagnostics.last_hour,
         ctx.pulse.diagnostics.top_error_types.join(", ")
     )];
-    for (status, count) in &ctx.pulse.tasks.by_status {
+    let mut task_statuses = ctx.pulse.tasks.by_status.iter().collect::<Vec<_>>();
+    task_statuses.sort_by(|a, b| a.0.cmp(b.0));
+    for (status, count) in task_statuses {
         lines.push(format!(
             "task_status {}={}",
             redact_and_cap_text(status, 80),
             count
         ));
     }
-    for fact in ctx
-        .facts
-        .iter()
-        .filter(|fact| habit_fact_relevant(fact.kind))
-        .take(MAX_FACT_EVIDENCE_ITEMS)
+    for fact in stable_facts(
+        ctx.facts
+            .iter()
+            .filter(|fact| habit_fact_relevant(fact.kind)),
+    )
+    .into_iter()
+    .take(MAX_FACT_EVIDENCE_ITEMS)
     {
         let mut fact_lines = vec![format!(
             "fact kind={} key={} source={} confidence={:.2}",
@@ -756,18 +913,150 @@ fn habit_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
     })
 }
 
-fn format_rate(part: usize, total: usize) -> String {
+fn bucket_rate(part: usize, total: usize) -> String {
     if total == 0 {
-        return "0.0%".to_string();
+        return "0%".to_string();
     }
-    format!("{:.1}%", part as f64 * 100.0 / total as f64)
+    let rate = part as f64 * 100.0 / total as f64;
+    if rate == 0.0 {
+        "0%".to_string()
+    } else if rate < 10.0 {
+        "under_10%".to_string()
+    } else if rate < 25.0 {
+        "10-24%".to_string()
+    } else if rate < 50.0 {
+        "25-49%".to_string()
+    } else if rate < 75.0 {
+        "50-74%".to_string()
+    } else {
+        "75%+".to_string()
+    }
+}
+
+fn bucket_count(value: usize) -> String {
+    match value {
+        0 => "0".to_string(),
+        1..=4 => "1-4".to_string(),
+        5..=9 => "5-9".to_string(),
+        10..=24 => "10-24".to_string(),
+        25..=49 => "25-49".to_string(),
+        50..=99 => "50-99".to_string(),
+        100..=249 => "100-249".to_string(),
+        250..=499 => "250-499".to_string(),
+        _ => "500+".to_string(),
+    }
+}
+
+fn bucket_tokens(value: usize) -> String {
+    match value {
+        0 => "0".to_string(),
+        1..=9_999 => "1-9k".to_string(),
+        10_000..=49_999 => "10k-49k".to_string(),
+        50_000..=99_999 => "50k-99k".to_string(),
+        100_000..=249_999 => "100k-249k".to_string(),
+        250_000..=499_999 => "250k-499k".to_string(),
+        500_000..=999_999 => "500k-999k".to_string(),
+        _ => "1m+".to_string(),
+    }
+}
+
+fn bucket_cost(value: f64) -> String {
+    if value <= 0.0 {
+        "0".to_string()
+    } else if value < 0.10 {
+        "under_0.10".to_string()
+    } else if value < 0.50 {
+        "0.10-0.49".to_string()
+    } else if value < 1.00 {
+        "0.50-0.99".to_string()
+    } else if value < 5.00 {
+        "1-4.99".to_string()
+    } else if value < 10.00 {
+        "5-9.99".to_string()
+    } else {
+        "10+".to_string()
+    }
+}
+
+fn bucket_duration_ms(value: u64) -> String {
+    match value {
+        0..=4_999 => "under_5s".to_string(),
+        5_000..=9_999 => "5s-9s".to_string(),
+        10_000..=19_999 => "10s-19s".to_string(),
+        20_000..=39_999 => "20s-39s".to_string(),
+        40_000..=59_999 => "40s-59s".to_string(),
+        _ => "60s+".to_string(),
+    }
+}
+
+fn is_buddy_autonomous_model_cost_event(event: &LlmCallEvent) -> bool {
+    let mode = event.mode.to_ascii_lowercase();
+    let task_role = event
+        .task_role
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let task_id = event
+        .task_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let agent_id = event
+        .agent_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let card_id = event
+        .card_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let chat_id = event.chat_id.to_ascii_lowercase();
+    let root_chat_id = event
+        .root_chat_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let identifiers = [
+        &task_role,
+        &task_id,
+        &agent_id,
+        &card_id,
+        &chat_id,
+        &root_chat_id,
+    ];
+    mode == "buddy"
+        || identifiers.iter().any(|value| {
+            value.contains("buddy_model_cost_optimizer")
+                || value.contains("buddy_autonomous")
+                || value.contains("buddy-buddy_model_cost_optimizer")
+        })
+}
+
+fn model_cost_input_events(events: &[LlmCallEvent]) -> Vec<LlmCallEvent> {
+    let mut filtered = events
+        .iter()
+        .filter(|event| !is_buddy_autonomous_model_cost_event(event))
+        .cloned()
+        .collect::<Vec<_>>();
+    filtered.sort_by(|a, b| {
+        a.ts_start
+            .cmp(&b.ts_start)
+            .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.chat_id.cmp(&b.chat_id))
+    });
+    if filtered.len() > MODEL_COST_RECENT_EVENT_LIMIT {
+        filtered.drain(0..filtered.len() - MODEL_COST_RECENT_EVENT_LIMIT);
+    }
+    filtered
 }
 
 fn model_cost_evidence_from_events(events: &[LlmCallEvent]) -> Option<AutonomousEvidence> {
+    let events = model_cost_input_events(events);
     if events.len() < 5 {
         return None;
     }
-    let summary = crate::stats::reader::aggregate_summary(events, None, None);
+    let summary = crate::stats::reader::aggregate_summary(&events, None, None);
     let totals = &summary.totals;
     let high_failure = totals.failed_calls >= 3
         && totals.failed_calls as f64 / totals.total_calls.max(1) as f64 >= 0.25;
@@ -786,45 +1075,46 @@ fn model_cost_evidence_from_events(events: &[LlmCallEvent]) -> Option<Autonomous
     }
 
     let mut lines = vec![format!(
-        "totals calls={} successful={} failed={} failure_rate={} total_tokens={} prompt_tokens={} completion_tokens={} cache_read_tokens={} cache_creation_tokens={} total_cost_usd={:.4} avg_duration_ms={} conversations={} messages_sent={}",
-        totals.total_calls,
-        totals.successful_calls,
-        totals.failed_calls,
-        format_rate(totals.failed_calls, totals.total_calls),
-        totals.total_tokens,
-        totals.total_prompt_tokens,
-        totals.total_completion_tokens,
-        totals.total_cache_read_tokens,
-        totals.total_cache_creation_tokens,
-        totals.total_cost_usd,
-        totals.avg_duration_ms,
-        totals.total_conversations,
-        totals.total_messages_sent
+        "recent_window max_events={} calls_bucket={} successful_bucket={} failed_bucket={} failure_rate_bucket={} total_tokens_bucket={} prompt_tokens_bucket={} completion_tokens_bucket={} cache_read_tokens_bucket={} cache_creation_tokens_bucket={} total_cost_usd_bucket={} avg_duration_bucket={} conversations_bucket={} messages_sent_bucket={}",
+        MODEL_COST_RECENT_EVENT_LIMIT,
+        bucket_count(totals.total_calls),
+        bucket_count(totals.successful_calls),
+        bucket_count(totals.failed_calls),
+        bucket_rate(totals.failed_calls, totals.total_calls),
+        bucket_tokens(totals.total_tokens),
+        bucket_tokens(totals.total_prompt_tokens),
+        bucket_tokens(totals.total_completion_tokens),
+        bucket_tokens(totals.total_cache_read_tokens),
+        bucket_tokens(totals.total_cache_creation_tokens),
+        bucket_cost(totals.total_cost_usd),
+        bucket_duration_ms(totals.avg_duration_ms),
+        bucket_count(totals.total_conversations),
+        bucket_count(totals.total_messages_sent)
     )];
     for model in summary.by_model.iter().take(8) {
         lines.push(format!(
-            "model id={} provider={} model={} calls={} failed={} failure_rate={} tokens={} cost_usd={:.4} avg_duration_ms={}",
+            "model id={} provider={} model={} calls_bucket={} failed_bucket={} failure_rate_bucket={} tokens_bucket={} cost_usd_bucket={} avg_duration_bucket={}",
             redact_and_cap_text(&model.model_id, 120),
             redact_and_cap_text(&model.provider, 80),
             redact_and_cap_text(&model.model, 100),
-            model.total_calls,
-            model.failed_calls,
-            format_rate(model.failed_calls, model.total_calls),
-            model.total_tokens,
-            model.total_cost_usd,
-            model.avg_duration_ms
+            bucket_count(model.total_calls),
+            bucket_count(model.failed_calls),
+            bucket_rate(model.failed_calls, model.total_calls),
+            bucket_tokens(model.total_tokens),
+            bucket_cost(model.total_cost_usd),
+            bucket_duration_ms(model.avg_duration_ms)
         ));
     }
     for provider in summary.by_provider.iter().take(6) {
         lines.push(format!(
-            "provider name={} calls={} failed={} failure_rate={} tokens={} cost_usd={:.4} total_duration_ms={}",
+            "provider name={} calls_bucket={} failed_bucket={} failure_rate_bucket={} tokens_bucket={} cost_usd_bucket={} total_duration_bucket={}",
             redact_and_cap_text(&provider.provider, 80),
-            provider.total_calls,
-            provider.failed_calls,
-            format_rate(provider.failed_calls, provider.total_calls),
-            provider.total_tokens,
-            provider.total_cost_usd,
-            provider.total_duration_ms
+            bucket_count(provider.total_calls),
+            bucket_count(provider.failed_calls),
+            bucket_rate(provider.failed_calls, provider.total_calls),
+            bucket_tokens(provider.total_tokens),
+            bucket_cost(provider.total_cost_usd),
+            bucket_duration_ms(provider.total_duration_ms)
         ));
     }
     Some(AutonomousEvidence {
@@ -835,7 +1125,14 @@ fn model_cost_evidence_from_events(events: &[LlmCallEvent]) -> Option<Autonomous
 
 async fn model_cost_evidence(gcx: Arc<ARwLock<GlobalContext>>) -> Option<AutonomousEvidence> {
     let stats_dirs = crate::stats::get_stats_dirs_for_read(gcx).await;
-    let events = crate::stats::reader::read_stats_events_from_dirs(&stats_dirs, None, None);
+    let events = tokio::task::spawn_blocking(move || {
+        crate::stats::reader::read_recent_stats_events_from_dirs(
+            &stats_dirs,
+            MODEL_COST_RECENT_EVENT_LIMIT,
+        )
+    })
+    .await
+    .unwrap_or_default();
     model_cost_evidence_from_events(&events)
 }
 
@@ -2410,10 +2707,35 @@ mod tests {
         BuddyFact {
             kind,
             key: format!("test:{:?}", kind),
-            source: "memory_garden",
+            source: test_fact_source(kind),
             payload,
             seen_at: Utc::now(),
             confidence: 0.9,
+        }
+    }
+
+    fn test_fact_source(kind: BuddyFactKind) -> &'static str {
+        match kind {
+            BuddyFactKind::TaskStuck
+            | BuddyFactKind::TaskAbandoned
+            | BuddyFactKind::TaskClusterDuplicate => "task_health",
+            BuddyFactKind::TrajectoryClutter => "trajectory_clutter",
+            BuddyFactKind::ChatRetryStreak => "chat_pattern",
+            BuddyFactKind::MemoryOrphan
+            | BuddyFactKind::MemoryStaleConflict
+            | BuddyFactKind::MemoryRecurringLesson => "memory_garden",
+            BuddyFactKind::ModePromptOverlap
+            | BuddyFactKind::SkillTriggerWeak
+            | BuddyFactKind::AgentsMdGapDetected => "customization_drift",
+            BuddyFactKind::DefaultModelMissing | BuddyFactKind::BrokenModelReference => {
+                "provider_health"
+            }
+            BuddyFactKind::McpAuthExpired | BuddyFactKind::IntegrationFailing => "mcp_auth",
+            BuddyFactKind::DiagnosticCluster | BuddyFactKind::FrontendErrorBurst => {
+                "diagnostic_cluster"
+            }
+            BuddyFactKind::GitDiffWidening | BuddyFactKind::UncommittedPressure => "git_pressure",
+            BuddyFactKind::WorktreeHygiene => "worktree_hygiene",
         }
     }
 
@@ -2423,6 +2745,28 @@ mod tests {
         duration_ms: u64,
         tokens: usize,
         cost: f64,
+    ) -> LlmCallEvent {
+        test_llm_event_for_model(
+            i,
+            success,
+            duration_ms,
+            tokens,
+            cost,
+            "anthropic/claude-test",
+            "anthropic",
+            "claude-test",
+        )
+    }
+
+    fn test_llm_event_for_model(
+        i: u64,
+        success: bool,
+        duration_ms: u64,
+        tokens: usize,
+        cost: f64,
+        model_id: &str,
+        provider: &str,
+        model: &str,
     ) -> LlmCallEvent {
         LlmCallEvent {
             id: format!("event-{i}"),
@@ -2436,9 +2780,9 @@ mod tests {
             task_role: None,
             agent_id: None,
             card_id: None,
-            model_id: "anthropic/claude-test".to_string(),
-            provider: "anthropic".to_string(),
-            model: "claude-test".to_string(),
+            model_id: model_id.to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
             messages_count: 3,
             tools_count: 0,
             max_tokens: 4096,
@@ -2589,6 +2933,7 @@ mod tests {
     fn memory_fact_filtering_builds_metadata_only_evidence() {
         let mut ctx = context_with_last_result(None);
         ctx.pulse.memory.orphan = 2;
+        ctx.pulse.memory.stale_conflicts = 1;
         ctx.facts = vec![
             test_fact(
                 BuddyFactKind::MemoryOrphan,
@@ -2613,10 +2958,38 @@ mod tests {
 
         assert!(gardener.evidence.contains("mem-a"));
         assert!(gardener.evidence.contains("memory_pulse"));
+        assert!(!gardener.evidence.contains("memory_stale_conflict"));
+        assert!(!gardener.evidence.contains("stale_conflicts"));
         assert!(!gardener.evidence.contains("full memory body"));
         assert!(conflict.evidence.contains("doc-a"));
         assert!(conflict.evidence.contains("prefer x vs avoid x"));
         assert!(!conflict.evidence.contains("full doc body"));
+    }
+
+    #[test]
+    fn lone_stale_conflict_routes_only_to_conflict_resolver() {
+        let mut ctx = context_with_last_result(None);
+        ctx.pulse.memory.total = 4;
+        ctx.pulse.memory.stale_conflicts = 1;
+        ctx.facts = vec![test_fact(
+            BuddyFactKind::MemoryStaleConflict,
+            serde_json::json!({
+                "doc_ids": ["doc-a", "doc-b"],
+                "conflict_summary": "prefer short answers vs detailed answers"
+            }),
+        )];
+
+        assert_eq!(
+            memory_route_for_fact_kind(BuddyFactKind::MemoryStaleConflict),
+            Some(MemoryRouting::KnowledgeConflictResolver)
+        );
+        assert!(memory_gardener_evidence(&ctx).is_none());
+        let conflict = knowledge_conflict_evidence(&ctx).unwrap();
+        assert!(conflict.evidence.contains("memory_stale_conflict"));
+
+        ctx.facts.clear();
+        assert!(memory_gardener_evidence(&ctx).is_none());
+        assert!(knowledge_conflict_evidence(&ctx).is_some());
     }
 
     #[test]
@@ -2703,6 +3076,110 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn oversized_trajectory_json_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let small_path = dir.path().join("small.json");
+        let large_path = dir.path().join("large.json");
+        tokio::fs::write(
+            &small_path,
+            serde_json::json!({"messages": [{"role": "user", "content": "I prefer concise answers."}]}).to_string(),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(&large_path, format!("{{\"pad\":\"{}\"}}", "x".repeat(128)))
+            .await
+            .unwrap();
+
+        assert!(read_bounded_trajectory_json(&small_path, 256)
+            .await
+            .is_some());
+        assert!(read_bounded_trajectory_json(&large_path, 32)
+            .await
+            .is_none());
+    }
+
+    #[test]
+    fn behavior_trajectory_meta_collection_skips_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let small_path = dir.path().join("small.json");
+        let large_path = dir.path().join("large.json");
+        std::fs::write(
+            &small_path,
+            serde_json::json!({
+                "id": "small",
+                "title": "Small",
+                "mode": "agent",
+                "updated_at": "2026-01-02T00:00:00Z",
+                "messages": [{"role": "user", "content": "I prefer concise answers."}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &large_path,
+            format!(
+                "{{\"id\":\"large\",\"updated_at\":\"2026-01-03T00:00:00Z\",\"pad\":\"{}\"}}",
+                "x".repeat((MAX_BEHAVIOR_TRAJECTORY_BYTES as usize) + 1)
+            ),
+        )
+        .unwrap();
+
+        let mut metas = Vec::new();
+        let mut seen = HashSet::new();
+        collect_behavior_trajectory_metas_from_dir(dir.path(), &mut metas, &mut seen);
+
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].id, "small");
+    }
+
+    #[test]
+    fn habit_evidence_is_deterministic_for_task_status_and_fact_order() {
+        let mut first = context_with_last_result(None);
+        first.pulse.tasks.stuck = 1;
+        first.pulse.tasks.by_status = HashMap::from([
+            ("completed".to_string(), 2),
+            ("active".to_string(), 1),
+            ("planning".to_string(), 3),
+        ]);
+        first.facts = vec![
+            test_fact(
+                BuddyFactKind::ChatRetryStreak,
+                serde_json::json!({"count": 4, "summary": "retry streak"}),
+            ),
+            test_fact(
+                BuddyFactKind::TaskStuck,
+                serde_json::json!({"count": 1, "summary": "stuck task"}),
+            ),
+        ];
+        let mut second = context_with_last_result(None);
+        second.pulse.tasks.stuck = 1;
+        second.pulse.tasks.by_status = HashMap::from([
+            ("planning".to_string(), 3),
+            ("completed".to_string(), 2),
+            ("active".to_string(), 1),
+        ]);
+        second.facts = first.facts.iter().rev().cloned().collect();
+
+        let first_evidence = habit_evidence(&first).unwrap();
+        let second_evidence = habit_evidence(&second).unwrap();
+        let first_spec = build_spec("buddy_user_habit_coach", first_evidence.clone());
+        let second_spec = build_spec("buddy_user_habit_coach", second_evidence.clone());
+
+        assert_eq!(first_evidence.evidence, second_evidence.evidence);
+        assert!(
+            first_evidence
+                .evidence
+                .find("task_status active=1")
+                .unwrap()
+                < first_evidence
+                    .evidence
+                    .find("task_status completed=2")
+                    .unwrap()
+        );
+        assert_eq!(first_spec.signal_hash, second_spec.signal_hash);
+    }
+
     #[test]
     fn model_cost_trigger_uses_aggregate_stats_only() {
         let events = (0..8)
@@ -2711,11 +3188,86 @@ mod tests {
 
         let evidence = model_cost_evidence_from_events(&events).unwrap();
 
-        assert!(evidence.evidence.contains("failure_rate"));
-        assert!(evidence.evidence.contains("total_tokens"));
-        assert!(evidence.evidence.contains("cost_usd"));
+        assert!(evidence.evidence.contains("failure_rate_bucket"));
+        assert!(evidence.evidence.contains("total_tokens_bucket"));
+        assert!(evidence.evidence.contains("cost_usd_bucket"));
         assert!(!evidence.evidence.contains("timeout"));
         assert!(!evidence.evidence.contains("chat-"));
+        assert!(!evidence.evidence.contains("total_tokens=400000"));
+    }
+
+    #[test]
+    fn model_cost_evidence_excludes_buddy_autonomous_report_events() {
+        let mut events = (0..5)
+            .map(|i| test_llm_event(i, true, 1_000, 1_000, 0.01))
+            .collect::<Vec<_>>();
+        let mut buddy_report = test_llm_event(20, false, 60_000, 1_000_000, 10.0);
+        buddy_report.mode = "buddy".to_string();
+        buddy_report.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
+        events.push(buddy_report);
+
+        assert!(model_cost_evidence_from_events(&events).is_none());
+
+        let input_events = model_cost_input_events(&events);
+        assert_eq!(input_events.len(), 5);
+        assert!(input_events
+            .iter()
+            .all(|event| !event.chat_id.contains("buddy_model_cost_optimizer")));
+    }
+
+    #[test]
+    fn model_cost_signal_is_bucketed_against_one_report_event_noise() {
+        let events = (0..8)
+            .map(|i| test_llm_event(i, i >= 4, 25_000, 50_000, 0.20))
+            .collect::<Vec<_>>();
+        let first = build_spec(
+            "buddy_model_cost_optimizer",
+            model_cost_evidence_from_events(&events).unwrap(),
+        );
+        let mut with_report = events.clone();
+        let mut report = test_llm_event(40, true, 1_000, 1_000, 0.01);
+        report.mode = "buddy".to_string();
+        report.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
+        with_report.push(report);
+        let second = build_spec(
+            "buddy_model_cost_optimizer",
+            model_cost_evidence_from_events(&with_report).unwrap(),
+        );
+
+        assert_eq!(first.signal_hash, second.signal_hash);
+    }
+
+    #[test]
+    fn model_cost_evidence_has_stable_model_provider_tie_breakers() {
+        let ordered = vec![
+            test_llm_event_for_model(0, true, 25_000, 100_000, 0.50, "z/model", "z", "model"),
+            test_llm_event_for_model(1, true, 25_000, 100_000, 0.50, "a/model", "a", "model"),
+            test_llm_event_for_model(2, true, 25_000, 100_000, 0.50, "m/model", "m", "model"),
+            test_llm_event_for_model(3, true, 25_000, 100_000, 0.50, "a/model", "a", "model"),
+            test_llm_event_for_model(4, true, 25_000, 100_000, 0.50, "z/model", "z", "model"),
+            test_llm_event_for_model(5, true, 25_000, 100_000, 0.50, "m/model", "m", "model"),
+        ];
+        let reordered = vec![
+            ordered[2].clone(),
+            ordered[0].clone(),
+            ordered[5].clone(),
+            ordered[1].clone(),
+            ordered[4].clone(),
+            ordered[3].clone(),
+        ];
+
+        let first = model_cost_evidence_from_events(&ordered).unwrap();
+        let second = model_cost_evidence_from_events(&reordered).unwrap();
+
+        assert_eq!(first.evidence, second.evidence);
+        assert!(
+            first.evidence.find("model id=a/model").unwrap()
+                < first.evidence.find("model id=m/model").unwrap()
+        );
+        assert!(
+            first.evidence.find("provider name=a").unwrap()
+                < first.evidence.find("provider name=m").unwrap()
+        );
     }
 
     #[test]

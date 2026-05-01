@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -23,11 +24,60 @@ pub fn read_stats_events_from_dirs(
     to: Option<&str>,
 ) -> Vec<LlmCallEvent> {
     let mut all_events = Vec::new();
+    let mut seen_prior_dir_ids = HashSet::new();
     for stats_dir in stats_dirs {
-        all_events.extend(read_stats_events_from_single_dir(stats_dir, from, to));
+        let dir_events = read_stats_events_from_single_dir(stats_dir, from, to);
+        merge_dir_events(&mut all_events, &mut seen_prior_dir_ids, dir_events);
     }
-    all_events.sort_by(|a, b| a.ts_start.cmp(&b.ts_start).then_with(|| a.id.cmp(&b.id)));
+    sort_events(&mut all_events);
     all_events
+}
+
+pub fn read_recent_stats_events_from_dirs(
+    stats_dirs: &[PathBuf],
+    max_events: usize,
+) -> Vec<LlmCallEvent> {
+    if max_events == 0 {
+        return Vec::new();
+    }
+    let mut all_events = Vec::new();
+    let mut seen_prior_dir_ids = HashSet::new();
+    for stats_dir in stats_dirs {
+        let dir_events = read_recent_stats_events_from_single_dir(stats_dir, max_events);
+        merge_dir_events(&mut all_events, &mut seen_prior_dir_ids, dir_events);
+    }
+    sort_events(&mut all_events);
+    if all_events.len() > max_events {
+        all_events.drain(0..all_events.len() - max_events);
+    }
+    all_events
+}
+
+fn merge_dir_events(
+    all_events: &mut Vec<LlmCallEvent>,
+    seen_prior_dir_ids: &mut HashSet<String>,
+    dir_events: Vec<LlmCallEvent>,
+) {
+    let mut current_dir_ids = HashSet::new();
+    for event in dir_events {
+        if !event.id.is_empty() && seen_prior_dir_ids.contains(&event.id) {
+            continue;
+        }
+        if !event.id.is_empty() {
+            current_dir_ids.insert(event.id.clone());
+        }
+        all_events.push(event);
+    }
+    seen_prior_dir_ids.extend(current_dir_ids);
+}
+
+fn sort_events(events: &mut Vec<LlmCallEvent>) {
+    events.sort_by(|a, b| {
+        a.ts_start
+            .cmp(&b.ts_start)
+            .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.chat_id.cmp(&b.chat_id))
+    });
 }
 
 fn read_stats_events_from_single_dir(
@@ -81,6 +131,55 @@ fn read_stats_events_from_single_dir(
         }
     }
     events
+}
+
+fn read_recent_stats_events_from_single_dir(
+    stats_dir: &Path,
+    max_events: usize,
+) -> Vec<LlmCallEvent> {
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(stats_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+            .collect(),
+        Err(_) => return vec![],
+    };
+    files.sort();
+
+    let mut events = Vec::new();
+    for path in files.iter().rev() {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("stats reader: failed to read {:?}: {}", path, e);
+                continue;
+            }
+        };
+        for line in content.lines().rev() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<LlmCallEvent>(line) {
+                Ok(mut event) => {
+                    event.mode = canonicalize_mode_for_stats(&event.mode);
+                    events.push(event);
+                    if events.len() >= max_events {
+                        return events;
+                    }
+                }
+                Err(e) => {
+                    warn!("stats reader: skipping malformed line in {:?}: {}", path, e);
+                }
+            }
+        }
+    }
+    events
+}
+
+fn cmp_f64_desc(a: f64, b: f64) -> Ordering {
+    b.partial_cmp(&a).unwrap_or(Ordering::Equal)
 }
 
 #[derive(serde::Serialize)]
@@ -416,7 +515,13 @@ pub fn aggregate_summary(
             },
         })
         .collect();
-    by_model.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    by_model.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| cmp_f64_desc(a.total_cost_usd, b.total_cost_usd))
+            .then_with(|| b.total_calls.cmp(&a.total_calls))
+            .then_with(|| a.model_id.cmp(&b.model_id))
+    });
 
     let mut by_provider: Vec<StatsByProvider> = by_provider_map
         .into_iter()
@@ -434,7 +539,13 @@ pub fn aggregate_summary(
             total_duration_ms: acc.total_duration_ms,
         })
         .collect();
-    by_provider.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    by_provider.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| cmp_f64_desc(a.total_cost_usd, b.total_cost_usd))
+            .then_with(|| b.total_calls.cmp(&a.total_calls))
+            .then_with(|| a.provider.cmp(&b.provider))
+    });
 
     let mut by_day: Vec<StatsByDay> = by_day_map
         .into_iter()
@@ -462,7 +573,13 @@ pub fn aggregate_summary(
             total_cost_usd: acc.total_cost_usd,
         })
         .collect();
-    by_mode.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    by_mode.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| cmp_f64_desc(a.total_cost_usd, b.total_cost_usd))
+            .then_with(|| b.total_calls.cmp(&a.total_calls))
+            .then_with(|| a.mode.cmp(&b.mode))
+    });
 
     let mut top_conversations: Vec<TopConversation> = conv_map
         .into_iter()
@@ -474,7 +591,13 @@ pub fn aggregate_summary(
             model_id: acc.model_id,
         })
         .collect();
-    top_conversations.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    top_conversations.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| cmp_f64_desc(a.total_cost_usd, b.total_cost_usd))
+            .then_with(|| b.total_calls.cmp(&a.total_calls))
+            .then_with(|| a.chat_id.cmp(&b.chat_id))
+    });
     top_conversations.truncate(10);
 
     StatsSummary {
@@ -705,6 +828,88 @@ mod tests {
     }
 
     #[test]
+    fn test_read_stats_events_from_dirs_dedupes_duplicate_event_ids() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+
+        let mut first = make_event(1, true);
+        first.id = "duplicate-id".to_string();
+        first.chat_id = "workspace-chat".to_string();
+        first.ts_start = "2026-02-02T00:00:00Z".to_string();
+
+        let mut duplicate = first.clone();
+        duplicate.chat_id = "config-chat".to_string();
+
+        let mut unique = make_event(2, true);
+        unique.id = "unique-id".to_string();
+        unique.chat_id = "unique-chat".to_string();
+        unique.ts_start = "2026-02-03T00:00:00Z".to_string();
+
+        std::fs::write(
+            workspace_dir.path().join("00000001.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&first).unwrap(),
+                serde_json::to_string(&unique).unwrap()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            config_dir.path().join("00000001.jsonl"),
+            format!("{}\n", serde_json::to_string(&duplicate).unwrap()),
+        )
+        .unwrap();
+
+        let events = read_stats_events_from_dirs(
+            &[
+                workspace_dir.path().to_path_buf(),
+                config_dir.path().to_path_buf(),
+            ],
+            None,
+            None,
+        );
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.id == "duplicate-id")
+                .count(),
+            1
+        );
+        assert!(events.iter().any(|event| event.chat_id == "unique-chat"));
+    }
+
+    #[test]
+    fn test_read_recent_stats_events_from_dirs_is_bounded_and_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("00000001.jsonl");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        for i in 1u64..=5 {
+            let event = make_event(i, true);
+            let line = serde_json::to_string(&event).unwrap();
+            writeln!(file, "{}", line).unwrap();
+        }
+        let mut duplicate = make_event(5, true);
+        duplicate.chat_id = "duplicate-chat".to_string();
+        writeln!(file, "{}", serde_json::to_string(&duplicate).unwrap()).unwrap();
+
+        let events = read_recent_stats_events_from_dirs(&[dir.path().to_path_buf()], 3);
+
+        assert_eq!(events.len(), 3);
+        assert!(events
+            .iter()
+            .all(|event| event.ts_start.as_str() >= "2026-02-05T00:00:00Z"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.id == "test-id-5")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn test_empty_stats_dir() {
         let dir = tempfile::tempdir().unwrap();
         let events = read_all_stats_events(dir.path());
@@ -794,5 +999,29 @@ mod tests {
         assert_eq!(summary.by_mode.len(), 1);
         assert_eq!(summary.by_mode[0].mode, "task_agent");
         assert_eq!(summary.by_mode[0].total_calls, 2);
+    }
+
+    #[test]
+    fn test_summary_sorting_has_stable_tie_breakers() {
+        let mut z = make_event(1, true);
+        z.model_id = "z/model".to_string();
+        z.provider = "z".to_string();
+        z.model = "model".to_string();
+        z.chat_id = "z-chat".to_string();
+        z.mode = "z_mode".to_string();
+
+        let mut a = make_event(2, true);
+        a.model_id = "a/model".to_string();
+        a.provider = "a".to_string();
+        a.model = "model".to_string();
+        a.chat_id = "a-chat".to_string();
+        a.mode = "a_mode".to_string();
+
+        let summary = aggregate_summary(&[z, a], None, None);
+
+        assert_eq!(summary.by_model[0].model_id, "a/model");
+        assert_eq!(summary.by_provider[0].provider, "a");
+        assert_eq!(summary.by_mode[0].mode, "a_mode");
+        assert_eq!(summary.top_conversations[0].chat_id, "a-chat");
     }
 }
