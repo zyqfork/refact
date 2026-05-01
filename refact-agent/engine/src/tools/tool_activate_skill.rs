@@ -18,10 +18,34 @@ pub struct ToolActivateSkill {
     pub config_path: String,
 }
 
+#[derive(Debug)]
+struct ActivatedSkill {
+    body: String,
+    allowed_tools: Vec<String>,
+    model_override: Option<String>,
+    skill_dir: String,
+}
+
+fn build_cd_instruction_content(name: &str, activated: &ActivatedSkill) -> String {
+    let header_json = serde_json::json!({
+        "name": name,
+        "allowed_tools": &activated.allowed_tools,
+        "model_override": &activated.model_override,
+        "skill_dir": &activated.skill_dir,
+    });
+    format!(
+        "💿 SKILL_ACTIVATED {}\n\nSkill directory: `{}`\n\nUse absolute paths under this directory when reading skill companion files (docs, scripts, assets). Do not use workspace-relative paths like `skills/{}/...`.\n\n{}",
+        header_json,
+        activated.skill_dir,
+        name,
+        activated.body
+    )
+}
+
 async fn activate_skill_inner(
     ext_dirs: &crate::ext::config_dirs::ExtDirs,
     name: &str,
-) -> Result<(String, Vec<String>, Option<String>), String> {
+) -> Result<ActivatedSkill, String> {
     if let Err(e) = crate::ext::skills::validate_skill_id(name) {
         return Err(format!("Invalid skill name '{}': {}", name, e));
     }
@@ -35,7 +59,12 @@ async fn activate_skill_inner(
         return Err(format!("Skill '{}' cannot be activated by the model", name));
     }
     let body = expand_skill_includes(&skill.body, &skill.skill_dir).await;
-    Ok((body, skill.allowed_tools, skill.model))
+    Ok(ActivatedSkill {
+        body,
+        allowed_tools: skill.allowed_tools,
+        model_override: skill.model,
+        skill_dir: skill.skill_dir.display().to_string(),
+    })
 }
 
 #[async_trait]
@@ -115,7 +144,7 @@ impl Tool for ToolActivateSkill {
         }
 
         let ext_dirs = get_ext_dirs(gcx.clone()).await;
-        let (body, allowed_tools, model_override) = activate_skill_inner(&ext_dirs, &name).await?;
+        let activated = activate_skill_inner(&ext_dirs, &name).await?;
 
         {
             let session_arc_opt = {
@@ -126,20 +155,15 @@ impl Tool for ToolActivateSkill {
             if let Some(session_arc) = session_arc_opt {
                 let mut session = session_arc.lock().await;
                 session.active_command.name = name.clone();
-                session.active_command.allowed_tools = allowed_tools.clone();
-                session.active_command.model_override = model_override.clone();
+                session.active_command.allowed_tools = activated.allowed_tools.clone();
+                session.active_command.model_override = activated.model_override.clone();
                 session.active_command.started_at_index = Some(session.messages.len());
                 session.active_command.activation_tool_call_id = Some(tool_call_id.clone());
                 session.set_active_skill(name.clone());
             }
         }
 
-        let header_json = serde_json::json!({
-            "name": name.clone(),
-            "allowed_tools": allowed_tools,
-            "model_override": model_override,
-        });
-        let cd_instruction_content = format!("💿 SKILL_ACTIVATED {}\n\n{}", header_json, body);
+        let cd_instruction_content = build_cd_instruction_content(&name, &activated);
 
         Ok((
             false,
@@ -311,10 +335,13 @@ mod tests {
         let ext_dirs = make_ext_dirs(tmp.path());
         let result = activate_skill_inner(&ext_dirs, "my-skill").await;
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-        let (body, allowed_tools, model_override) = result.unwrap();
-        assert!(body.contains("Do something useful with $ARGUMENTS"));
-        assert!(allowed_tools.is_empty());
-        assert!(model_override.is_none());
+        let activated = result.unwrap();
+        assert!(activated
+            .body
+            .contains("Do something useful with $ARGUMENTS"));
+        assert!(activated.allowed_tools.is_empty());
+        assert!(activated.model_override.is_none());
+        assert!(activated.skill_dir.ends_with("skills/my-skill"));
     }
 
     #[tokio::test]
@@ -371,14 +398,14 @@ mod tests {
         let ext_dirs = make_ext_dirs(tmp.path());
         let result = activate_skill_inner(&ext_dirs, "with-include").await;
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-        let (body, _, _) = result.unwrap();
+        let activated = result.unwrap();
         assert!(
-            body.contains("Included content here"),
+            activated.body.contains("Included content here"),
             "@include should be expanded, got: {}",
-            body
+            activated.body
         );
         assert!(
-            !body.contains("@include"),
+            !activated.body.contains("@include"),
             "@include directive should be replaced"
         );
     }
@@ -397,10 +424,13 @@ mod tests {
         let ext_dirs = make_ext_dirs(tmp.path());
         let result = activate_skill_inner(&ext_dirs, "restricted-skill").await;
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-        let (body, allowed_tools, model_override) = result.unwrap();
-        assert!(!body.is_empty());
-        assert_eq!(allowed_tools, vec!["cat".to_string(), "tree".to_string()]);
-        assert_eq!(model_override, Some("gpt-4o".to_string()));
+        let activated = result.unwrap();
+        assert!(!activated.body.is_empty());
+        assert_eq!(
+            activated.allowed_tools,
+            vec!["cat".to_string(), "tree".to_string()]
+        );
+        assert_eq!(activated.model_override, Some("gpt-4o".to_string()));
     }
 
     #[tokio::test]
@@ -417,15 +447,39 @@ mod tests {
         let ext_dirs = make_ext_dirs(tmp.path());
         let result = activate_skill_inner(&ext_dirs, "open-skill").await;
         assert!(result.is_ok());
-        let (_, allowed_tools, model_override) = result.unwrap();
+        let activated = result.unwrap();
         assert!(
-            allowed_tools.is_empty(),
+            activated.allowed_tools.is_empty(),
             "No restrictions should result in empty allowed_tools"
         );
         assert!(
-            model_override.is_none(),
+            activated.model_override.is_none(),
             "No model should result in None model_override"
         );
+    }
+
+    #[tokio::test]
+    async fn test_activate_skill_instruction_exposes_absolute_skill_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(
+            tmp.path(),
+            "visual-skill",
+            "name: visual-skill\ndescription: Skill with companion docs\nuser-invocable: true",
+            "Read visual-companion.md before changing UI",
+        )
+        .await;
+
+        let ext_dirs = make_ext_dirs(tmp.path());
+        let activated = activate_skill_inner(&ext_dirs, "visual-skill")
+            .await
+            .unwrap();
+        let content = build_cd_instruction_content("visual-skill", &activated);
+
+        assert!(content.contains("\"skill_dir\""));
+        assert!(content.contains(&activated.skill_dir));
+        assert!(content.contains("Use absolute paths under this directory"));
+        assert!(content.contains("Do not use workspace-relative paths"));
+        assert!(content.contains("skills/visual-skill/..."));
     }
 
     #[tokio::test]
