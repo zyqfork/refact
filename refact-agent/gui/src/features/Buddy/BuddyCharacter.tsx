@@ -18,6 +18,9 @@ interface BuddyCharacterProps {
   showStageBadge?: boolean;
   bubblePosition?: BubblePosition;
   randomizeBubblePosition?: boolean;
+  sceneXPercent?: number;
+  roamTargetX?: number;
+  roamBoost?: number;
   speechText?: string | null;
   speechControls?: BuddyControl[];
   onCanvasEvent: (event: BuddyEvent) => void;
@@ -32,12 +35,23 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
   showStageBadge = false,
   bubblePosition = "top",
   randomizeBubblePosition = false,
+  sceneXPercent,
+  roamTargetX,
+  roamBoost,
   speechText,
   speechControls,
   onCanvasEvent,
   onSpeechControl,
 }) => (
-  <div className={styles.character} data-testid="buddy-world-character">
+  <div
+    className={styles.character}
+    style={
+      typeof sceneXPercent === "number"
+        ? { left: `${sceneXPercent}%` }
+        : undefined
+    }
+    data-testid="buddy-world-character"
+  >
     <BuddyCanvas
       state={state}
       onEvent={onCanvasEvent}
@@ -47,6 +61,8 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
       onSpeechControlClick={onSpeechControl}
       bubblePosition={bubblePosition}
       randomizeBubblePosition={randomizeBubblePosition}
+      roamTargetX={roamTargetX}
+      roamBoost={roamBoost}
     />
     {showStageBadge && (
       <div

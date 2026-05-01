@@ -61,6 +61,17 @@ const SETUP_MODE_ACTIONS = [
 ] as const;
 
 const HOME_HOTSPOT = { x: 8.5, y: 67 } as const;
+const BUDDY_SCENE_CENTER_X = 50;
+const BUDDY_SCENE_WALK_RANGE = 42;
+
+interface BuddyWaypoint {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  reaction: string;
+  roamTargetX: number;
+}
 
 function pctX(width: number, value: number): number {
   return (width * value) / 100;
@@ -627,6 +638,50 @@ function drawVitality(
   }
 }
 
+function waypointToRoamTarget(x: number): number {
+  return Math.max(
+    -44,
+    Math.min(44, ((x - BUDDY_SCENE_CENTER_X) / BUDDY_SCENE_WALK_RANGE) * 46),
+  );
+}
+
+function buildBuddyWaypoints(world: BuddyWorldState): BuddyWaypoint[] {
+  return [
+    {
+      id: "home",
+      x: HOME_HOTSPOT.x,
+      y: HOME_HOTSPOT.y,
+      label: "home",
+      reaction: "Buddy checks the front door lights.",
+      roamTargetX: waypointToRoamTarget(HOME_HOTSPOT.x),
+    },
+    {
+      id: "celestial",
+      x: world.celestialX,
+      y: world.celestialY,
+      label: world.celestialLabel,
+      reaction: `Buddy tracks the ${world.celestialLabel.toLowerCase()}.`,
+      roamTargetX: waypointToRoamTarget(world.celestialX),
+    },
+    ...world.objects.map((item) => ({
+      id: item.id,
+      x: item.x,
+      y: item.y,
+      label: item.label,
+      reaction: `Buddy inspects ${item.label.toLowerCase()}.`,
+      roamTargetX: waypointToRoamTarget(item.x),
+    })),
+    {
+      id: "weather",
+      x: world.weatherX,
+      y: world.weatherY,
+      label: world.weatherLabel,
+      reaction: `Buddy watches ${world.weatherLabel.toLowerCase()}.`,
+      roamTargetX: waypointToRoamTarget(world.weatherX),
+    },
+  ];
+}
+
 function drawScene(
   ctx: CanvasRenderingContext2D,
   world: BuddyWorldState,
@@ -713,6 +768,8 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [currentTime, setCurrentTime] = useState(() => now ?? new Date());
   const [reaction, setReaction] = useState<string | null>(null);
+  const [activeWaypointIndex, setActiveWaypointIndex] = useState(0);
+  const [lastWaypoint, setLastWaypoint] = useState<BuddyWaypoint | null>(null);
 
   useEffect(() => {
     if (now) {
@@ -740,6 +797,33 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
       }),
     [activeQuest, currentTime, nowPlaying, pet, pulse],
   );
+  const waypoints = useMemo(() => buildBuddyWaypoints(world), [world]);
+  const activeWaypoint = waypoints[activeWaypointIndex % waypoints.length];
+  const characterSceneX = Math.max(18, Math.min(82, activeWaypoint.x));
+
+  useEffect(() => {
+    setActiveWaypointIndex(0);
+    setLastWaypoint(null);
+  }, [world.headline]);
+
+  useEffect(() => {
+    if (activeSpeech ?? reaction) return;
+    const delay = 5200 + Math.random() * 3600;
+    const timer = window.setTimeout(() => {
+      setActiveWaypointIndex((index) => (index + 1) % waypoints.length);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [activeSpeech, reaction, activeWaypointIndex, waypoints.length]);
+
+  useEffect(() => {
+    if (activeSpeech ?? reaction) return;
+    if (lastWaypoint?.id === activeWaypoint.id) return;
+    const timer = window.setTimeout(() => {
+      setLastWaypoint(activeWaypoint);
+      setReaction(activeWaypoint.reaction);
+    }, 1400);
+    return () => window.clearTimeout(timer);
+  }, [activeSpeech, activeWaypoint, lastWaypoint, reaction]);
 
   useEffect(() => {
     let frame = 0;
@@ -777,6 +861,12 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   }, [compact, palette, world]);
 
   const handleCelestialClick = () => {
+    setActiveWaypointIndex(
+      Math.max(
+        0,
+        waypoints.findIndex((point) => point.id === "celestial"),
+      ),
+    );
     if (world.phase === "night") {
       onCare("sleep");
       setReaction("Buddy curls up under the moon and saves energy.");
@@ -787,6 +877,12 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   };
 
   const handleWeatherClick = () => {
+    setActiveWaypointIndex(
+      Math.max(
+        0,
+        waypoints.findIndex((point) => point.id === "weather"),
+      ),
+    );
     if (world.weather === "storm") {
       onOpenPage({ type: "stats" });
       setReaction("Buddy marked the storm front for investigation.");
@@ -802,6 +898,12 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   };
 
   const handleHomeClick = () => {
+    setActiveWaypointIndex(
+      Math.max(
+        0,
+        waypoints.findIndex((point) => point.id === "home"),
+      ),
+    );
     if (homeDoorDisabled) {
       setReaction("Buddy is already home.");
       return;
@@ -863,6 +965,12 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
           className={classNames(styles.objectHotspot, TONE_CLASS[item.tone])}
           style={{ left: `${item.x}%`, top: `${item.y}%` }}
           onClick={() => {
+            setActiveWaypointIndex(
+              Math.max(
+                0,
+                waypoints.findIndex((point) => point.id === item.id),
+              ),
+            );
             onOpenPage(item.page);
             setReaction(`Buddy hops toward ${item.label.toLowerCase()}.`);
           }}
@@ -876,11 +984,22 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         </button>
       ))}
 
+      {lastWaypoint && (
+        <div
+          className={styles.waypointPing}
+          style={{ left: `${lastWaypoint.x}%`, top: `${lastWaypoint.y}%` }}
+          aria-hidden
+        />
+      )}
+
       <BuddyCharacter
         state={state}
         stage={stage}
         palette={palette}
         displaySize={compact ? 230 : 282}
+        sceneXPercent={characterSceneX}
+        roamTargetX={activeWaypoint.roamTargetX}
+        roamBoost={reaction ? 0.12 : 0}
         speechText={speechOverride}
         speechControls={activeSpeech ? activeSpeech.controls : undefined}
         randomizeBubblePosition

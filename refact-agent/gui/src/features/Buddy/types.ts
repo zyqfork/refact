@@ -403,6 +403,8 @@ export interface BuddyCanvasProps {
   displaySize?: number;
   className?: string;
   style?: React.CSSProperties;
+  roamTargetX?: number;
+  roamBoost?: number;
   /** Override speech bubble text (from runtime/backend), takes priority over canvas statusText */
   speechOverride?: string | null;
   /** Buttons rendered inside the speech bubble */

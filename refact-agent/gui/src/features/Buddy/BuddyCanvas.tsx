@@ -169,6 +169,8 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   displaySize = 512,
   className,
   style,
+  roamTargetX,
+  roamBoost = 0,
   speechOverride,
   speechControls,
   onSpeechControlClick,
@@ -178,6 +180,8 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<BuddyAnimState>(createInitialAnimState());
   const semanticRef = useRef<BuddySemanticState>(state);
+  const roamTargetXRef = useRef<number | undefined>(roamTargetX);
+  const roamBoostRef = useRef(roamBoost);
   const prevSignalTimeRef = useRef<number>(0);
   const frameIdRef = useRef<number>(0);
   const [bubbleView, setBubbleView] = useState<BubbleView>(() => ({
@@ -218,6 +222,14 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
     semanticRef.current = state;
   }, [state]);
 
+  useEffect(() => {
+    roamTargetXRef.current = roamTargetX;
+  }, [roamTargetX]);
+
+  useEffect(() => {
+    roamBoostRef.current = roamBoost;
+  }, [roamBoost]);
+
   const emit = useCallback(
     (event: BuddyEvent) => {
       onEvent?.(event);
@@ -247,6 +259,26 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
       const ctx = canvasRef.current?.getContext("2d");
       if (ctx) {
         const sem = semanticRef.current;
+        const roamTarget = roamTargetXRef.current;
+        if (typeof roamTarget === "number") {
+          const anim = animRef.current;
+          const target = Math.max(-46, Math.min(46, roamTarget));
+          if (
+            !anim.dragging &&
+            anim.idleAction !== "doze" &&
+            Math.abs(target - anim.walkOffsetX) > 2
+          ) {
+            anim.walking = true;
+            anim.idleAction = "walk";
+            anim.idleActionTimer = Math.max(anim.idleActionTimer, 90);
+            anim.walkTargetX = target;
+            anim.walkDirection = Math.sign(target - anim.walkOffsetX) || 1;
+            anim.walkSpeed = Math.max(
+              anim.walkSpeed,
+              0.32 + (sem.mood.energy / 100) * 0.38 + roamBoostRef.current,
+            );
+          }
+        }
         stepAnimFrame(animRef.current, sem, emit);
         renderFrame(ctx, animRef.current, sem);
 
