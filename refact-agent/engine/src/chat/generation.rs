@@ -335,20 +335,24 @@ pub async fn prepare_session_preamble_and_knowledge(
         }
     }
 
-    // Knowledge enrichment: first user message only, explicit flag, no manual context present.
-    let (last_is_user, auto_enrichment_enabled, user_count, has_manual_enrichment, suppress_flag) = {
+    let (
+        last_is_user,
+        auto_enrichment_enabled,
+        user_count,
+        has_manual_enrichment_for_turn,
+        suppress_flag,
+    ) = {
         let mut session = session_arc.lock().await;
-        let last_user = session
-            .messages
-            .last()
-            .map(|m| m.role == "user")
-            .unwrap_or(false);
+        let last_user_idx = session.messages.iter().rposition(|m| m.role == "user");
+        let last_user =
+            last_user_idx.is_some() && last_user_idx == session.messages.len().checked_sub(1);
         let auto = session.thread.auto_enrichment_enabled.unwrap_or(false);
         let count = session.messages.iter().filter(|m| m.role == "user").count();
-        let manual = session
-            .messages
-            .iter()
-            .any(|m| m.role == "context_file" && m.tool_call_id == "manual_memory_enrichment");
+        let manual = last_user_idx
+            .and_then(|idx| idx.checked_sub(1))
+            .and_then(|idx| session.messages.get(idx))
+            .map(|m| m.role == "context_file" && m.tool_call_id == "manual_memory_enrichment")
+            .unwrap_or(false);
         let suppress = session.suppress_auto_enrichment_for_next_turn;
         if suppress {
             session.suppress_auto_enrichment_for_next_turn = false;
@@ -358,16 +362,22 @@ pub async fn prepare_session_preamble_and_knowledge(
     if is_agentic_mode_id(&thread.mode)
         && last_is_user
         && auto_enrichment_enabled
-        && user_count == 1
-        && !has_manual_enrichment
+        && !has_manual_enrichment_for_turn
         && !suppress_flag
     {
+        let force_enrichment = user_count > 1;
         let mut messages = {
             let session = session_arc.lock().await;
             session.messages.clone()
         };
         let msg_count_before = messages.len();
-        enrich_messages_with_knowledge(gcx.clone(), &mut messages, Some(&chat_id)).await;
+        enrich_messages_with_knowledge(
+            gcx.clone(),
+            &mut messages,
+            Some(&chat_id),
+            force_enrichment,
+        )
+        .await;
         if messages.len() > msg_count_before {
             let local_last_user_idx = messages.iter().rposition(|m| m.role == "user").unwrap_or(0);
             if local_last_user_idx > 0 {

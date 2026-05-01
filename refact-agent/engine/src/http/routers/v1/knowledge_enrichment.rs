@@ -18,6 +18,11 @@ use crate::yaml_configs::customization_registry::get_subagent_config;
 static PATH_IN_CARD_RE: OnceLock<Regex> = OnceLock::new();
 static TITLE_IN_CARD_RE: OnceLock<Regex> = OnceLock::new();
 static CODE_FENCE_RE: OnceLock<Regex> = OnceLock::new();
+static TOOL_PATH_LINE_RE: OnceLock<Regex> = OnceLock::new();
+static TITLE_ICON_RE: OnceLock<Regex> = OnceLock::new();
+static KIND_ICON_RE: OnceLock<Regex> = OnceLock::new();
+static RELATED_BULLET_RE: OnceLock<Regex> = OnceLock::new();
+static LINE_RANGE_SUFFIX_RE: OnceLock<Regex> = OnceLock::new();
 
 fn path_in_card_re() -> &'static Regex {
     PATH_IN_CARD_RE.get_or_init(|| Regex::new(r"Memory file: (.+)").unwrap())
@@ -29,6 +34,27 @@ fn title_in_card_re() -> &'static Regex {
 
 fn code_fence_re() -> &'static Regex {
     CODE_FENCE_RE.get_or_init(|| Regex::new(r"```[\s\S]*?```").unwrap())
+}
+
+fn tool_path_line_re() -> &'static Regex {
+    TOOL_PATH_LINE_RE.get_or_init(|| Regex::new(r"(?m)^📄\s+(.+)$").unwrap())
+}
+
+fn title_icon_re() -> &'static Regex {
+    TITLE_ICON_RE.get_or_init(|| Regex::new(r"(?m)^📌\s+(.+)$").unwrap())
+}
+
+fn kind_icon_re() -> &'static Regex {
+    KIND_ICON_RE.get_or_init(|| Regex::new(r"(?m)^📦\s+(.+)$").unwrap())
+}
+
+fn related_bullet_re() -> &'static Regex {
+    RELATED_BULLET_RE.get_or_init(|| Regex::new(r"(?m)^-\s+(.+?)\s+\(([^()\n]+)\)\s*$").unwrap())
+}
+
+fn line_range_suffix_re() -> &'static Regex {
+    LINE_RANGE_SUFFIX_RE
+        .get_or_init(|| Regex::new(r"^(?P<path>.+):(?P<line1>\d+)-(?P<line2>\d+)$").unwrap())
 }
 
 fn format_enrichment_card(m: &crate::memories::MemoRecord) -> String {
@@ -65,6 +91,7 @@ fn format_enrichment_card(m: &crate::memories::MemoRecord) -> String {
 const KNOWLEDGE_TOP_N: usize = 3;
 const TRAJECTORY_TOP_N: usize = 2;
 const KNOWLEDGE_SCORE_THRESHOLD: f32 = 0.75;
+const FORCED_KNOWLEDGE_SCORE_THRESHOLD: f32 = 0.50;
 const KNOWLEDGE_ENRICHMENT_MARKER: &str = "knowledge_enrichment";
 const MAX_QUERY_LENGTH: usize = 2000;
 
@@ -72,6 +99,7 @@ pub async fn enrich_messages_with_knowledge(
     gcx: Arc<ARwLock<GlobalContext>>,
     messages: &mut Vec<ChatMessage>,
     current_chat_id: Option<&str>,
+    force_enrichment: bool,
 ) {
     let last_user_idx = match messages.iter().rposition(|m| m.role == "user") {
         Some(idx) => idx,
@@ -85,14 +113,26 @@ pub async fn enrich_messages_with_knowledge(
 
     let query_normalized = normalize_query(&query_raw);
 
-    if !should_enrich(messages, &query_raw, &query_normalized) {
+    if !should_enrich(messages, &query_raw, &query_normalized, force_enrichment) {
         return;
     }
 
     let existing_paths = get_existing_context_file_paths(messages);
 
-    if let Some(knowledge_context) =
-        create_knowledge_context(gcx, &query_normalized, &existing_paths, current_chat_id).await
+    let score_threshold = if force_enrichment {
+        FORCED_KNOWLEDGE_SCORE_THRESHOLD
+    } else {
+        KNOWLEDGE_SCORE_THRESHOLD
+    };
+
+    if let Some(knowledge_context) = create_knowledge_context(
+        gcx,
+        &query_normalized,
+        &existing_paths,
+        current_chat_id,
+        score_threshold,
+    )
+    .await
     {
         messages.insert(last_user_idx, knowledge_context);
         tracing::info!(
@@ -112,13 +152,22 @@ fn normalize_query(query: &str) -> String {
     }
 }
 
-fn should_enrich(messages: &[ChatMessage], query_raw: &str, query_normalized: &str) -> bool {
+fn should_enrich(
+    messages: &[ChatMessage],
+    query_raw: &str,
+    query_normalized: &str,
+    force_enrichment: bool,
+) -> bool {
     let trimmed = query_raw.trim();
     if trimmed.is_empty() {
         return false;
     }
     if trimmed.starts_with('@') || trimmed.starts_with('/') {
         return false;
+    }
+    if force_enrichment {
+        tracing::info!("Knowledge enrichment: explicitly enabled for later turn");
+        return true;
     }
     let user_message_count = messages.iter().filter(|m| m.role == "user").count();
     if user_message_count == 1 {
@@ -234,6 +283,7 @@ async fn create_knowledge_context(
     query_text: &str,
     existing_paths: &HashSet<String>,
     current_chat_id: Option<&str>,
+    score_threshold: f32,
 ) -> Option<ChatMessage> {
     let memories = memories_search(
         gcx.clone(),
@@ -247,7 +297,7 @@ async fn create_knowledge_context(
 
     let high_score_memories: Vec<_> = memories
         .into_iter()
-        .filter(|m| m.score.unwrap_or(0.0) >= KNOWLEDGE_SCORE_THRESHOLD)
+        .filter(|m| m.score.unwrap_or(0.0) >= score_threshold)
         .filter(|m| {
             if let Some(path) = &m.file_path {
                 !existing_paths.contains(&path.to_string_lossy().to_string())
@@ -264,7 +314,7 @@ async fn create_knowledge_context(
     tracing::info!(
         "Knowledge enrichment: {} memories passed threshold {}",
         high_score_memories.len(),
-        KNOWLEDGE_SCORE_THRESHOLD
+        score_threshold
     );
 
     let context_files: Vec<ContextFile> = high_score_memories
@@ -353,6 +403,98 @@ fn is_path_in_allowed_dirs(path: &std::path::Path, allowed: &[PathBuf]) -> bool 
     allowed.iter().any(|root| path.starts_with(root))
 }
 
+fn strip_line_range_suffix(path: &str) -> String {
+    let trimmed = path.trim();
+    line_range_suffix_re()
+        .captures(trimmed)
+        .and_then(|caps| caps.name("path").map(|m| m.as_str().trim().to_string()))
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn title_from_section(section: &str) -> Option<String> {
+    title_in_card_re()
+        .captures(section)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .or_else(|| {
+            title_icon_re()
+                .captures(section)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_string())
+        })
+}
+
+fn kind_from_section_or_path(section: &str, path_str: &str) -> String {
+    let raw_kind = kind_icon_re()
+        .captures(section)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_lowercase())
+        .filter(|kind| !kind.is_empty())
+        .unwrap_or_else(|| {
+            if path_str.contains("trajectories") {
+                "trajectory".to_string()
+            } else {
+                "memory".to_string()
+            }
+        });
+
+    match raw_kind.as_str() {
+        "trajectory" => "trajectory".to_string(),
+        "file" => "file".to_string(),
+        _ => "memory".to_string(),
+    }
+}
+
+fn push_enrichment_item(
+    items: &mut Vec<EnrichmentItem>,
+    seen_paths: &mut HashSet<String>,
+    allowed_dirs: &[PathBuf],
+    raw_path: &str,
+    label: Option<String>,
+    kind: String,
+    content: String,
+) {
+    let path_str = strip_line_range_suffix(raw_path);
+
+    if path_str.is_empty() || seen_paths.contains(&path_str) {
+        return;
+    }
+
+    let path = std::path::Path::new(&path_str);
+    if !is_path_in_allowed_dirs(path, allowed_dirs) {
+        tracing::warn!(
+            "preview: skipping enrichment path outside allowed roots: {}",
+            path_str
+        );
+        return;
+    }
+
+    let label = label
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .unwrap_or_else(|| path_str.clone());
+    let content: String = content.chars().take(900).collect();
+    let line_count = content.lines().count().max(1);
+
+    seen_paths.insert(path_str.clone());
+
+    items.push(EnrichmentItem {
+        kind,
+        label,
+        context_file: ContextFile {
+            file_name: path_str,
+            file_content: content,
+            line1: 1,
+            line2: line_count,
+            file_rev: None,
+            symbols: vec![],
+            gradient_type: -1,
+            usefulness: 85.0,
+            skip_pp: true,
+        },
+    });
+}
+
 /// Extract enrichment items from tool result messages produced by the knowledge tool.
 /// Content comes directly from tool results (server-generated) — no re-reading from disk.
 /// Paths are validated against allowed directories.
@@ -375,10 +517,6 @@ fn extract_items_from_tool_results(
             _ => continue,
         };
 
-        if !text.contains("Memory file:") {
-            continue;
-        }
-
         for section in text.split("# Related memory").skip(1) {
             let path_str = match path_re
                 .captures(section)
@@ -389,57 +527,125 @@ fn extract_items_from_tool_results(
                 _ => continue,
             };
 
-            if seen_paths.contains(&path_str) {
-                continue;
-            }
-
-            let path = std::path::Path::new(&path_str);
-            if !is_path_in_allowed_dirs(path, allowed_dirs) {
-                tracing::warn!(
-                    "preview: skipping enrichment path outside allowed roots: {}",
-                    path_str
-                );
-                continue;
-            }
-
             let label = title_re
                 .captures(section)
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().trim().to_string())
-                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()))
-                .unwrap_or_else(|| path_str.clone());
-
-            let kind = if path_str.contains("trajectories") {
-                "trajectory"
-            } else {
-                "memory"
-            };
+                .or_else(|| title_from_section(section));
 
             let card = format!("# Related memory{}", section);
-            let content: String = card.chars().take(900).collect();
-            let line_count = content.lines().count().max(1);
-
-            seen_paths.insert(path_str.clone());
-
-            items.push(EnrichmentItem {
-                kind: kind.to_string(),
+            let kind = kind_from_section_or_path(section, &path_str);
+            push_enrichment_item(
+                &mut items,
+                &mut seen_paths,
+                allowed_dirs,
+                &path_str,
                 label,
-                context_file: ContextFile {
-                    file_name: path_str,
-                    file_content: content,
-                    line1: 1,
-                    line2: line_count,
-                    file_rev: None,
-                    symbols: vec![],
-                    gradient_type: -1,
-                    usefulness: 85.0,
-                    skip_pp: true,
-                },
-            });
+                kind,
+                card,
+            );
+        }
+
+        for section in text.split("\n---\n") {
+            let path_str = match tool_path_line_re()
+                .captures(section)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_string())
+            {
+                Some(p) if !p.is_empty() => p,
+                _ => continue,
+            };
+
+            let label = title_from_section(section);
+            let kind = kind_from_section_or_path(section, &path_str);
+            push_enrichment_item(
+                &mut items,
+                &mut seen_paths,
+                allowed_dirs,
+                &path_str,
+                label,
+                kind,
+                section.trim().to_string(),
+            );
+        }
+
+        for caps in related_bullet_re().captures_iter(text) {
+            let label = caps.get(1).map(|m| m.as_str().trim().to_string());
+            let path_str = match caps.get(2).map(|m| m.as_str().trim().to_string()) {
+                Some(p) if !p.is_empty() => p,
+                _ => continue,
+            };
+            let content = label
+                .as_ref()
+                .map(|l| {
+                    format!(
+                        "# Related memory (short form)\nTitle: {}\nMemory file: {}",
+                        l, path_str
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!("# Related memory (short form)\nMemory file: {}", path_str)
+                });
+            let kind = kind_from_section_or_path(text, &path_str);
+            push_enrichment_item(
+                &mut items,
+                &mut seen_paths,
+                allowed_dirs,
+                &path_str,
+                label,
+                kind,
+                content,
+            );
         }
     }
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_message(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "tool".to_string(),
+            content: ChatContent::SimpleText(content.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn extract_items_from_tool_results_parses_knowledge_tool_blocks() {
+        let messages = vec![tool_message(
+            "📄 /tmp/project/.refact/knowledge/memory.md:1-3\n📌 Memory Title\n📦 decision\nbody\n\n---\n",
+        )];
+        let items =
+            extract_items_from_tool_results(&messages, &[PathBuf::from("/tmp/project/.refact")]);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "Memory Title");
+        assert_eq!(items[0].kind, "memory");
+        assert_eq!(
+            items[0].context_file.file_name,
+            "/tmp/project/.refact/knowledge/memory.md"
+        );
+    }
+
+    #[test]
+    fn extract_items_from_tool_results_parses_related_memory_bullets() {
+        let messages = vec![tool_message(
+            "## Related memories (short form)\n\n- Related Title (/tmp/project/.refact/knowledge/related.md)\n  short desc\n",
+        )];
+        let items =
+            extract_items_from_tool_results(&messages, &[PathBuf::from("/tmp/project/.refact")]);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "Related Title");
+        assert_eq!(
+            items[0].context_file.file_name,
+            "/tmp/project/.refact/knowledge/related.md"
+        );
+    }
 }
 
 /// Request body for the manual memory enrichment preview endpoint.

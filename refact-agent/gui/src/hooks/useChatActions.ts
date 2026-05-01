@@ -135,6 +135,10 @@ export function useChatActions() {
         manualPreviewItems.length > 0
           ? manualPreviewItems.map((item) => item.context_file)
           : undefined;
+      const shouldSuppressAutoEnrichment =
+        manualPreviewRan &&
+        contextFiles !== undefined &&
+        contextFiles.length > 0;
 
       const shouldPrioritize = priority ?? sendImmediately;
       await sendUserMessage(
@@ -144,7 +148,7 @@ export function useChatActions() {
         apiKey ?? undefined,
         shouldPrioritize,
         contextFiles,
-        manualPreviewRan,
+        shouldSuppressAutoEnrichment,
       );
 
       dispatch(clearManualPreviewItems({ chatId }));

@@ -825,10 +825,22 @@ async fn memories_search_fallback(
     exclude_root: Option<&str>,
 ) -> Result<Vec<MemoRecord>, String> {
     let query_lower = query.to_lowercase();
-    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+    const FALLBACK_STOP_WORDS: &[&str] = &[
+        "the", "and", "for", "with", "that", "this", "from", "into", "about", "what", "where",
+        "when", "why", "how", "can", "could", "should", "would", "please", "find", "search",
+        "look", "need", "want", "have", "does", "doesn", "work",
+    ];
+    let mut seen_query_words = std::collections::HashSet::new();
+    let query_words: Vec<&str> = query_lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .map(|w| w.trim_matches('-'))
+        .filter(|w| w.len() >= 3)
+        .filter(|w| !FALLBACK_STOP_WORDS.contains(w))
+        .filter(|w| seen_query_words.insert((*w).to_string()))
+        .collect();
     let mut scored_results: Vec<(usize, MemoRecord)> = Vec::new();
 
-    if knowledge_dirs.is_empty() {
+    if knowledge_dirs.is_empty() || query_words.is_empty() {
         return Ok(vec![]);
     }
 
@@ -890,8 +902,11 @@ async fn memories_search_fallback(
                 .unwrap_or_else(|| path.to_string_lossy().to_string());
             let content_preview: String = text[content_start..].chars().take(500).collect();
 
-            // Normalize keyword score to 0-1 range (assuming max ~10 word matches)
-            let normalized_score = (score as f32 / 10.0).min(1.0);
+            let normalized_score = if score >= 2 {
+                (score as f32 / 2.0).min(1.0)
+            } else {
+                0.70
+            };
 
             scored_results.push((
                 score,
