@@ -196,10 +196,11 @@ function findTarget(
   targets: BuddyShowcaseTargetCandidate[],
   definition: BuddyShowcaseDefinition,
 ): BuddyShowcaseTargetCandidate | null {
+  const idTarget = targets.find((target) => target.id === definition.targetId);
+  if (idTarget) return idTarget;
+  if (!definition.targetSprite) return null;
   return (
-    targets.find((target) => target.id === definition.targetId) ??
-    targets.find((target) => target.sprite === definition.targetSprite) ??
-    null
+    targets.find((target) => target.sprite === definition.targetSprite) ?? null
   );
 }
 

@@ -761,12 +761,12 @@ function prefersReducedMotion(): boolean {
 
 function resolveBuddyWorldSpeechOverride(args: {
   activeSpeechText: string | null;
-  showcasePose: BuddyScenePose | null;
+  showcaseActive: boolean;
   showcaseSpeech: string | null;
   reaction: string | null;
 }): string | null {
   if (args.activeSpeechText !== null) return args.activeSpeechText;
-  if (args.showcasePose !== null) return args.showcaseSpeech;
+  if (args.showcaseActive) return args.showcaseSpeech;
   return args.reaction;
 }
 
@@ -1057,8 +1057,29 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     ) {
       return;
     }
+    if (nowPlaying.id && nowPlaying.id === lastRuntimeShowcaseEventId) {
+      return;
+    }
+
+    const nowMs = Date.now();
+    if (nowMs < nextRuntimeShowcaseAtMs) {
+      const timer = window.setTimeout(
+        () => startShowcase(true),
+        nextRuntimeShowcaseAtMs - nowMs,
+      );
+      return () => window.clearTimeout(timer);
+    }
+
     startShowcase(true);
-  }, [activeSpeech, nowPlaying, reaction, showcaseRun, startShowcase]);
+  }, [
+    activeSpeech,
+    lastRuntimeShowcaseEventId,
+    nextRuntimeShowcaseAtMs,
+    nowPlaying,
+    reaction,
+    showcaseRun,
+    startShowcase,
+  ]);
 
   useEffect(() => {
     if (!showcaseRun) return;
@@ -1189,13 +1210,13 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   const characterPose: BuddyScenePose = showcasePose ?? randomPose;
   const speechOverride = resolveBuddyWorldSpeechOverride({
     activeSpeechText: activeSpeech?.text ?? null,
-    showcasePose,
+    showcaseActive: showcaseRun !== null,
     showcaseSpeech: showcaseRun?.speech ?? null,
     reaction,
   });
   const speechSource = activeSpeech
     ? "active"
-    : showcasePose
+    : showcaseRun
       ? "showcase"
       : reaction
         ? "reaction"

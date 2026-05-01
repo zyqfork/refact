@@ -315,6 +315,19 @@ function expectAlphaWritesFinite(ctx: RecordedCanvasContext): void {
   expect(ctx.alphaWrites.every((alpha) => Number.isFinite(alpha))).toBe(true);
 }
 
+function expectDrawOpsFinite(ctx: RecordedCanvasContext): void {
+  const serializedOps = ctx.drawOps.join(":");
+  const numericTokens = ctx.drawOps.flatMap((operation) =>
+    operation
+      .split(":")
+      .map((token) => Number(token))
+      .filter((value) => !Number.isNaN(value)),
+  );
+  expect(serializedOps).not.toMatch(/\b(?:NaN|Infinity|-Infinity)\b/);
+  expect(numericTokens.length).toBeGreaterThan(0);
+  expect(numericTokens.every((value) => Number.isFinite(value))).toBe(true);
+}
+
 describe("buddy showcase director", () => {
   it("draws showcase overlay events for both supported kinds", () => {
     const world = makeWorld();
@@ -432,9 +445,10 @@ describe("buddy showcase director", () => {
     expectAlphaWritesClamped(reducedCompactCtx);
   });
 
-  it("does not write non-finite alpha for edge draw inputs", () => {
+  it("does not write non-finite alpha or draw coordinates for edge draw inputs", () => {
     const invalidTimeCtx = makeCanvasContext();
     const invalidSeedCtx = makeCanvasContext();
+    const invalidGeometryCtx = makeCanvasContext();
 
     drawShowcaseEvent({
       ctx: invalidTimeCtx,
@@ -450,7 +464,12 @@ describe("buddy showcase director", () => {
     });
     drawShowcaseEvent({
       ctx: invalidSeedCtx,
-      run: makeShowcaseRun({ seed: Number.POSITIVE_INFINITY }),
+      run: makeShowcaseRun({
+        kind: "stargazing_constellation",
+        target: OBSERVATORY_TARGET,
+        pose: "stargaze",
+        seed: Number.POSITIVE_INFINITY,
+      }),
       world: makeWorld(),
       palette: PALETTES[0],
       frame: 240,
@@ -460,11 +479,37 @@ describe("buddy showcase director", () => {
       reducedMotion: false,
       nowMs: 3_400,
     });
+    drawShowcaseEvent({
+      ctx: invalidGeometryCtx,
+      run: makeShowcaseRun({
+        kind: "stargazing_constellation",
+        target: {
+          ...OBSERVATORY_TARGET,
+          x: Number.POSITIVE_INFINITY,
+          y: Number.NaN,
+        },
+        pose: "stargaze",
+        phaseStartedAtMs: Number.NEGATIVE_INFINITY,
+      }),
+      world: makeWorld(),
+      palette: PALETTES[0],
+      frame: Number.POSITIVE_INFINITY,
+      width: Number.POSITIVE_INFINITY,
+      height: Number.NaN,
+      compact: false,
+      reducedMotion: false,
+      nowMs: Number.POSITIVE_INFINITY,
+    });
 
     expectAlphaWritesFinite(invalidTimeCtx);
     expectAlphaWritesFinite(invalidSeedCtx);
+    expectAlphaWritesFinite(invalidGeometryCtx);
     expectAlphaWritesClamped(invalidTimeCtx);
     expectAlphaWritesClamped(invalidSeedCtx);
+    expectAlphaWritesClamped(invalidGeometryCtx);
+    expectDrawOpsFinite(invalidTimeCtx);
+    expectDrawOpsFinite(invalidSeedCtx);
+    expectDrawOpsFinite(invalidGeometryCtx);
   });
 
   it("draws deterministic showcase output for the same seed and frame", () => {
@@ -932,6 +977,30 @@ describe("buddy showcase director", () => {
       activeSpeechVisible: false,
       pet: makePet(),
       nowMs: 40_000,
+      lastShowcaseKind: null,
+      strongRuntimeTrigger: true,
+      pulse: makePulse(),
+      world: { phase: "night" as const, weather: "rain" as const },
+    };
+
+    expect(chooseBuddyShowcase(args)).toBeNull();
+    expect(createBuddyShowcaseRun(args)).toBeNull();
+  });
+
+  it("does not match undefined sprite fallback when target id is missing", () => {
+    const args = {
+      targets: [
+        {
+          id: "future-target",
+          x: 48,
+          y: 58,
+          label: "Future target",
+        },
+      ],
+      nowPlaying: makeRuntimeEvent({ signal_type: "memory_extract" }),
+      activeSpeechVisible: false,
+      pet: makePet(),
+      nowMs: 41_000,
       lastShowcaseKind: null,
       strongRuntimeTrigger: true,
       pulse: makePulse(),

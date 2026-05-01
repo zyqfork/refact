@@ -25,19 +25,25 @@ interface Point {
   y: number;
 }
 
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function pctX(width: number, value: number): number {
-  return (width * value) / 100;
+  return finiteOrZero((width * value) / 100);
 }
 
 function pctY(height: number, value: number): number {
-  return (height * value) / 100;
+  return finiteOrZero((height * value) / 100);
 }
 
 function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, value));
 }
 
 function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
   return clamp(value, 0, 1);
 }
 
@@ -47,7 +53,7 @@ function clampAlpha(value: number): number {
 }
 
 function lerp(from: number, to: number, progress: number): number {
-  return from + (to - from) * progress;
+  return finiteOrZero(from + (to - from) * progress);
 }
 
 function easeOut(progress: number): number {
@@ -61,7 +67,7 @@ function easeInOut(progress: number): number {
 }
 
 function seededUnit(seed: number, salt: number): number {
-  let value = (seed + Math.imul(salt + 1, 0x9e3779b9)) >>> 0;
+  let value = (finiteOrZero(seed) + Math.imul(salt + 1, 0x9e3779b9)) >>> 0;
   value ^= value >>> 16;
   value = Math.imul(value, 0x85ebca6b) >>> 0;
   value ^= value >>> 13;
@@ -72,7 +78,7 @@ function seededUnit(seed: number, salt: number): number {
 
 function phaseProgress(run: BuddyShowcaseRun, nowMs?: number): number {
   const duration = BUDDY_SHOWCASE_PHASE_DURATIONS_MS[run.phase];
-  const elapsed = (nowMs ?? Date.now()) - run.phaseStartedAtMs;
+  const elapsed = finiteOrZero(nowMs ?? Date.now()) - run.phaseStartedAtMs;
   return clamp01(elapsed / duration);
 }
 
@@ -123,10 +129,10 @@ function fillPixelRect(
   ctx.globalAlpha = clampAlpha(alpha);
   ctx.fillStyle = color;
   ctx.fillRect(
-    Math.round(x),
-    Math.round(y),
-    Math.max(1, Math.round(width)),
-    Math.max(1, Math.round(height)),
+    Math.round(finiteOrZero(x)),
+    Math.round(finiteOrZero(y)),
+    Math.max(1, Math.round(finiteOrZero(width))),
+    Math.max(1, Math.round(finiteOrZero(height))),
   );
   ctx.restore();
 }
@@ -143,7 +149,13 @@ function fillCircle(
   ctx.globalAlpha = clampAlpha(alpha);
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.arc(x, y, radius, 0, TAU);
+  ctx.arc(
+    finiteOrZero(x),
+    finiteOrZero(y),
+    Math.max(0, finiteOrZero(radius)),
+    0,
+    TAU,
+  );
   ctx.fill();
   ctx.restore();
 }
@@ -159,11 +171,11 @@ function strokeLine(
   ctx.save();
   ctx.globalAlpha = clampAlpha(alpha);
   ctx.strokeStyle = color;
-  ctx.lineWidth = width;
+  ctx.lineWidth = Math.max(0, finiteOrZero(width));
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(to.x, to.y);
+  ctx.moveTo(finiteOrZero(from.x), finiteOrZero(from.y));
+  ctx.lineTo(finiteOrZero(to.x), finiteOrZero(to.y));
   ctx.stroke();
   ctx.restore();
 }
@@ -207,7 +219,7 @@ function drawSpark(
 function memoryAnchor(args: DrawShowcaseEventArgs): Point {
   const x = pctX(args.width, args.run.target.x);
   const objectY = pctY(args.height, args.run.target.y);
-  const buddyY = args.height * (args.compact ? 0.62 : 0.66);
+  const buddyY = finiteOrZero(args.height) * (args.compact ? 0.62 : 0.66);
   return { x, y: Math.max(objectY + 22, buddyY) };
 }
 
@@ -320,7 +332,7 @@ function drawMemoryFireflyNight(args: DrawShowcaseEventArgs): void {
         anchor.y -
         lift * 0.4 +
         Math.sin(angle) * radius * 0.32 -
-        local * height * (compact ? 0.23 : 0.32);
+        local * finiteOrZero(height) * (compact ? 0.23 : 0.32);
       particleAlpha *= 1 - local * 0.76;
     }
 
@@ -354,18 +366,24 @@ function constellationStars(
   count: number,
 ): Point[] {
   const { run, width, height, compact } = args;
-  const xRadius = width * (compact ? 0.17 : 0.2);
-  const yRadius = height * (compact ? 0.1 : 0.12);
+  const safeWidth = finiteOrZero(width);
+  const safeHeight = finiteOrZero(height);
+  const xRadius = safeWidth * (compact ? 0.17 : 0.2);
+  const yRadius = safeHeight * (compact ? 0.1 : 0.12);
   return Array.from({ length: count }, (_, index) => {
     const angle =
       (index / count) * TAU + seededUnit(run.seed, 100 + index) * 0.72;
     const radius = lerp(0.42, 1, seededUnit(run.seed, 140 + index));
     return {
-      x: clamp(center.x + Math.cos(angle) * xRadius * radius, 18, width - 18),
+      x: clamp(
+        center.x + Math.cos(angle) * xRadius * radius,
+        18,
+        safeWidth - 18,
+      ),
       y: clamp(
         center.y + Math.sin(angle) * yRadius * radius,
         18,
-        height * 0.48,
+        safeHeight * 0.48,
       ),
     };
   });
@@ -415,14 +433,14 @@ function drawBeam(
   width: number,
   alpha: number,
 ): void {
-  const spread = width;
+  const spread = finiteOrZero(width);
   ctx.save();
   ctx.globalAlpha = clampAlpha(alpha);
   ctx.fillStyle = "rgba(191, 219, 254, 0.18)";
   ctx.beginPath();
-  ctx.moveTo(base.x + 22, base.y - 18);
-  ctx.lineTo(sky.x - spread, sky.y + 10);
-  ctx.lineTo(sky.x + spread, sky.y - 2);
+  ctx.moveTo(finiteOrZero(base.x + 22), finiteOrZero(base.y - 18));
+  ctx.lineTo(finiteOrZero(sky.x - spread), finiteOrZero(sky.y + 10));
+  ctx.lineTo(finiteOrZero(sky.x + spread), finiteOrZero(sky.y - 2));
   ctx.closePath();
   ctx.fill();
   ctx.restore();
@@ -495,14 +513,17 @@ function drawStargazingConstellation(args: DrawShowcaseEventArgs): void {
     x: pctX(width, run.target.x),
     y: pctY(height, run.target.y),
   };
-  const skyBaseX = width * lerp(0.39, 0.57, seededUnit(run.seed, 210));
+  const safeWidth = finiteOrZero(width);
+  const safeHeight = finiteOrZero(height);
+  const safeSeed = finiteOrZero(run.seed);
+  const skyBaseX = safeWidth * lerp(0.39, 0.57, seededUnit(run.seed, 210));
   const sweep = reducedMotion
     ? 0
-    : Math.sin(frame / 82 + run.seed) * width * (compact ? 0.025 : 0.045);
+    : Math.sin(frame / 82 + safeSeed) * safeWidth * (compact ? 0.025 : 0.045);
   const sky = {
-    x: clamp(skyBaseX + sweep, width * 0.22, width * 0.78),
+    x: clamp(skyBaseX + sweep, safeWidth * 0.22, safeWidth * 0.78),
     y:
-      height * (compact ? 0.21 : 0.17) +
+      safeHeight * (compact ? 0.21 : 0.17) +
       (reducedMotion ? 0 : Math.sin(frame / 96) * 3),
   };
   const beamProgress = easeOut(clamp01(timeline / 0.34));

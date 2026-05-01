@@ -290,6 +290,19 @@ describe("buddy UI polish", () => {
     expect(dispatchedActions.some(isSetupModeCreateAction)).toBe(true);
   });
 
+  it("BuddyWorld_keeps_scene_level_motion_without_roam_boosts", async () => {
+    const buddyWorldSource = await import(
+      "../features/Buddy/BuddyWorld.tsx?raw"
+    );
+    const source = buddyWorldSource.default;
+
+    const forbiddenTarget = ["roam", "TargetX"].join("");
+    const forbiddenBoost = ["roam", "Boost"].join("");
+
+    expect(source).not.toContain(forbiddenTarget);
+    expect(source).not.toContain(forbiddenBoost);
+  });
+
   it("BuddyHome_container_renders_split_subcomponents", async () => {
     server.use(
       http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
