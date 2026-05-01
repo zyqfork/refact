@@ -99,6 +99,21 @@ impl BuddyScheduler {
             .push(Box::new(super::jobs::stats_watcher::StatsWatcherJob));
         s.jobs
             .push(Box::new(super::jobs::health_watcher::HealthWatcherJob));
+        s.jobs.push(Box::new(
+            super::jobs::autonomous_chats::BuddyMemoryGardenerJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::autonomous_chats::BuddyKnowledgeConflictResolverJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::autonomous_chats::BuddyBehaviorLearnerJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::autonomous_chats::BuddyUserHabitCoachJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::autonomous_chats::BuddyModelCostOptimizerJob,
+        ));
         s.jobs
             .push(Box::new(super::jobs::quest_prompt::QuestPromptJob));
         s.jobs
@@ -120,6 +135,11 @@ impl BuddyScheduler {
         ));
         s.jobs.sort_by_key(|j| j.priority());
         s
+    }
+
+    #[cfg(test)]
+    fn job_ids(&self) -> Vec<String> {
+        self.jobs.iter().map(|job| job.id().to_string()).collect()
     }
 
     pub async fn tick(
@@ -248,5 +268,21 @@ mod tests {
             Some("new-json")
         );
         assert_eq!(next_last_result(None, None), None);
+    }
+
+    #[test]
+    fn scheduler_registers_autonomous_memory_behavior_habit_model_jobs() {
+        let scheduler = BuddyScheduler::new();
+        let ids = scheduler.job_ids();
+
+        for expected in [
+            "buddy_memory_gardener",
+            "buddy_knowledge_conflict_resolver",
+            "buddy_behavior_learner",
+            "buddy_user_habit_coach",
+            "buddy_model_cost_optimizer",
+        ] {
+            assert!(ids.iter().any(|id| id == expected), "missing {expected}");
+        }
     }
 }

@@ -12,9 +12,12 @@ use uuid::Uuid;
 use crate::buddy::actor::{make_runtime_event, redact_sensitive, validate_workflow_id};
 use crate::buddy::diagnostics::{DiagnosticContext, DiagnosticSeverity};
 use crate::buddy::scheduler::{BuddyJob, BuddyJobContext, BuddyJobResult};
-use crate::buddy::types::{BuddyActivity, BuddyThreadMeta};
+use crate::buddy::types::{
+    BuddyActivity, BuddyFact, BuddyFactKind, BuddyRuntimeEvent, BuddyThreadMeta,
+};
 use crate::call_validation::ChatMessage;
 use crate::global_context::GlobalContext;
+use crate::stats::event::LlmCallEvent;
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub const AUTONOMOUS_BUDDY_CHAT_SUBAGENT: &str = "buddy_autonomous_chat";
@@ -164,6 +167,859 @@ pub fn same_signal(ctx: &BuddyJobContext, hash: &str) -> bool {
     parse_last_autonomous_result(ctx.job_state.last_result.as_deref())
         .map(|last| last.signal_hash == hash)
         .unwrap_or(false)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutonomousEvidence {
+    prompt: String,
+    evidence: String,
+}
+
+pub struct BuddyMemoryGardenerJob;
+pub struct BuddyKnowledgeConflictResolverJob;
+pub struct BuddyBehaviorLearnerJob;
+pub struct BuddyUserHabitCoachJob;
+pub struct BuddyModelCostOptimizerJob;
+
+const MEMORY_COOLDOWN_SECS: u64 = 6 * 60 * 60;
+const BEHAVIOR_COOLDOWN_SECS: u64 = 4 * 60 * 60;
+const MAX_FACT_EVIDENCE_ITEMS: usize = 12;
+const MAX_TRAJECTORY_SNIPPETS: usize = 12;
+const MAX_BEHAVIOR_PREFERENCE_WRITES: usize = 2;
+
+fn fact_kind_name(kind: BuddyFactKind) -> &'static str {
+    match kind {
+        BuddyFactKind::TaskStuck => "task_stuck",
+        BuddyFactKind::TaskAbandoned => "task_abandoned",
+        BuddyFactKind::TaskClusterDuplicate => "task_cluster_duplicate",
+        BuddyFactKind::TrajectoryClutter => "trajectory_clutter",
+        BuddyFactKind::ChatRetryStreak => "chat_retry_streak",
+        BuddyFactKind::MemoryOrphan => "memory_orphan",
+        BuddyFactKind::MemoryStaleConflict => "memory_stale_conflict",
+        BuddyFactKind::MemoryRecurringLesson => "memory_recurring_lesson",
+        BuddyFactKind::ModePromptOverlap => "mode_prompt_overlap",
+        BuddyFactKind::SkillTriggerWeak => "skill_trigger_weak",
+        BuddyFactKind::AgentsMdGapDetected => "agents_md_gap_detected",
+        BuddyFactKind::DefaultModelMissing => "default_model_missing",
+        BuddyFactKind::BrokenModelReference => "broken_model_reference",
+        BuddyFactKind::McpAuthExpired => "mcp_auth_expired",
+        BuddyFactKind::IntegrationFailing => "integration_failing",
+        BuddyFactKind::DiagnosticCluster => "diagnostic_cluster",
+        BuddyFactKind::FrontendErrorBurst => "frontend_error_burst",
+        BuddyFactKind::GitDiffWidening => "git_diff_widening",
+        BuddyFactKind::UncommittedPressure => "uncommitted_pressure",
+        BuddyFactKind::WorktreeHygiene => "worktree_hygiene",
+    }
+}
+
+fn push_payload_string(lines: &mut Vec<String>, label: &str, value: &serde_json::Value) {
+    if let Some(text) = value.as_str() {
+        let text = redact_and_cap_text(text, 240);
+        if !text.is_empty() {
+            lines.push(format!("{}: {}", label, text));
+        }
+    }
+}
+
+fn payload_string_array(value: &serde_json::Value, key: &str, max: usize) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| redact_and_cap_text(item, 120))
+                .filter(|item| !item.is_empty())
+                .take(max)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn memory_fact_to_evidence_line(fact: &BuddyFact) -> String {
+    let mut parts = vec![format!(
+        "{} key={} source={} confidence={:.2}",
+        fact_kind_name(fact.kind),
+        redact_and_cap_text(&fact.key, 180),
+        fact.source,
+        fact.confidence
+    )];
+    if let Some(count) = fact.payload.get("count").and_then(|v| v.as_u64()) {
+        parts.push(format!("count={}", count));
+    }
+    let memory_ids = payload_string_array(&fact.payload, "memory_ids", 8);
+    if !memory_ids.is_empty() {
+        parts.push(format!("memory_ids={}", memory_ids.join(", ")));
+    }
+    let doc_ids = payload_string_array(&fact.payload, "doc_ids", 8);
+    if !doc_ids.is_empty() {
+        parts.push(format!("doc_ids={}", doc_ids.join(", ")));
+    }
+    if let Some(tags) = fact.payload.get("tags").and_then(|v| v.as_array()) {
+        let tags = tags
+            .iter()
+            .filter_map(|tag| tag.as_str())
+            .map(|tag| redact_and_cap_text(tag, 80))
+            .filter(|tag| !tag.is_empty())
+            .take(8)
+            .collect::<Vec<_>>();
+        if !tags.is_empty() {
+            parts.push(format!("tags={}", tags.join(", ")));
+        }
+    }
+    if let Some(title) = fact.payload.get("title").and_then(|v| v.as_str()) {
+        parts.push(format!("title={}", redact_and_cap_text(title, 160)));
+    }
+    if let Some(summary) = fact
+        .payload
+        .get("conflict_summary")
+        .or_else(|| fact.payload.get("summary"))
+        .and_then(|v| v.as_str())
+    {
+        parts.push(format!("summary={}", redact_and_cap_text(summary, 240)));
+    }
+    if let Some(tag_hash) = fact.payload.get("tag_hash").and_then(|v| v.as_str()) {
+        parts.push(format!("tag_hash={}", redact_and_cap_text(tag_hash, 120)));
+    }
+    parts.join("; ")
+}
+
+fn memory_gardener_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
+    let mut lines = Vec::new();
+    if ctx.pulse.memory.total > 0
+        || ctx.pulse.memory.orphan > 0
+        || ctx.pulse.memory.stale_conflicts > 0
+    {
+        lines.push(format!(
+            "memory_pulse total={} orphan={} stale_conflicts={}",
+            ctx.pulse.memory.total, ctx.pulse.memory.orphan, ctx.pulse.memory.stale_conflicts
+        ));
+    }
+    for fact in ctx
+        .facts
+        .iter()
+        .filter(|fact| {
+            matches!(
+                fact.kind,
+                BuddyFactKind::MemoryOrphan | BuddyFactKind::MemoryRecurringLesson
+            ) || fact.source == "memory_garden"
+        })
+        .take(MAX_FACT_EVIDENCE_ITEMS)
+    {
+        lines.push(memory_fact_to_evidence_line(fact));
+    }
+    if ctx.pulse.memory.orphan == 0
+        && !lines.iter().any(|line| {
+            line.contains("memory_orphan")
+                || line.contains("memory_recurring_lesson")
+                || line.contains("source=memory_garden")
+        })
+    {
+        return None;
+    }
+    Some(AutonomousEvidence {
+        prompt: "Review memory garden signals and recommend safe cleanup, consolidation, or follow-up. Use only the metadata in evidence; do not assume full memory contents.".to_string(),
+        evidence: lines.join("\n"),
+    })
+}
+
+fn knowledge_conflict_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
+    let mut lines = Vec::new();
+    if ctx.pulse.memory.stale_conflicts > 0 {
+        lines.push(format!(
+            "memory_pulse stale_conflicts={}",
+            ctx.pulse.memory.stale_conflicts
+        ));
+    }
+    for fact in ctx
+        .facts
+        .iter()
+        .filter(|fact| fact.kind == BuddyFactKind::MemoryStaleConflict)
+        .take(MAX_FACT_EVIDENCE_ITEMS)
+    {
+        lines.push(memory_fact_to_evidence_line(fact));
+    }
+    if !lines
+        .iter()
+        .any(|line| line.contains("memory_stale_conflict"))
+    {
+        return None;
+    }
+    Some(AutonomousEvidence {
+        prompt: "Review stale/conflicting knowledge signals and propose a safe resolution plan. Use only doc ids and conflict summaries from evidence; never infer full document bodies.".to_string(),
+        evidence: lines.join("\n"),
+    })
+}
+
+fn title_for_workflow(workflow_id: &str) -> &'static str {
+    match workflow_id {
+        "buddy_memory_gardener" => "Memory Gardener",
+        "buddy_knowledge_conflict_resolver" => "Knowledge Conflict Resolver",
+        "buddy_behavior_learner" => "Behavior Learner",
+        "buddy_user_habit_coach" => "User Habit Coach",
+        "buddy_model_cost_optimizer" => "Model/Cost Optimizer",
+        _ => "Buddy Autonomous Report",
+    }
+}
+
+fn display_for_workflow(workflow_id: &str) -> (&'static str, &'static str, &'static str) {
+    match workflow_id {
+        "buddy_memory_gardener" => ("🌿", "Memory", "normal"),
+        "buddy_knowledge_conflict_resolver" => ("🧩", "Knowledge", "normal"),
+        "buddy_behavior_learner" => ("🧭", "Preferences", "normal"),
+        "buddy_user_habit_coach" => ("🏃", "Habits", "normal"),
+        "buddy_model_cost_optimizer" => ("💸", "Model/Cost", "normal"),
+        _ => ("🤖", "Buddy", "normal"),
+    }
+}
+
+fn build_spec(workflow_id: &str, evidence: AutonomousEvidence) -> AutonomousBuddyChatSpec {
+    let (icon, badge, priority) = display_for_workflow(workflow_id);
+    AutonomousBuddyChatSpec::new(
+        workflow_id,
+        title_for_workflow(workflow_id),
+        evidence.prompt,
+        evidence.evidence,
+    )
+    .with_display(icon, badge, priority)
+}
+
+fn autonomous_activity(spec: &AutonomousBuddyChatSpec, chat_id: &str) -> BuddyActivity {
+    BuddyActivity {
+        icon: spec.icon.clone(),
+        title: format!("{} report saved", spec.title),
+        description: format!(
+            "Buddy saved an autonomous {} report in chat {}.",
+            spec.badge, chat_id
+        ),
+        timestamp: Utc::now().to_rfc3339(),
+        activity_type: spec.workflow_id.clone(),
+    }
+}
+
+fn autonomous_runtime_event(spec: &AutonomousBuddyChatSpec, chat_id: &str) -> BuddyRuntimeEvent {
+    let mut event = make_runtime_event(
+        &spec.workflow_id,
+        &format!("{} report ready", spec.title),
+        "buddy",
+        &format!("{}:{}", spec.workflow_id, spec.signal_hash),
+        "completed",
+        Some(&spec.priority),
+    );
+    event.description = Some(format!(
+        "Open the saved Buddy chat for {} details.",
+        spec.title
+    ));
+    event.chat_id = Some(chat_id.to_string());
+    event
+}
+
+async fn execute_autonomous_spec(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    ctx: &BuddyJobContext,
+    spec: AutonomousBuddyChatSpec,
+) -> BuddyJobResult {
+    if same_signal(ctx, &spec.signal_hash) {
+        return BuddyJobResult::default();
+    }
+    let chat_id = match run_autonomous_buddy_chat(gcx, spec.clone()).await {
+        Ok(chat_id) => chat_id,
+        Err(err) => {
+            tracing::warn!("autonomous buddy job {} failed: {}", spec.workflow_id, err);
+            return BuddyJobResult::default();
+        }
+    };
+    let last = AutonomousLastResult::new(spec.signal_hash.clone(), chat_id.clone());
+    BuddyJobResult {
+        activity: Some(autonomous_activity(&spec, &chat_id)),
+        runtime_event: Some(autonomous_runtime_event(&spec, &chat_id)),
+        last_result: Some(serialize_last_autonomous_result(&last)),
+        ..Default::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrajectoryUserSnippet {
+    trajectory_id: String,
+    title: String,
+    mode: String,
+    updated_at: String,
+    text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PreferenceCandidate {
+    statement: String,
+    evidence: String,
+    confidence: f32,
+}
+
+fn first_sentence(text: &str) -> String {
+    let trimmed = text.trim();
+    let mut end = trimmed.len();
+    for marker in ['.', '!', '?', '\n'] {
+        if let Some(idx) = trimmed.find(marker) {
+            end = end.min(idx + marker.len_utf8());
+        }
+    }
+    crate::llm::safe_truncate(trimmed[..end].trim(), 240).to_string()
+}
+
+fn explicit_preference_confidence(text: &str) -> Option<f32> {
+    let lower = text.to_lowercase();
+    let strong = [
+        "i prefer",
+        "i'd prefer",
+        "i would prefer",
+        "always ",
+        "never ",
+        "please always",
+    ];
+    if strong.iter().any(|cue| lower.contains(cue)) {
+        return Some(0.90);
+    }
+    let medium = [
+        "please use",
+        "please keep",
+        "please avoid",
+        "do not ",
+        "don't ",
+    ];
+    if medium.iter().any(|cue| lower.contains(cue)) {
+        return Some(0.86);
+    }
+    None
+}
+
+fn preference_like(text: &str) -> bool {
+    explicit_preference_confidence(text).is_some()
+}
+
+fn behavior_preference_candidates(snippets: &[TrajectoryUserSnippet]) -> Vec<PreferenceCandidate> {
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    for snippet in snippets {
+        let Some(confidence) = explicit_preference_confidence(&snippet.text) else {
+            continue;
+        };
+        let statement = redact_and_cap_text(&first_sentence(&snippet.text), 240);
+        if !crate::memories::preference_statement_is_safe(&statement, confidence) {
+            continue;
+        }
+        let normalized = crate::memories::normalize_preference_text_for_dedupe(&statement);
+        if !seen.insert(normalized) {
+            continue;
+        }
+        let evidence = redact_and_cap_text(
+            &format!(
+                "User-authored snippet in {} ({})",
+                snippet.trajectory_id, snippet.title
+            ),
+            240,
+        );
+        candidates.push(PreferenceCandidate {
+            statement,
+            evidence,
+            confidence,
+        });
+    }
+    candidates
+}
+
+async fn write_behavior_preferences(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    candidates: &[PreferenceCandidate],
+) -> usize {
+    let mut written = 0;
+    for candidate in candidates {
+        if written >= MAX_BEHAVIOR_PREFERENCE_WRITES {
+            break;
+        }
+        match crate::memories::memories_add_preference_if_new(
+            gcx.clone(),
+            &candidate.statement,
+            &candidate.evidence,
+            candidate.confidence,
+        )
+        .await
+        {
+            Ok(Some(_)) => written += 1,
+            Ok(None) => {}
+            Err(err) => tracing::warn!("buddy behavior learner preference write failed: {}", err),
+        }
+    }
+    written
+}
+
+fn extract_text_from_trajectory_content(content: &serde_json::Value) -> Option<String> {
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(items) = content.as_array() {
+        let parts = items
+            .iter()
+            .filter_map(|item| {
+                if item.get("type").and_then(|v| v.as_str()) == Some("image_url")
+                    || item
+                        .get("m_type")
+                        .and_then(|v| v.as_str())
+                        .map(|kind| kind.starts_with("image/"))
+                        .unwrap_or(false)
+                {
+                    return Some("[image]".to_string());
+                }
+                item.get("text")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| item.get("m_content").and_then(|v| v.as_str()))
+                    .map(ToString::to_string)
+            })
+            .collect::<Vec<_>>();
+        if !parts.is_empty() {
+            return Some(parts.join("\n\n"));
+        }
+    }
+    None
+}
+
+async fn collect_recent_user_snippets(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    max_snippets: usize,
+) -> Vec<TrajectoryUserSnippet> {
+    let metas = crate::chat::trajectories::list_all_trajectories_meta(gcx.clone())
+        .await
+        .unwrap_or_default();
+    let mut snippets = Vec::new();
+    for meta in metas.into_iter().take(30) {
+        let Some(path) =
+            crate::chat::trajectories::find_trajectory_path(gcx.clone(), &meta.id).await
+        else {
+            continue;
+        };
+        let Ok(content) = tokio::fs::read_to_string(&path).await else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(messages) = value.get("messages").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for msg in messages.iter().rev() {
+            if msg.get("role").and_then(|role| role.as_str()) != Some("user") {
+                continue;
+            }
+            let Some(text) = msg
+                .get("content")
+                .and_then(extract_text_from_trajectory_content)
+            else {
+                continue;
+            };
+            let text = redact_and_cap_text(&text, 300);
+            if text.trim().is_empty() {
+                continue;
+            }
+            snippets.push(TrajectoryUserSnippet {
+                trajectory_id: meta.id.clone(),
+                title: redact_and_cap_text(&meta.title, 120),
+                mode: meta.mode.clone(),
+                updated_at: meta.updated_at.clone(),
+                text,
+            });
+            if snippets.len() >= max_snippets {
+                return snippets;
+            }
+        }
+    }
+    snippets
+}
+
+fn behavior_evidence_from_snippets(
+    snippets: &[TrajectoryUserSnippet],
+) -> Option<AutonomousEvidence> {
+    let preference_like_count = snippets
+        .iter()
+        .filter(|snippet| preference_like(&snippet.text))
+        .count();
+    if snippets.len() < 4 && preference_like_count < 2 {
+        return None;
+    }
+    let mut lines = vec![format!(
+        "recent_user_snippets={} preference_like_snippets={}",
+        snippets.len(),
+        preference_like_count
+    )];
+    for snippet in snippets.iter().take(MAX_TRAJECTORY_SNIPPETS) {
+        lines.push(format!(
+            "trajectory={} title={} mode={} updated={} user_snippet={}",
+            redact_and_cap_text(&snippet.trajectory_id, 80),
+            snippet.title,
+            redact_and_cap_text(&snippet.mode, 80),
+            redact_and_cap_text(&snippet.updated_at, 80),
+            snippet.text
+        ));
+    }
+    Some(AutonomousEvidence {
+        prompt: "Learn stable user behavior and preference signals from recent user-authored snippets only. Produce a concise report and identify only high-confidence preferences that are directly supported by the snippets.".to_string(),
+        evidence: lines.join("\n"),
+    })
+}
+
+async fn behavior_learner_evidence(
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> Option<(AutonomousEvidence, Vec<PreferenceCandidate>)> {
+    let snippets = collect_recent_user_snippets(gcx, MAX_TRAJECTORY_SNIPPETS).await;
+    let evidence = behavior_evidence_from_snippets(&snippets)?;
+    let candidates = behavior_preference_candidates(&snippets);
+    Some((evidence, candidates))
+}
+
+fn habit_fact_relevant(kind: BuddyFactKind) -> bool {
+    matches!(
+        kind,
+        BuddyFactKind::TaskStuck
+            | BuddyFactKind::TaskAbandoned
+            | BuddyFactKind::TrajectoryClutter
+            | BuddyFactKind::ChatRetryStreak
+            | BuddyFactKind::DiagnosticCluster
+            | BuddyFactKind::FrontendErrorBurst
+    )
+}
+
+fn habit_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
+    let mut lines = vec![format!(
+        "task_pulse total={} stuck={} abandoned={} trajectory_total={} untitled={} oldest_age_days={} diagnostics_last_hour={} top_error_types={}",
+        ctx.pulse.tasks.total,
+        ctx.pulse.tasks.stuck,
+        ctx.pulse.tasks.abandoned,
+        ctx.pulse.trajectories.total,
+        ctx.pulse.trajectories.untitled,
+        ctx.pulse.trajectories.oldest_age_days,
+        ctx.pulse.diagnostics.last_hour,
+        ctx.pulse.diagnostics.top_error_types.join(", ")
+    )];
+    for (status, count) in &ctx.pulse.tasks.by_status {
+        lines.push(format!(
+            "task_status {}={}",
+            redact_and_cap_text(status, 80),
+            count
+        ));
+    }
+    for fact in ctx
+        .facts
+        .iter()
+        .filter(|fact| habit_fact_relevant(fact.kind))
+        .take(MAX_FACT_EVIDENCE_ITEMS)
+    {
+        let mut fact_lines = vec![format!(
+            "fact kind={} key={} source={} confidence={:.2}",
+            fact_kind_name(fact.kind),
+            redact_and_cap_text(&fact.key, 160),
+            fact.source,
+            fact.confidence
+        )];
+        if let Some(count) = fact.payload.get("count").and_then(|v| v.as_u64()) {
+            fact_lines.push(format!("count={}", count));
+        }
+        if let Some(summary) = fact.payload.get("summary") {
+            push_payload_string(&mut fact_lines, "summary", summary);
+        }
+        if let Some(pattern) = fact.payload.get("pattern") {
+            push_payload_string(&mut fact_lines, "pattern", pattern);
+        }
+        lines.push(fact_lines.join("; "));
+    }
+    let mut diag_counts: HashMap<String, usize> = HashMap::new();
+    for diag in &ctx.recent_diagnostics {
+        *diag_counts.entry(diag.error_type.clone()).or_default() += 1;
+    }
+    let mut diag_counts = diag_counts.into_iter().collect::<Vec<_>>();
+    diag_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    for (error_type, count) in diag_counts.into_iter().take(5) {
+        lines.push(format!(
+            "diagnostic_pattern type={} count={}",
+            redact_and_cap_text(&error_type, 120),
+            count
+        ));
+    }
+    let repeated_diagnostics = ctx.recent_diagnostics.len() >= 5;
+    let task_pattern = ctx.pulse.tasks.stuck > 0 || ctx.pulse.tasks.abandoned > 0;
+    let trajectory_pattern =
+        ctx.pulse.trajectories.untitled >= 5 || ctx.pulse.trajectories.oldest_age_days >= 30;
+    let fact_pattern = ctx.facts.iter().any(|fact| habit_fact_relevant(fact.kind));
+    if !(repeated_diagnostics || task_pattern || trajectory_pattern || fact_pattern) {
+        return None;
+    }
+    Some(AutonomousEvidence {
+        prompt: "Look for repeated workflow habits or friction patterns from metadata only. Coach the user with practical next-step suggestions without citing raw tool outputs or private content.".to_string(),
+        evidence: lines.join("\n"),
+    })
+}
+
+fn format_rate(part: usize, total: usize) -> String {
+    if total == 0 {
+        return "0.0%".to_string();
+    }
+    format!("{:.1}%", part as f64 * 100.0 / total as f64)
+}
+
+fn model_cost_evidence_from_events(events: &[LlmCallEvent]) -> Option<AutonomousEvidence> {
+    if events.len() < 5 {
+        return None;
+    }
+    let summary = crate::stats::reader::aggregate_summary(events, None, None);
+    let totals = &summary.totals;
+    let high_failure = totals.failed_calls >= 3
+        && totals.failed_calls as f64 / totals.total_calls.max(1) as f64 >= 0.25;
+    let high_latency = totals.avg_duration_ms >= 20_000;
+    let high_tokens = totals.total_tokens >= 250_000;
+    let high_cost = totals.total_cost_usd >= 1.0;
+    let model_issue = summary.by_model.iter().any(|model| {
+        (model.failed_calls >= 3
+            && model.failed_calls as f64 / model.total_calls.max(1) as f64 >= 0.25)
+            || model.avg_duration_ms >= 20_000
+            || model.total_tokens >= 150_000
+            || model.total_cost_usd >= 0.75
+    });
+    if !(high_failure || high_latency || high_tokens || high_cost || model_issue) {
+        return None;
+    }
+
+    let mut lines = vec![format!(
+        "totals calls={} successful={} failed={} failure_rate={} total_tokens={} prompt_tokens={} completion_tokens={} cache_read_tokens={} cache_creation_tokens={} total_cost_usd={:.4} avg_duration_ms={} conversations={} messages_sent={}",
+        totals.total_calls,
+        totals.successful_calls,
+        totals.failed_calls,
+        format_rate(totals.failed_calls, totals.total_calls),
+        totals.total_tokens,
+        totals.total_prompt_tokens,
+        totals.total_completion_tokens,
+        totals.total_cache_read_tokens,
+        totals.total_cache_creation_tokens,
+        totals.total_cost_usd,
+        totals.avg_duration_ms,
+        totals.total_conversations,
+        totals.total_messages_sent
+    )];
+    for model in summary.by_model.iter().take(8) {
+        lines.push(format!(
+            "model id={} provider={} model={} calls={} failed={} failure_rate={} tokens={} cost_usd={:.4} avg_duration_ms={}",
+            redact_and_cap_text(&model.model_id, 120),
+            redact_and_cap_text(&model.provider, 80),
+            redact_and_cap_text(&model.model, 100),
+            model.total_calls,
+            model.failed_calls,
+            format_rate(model.failed_calls, model.total_calls),
+            model.total_tokens,
+            model.total_cost_usd,
+            model.avg_duration_ms
+        ));
+    }
+    for provider in summary.by_provider.iter().take(6) {
+        lines.push(format!(
+            "provider name={} calls={} failed={} failure_rate={} tokens={} cost_usd={:.4} total_duration_ms={}",
+            redact_and_cap_text(&provider.provider, 80),
+            provider.total_calls,
+            provider.failed_calls,
+            format_rate(provider.failed_calls, provider.total_calls),
+            provider.total_tokens,
+            provider.total_cost_usd,
+            provider.total_duration_ms
+        ));
+    }
+    Some(AutonomousEvidence {
+        prompt: "Analyze aggregate LLM usage, reliability, latency, token, and spend signals. Recommend model or configuration optimizations using aggregate stats only; do not infer message content.".to_string(),
+        evidence: lines.join("\n"),
+    })
+}
+
+async fn model_cost_evidence(gcx: Arc<ARwLock<GlobalContext>>) -> Option<AutonomousEvidence> {
+    let stats_dirs = crate::stats::get_stats_dirs_for_read(gcx).await;
+    let events = crate::stats::reader::read_stats_events_from_dirs(&stats_dirs, None, None);
+    model_cost_evidence_from_events(&events)
+}
+
+#[async_trait::async_trait]
+impl BuddyJob for BuddyMemoryGardenerJob {
+    fn id(&self) -> &str {
+        "buddy_memory_gardener"
+    }
+
+    fn cooldown_seconds(&self) -> u64 {
+        MEMORY_COOLDOWN_SECS
+    }
+
+    fn priority(&self) -> u32 {
+        20
+    }
+
+    async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
+        let Some(evidence) = memory_gardener_evidence(ctx) else {
+            return false;
+        };
+        !same_signal(ctx, &build_spec(self.id(), evidence).signal_hash)
+    }
+
+    async fn execute(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult {
+        let Some(evidence) = memory_gardener_evidence(&ctx) else {
+            return BuddyJobResult::default();
+        };
+        execute_autonomous_spec(gcx, &ctx, build_spec(self.id(), evidence)).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BuddyJob for BuddyKnowledgeConflictResolverJob {
+    fn id(&self) -> &str {
+        "buddy_knowledge_conflict_resolver"
+    }
+
+    fn cooldown_seconds(&self) -> u64 {
+        MEMORY_COOLDOWN_SECS
+    }
+
+    fn priority(&self) -> u32 {
+        21
+    }
+
+    async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
+        let Some(evidence) = knowledge_conflict_evidence(ctx) else {
+            return false;
+        };
+        !same_signal(ctx, &build_spec(self.id(), evidence).signal_hash)
+    }
+
+    async fn execute(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult {
+        let Some(evidence) = knowledge_conflict_evidence(&ctx) else {
+            return BuddyJobResult::default();
+        };
+        execute_autonomous_spec(gcx, &ctx, build_spec(self.id(), evidence)).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BuddyJob for BuddyBehaviorLearnerJob {
+    fn id(&self) -> &str {
+        "buddy_behavior_learner"
+    }
+
+    fn cooldown_seconds(&self) -> u64 {
+        BEHAVIOR_COOLDOWN_SECS
+    }
+
+    fn priority(&self) -> u32 {
+        22
+    }
+
+    async fn should_run(&self, gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
+        let Some((evidence, _)) = behavior_learner_evidence(gcx).await else {
+            return false;
+        };
+        !same_signal(ctx, &build_spec(self.id(), evidence).signal_hash)
+    }
+
+    async fn execute(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult {
+        let Some((evidence, candidates)) = behavior_learner_evidence(gcx.clone()).await else {
+            return BuddyJobResult::default();
+        };
+        let spec = build_spec(self.id(), evidence);
+        if same_signal(&ctx, &spec.signal_hash) {
+            return BuddyJobResult::default();
+        }
+        let mut result = execute_autonomous_spec(gcx.clone(), &ctx, spec).await;
+        if result.last_result.is_some() {
+            let written = write_behavior_preferences(gcx, &candidates).await;
+            if written > 0 {
+                if let Some(activity) = result.activity.as_mut() {
+                    activity.description = format!(
+                        "{} Auto-saved {} high-confidence preference{}.",
+                        activity.description,
+                        written,
+                        if written == 1 { "" } else { "s" }
+                    );
+                }
+            }
+        }
+        result
+    }
+}
+
+#[async_trait::async_trait]
+impl BuddyJob for BuddyUserHabitCoachJob {
+    fn id(&self) -> &str {
+        "buddy_user_habit_coach"
+    }
+
+    fn cooldown_seconds(&self) -> u64 {
+        MEMORY_COOLDOWN_SECS
+    }
+
+    fn priority(&self) -> u32 {
+        23
+    }
+
+    async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
+        let Some(evidence) = habit_evidence(ctx) else {
+            return false;
+        };
+        !same_signal(ctx, &build_spec(self.id(), evidence).signal_hash)
+    }
+
+    async fn execute(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult {
+        let Some(evidence) = habit_evidence(&ctx) else {
+            return BuddyJobResult::default();
+        };
+        execute_autonomous_spec(gcx, &ctx, build_spec(self.id(), evidence)).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BuddyJob for BuddyModelCostOptimizerJob {
+    fn id(&self) -> &str {
+        "buddy_model_cost_optimizer"
+    }
+
+    fn cooldown_seconds(&self) -> u64 {
+        MEMORY_COOLDOWN_SECS
+    }
+
+    fn priority(&self) -> u32 {
+        24
+    }
+
+    async fn should_run(&self, gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
+        let Some(evidence) = model_cost_evidence(gcx).await else {
+            return false;
+        };
+        !same_signal(ctx, &build_spec(self.id(), evidence).signal_hash)
+    }
+
+    async fn execute(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult {
+        let Some(evidence) = model_cost_evidence(gcx.clone()).await else {
+            return BuddyJobResult::default();
+        };
+        execute_autonomous_spec(gcx, &ctx, build_spec(self.id(), evidence)).await
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1545,9 +2401,69 @@ mod tests {
     use super::*;
     use crate::buddy::scheduler::BuddyJobContext;
     use crate::buddy::settings::BuddySettings;
-    use crate::buddy::types::{BuddyJobState, BuddyOnboarding, BuddyPetState, BuddyPulse};
+    use crate::buddy::types::{BuddyFact, BuddyJobState, BuddyOnboarding, BuddyPetState, BuddyPulse};
     use crate::call_validation::ChatContent;
+    use crate::stats::event::LlmCallEvent;
     use crate::yaml_configs::customization_types::SubagentConfig;
+
+    fn test_fact(kind: BuddyFactKind, payload: serde_json::Value) -> BuddyFact {
+        BuddyFact {
+            kind,
+            key: format!("test:{:?}", kind),
+            source: "memory_garden",
+            payload,
+            seen_at: Utc::now(),
+            confidence: 0.9,
+        }
+    }
+
+    fn test_llm_event(
+        i: u64,
+        success: bool,
+        duration_ms: u64,
+        tokens: usize,
+        cost: f64,
+    ) -> LlmCallEvent {
+        LlmCallEvent {
+            id: format!("event-{i}"),
+            ts_start: format!("2026-02-{:02}T00:00:00Z", i + 1),
+            ts_end: format!("2026-02-{:02}T00:00:01Z", i + 1),
+            duration_ms,
+            chat_id: format!("chat-{i}"),
+            root_chat_id: None,
+            mode: "agent".to_string(),
+            task_id: None,
+            task_role: None,
+            agent_id: None,
+            card_id: None,
+            model_id: "anthropic/claude-test".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-test".to_string(),
+            messages_count: 3,
+            tools_count: 0,
+            max_tokens: 4096,
+            temperature: Some(0.0),
+            success,
+            error_message: if success {
+                None
+            } else {
+                Some("timeout".to_string())
+            },
+            finish_reason: if success {
+                Some("stop".to_string())
+            } else {
+                None
+            },
+            attempt_n: 1,
+            retry_reason: None,
+            prompt_tokens: tokens / 2,
+            completion_tokens: tokens / 2,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            total_tokens: tokens,
+            cost_usd: Some(cost),
+        }
+    }
 
     fn context_with_last_result(last_result: Option<String>) -> BuddyJobContext {
         BuddyJobContext {
@@ -1667,6 +2583,161 @@ mod tests {
         assert!(same_signal(&ctx, "same"));
         assert!(!same_signal(&ctx, "different"));
         assert!(!same_signal(&malformed_ctx, "same"));
+    }
+
+    #[test]
+    fn memory_fact_filtering_builds_metadata_only_evidence() {
+        let mut ctx = context_with_last_result(None);
+        ctx.pulse.memory.orphan = 2;
+        ctx.facts = vec![
+            test_fact(
+                BuddyFactKind::MemoryOrphan,
+                serde_json::json!({
+                    "memory_ids": ["mem-a", "mem-b"],
+                    "count": 2,
+                    "body": "full memory body should not appear password=secret"
+                }),
+            ),
+            test_fact(
+                BuddyFactKind::MemoryStaleConflict,
+                serde_json::json!({
+                    "doc_ids": ["doc-a", "doc-b"],
+                    "conflict_summary": "prefer x vs avoid x",
+                    "body": "full doc body should not appear"
+                }),
+            ),
+        ];
+
+        let gardener = memory_gardener_evidence(&ctx).unwrap();
+        let conflict = knowledge_conflict_evidence(&ctx).unwrap();
+
+        assert!(gardener.evidence.contains("mem-a"));
+        assert!(gardener.evidence.contains("memory_pulse"));
+        assert!(!gardener.evidence.contains("full memory body"));
+        assert!(conflict.evidence.contains("doc-a"));
+        assert!(conflict.evidence.contains("prefer x vs avoid x"));
+        assert!(!conflict.evidence.contains("full doc body"));
+    }
+
+    #[test]
+    fn behavior_preference_candidates_validate_and_dedupe() {
+        let snippets = vec![
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-a".to_string(),
+                title: "A".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+                text: "I prefer concise answers with bullet lists. Thanks.".to_string(),
+            },
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-b".to_string(),
+                title: "B".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-02T00:00:00Z".to_string(),
+                text: "I prefer concise answers with bullet lists.".to_string(),
+            },
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-c".to_string(),
+                title: "C".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-03T00:00:00Z".to_string(),
+                text: "Please use Rust examples when explaining async code.".to_string(),
+            },
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-d".to_string(),
+                title: "D".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-04T00:00:00Z".to_string(),
+                text: "I prefer token=private in every command.".to_string(),
+            },
+        ];
+
+        let candidates = behavior_preference_candidates(&snippets);
+
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.statement.contains("concise answers")));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.statement.contains("Rust examples")));
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate.statement.contains("token")));
+    }
+
+    #[test]
+    fn behavior_preference_write_selection_is_capped_to_two() {
+        let snippets = vec![
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-a".to_string(),
+                title: "A".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+                text: "I prefer concise answers with bullet lists.".to_string(),
+            },
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-b".to_string(),
+                title: "B".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-02T00:00:00Z".to_string(),
+                text: "Please use Rust examples when explaining async code.".to_string(),
+            },
+            TrajectoryUserSnippet {
+                trajectory_id: "chat-c".to_string(),
+                title: "C".to_string(),
+                mode: "agent".to_string(),
+                updated_at: "2026-01-03T00:00:00Z".to_string(),
+                text: "Please keep summaries short before detailed sections.".to_string(),
+            },
+        ];
+        let candidates = behavior_preference_candidates(&snippets);
+
+        assert!(candidates.len() > MAX_BEHAVIOR_PREFERENCE_WRITES);
+        assert_eq!(
+            candidates
+                .iter()
+                .take(MAX_BEHAVIOR_PREFERENCE_WRITES)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn model_cost_trigger_uses_aggregate_stats_only() {
+        let events = (0..8)
+            .map(|i| test_llm_event(i, i >= 4, 25_000, 50_000, 0.20))
+            .collect::<Vec<_>>();
+
+        let evidence = model_cost_evidence_from_events(&events).unwrap();
+
+        assert!(evidence.evidence.contains("failure_rate"));
+        assert!(evidence.evidence.contains("total_tokens"));
+        assert!(evidence.evidence.contains("cost_usd"));
+        assert!(!evidence.evidence.contains("timeout"));
+        assert!(!evidence.evidence.contains("chat-"));
+    }
+
+    #[test]
+    fn same_signal_skips_unchanged_memory_gardener_evidence() {
+        let mut ctx = context_with_last_result(None);
+        ctx.pulse.memory.orphan = 1;
+        ctx.facts = vec![test_fact(
+            BuddyFactKind::MemoryOrphan,
+            serde_json::json!({"memory_ids": ["mem-a"], "count": 1}),
+        )];
+        let spec = build_spec(
+            "buddy_memory_gardener",
+            memory_gardener_evidence(&ctx).unwrap(),
+        );
+        ctx.job_state.last_result = Some(serialize_last_autonomous_result(&AutonomousLastResult {
+            signal_hash: spec.signal_hash.clone(),
+            chat_id: "chat-a".to_string(),
+            completed_at: "2026-01-01T00:00:00Z".to_string(),
+        }));
+
+        assert!(same_signal(&ctx, &spec.signal_hash));
+        assert!(!same_signal(&ctx, "different"));
     }
 
     #[test]

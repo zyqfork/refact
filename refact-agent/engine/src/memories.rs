@@ -478,6 +478,217 @@ pub async fn load_memories_by_tags(
     Ok(records)
 }
 
+const PREFERENCE_MIN_CONFIDENCE: f32 = 0.85;
+const PREFERENCE_STATEMENT_MAX_CHARS: usize = 240;
+const PREFERENCE_EVIDENCE_MAX_CHARS: usize = 600;
+
+pub fn normalize_preference_text_for_dedupe(text: &str) -> String {
+    text.to_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn preference_statement_is_safe(statement: &str, confidence: f32) -> bool {
+    if confidence < PREFERENCE_MIN_CONFIDENCE {
+        return false;
+    }
+    let trimmed = statement.trim();
+    if trimmed.chars().count() < 12 {
+        return false;
+    }
+    let redacted = crate::buddy::actor::redact_sensitive(trimmed);
+    if redacted != trimmed || redacted.contains("[REDACTED") {
+        return false;
+    }
+    let normalized = normalize_preference_text_for_dedupe(trimmed);
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+    if words.len() < 3 {
+        return false;
+    }
+    let vague = [
+        "remember this",
+        "do this",
+        "use this",
+        "i like this",
+        "i prefer this",
+        "preference",
+        "user preference",
+    ];
+    if vague.contains(&normalized.as_str()) {
+        return false;
+    }
+    let sensitive_terms = [
+        "password",
+        "token",
+        "secret",
+        "credential",
+        "api key",
+        "apikey",
+        "private key",
+        "ssh key",
+        "home address",
+        "phone number",
+        "email address",
+        "ssn",
+        "credit card",
+    ];
+    if sensitive_terms.iter().any(|term| normalized.contains(term)) {
+        return false;
+    }
+    let lower = trimmed.to_lowercase();
+    let preference_cues = [
+        "prefer",
+        "always",
+        "never",
+        "avoid",
+        "don't",
+        "do not",
+        "i like",
+        "i want",
+        "please use",
+        "please keep",
+        "use ",
+        "keep ",
+        "format ",
+        "respond ",
+        "write ",
+    ];
+    preference_cues.iter().any(|cue| lower.contains(cue))
+}
+
+fn redact_and_cap_preference_text(text: &str, max_chars: usize) -> String {
+    let redacted = crate::buddy::actor::redact_sensitive(text);
+    let collapsed = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::llm::safe_truncate(&collapsed, max_chars)
+        .trim()
+        .to_string()
+}
+
+fn preference_matches_existing(existing: &MemoRecord, normalized_statement: &str) -> bool {
+    let mut candidates = vec![existing.content.as_str()];
+    if let Some(title) = existing.title.as_deref() {
+        candidates.push(title);
+    }
+    candidates.into_iter().any(|text| {
+        let normalized = normalize_preference_text_for_dedupe(text);
+        let normalized_without_heading = normalized.strip_prefix("# ").unwrap_or(&normalized);
+        normalized == normalized_statement
+            || normalized_without_heading == normalized_statement
+            || normalized.contains(normalized_statement)
+            || normalized_statement.contains(&normalized)
+            || normalized_statement.contains(normalized_without_heading)
+    })
+}
+
+fn preference_file_already_exists(knowledge_dirs: &[PathBuf], normalized_statement: &str) -> bool {
+    knowledge_dirs.iter().any(|knowledge_dir| {
+        if !knowledge_dir.exists() {
+            return false;
+        }
+        WalkDir::new(knowledge_dir)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                let path = entry.path();
+                if !path.is_file() || path_contains_component(path, "archive") {
+                    return false;
+                }
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext != "md" && ext != "mdx" {
+                    return false;
+                }
+                let Ok(text) = std::fs::read_to_string(path) else {
+                    return false;
+                };
+                let (frontmatter, content_start) = KnowledgeFrontmatter::parse(&text);
+                if frontmatter.is_archived()
+                    || frontmatter.is_deprecated()
+                    || !frontmatter
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains("preference"))
+                {
+                    return false;
+                }
+                let content = text[content_start..].trim();
+                let record = MemoRecord {
+                    memid: path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    tags: frontmatter.tags,
+                    content: content.to_string(),
+                    file_path: Some(path.to_path_buf()),
+                    line_range: None,
+                    title: frontmatter.title,
+                    created: frontmatter.created,
+                    kind: frontmatter.kind,
+                    score: None,
+                };
+                preference_matches_existing(&record, normalized_statement)
+            })
+    })
+}
+
+pub async fn memories_add_preference_if_new(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    statement: &str,
+    evidence: &str,
+    confidence: f32,
+) -> Result<Option<PathBuf>, String> {
+    if !preference_statement_is_safe(statement, confidence) {
+        return Ok(None);
+    }
+
+    let statement = redact_and_cap_preference_text(statement, PREFERENCE_STATEMENT_MAX_CHARS);
+    let evidence = redact_and_cap_preference_text(evidence, PREFERENCE_EVIDENCE_MAX_CHARS);
+    let normalized_statement = normalize_preference_text_for_dedupe(&statement);
+    if normalized_statement.is_empty() {
+        return Ok(None);
+    }
+
+    let existing = load_memories_by_tags(gcx.clone(), &["preference"], 200).await?;
+    if existing
+        .iter()
+        .any(|memory| preference_matches_existing(memory, &normalized_statement))
+    {
+        return Ok(None);
+    }
+
+    let knowledge_dirs = get_all_knowledge_dirs(gcx.clone()).await;
+    if preference_file_already_exists(&knowledge_dirs, &normalized_statement) {
+        return Ok(None);
+    }
+
+    let tags = vec![
+        "preference".to_string(),
+        "buddy".to_string(),
+        "behavior_learner".to_string(),
+    ];
+    let empty = Vec::<String>::new();
+    let mut frontmatter = create_frontmatter(Some(&statement), &tags, &empty, &empty, "preference");
+    frontmatter.summary = Some(statement.clone());
+    if !evidence.is_empty() {
+        frontmatter.description = Some(evidence.clone());
+    }
+    frontmatter.content_hash = Some(compute_content_hash_hex(&statement));
+    frontmatter.source_tool = Some("buddy_behavior_learner".to_string());
+
+    let content = if evidence.is_empty() {
+        format!("# {}\n\nConfidence: {:.2}", statement, confidence)
+    } else {
+        format!(
+            "# {}\n\nEvidence: {}\n\nConfidence: {:.2}",
+            statement, evidence, confidence
+        )
+    };
+
+    memories_add(gcx, &frontmatter, &content).await.map(Some)
+}
+
 pub async fn memories_search(
     gcx: Arc<ARwLock<GlobalContext>>,
     query: &str,
@@ -1243,4 +1454,62 @@ pub async fn memories_add_enriched(
     }
 
     Ok(file_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preference_statement_validation_rejects_low_confidence_vague_and_sensitive() {
+        assert!(preference_statement_is_safe(
+            "I prefer concise answers with bullet lists",
+            0.90
+        ));
+        assert!(!preference_statement_is_safe(
+            "I prefer concise answers with bullet lists",
+            0.80
+        ));
+        assert!(!preference_statement_is_safe("remember this", 0.95));
+        assert!(!preference_statement_is_safe("I prefer token=secret", 0.95));
+    }
+
+    #[test]
+    fn normalized_preference_dedupe_matches_case_and_punctuation() {
+        let first = normalize_preference_text_for_dedupe("I prefer concise answers, with bullets!");
+        let second = normalize_preference_text_for_dedupe("i prefer concise answers with bullets");
+
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn memories_add_preference_if_new_dedupes_existing_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+                vec![dir.path().to_path_buf()];
+        }
+
+        let first = memories_add_preference_if_new(
+            gcx.clone(),
+            "I prefer concise answers with bullet lists",
+            "User-authored snippet",
+            0.91,
+        )
+        .await
+        .unwrap();
+        let duplicate = memories_add_preference_if_new(
+            gcx,
+            "i prefer concise answers with bullet lists.",
+            "Repeated user-authored snippet",
+            0.95,
+        )
+        .await
+        .unwrap();
+
+        assert!(first.is_some());
+        assert!(duplicate.is_none());
+    }
 }
