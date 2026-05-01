@@ -257,7 +257,7 @@ const ProviderDefaultModelsSetup: React.FC = () => {
   if (isError) return null;
 
   return (
-    <Card size="2">
+    <Card size="2" className={styles.defaultsCard}>
       <Flex direction="column" gap="3">
         <Flex justify="between" align="center" gap="3">
           <Flex direction="column" gap="1">
@@ -355,7 +355,14 @@ export const ProviderForm: React.FC<ProviderFormProps> = ({
   const isReadonly = formValues.readonly;
 
   return (
-    <Flex direction="column" width="100%" height="100%" mt="2" gap="3">
+    <Flex
+      direction="column"
+      width="100%"
+      minHeight="100%"
+      mt="2"
+      pb="4"
+      gap="3"
+    >
       <Flex align="center" gap="2">
         <StatusBadge status={status} />
         {currentProvider.name === "openrouter" && openRouterHealth && (

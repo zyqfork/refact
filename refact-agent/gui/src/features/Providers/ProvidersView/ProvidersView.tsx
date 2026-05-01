@@ -54,7 +54,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   }, [currentProvider, backFromProviders]);
 
   return (
-    <Flex px="1" direction="column" height="100%" width="100%">
+    <Flex px="1" direction="column" minHeight="100%" width="100%">
       {currentHost === "vscode" ? (
         <Flex gap="2" pb="3">
           <Button variant="surface" onClick={handleBackClick}>

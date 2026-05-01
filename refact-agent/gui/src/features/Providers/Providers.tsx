@@ -5,6 +5,7 @@ import { ScrollArea } from "../../components/ScrollArea";
 import { PageWrapper } from "../../components/PageWrapper";
 import { Spinner } from "../../components/Spinner";
 import { ProvidersView } from "./ProvidersView";
+import styles from "./Providers.module.css";
 
 import { useGetConfiguredProvidersQuery } from "../../hooks/useProvidersQuery";
 
@@ -31,14 +32,18 @@ export const Providers: React.FC<ProvidersProps> = ({
         marginTop: 0,
       }}
     >
-      <ScrollArea scrollbars="vertical" fullHeight>
+      <ScrollArea
+        scrollbars="vertical"
+        fullHeight
+        className={styles.scrollArea}
+      >
         <Flex
           direction="column"
           justify="between"
           flexGrow="1"
           style={{
             width: "inherit",
-            height: "100%",
+            minHeight: "100%",
           }}
         >
           <ProvidersView

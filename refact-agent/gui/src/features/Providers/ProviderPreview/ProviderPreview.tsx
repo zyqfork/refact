@@ -41,7 +41,7 @@ export const ProviderPreview: React.FC<ProviderPreviewProps> = ({
   };
 
   return (
-    <Flex direction="column" align="start" height="100%">
+    <Flex direction="column" align="start" minHeight="100%">
       <Flex justify="between" align="center" width="100%" mb="4">
         <Heading as="h2" size="3">
           {getProviderName(currentProvider)} Configuration
