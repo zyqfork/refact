@@ -61,8 +61,21 @@ const SETUP_MODE_ACTIONS = [
 ] as const;
 
 const HOME_HOTSPOT = { x: 8.5, y: 67 } as const;
-const BUDDY_SCENE_CENTER_X = 50;
-const BUDDY_SCENE_WALK_RANGE = 42;
+const BUDDY_CENTER_X = 50;
+const BUDDY_MIN_X = 33;
+const BUDDY_MAX_X = 67;
+
+const RANDOM_IDLE_REACTIONS = [
+  "Buddy does a tiny spin.",
+  "Buddy watches the garden for a moment.",
+  "Buddy checks the breeze and grins.",
+  "Buddy makes a small happy bounce.",
+  "Buddy pauses to inspect a sparkle.",
+] as const;
+
+const RANDOM_POSES = ["idle", "spin", "bounce", "look"] as const;
+
+type BuddyRandomPose = (typeof RANDOM_POSES)[number];
 
 interface BuddyWaypoint {
   id: string;
@@ -70,7 +83,6 @@ interface BuddyWaypoint {
   y: number;
   label: string;
   reaction: string;
-  roamTargetX: number;
 }
 
 function pctX(width: number, value: number): number {
@@ -638,22 +650,25 @@ function drawVitality(
   }
 }
 
-function waypointToRoamTarget(x: number): number {
-  return Math.max(
-    -44,
-    Math.min(44, ((x - BUDDY_SCENE_CENTER_X) / BUDDY_SCENE_WALK_RANGE) * 46),
-  );
+function clampBuddySceneX(x: number): number {
+  return Math.max(BUDDY_MIN_X, Math.min(BUDDY_MAX_X, x));
 }
 
 function buildBuddyWaypoints(world: BuddyWorldState): BuddyWaypoint[] {
   return [
+    {
+      id: "center",
+      x: BUDDY_CENTER_X,
+      y: 76,
+      label: "clearing",
+      reaction: "Buddy wanders back to the clearing.",
+    },
     {
       id: "home",
       x: HOME_HOTSPOT.x,
       y: HOME_HOTSPOT.y,
       label: "home",
       reaction: "Buddy checks the front door lights.",
-      roamTargetX: waypointToRoamTarget(HOME_HOTSPOT.x),
     },
     {
       id: "celestial",
@@ -661,7 +676,6 @@ function buildBuddyWaypoints(world: BuddyWorldState): BuddyWaypoint[] {
       y: world.celestialY,
       label: world.celestialLabel,
       reaction: `Buddy tracks the ${world.celestialLabel.toLowerCase()}.`,
-      roamTargetX: waypointToRoamTarget(world.celestialX),
     },
     ...world.objects.map((item) => ({
       id: item.id,
@@ -669,7 +683,6 @@ function buildBuddyWaypoints(world: BuddyWorldState): BuddyWaypoint[] {
       y: item.y,
       label: item.label,
       reaction: `Buddy inspects ${item.label.toLowerCase()}.`,
-      roamTargetX: waypointToRoamTarget(item.x),
     })),
     {
       id: "weather",
@@ -677,8 +690,29 @@ function buildBuddyWaypoints(world: BuddyWorldState): BuddyWaypoint[] {
       y: world.weatherY,
       label: world.weatherLabel,
       reaction: `Buddy watches ${world.weatherLabel.toLowerCase()}.`,
-      roamTargetX: waypointToRoamTarget(world.weatherX),
     },
+  ];
+}
+
+function pickNextWaypointIndex(
+  waypoints: BuddyWaypoint[],
+  currentIndex: number,
+): number {
+  if (waypoints.length <= 1) return 0;
+
+  const roll = Math.random();
+  if (roll < 0.24) return 0;
+
+  let nextIndex = currentIndex;
+  while (nextIndex === currentIndex) {
+    nextIndex = Math.floor(Math.random() * waypoints.length);
+  }
+  return nextIndex;
+}
+
+function randomIdleReaction(): string {
+  return RANDOM_IDLE_REACTIONS[
+    Math.floor(Math.random() * RANDOM_IDLE_REACTIONS.length)
   ];
 }
 
@@ -770,6 +804,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   const [reaction, setReaction] = useState<string | null>(null);
   const [activeWaypointIndex, setActiveWaypointIndex] = useState(0);
   const [lastWaypoint, setLastWaypoint] = useState<BuddyWaypoint | null>(null);
+  const [randomPose, setRandomPose] = useState<BuddyRandomPose>("idle");
 
   useEffect(() => {
     if (now) {
@@ -786,6 +821,12 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     return () => window.clearTimeout(timer);
   }, [reaction]);
 
+  useEffect(() => {
+    if (randomPose === "idle") return;
+    const timer = window.setTimeout(() => setRandomPose("idle"), 2600);
+    return () => window.clearTimeout(timer);
+  }, [randomPose]);
+
   const world = useMemo(
     () =>
       buildBuddyWorldState({
@@ -799,7 +840,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   );
   const waypoints = useMemo(() => buildBuddyWaypoints(world), [world]);
   const activeWaypoint = waypoints[activeWaypointIndex % waypoints.length];
-  const characterSceneX = Math.max(18, Math.min(82, activeWaypoint.x));
+  const characterSceneX = clampBuddySceneX(activeWaypoint.x);
 
   useEffect(() => {
     setActiveWaypointIndex(0);
@@ -808,20 +849,39 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
 
   useEffect(() => {
     if (activeSpeech ?? reaction) return;
-    const delay = 5200 + Math.random() * 3600;
+    const delay = 4200 + Math.random() * 7200;
     const timer = window.setTimeout(() => {
-      setActiveWaypointIndex((index) => (index + 1) % waypoints.length);
+      const roll = Math.random();
+      if (roll < 0.22) {
+        setRandomPose(
+          RANDOM_POSES[Math.floor(Math.random() * RANDOM_POSES.length)],
+        );
+        setReaction(randomIdleReaction());
+        return;
+      }
+
+      if (roll < 0.36) {
+        setLastWaypoint(null);
+        return;
+      }
+
+      setLastWaypoint(null);
+      setActiveWaypointIndex((index) =>
+        pickNextWaypointIndex(waypoints, index),
+      );
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [activeSpeech, reaction, activeWaypointIndex, waypoints.length]);
+  }, [activeSpeech, reaction, waypoints]);
 
   useEffect(() => {
     if (activeSpeech ?? reaction) return;
     if (lastWaypoint?.id === activeWaypoint.id) return;
     const timer = window.setTimeout(() => {
       setLastWaypoint(activeWaypoint);
-      setReaction(activeWaypoint.reaction);
-    }, 1400);
+      if (Math.random() < 0.72) {
+        setReaction(activeWaypoint.reaction);
+      }
+    }, 2200);
     return () => window.clearTimeout(timer);
   }, [activeSpeech, activeWaypoint, lastWaypoint, reaction]);
 
@@ -998,8 +1058,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         palette={palette}
         displaySize={compact ? 230 : 282}
         sceneXPercent={characterSceneX}
-        roamTargetX={activeWaypoint.roamTargetX}
-        roamBoost={reaction ? 0.12 : 0}
+        scenePose={randomPose}
         speechText={speechOverride}
         speechControls={activeSpeech ? activeSpeech.controls : undefined}
         randomizeBubblePosition
