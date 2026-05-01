@@ -126,6 +126,150 @@ fn provider_display_name(base_provider: &str) -> Result<String, ScratchError> {
         })
 }
 
+fn oauth_supported_for_base(base_provider: &str) -> bool {
+    matches!(
+        base_provider,
+        "claude_code" | "openai_codex" | "github_copilot"
+    )
+}
+
+fn openrouter_base_provider_supported(base_provider: &str) -> bool {
+    base_provider == "openrouter"
+}
+
+fn health_base_provider_supported(base_provider: &str) -> bool {
+    matches!(base_provider, "openrouter" | "google_gemini")
+}
+
+fn usage_base_provider_supported(base_provider: &str) -> bool {
+    matches!(base_provider, "claude_code" | "openai_codex")
+}
+
+fn provider_identity_from_existing_config(
+    instance_id: &str,
+    settings: &serde_yaml::Value,
+) -> Result<HttpProviderIdentity, ScratchError> {
+    let identity = provider_identity_from_yaml(instance_id, settings)
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+    let display_name = identity
+        .display_name
+        .unwrap_or(provider_display_name(&identity.base_provider)?);
+    Ok(HttpProviderIdentity {
+        instance_id: identity.instance_id,
+        base_provider: identity.base_provider,
+        display_name,
+    })
+}
+
+async fn resolve_config_identity(
+    config_dir: &std::path::Path,
+    instance_id: &str,
+) -> Result<HttpProviderIdentity, ScratchError> {
+    validate_instance_id_for_http(instance_id)?;
+    if let Some(existing_settings) =
+        read_existing_provider_settings(config_dir, instance_id).await?
+    {
+        return provider_identity_from_existing_config(instance_id, &existing_settings);
+    }
+    if create_provider(instance_id).is_none() {
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            format!("Provider '{}' not found or not configured", instance_id),
+        ));
+    }
+    Ok(HttpProviderIdentity {
+        instance_id: instance_id.to_string(),
+        base_provider: instance_id.to_string(),
+        display_name: provider_display_name(instance_id)?,
+    })
+}
+
+async fn resolve_provider_identity(
+    gcx: &Arc<ARwLock<GlobalContext>>,
+    instance_id: &str,
+) -> Result<HttpProviderIdentity, ScratchError> {
+    validate_instance_id_for_http(instance_id)?;
+    let (config_dir, registry_identity) = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        let registry_identity = registry
+            .get(instance_id)
+            .map(|provider| HttpProviderIdentity {
+                instance_id: provider.name().to_string(),
+                base_provider: provider.base_provider_name().to_string(),
+                display_name: provider.display_name().to_string(),
+            });
+        (gcx_locked.config_dir.clone(), registry_identity)
+    };
+    if let Some(identity) = registry_identity {
+        return Ok(identity);
+    }
+    resolve_config_identity(&config_dir, instance_id).await
+}
+
+fn downcast_provider<'a, T: 'static>(
+    provider: &'a dyn ProviderTrait,
+    type_name: &str,
+) -> Result<&'a T, ScratchError> {
+    provider.as_any().downcast_ref::<T>().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to resolve {type_name} provider type"),
+        )
+    })
+}
+
+async fn resolve_provider_for_base(
+    gcx: &Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
+    expected_base: &str,
+) -> Result<(Box<dyn ProviderTrait>, reqwest::Client), ScratchError> {
+    let identity = resolve_provider_identity(gcx, provider_name).await?;
+    if identity.base_provider != expected_base {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Provider '{}' uses base_provider '{}' and does not support this route",
+                provider_name, identity.base_provider
+            ),
+        ));
+    }
+    let (provider, http_client) = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        (
+            registry
+                .get(provider_name)
+                .map(|provider| provider.clone_box()),
+            gcx_locked.http_client.clone(),
+        )
+    };
+    let provider = if let Some(provider) = provider {
+        provider
+    } else {
+        let config_dir = gcx.read().await.config_dir.clone();
+        if provider_file_exists(&config_dir, provider_name) {
+            let settings = read_existing_provider_settings(&config_dir, provider_name)
+                .await?
+                .ok_or_else(|| {
+                    ScratchError::new(
+                        StatusCode::NOT_FOUND,
+                        format!("Provider '{}' not found", provider_name),
+                    )
+                })?;
+            provider_from_yaml(provider_name, settings)?
+        } else {
+            create_provider(expected_base).ok_or_else(|| {
+                ScratchError::new(
+                    StatusCode::NOT_FOUND,
+                    format!("Provider '{}' not found", provider_name),
+                )
+            })?
+        }
+    };
+    Ok((provider, http_client))
+}
+
 async fn identity_for_model_management(
     config_dir: &std::path::Path,
     provider_name: &str,
@@ -134,17 +278,7 @@ async fn identity_for_model_management(
     if let Some(existing_settings) =
         read_existing_provider_settings(config_dir, provider_name).await?
     {
-        let identity = provider_identity_from_yaml(provider_name, &existing_settings)
-            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
-        let display_name = identity
-            .display_name
-            .clone()
-            .unwrap_or(provider_display_name(&identity.base_provider)?);
-        return Ok(HttpProviderIdentity {
-            instance_id: identity.instance_id,
-            base_provider: identity.base_provider,
-            display_name,
-        });
+        return provider_identity_from_existing_config(provider_name, &existing_settings);
     }
     if create_provider(provider_name).is_none() {
         return Err(ScratchError::new(
@@ -485,13 +619,24 @@ pub async fn handle_v1_provider_get(
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
     validate_instance_id_for_http(&params.name)?;
-    let gcx_locked = gcx.read().await;
-    let registry = gcx_locked.providers.read().await;
-
-    let provider: Box<dyn ProviderTrait> = if let Some(p) = registry.get(&params.name) {
-        p.clone_box()
-    } else if let Some(p) = create_provider(&params.name) {
-        p
+    let (registry_provider, config_dir) = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        (
+            registry
+                .get(&params.name)
+                .map(|provider| provider.clone_box()),
+            gcx_locked.config_dir.clone(),
+        )
+    };
+    let provider: Box<dyn ProviderTrait> = if let Some(provider) = registry_provider {
+        provider
+    } else if let Some(settings) =
+        read_existing_provider_settings(&config_dir, &params.name).await?
+    {
+        provider_from_yaml(&params.name, settings)?
+    } else if let Some(provider) = create_provider(&params.name) {
+        provider
     } else {
         return Err(ScratchError::new(
             StatusCode::NOT_FOUND,
@@ -1169,32 +1314,13 @@ pub async fn handle_v1_openrouter_model_endpoints(
     )
 }
 
-/// GET /v1/openrouter/account-info
-pub async fn handle_v1_openrouter_account_info(
-    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+async fn openrouter_account_info_response(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
 ) -> Result<Response<Body>, ScratchError> {
-    let (provider, http_client) = {
-        let gcx_locked = gcx.read().await;
-        let registry = gcx_locked.providers.read().await;
-        let provider = registry
-            .get("openrouter")
-            .map(|p| p.clone_box())
-            .or_else(|| create_provider("openrouter"))
-            .ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    "OpenRouter provider is not available".to_string(),
-                )
-            })?;
-        (provider, gcx_locked.http_client.clone())
-    };
-
-    let Some(openrouter) = provider.as_any().downcast_ref::<OpenRouterProvider>() else {
-        return Err(ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to resolve OpenRouter provider type".to_string(),
-        ));
-    };
+    let (provider, http_client) =
+        resolve_provider_for_base(&gcx, provider_name, "openrouter").await?;
+    let openrouter = downcast_provider::<OpenRouterProvider>(provider.as_ref(), "OpenRouter")?;
 
     let account_info = openrouter
         .fetch_account_info(&http_client)
@@ -1204,32 +1330,35 @@ pub async fn handle_v1_openrouter_account_info(
     json_response(StatusCode::OK, &json!({"data": account_info}))
 }
 
-/// GET /v1/openrouter/health
-pub async fn handle_v1_openrouter_health(
+/// GET /v1/openrouter/account-info
+pub async fn handle_v1_openrouter_account_info(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
 ) -> Result<Response<Body>, ScratchError> {
-    let (provider, http_client) = {
-        let gcx_locked = gcx.read().await;
-        let registry = gcx_locked.providers.read().await;
-        let provider = registry
-            .get("openrouter")
-            .map(|p| p.clone_box())
-            .or_else(|| create_provider("openrouter"))
-            .ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    "OpenRouter provider is not available".to_string(),
-                )
-            })?;
-        (provider, gcx_locked.http_client.clone())
-    };
+    openrouter_account_info_response(gcx, "openrouter").await
+}
 
-    let Some(openrouter) = provider.as_any().downcast_ref::<OpenRouterProvider>() else {
+pub async fn handle_v1_provider_account_info(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(params): Path<ProviderPathParams>,
+) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
+    let identity = resolve_provider_identity(&gcx, &params.name).await?;
+    if !openrouter_base_provider_supported(&identity.base_provider) {
         return Err(ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to resolve OpenRouter provider type".to_string(),
+            StatusCode::BAD_REQUEST,
+            format!("Provider '{}' does not support account-info", params.name),
         ));
-    };
+    }
+    openrouter_account_info_response(gcx, &params.name).await
+}
+
+async fn openrouter_health_response(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
+) -> Result<Response<Body>, ScratchError> {
+    let (provider, http_client) =
+        resolve_provider_for_base(&gcx, provider_name, "openrouter").await?;
+    let openrouter = downcast_provider::<OpenRouterProvider>(provider.as_ref(), "OpenRouter")?;
 
     match openrouter.check_api_key_health(&http_client).await {
         Ok(info) => json_response(
@@ -1251,32 +1380,13 @@ pub async fn handle_v1_openrouter_health(
     }
 }
 
-/// GET /v1/google-gemini/health
-pub async fn handle_v1_google_gemini_health(
-    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+async fn google_gemini_health_response(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
 ) -> Result<Response<Body>, ScratchError> {
-    let (provider, http_client) = {
-        let gcx_locked = gcx.read().await;
-        let registry = gcx_locked.providers.read().await;
-        let provider = registry
-            .get("google_gemini")
-            .map(|p| p.clone_box())
-            .or_else(|| create_provider("google_gemini"))
-            .ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    "Google Gemini provider is not available".to_string(),
-                )
-            })?;
-        (provider, gcx_locked.http_client.clone())
-    };
-
-    let Some(gemini) = provider.as_any().downcast_ref::<GoogleGeminiProvider>() else {
-        return Err(ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to resolve Google Gemini provider type".to_string(),
-        ));
-    };
+    let (provider, http_client) =
+        resolve_provider_for_base(&gcx, provider_name, "google_gemini").await?;
+    let gemini = downcast_provider::<GoogleGeminiProvider>(provider.as_ref(), "Google Gemini")?;
 
     match gemini.check_api_key_health(&http_client).await {
         Ok(info) => json_response(
@@ -1295,6 +1405,42 @@ pub async fn handle_v1_google_gemini_health(
                 data: None,
             },
         ),
+    }
+}
+
+/// GET /v1/openrouter/health
+pub async fn handle_v1_openrouter_health(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<Response<Body>, ScratchError> {
+    openrouter_health_response(gcx, "openrouter").await
+}
+
+/// GET /v1/google-gemini/health
+pub async fn handle_v1_google_gemini_health(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<Response<Body>, ScratchError> {
+    google_gemini_health_response(gcx, "google_gemini").await
+}
+
+pub async fn handle_v1_provider_health(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(params): Path<ProviderPathParams>,
+) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
+    let identity = resolve_provider_identity(&gcx, &params.name).await?;
+    if !health_base_provider_supported(&identity.base_provider) {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Provider '{}' does not support health", params.name),
+        ));
+    }
+    match identity.base_provider.as_str() {
+        "openrouter" => openrouter_health_response(gcx, &params.name).await,
+        "google_gemini" => google_gemini_health_response(gcx, &params.name).await,
+        _ => Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Provider '{}' does not support health", params.name),
+        )),
     }
 }
 
@@ -1968,6 +2114,44 @@ async fn reload_provider_from_disk(
     Ok(())
 }
 
+async fn ensure_oauth_identity_for_instance(
+    config_dir: &std::path::Path,
+    provider_name: &str,
+    base_provider: &str,
+    yaml_map: &mut serde_yaml::Mapping,
+) -> Result<HttpProviderIdentity, ScratchError> {
+    let identity = match provider_identity_from_yaml(
+        provider_name,
+        &serde_yaml::Value::Mapping(yaml_map.clone()),
+    ) {
+        Ok(identity) => HttpProviderIdentity {
+            display_name: identity
+                .display_name
+                .clone()
+                .unwrap_or(provider_display_name(&identity.base_provider)?),
+            instance_id: identity.instance_id,
+            base_provider: identity.base_provider,
+        },
+        Err(_) if !provider_file_exists(config_dir, provider_name) => HttpProviderIdentity {
+            instance_id: provider_name.to_string(),
+            base_provider: base_provider.to_string(),
+            display_name: provider_display_name(base_provider)?,
+        },
+        Err(e) => return Err(ScratchError::new(StatusCode::BAD_REQUEST, e)),
+    };
+    if identity.base_provider != base_provider {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "OAuth not supported for provider '{}' with base_provider '{}'",
+                provider_name, identity.base_provider
+            ),
+        ));
+    }
+    ensure_yaml_identity_fields(yaml_map, &identity);
+    Ok(identity)
+}
+
 #[derive(Deserialize, Default)]
 struct GitHubCopilotOAuthStartRequest {
     #[serde(default, alias = "enterpriseUrl")]
@@ -1976,12 +2160,28 @@ struct GitHubCopilotOAuthStartRequest {
     deployment_type: Option<String>,
 }
 
+async fn oauth_base_provider_for_instance(
+    gcx: &Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
+) -> Result<String, ScratchError> {
+    let identity = resolve_provider_identity(gcx, provider_name).await?;
+    if !oauth_supported_for_base(&identity.base_provider) {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("OAuth not supported for provider '{}'", provider_name),
+        ));
+    }
+    Ok(identity.base_provider)
+}
+
 pub async fn handle_v1_provider_oauth_start(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    match params.name.as_str() {
+    validate_instance_id_for_http(&params.name)?;
+    let base_provider = oauth_base_provider_for_instance(&gcx, &params.name).await?;
+    match base_provider.as_str() {
         "claude_code" => {
             let mode = crate::providers::claude_code_oauth::OAuthMode::Max;
             let (session_id, authorize_url) =
@@ -1997,9 +2197,12 @@ pub async fn handle_v1_provider_oauth_start(
         "openai_codex" => {
             let fallback_port = gcx.read().await.cmdline.http_port;
             let (session_id, authorize_url, callback_port) =
-                crate::providers::openai_codex_oauth::start_oauth_session(fallback_port).await;
+                crate::providers::openai_codex_oauth::start_oauth_session(
+                    fallback_port,
+                    params.name.clone(),
+                )
+                .await;
 
-            // If callback port differs from our main HTTP port, start a dedicated listener
             if callback_port != fallback_port {
                 let http_client = gcx.read().await.http_client.clone();
                 match crate::providers::openai_codex_oauth::start_callback_listener(
@@ -2011,12 +2214,15 @@ pub async fn handle_v1_provider_oauth_start(
                     Ok(listener_handle) => {
                         let gcx_clone = gcx.clone();
                         tokio::spawn(async move {
-                            if let Some(tokens) = listener_handle.await.ok().flatten() {
+                            if let Some((tokens, provider_instance_id)) =
+                                listener_handle.await.ok().flatten()
+                            {
                                 let config_dir = gcx_clone.read().await.config_dir.clone();
                                 if let Ok(tokens_value) = serde_yaml::to_value(&tokens) {
                                     if let Err(e) = save_provider_oauth_tokens(
                                         &gcx_clone,
                                         &config_dir,
+                                        &provider_instance_id,
                                         "openai_codex",
                                         &tokens_value,
                                     )
@@ -2108,10 +2314,12 @@ pub async fn handle_v1_provider_oauth_exchange(
         )
     })?;
 
+    validate_instance_id_for_http(&params.name)?;
+    let base_provider = oauth_base_provider_for_instance(&gcx, &params.name).await?;
     let http_client = gcx.read().await.http_client.clone();
     let config_dir = gcx.read().await.config_dir.clone();
 
-    match params.name.as_str() {
+    match base_provider.as_str() {
         "claude_code" => {
             let tokens = crate::providers::claude_code_oauth::exchange_code(
                 &http_client,
@@ -2124,6 +2332,7 @@ pub async fn handle_v1_provider_oauth_exchange(
             save_provider_oauth_tokens(
                 &gcx,
                 &config_dir,
+                &params.name,
                 "claude_code",
                 &serde_yaml::to_value(&tokens).map_err(|e| {
                     ScratchError::new(
@@ -2135,17 +2344,28 @@ pub async fn handle_v1_provider_oauth_exchange(
             .await?;
         }
         "openai_codex" => {
-            let tokens = crate::providers::openai_codex_oauth::exchange_code(
-                &http_client,
-                &request.session_id,
-                &request.code,
-            )
-            .await
-            .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+            let (tokens, session_provider_name) =
+                crate::providers::openai_codex_oauth::exchange_code_for_session(
+                    &http_client,
+                    &request.session_id,
+                    &request.code,
+                )
+                .await
+                .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
+            if session_provider_name != params.name {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "OAuth session belongs to provider '{}'",
+                        session_provider_name
+                    ),
+                ));
+            }
 
             save_provider_oauth_tokens(
                 &gcx,
                 &config_dir,
+                &session_provider_name,
                 "openai_codex",
                 &serde_yaml::to_value(&tokens).map_err(|e| {
                     ScratchError::new(
@@ -2168,6 +2388,7 @@ pub async fn handle_v1_provider_oauth_exchange(
                     save_provider_oauth_tokens(
                         &gcx,
                         &config_dir,
+                        &params.name,
                         "github_copilot",
                         &serde_yaml::to_value(&tokens).map_err(|e| {
                             ScratchError::new(
@@ -2234,9 +2455,11 @@ pub async fn handle_v1_provider_oauth_logout(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
 ) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
+    let base_provider = oauth_base_provider_for_instance(&gcx, &params.name).await?;
     let config_dir = gcx.read().await.config_dir.clone();
 
-    match params.name.as_str() {
+    match base_provider.as_str() {
         "claude_code" => {
             let empty =
                 serde_yaml::to_value(&crate::providers::claude_code_oauth::OAuthTokens::default())
@@ -2246,7 +2469,8 @@ pub async fn handle_v1_provider_oauth_logout(
                             format!("Failed to serialize: {}", e),
                         )
                     })?;
-            save_provider_oauth_tokens(&gcx, &config_dir, "claude_code", &empty).await?;
+            save_provider_oauth_tokens(&gcx, &config_dir, &params.name, "claude_code", &empty)
+                .await?;
         }
         "openai_codex" => {
             let empty =
@@ -2257,7 +2481,8 @@ pub async fn handle_v1_provider_oauth_logout(
                             format!("Failed to serialize: {}", e),
                         )
                     })?;
-            save_provider_oauth_tokens(&gcx, &config_dir, "openai_codex", &empty).await?;
+            save_provider_oauth_tokens(&gcx, &config_dir, &params.name, "openai_codex", &empty)
+                .await?;
         }
         "github_copilot" => {
             let empty = serde_yaml::to_value(
@@ -2269,7 +2494,8 @@ pub async fn handle_v1_provider_oauth_logout(
                     format!("Failed to serialize: {}", e),
                 )
             })?;
-            save_provider_oauth_tokens(&gcx, &config_dir, "github_copilot", &empty).await?;
+            save_provider_oauth_tokens(&gcx, &config_dir, &params.name, "github_copilot", &empty)
+                .await?;
         }
         _ => {
             return Err(ScratchError::new(
@@ -2337,12 +2563,125 @@ fn html_response(
         })
 }
 
+async fn handle_openai_codex_oauth_callback_impl(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    query: OAuthCallbackParams,
+    expected_provider_name: Option<String>,
+) -> Result<Response<Body>, ScratchError> {
+    if let Some(err) = &query.error {
+        let desc = query
+            .error_description
+            .as_deref()
+            .unwrap_or("Unknown error");
+        tracing::warn!("OpenAI OAuth error: {} — {}", err, desc);
+        return html_response(
+            "Authentication Failed",
+            "✗ Authentication Failed",
+            "#ef4444",
+            &format!("{}: {}", err, desc),
+        );
+    }
+
+    let code = match &query.code {
+        Some(c) if !c.is_empty() => c.clone(),
+        _ => {
+            return html_response(
+                "Authentication Failed",
+                "✗ Authentication Failed",
+                "#ef4444",
+                "No authorization code received. Please try again.",
+            );
+        }
+    };
+
+    let session_id = match &query.state {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => {
+            return html_response(
+                "Authentication Failed",
+                "✗ Authentication Failed",
+                "#ef4444",
+                "Missing state parameter. Please start the OAuth flow again.",
+            );
+        }
+    };
+
+    let http_client = gcx.read().await.http_client.clone();
+    let config_dir = gcx.read().await.config_dir.clone();
+
+    let (tokens, provider_instance_id) =
+        match crate::providers::openai_codex_oauth::exchange_code_for_session(
+            &http_client,
+            &session_id,
+            &code,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!("OpenAI OAuth exchange failed: {}", e);
+                return html_response(
+                    "Authentication Failed",
+                    "✗ Authentication Failed",
+                    "#ef4444",
+                    &format!("Token exchange failed: {}", e),
+                );
+            }
+        };
+
+    if let Some(expected_provider_name) = expected_provider_name {
+        if provider_instance_id != expected_provider_name {
+            return html_response(
+                "Authentication Failed",
+                "✗ Authentication Failed",
+                "#ef4444",
+                &format!(
+                    "OAuth session belongs to provider '{}'. Please restart login.",
+                    provider_instance_id
+                ),
+            );
+        }
+    }
+
+    if let Err(e) = save_provider_oauth_tokens(
+        &gcx,
+        &config_dir,
+        &provider_instance_id,
+        "openai_codex",
+        &serde_yaml::to_value(&tokens).map_err(|e| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize tokens: {}", e),
+            )
+        })?,
+    )
+    .await
+    {
+        tracing::warn!("Failed to save OAuth tokens: {:?}", e);
+        return html_response(
+            "Authentication Failed",
+            "✗ Authentication Failed",
+            "#ef4444",
+            "Tokens received but failed to save. Please try again.",
+        );
+    }
+
+    html_response(
+        "Authentication Successful",
+        "✓ Authentication Successful",
+        "#4ade80",
+        "You can close this window and return to the application.",
+    )
+}
+
 pub async fn handle_v1_provider_oauth_callback(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(params): Path<ProviderPathParams>,
     Query(query): Query<OAuthCallbackParams>,
 ) -> Result<Response<Body>, ScratchError> {
-    if params.name != "openai_codex" {
+    validate_instance_id_for_http(&params.name)?;
+    let base_provider = oauth_base_provider_for_instance(&gcx, &params.name).await?;
+    if base_provider != "openai_codex" {
         return Err(ScratchError::new(
             StatusCode::BAD_REQUEST,
             format!(
@@ -2351,211 +2690,23 @@ pub async fn handle_v1_provider_oauth_callback(
             ),
         ));
     }
-
-    if let Some(err) = &query.error {
-        let desc = query
-            .error_description
-            .as_deref()
-            .unwrap_or("Unknown error");
-        tracing::warn!("OpenAI OAuth error: {} — {}", err, desc);
-        return html_response(
-            "Authentication Failed",
-            "✗ Authentication Failed",
-            "#ef4444",
-            &format!("{}: {}", err, desc),
-        );
-    }
-
-    let code = match &query.code {
-        Some(c) if !c.is_empty() => c.clone(),
-        _ => {
-            return html_response(
-                "Authentication Failed",
-                "✗ Authentication Failed",
-                "#ef4444",
-                "No authorization code received. Please try again.",
-            );
-        }
-    };
-
-    let session_id = match &query.state {
-        Some(s) if !s.is_empty() => s.clone(),
-        _ => {
-            return html_response(
-                "Authentication Failed",
-                "✗ Authentication Failed",
-                "#ef4444",
-                "Missing state parameter. Please start the OAuth flow again.",
-            );
-        }
-    };
-
-    let http_client = gcx.read().await.http_client.clone();
-    let config_dir = gcx.read().await.config_dir.clone();
-
-    let tokens =
-        match crate::providers::openai_codex_oauth::exchange_code(&http_client, &session_id, &code)
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!("OpenAI OAuth exchange failed: {}", e);
-                return html_response(
-                    "Authentication Failed",
-                    "✗ Authentication Failed",
-                    "#ef4444",
-                    &format!("Token exchange failed: {}", e),
-                );
-            }
-        };
-
-    if let Err(e) = save_provider_oauth_tokens(
-        &gcx,
-        &config_dir,
-        "openai_codex",
-        &serde_yaml::to_value(&tokens).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to serialize tokens: {}", e),
-            )
-        })?,
-    )
-    .await
-    {
-        tracing::warn!("Failed to save OAuth tokens: {:?}", e);
-        return html_response(
-            "Authentication Failed",
-            "✗ Authentication Failed",
-            "#ef4444",
-            "Tokens received but failed to save. Please try again.",
-        );
-    }
-
-    html_response(
-        "Authentication Successful",
-        "✓ Authentication Successful",
-        "#4ade80",
-        "You can close this window and return to the application.",
-    )
+    handle_openai_codex_oauth_callback_impl(gcx, query, Some(params.name)).await
 }
 
 pub async fn handle_openai_codex_auth_callback(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Query(query): Query<OAuthCallbackParams>,
 ) -> Result<Response<Body>, ScratchError> {
-    if let Some(err) = &query.error {
-        let desc = query
-            .error_description
-            .as_deref()
-            .unwrap_or("Unknown error");
-        tracing::warn!("OpenAI OAuth error: {} — {}", err, desc);
-        return html_response(
-            "Authentication Failed",
-            "✗ Authentication Failed",
-            "#ef4444",
-            &format!("{}: {}", err, desc),
-        );
-    }
-
-    let code = match &query.code {
-        Some(c) if !c.is_empty() => c.clone(),
-        _ => {
-            return html_response(
-                "Authentication Failed",
-                "✗ Authentication Failed",
-                "#ef4444",
-                "No authorization code received. Please try again.",
-            );
-        }
-    };
-
-    let session_id = match &query.state {
-        Some(s) if !s.is_empty() => s.clone(),
-        _ => {
-            return html_response(
-                "Authentication Failed",
-                "✗ Authentication Failed",
-                "#ef4444",
-                "Missing state parameter. Please start the OAuth flow again.",
-            );
-        }
-    };
-
-    let http_client = gcx.read().await.http_client.clone();
-    let config_dir = gcx.read().await.config_dir.clone();
-
-    let tokens =
-        match crate::providers::openai_codex_oauth::exchange_code(&http_client, &session_id, &code)
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!("OpenAI OAuth exchange failed: {}", e);
-                return html_response(
-                    "Authentication Failed",
-                    "✗ Authentication Failed",
-                    "#ef4444",
-                    &format!("Token exchange failed: {}", e),
-                );
-            }
-        };
-
-    if let Err(e) = save_provider_oauth_tokens(
-        &gcx,
-        &config_dir,
-        "openai_codex",
-        &serde_yaml::to_value(&tokens).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to serialize tokens: {}", e),
-            )
-        })?,
-    )
-    .await
-    {
-        tracing::warn!("Failed to save OAuth tokens: {:?}", e);
-        return html_response(
-            "Authentication Failed",
-            "✗ Authentication Failed",
-            "#ef4444",
-            "Tokens received but failed to save. Please try again.",
-        );
-    }
-
-    html_response(
-        "Authentication Successful",
-        "✓ Authentication Successful",
-        "#4ade80",
-        "You can close this window and return to the application.",
-    )
+    handle_openai_codex_oauth_callback_impl(gcx, query, None).await
 }
 
-/// GET /v1/claude-code/usage
-pub async fn handle_v1_claude_code_usage(
-    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+async fn claude_code_usage_response(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
 ) -> Result<Response<Body>, ScratchError> {
-    let (provider, http_client) = {
-        let gcx_locked = gcx.read().await;
-        let registry = gcx_locked.providers.read().await;
-        let provider = registry
-            .get("claude_code")
-            .map(|p| p.clone_box())
-            .or_else(|| create_provider("claude_code"))
-            .ok_or_else(|| {
-                ScratchError::new(
-                    StatusCode::NOT_FOUND,
-                    "Claude Code provider is not available".to_string(),
-                )
-            })?;
-        (provider, gcx_locked.http_client.clone())
-    };
-
-    let Some(claude_code) = provider.as_any().downcast_ref::<ClaudeCodeProvider>() else {
-        return Err(ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to resolve Claude Code provider type".to_string(),
-        ));
-    };
+    let (provider, http_client) =
+        resolve_provider_for_base(&gcx, provider_name, "claude_code").await?;
+    let claude_code = downcast_provider::<ClaudeCodeProvider>(provider.as_ref(), "Claude Code")?;
 
     match claude_code.fetch_usage(&http_client).await {
         Ok(usage) => json_response(StatusCode::OK, &json!({"data": usage})),
@@ -2563,11 +2714,11 @@ pub async fn handle_v1_claude_code_usage(
     }
 }
 
-/// GET /v1/openai-codex/usage
-pub async fn handle_v1_openai_codex_usage(
-    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+async fn openai_codex_usage_response(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
 ) -> Result<Response<Body>, ScratchError> {
-    let result = fetch_openai_codex_usage_with_refresh(gcx).await;
+    let result = fetch_openai_codex_usage_with_refresh(gcx, provider_name).await;
 
     match result {
         Ok(usage) => json_response(StatusCode::OK, &json!({"data": usage})),
@@ -2575,34 +2726,95 @@ pub async fn handle_v1_openai_codex_usage(
     }
 }
 
+/// GET /v1/claude-code/usage
+pub async fn handle_v1_claude_code_usage(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<Response<Body>, ScratchError> {
+    claude_code_usage_response(gcx, "claude_code").await
+}
+
+/// GET /v1/openai-codex/usage
+pub async fn handle_v1_openai_codex_usage(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<Response<Body>, ScratchError> {
+    openai_codex_usage_response(gcx, "openai_codex").await
+}
+
+pub async fn handle_v1_provider_usage(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path(params): Path<ProviderPathParams>,
+) -> Result<Response<Body>, ScratchError> {
+    validate_instance_id_for_http(&params.name)?;
+    let identity = resolve_provider_identity(&gcx, &params.name).await?;
+    if !usage_base_provider_supported(&identity.base_provider) {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Provider '{}' does not support usage", params.name),
+        ));
+    }
+    match identity.base_provider.as_str() {
+        "claude_code" => claude_code_usage_response(gcx, &params.name).await,
+        "openai_codex" => openai_codex_usage_response(gcx, &params.name).await,
+        _ => Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Provider '{}' does not support usage", params.name),
+        )),
+    }
+}
+
 async fn current_openai_codex_provider(
     gcx: &Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
 ) -> Result<(OpenAICodexProvider, reqwest::Client, std::path::PathBuf), String> {
-    let gcx_locked = gcx.read().await;
-    let registry = gcx_locked.providers.read().await;
-    let provider = registry
-        .get("openai_codex")
-        .map(|p| p.clone_box())
-        .or_else(|| create_provider("openai_codex"))
-        .ok_or_else(|| "OpenAI Codex provider is not available".to_string())?;
+    let (provider, http_client, config_dir) = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        (
+            registry
+                .get(provider_name)
+                .map(|provider| provider.clone_box()),
+            gcx_locked.http_client.clone(),
+            gcx_locked.config_dir.clone(),
+        )
+    };
+    let provider = if let Some(provider) = provider {
+        provider
+    } else if provider_file_exists(&config_dir, provider_name) {
+        let settings = read_existing_provider_settings(&config_dir, provider_name)
+            .await
+            .map_err(|e| e.message)?
+            .ok_or_else(|| format!("OpenAI Codex provider '{}' is not available", provider_name))?;
+        provider_from_yaml(provider_name, settings).map_err(|e| e.message)?
+    } else if provider_name == "openai_codex" {
+        create_provider("openai_codex")
+            .ok_or_else(|| "OpenAI Codex provider is not available".to_string())?
+    } else {
+        return Err(format!(
+            "OpenAI Codex provider '{}' is not available",
+            provider_name
+        ));
+    };
+    if provider.base_provider_name() != "openai_codex" {
+        return Err(format!(
+            "Provider '{}' is not an OpenAI Codex instance",
+            provider_name
+        ));
+    }
     let Some(codex) = provider.as_any().downcast_ref::<OpenAICodexProvider>() else {
         return Err("Failed to resolve OpenAI Codex provider type".to_string());
     };
-    Ok((
-        codex.clone(),
-        gcx_locked.http_client.clone(),
-        gcx_locked.config_dir.clone(),
-    ))
+    Ok((codex.clone(), http_client, config_dir))
 }
 
 async fn force_refresh_openai_codex_usage_for_retry(
     gcx: Arc<ARwLock<GlobalContext>>,
     http_client: &reqwest::Client,
+    provider_name: &str,
     rejected_access_token: &str,
     rejected_status: Option<reqwest::StatusCode>,
 ) -> Result<Option<OpenAICodexProvider>, String> {
     let _guard = OpenAICodexProvider::lock_refresh_guard().await?;
-    let (mut provider, _, config_dir) = current_openai_codex_provider(&gcx).await?;
+    let (mut provider, _, config_dir) = current_openai_codex_provider(&gcx, provider_name).await?;
 
     if provider
         .access_token_changed_since_rejection(rejected_access_token)
@@ -2626,12 +2838,13 @@ async fn force_refresh_openai_codex_usage_for_retry(
     let previous_tokens = provider.oauth_tokens.clone();
     let previous_session_id = provider.session_id.clone();
     let refresh_result = provider
-        .force_refresh_after_auth_rejection(http_client, &config_dir)
+        .force_refresh_after_auth_rejection(http_client, &config_dir, provider_name)
         .await;
 
     if !provider.auth_state_matches(&previous_tokens, &previous_session_id) {
         if sync_openai_codex_auth_state(
             gcx.clone(),
+            provider_name,
             &provider,
             &previous_tokens,
             &previous_session_id,
@@ -2648,8 +2861,10 @@ async fn force_refresh_openai_codex_usage_for_retry(
 
 async fn fetch_openai_codex_usage_with_refresh(
     gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
 ) -> Result<crate::providers::openai_codex::OpenAICodexUsage, String> {
-    let (mut request_provider, http_client, _) = current_openai_codex_provider(&gcx).await?;
+    let (mut request_provider, http_client, _) =
+        current_openai_codex_provider(&gcx, provider_name).await?;
     if !request_provider.oauth_tokens.has_refresh_token() {
         return request_provider.fetch_usage(&http_client).await;
     }
@@ -2663,6 +2878,7 @@ async fn fetch_openai_codex_usage_with_refresh(
             request_provider = force_refresh_openai_codex_usage_for_retry(
                 gcx.clone(),
                 &http_client,
+                provider_name,
                 &rejected_access_token,
                 None,
             )
@@ -2695,6 +2911,7 @@ async fn fetch_openai_codex_usage_with_refresh(
             let Some(retry_provider) = force_refresh_openai_codex_usage_for_retry(
                 gcx,
                 &http_client,
+                provider_name,
                 &context.access_token,
                 Some(status),
             )
@@ -2726,6 +2943,7 @@ async fn fetch_openai_codex_usage_with_refresh(
 
 async fn sync_openai_codex_auth_state(
     gcx: Arc<ARwLock<GlobalContext>>,
+    provider_name: &str,
     source: &OpenAICodexProvider,
     previous_tokens: &crate::providers::openai_codex_oauth::OAuthTokens,
     previous_session_id: &str,
@@ -2736,10 +2954,10 @@ async fn sync_openai_codex_auth_state(
 
     let gcx_locked = gcx.read().await;
     let mut registry = gcx_locked.providers.write().await;
-    let provider = registry.get_mut("openai_codex").ok_or_else(|| {
+    let provider = registry.get_mut(provider_name).ok_or_else(|| {
         ScratchError::new(
             StatusCode::NOT_FOUND,
-            "OpenAI Codex provider is not available".to_string(),
+            format!("OpenAI Codex provider '{}' is not available", provider_name),
         )
     })?;
     let Some(current) = provider.as_any_mut().downcast_mut::<OpenAICodexProvider>() else {
@@ -2769,9 +2987,17 @@ async fn save_provider_oauth_tokens(
     gcx: &Arc<ARwLock<GlobalContext>>,
     config_dir: &std::path::Path,
     provider_name: &str,
+    base_provider: &str,
     tokens_value: &serde_yaml::Value,
 ) -> Result<(), ScratchError> {
-    let _openai_codex_refresh_guard = if provider_name == "openai_codex" {
+    validate_instance_id_for_http(provider_name)?;
+    if !oauth_supported_for_base(base_provider) {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("OAuth not supported for provider '{}'", provider_name),
+        ));
+    }
+    let _openai_codex_refresh_guard = if base_provider == "openai_codex" {
         Some(
             OpenAICodexProvider::lock_refresh_guard()
                 .await
@@ -2814,12 +3040,15 @@ async fn save_provider_oauth_tokens(
         serde_yaml::Mapping::new()
     };
 
+    ensure_oauth_identity_for_instance(config_dir, provider_name, base_provider, &mut yaml_map)
+        .await?;
+
     yaml_map.insert(
         serde_yaml::Value::String("oauth_tokens".to_string()),
         tokens_value.clone(),
     );
 
-    if provider_name == "openai_codex" {
+    if base_provider == "openai_codex" {
         if let Some(api_key) = tokens_value
             .get("openai_api_key")
             .and_then(|v| v.as_str())
@@ -2880,18 +3109,7 @@ async fn save_provider_oauth_tokens(
             )
         })?;
 
-        let mut provider = create_provider(provider_name).ok_or_else(|| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create provider '{}'", provider_name),
-            )
-        })?;
-        provider.provider_settings_apply(yaml).map_err(|e| {
-            ScratchError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to apply settings: {}", e),
-            )
-        })?;
+        let provider = provider_from_yaml(provider_name, yaml)?;
         registry.add(provider);
     }
 
@@ -3547,7 +3765,7 @@ extra_headers:
             serde_yaml::to_value(&crate::providers::openai_codex_oauth::OAuthTokens::default())
                 .unwrap();
 
-        save_provider_oauth_tokens(&gcx, &config_dir, "openai_codex", &empty)
+        save_provider_oauth_tokens(&gcx, &config_dir, "openai_codex", "openai_codex", &empty)
             .await
             .unwrap();
 
@@ -3576,9 +3794,15 @@ extra_headers:
         };
         let tokens_value = serde_yaml::to_value(&tokens).unwrap();
 
-        save_provider_oauth_tokens(&gcx, &config_dir, "openai_codex", &tokens_value)
-            .await
-            .unwrap();
+        save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "openai_codex",
+            "openai_codex",
+            &tokens_value,
+        )
+        .await
+        .unwrap();
 
         let content = tokio::fs::read_to_string(provider_file_path(&config_dir, "openai_codex"))
             .await
@@ -3608,9 +3832,15 @@ extra_headers:
         };
         let tokens_value = serde_yaml::to_value(&tokens).unwrap();
 
-        save_provider_oauth_tokens(&gcx, &config_dir, "github_copilot", &tokens_value)
-            .await
-            .unwrap();
+        save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "github_copilot",
+            "github_copilot",
+            &tokens_value,
+        )
+        .await
+        .unwrap();
 
         let content = tokio::fs::read_to_string(provider_file_path(&config_dir, "github_copilot"))
             .await
@@ -3657,9 +3887,15 @@ extra_headers:
             serde_yaml::to_value(&crate::providers::github_copilot_oauth::OAuthTokens::default())
                 .unwrap();
 
-        save_provider_oauth_tokens(&gcx, &config_dir, "github_copilot", &empty)
-            .await
-            .unwrap();
+        save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "github_copilot",
+            "github_copilot",
+            &empty,
+        )
+        .await
+        .unwrap();
 
         let content = tokio::fs::read_to_string(providers_dir.join("github_copilot.yaml"))
             .await
@@ -3677,6 +3913,133 @@ extra_headers:
                 .and_then(|value| value.as_i64()),
             Some(0)
         );
+    }
+
+    #[tokio::test]
+    async fn save_oauth_tokens_writes_alias_config_and_preserves_identity() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("openai_codex_2.yaml"),
+            "base_provider: openai_codex\ndisplay_name: Work Codex\noauth_tokens:\n  access_token: old\n",
+        )
+        .await
+        .unwrap();
+        let tokens = crate::providers::openai_codex_oauth::OAuthTokens {
+            access_token: "alias-access".to_string(),
+            refresh_token: "alias-refresh".to_string(),
+            openai_api_key: "sk-alias".to_string(),
+            expires_at: i64::MAX,
+            ..Default::default()
+        };
+
+        save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "openai_codex_2",
+            "openai_codex",
+            &serde_yaml::to_value(&tokens).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(provider_file_exists(&config_dir, "openai_codex_2"));
+        assert!(!provider_file_exists(&config_dir, "openai_codex"));
+        let saved = provider_config_json(&config_dir, "openai_codex_2").await;
+        assert_eq!(saved["base_provider"], "openai_codex");
+        assert_eq!(saved["display_name"], "Work Codex");
+        assert_eq!(saved["OPENAI_API_KEY"], "sk-alias");
+        assert_eq!(saved["oauth_tokens"]["access_token"], "alias-access");
+        let identity = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            let provider = registry.get("openai_codex_2").unwrap();
+            (
+                provider.name().to_string(),
+                provider.base_provider_name().to_string(),
+                provider.display_name().to_string(),
+            )
+        };
+        assert_eq!(
+            identity,
+            (
+                "openai_codex_2".to_string(),
+                "openai_codex".to_string(),
+                "Work Codex".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn github_copilot_oauth_alias_redacts_settings() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let tokens = crate::providers::github_copilot_oauth::OAuthTokens {
+            access_token: "gho-alias-secret".to_string(),
+            expires_at: i64::MAX,
+            ..Default::default()
+        };
+
+        save_provider_oauth_tokens(
+            &gcx,
+            &config_dir,
+            "github_copilot_2",
+            "github_copilot",
+            &serde_yaml::to_value(&tokens).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let saved = provider_config_json(&config_dir, "github_copilot_2").await;
+        assert_eq!(saved["base_provider"], "github_copilot");
+        assert_eq!(saved["oauth_tokens"]["access_token"], "gho-alias-secret");
+        let settings = {
+            let gcx_locked = gcx.read().await;
+            let registry = gcx_locked.providers.read().await;
+            registry
+                .get("github_copilot_2")
+                .unwrap()
+                .provider_settings_as_json()
+        };
+        assert_eq!(settings["base_provider"], "github_copilot");
+        assert_eq!(settings["oauth_tokens"]["access_token"], "***");
+        assert!(!settings.to_string().contains("gho-alias-secret"));
+    }
+
+    #[tokio::test]
+    async fn instance_aware_route_resolution_rejects_unsupported_base() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let config_dir = gcx.read().await.config_dir.clone();
+        let providers_dir = config_dir.join("providers.d");
+        tokio::fs::create_dir_all(&providers_dir).await.unwrap();
+        tokio::fs::write(
+            providers_dir.join("openai_2.yaml"),
+            "base_provider: openai\ndisplay_name: Work OpenAI\napi_key: sk-test\n",
+        )
+        .await
+        .unwrap();
+
+        let err = handle_v1_provider_health(
+            Extension(gcx.clone()),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status_code, StatusCode::BAD_REQUEST);
+
+        let err = handle_v1_provider_usage(
+            Extension(gcx),
+            Path(ProviderPathParams {
+                name: "openai_2".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status_code, StatusCode::BAD_REQUEST);
     }
 
     async fn assert_remove_custom_model_clears_enabled_entry(
@@ -3787,6 +4150,7 @@ extra_headers:
 
         let changed = sync_openai_codex_auth_state(
             gcx.clone(),
+            "openai_codex",
             &source,
             &previous_tokens,
             &previous_session_id,
@@ -3835,6 +4199,7 @@ extra_headers:
 
         let changed = sync_openai_codex_auth_state(
             gcx.clone(),
+            "openai_codex",
             &source,
             &previous_tokens,
             &previous_session_id,
@@ -3876,6 +4241,7 @@ extra_headers:
         let refreshed = force_refresh_openai_codex_usage_for_retry(
             gcx,
             &http_client,
+            "openai_codex",
             "stale-access",
             Some(reqwest::StatusCode::UNAUTHORIZED),
         )
@@ -3916,6 +4282,7 @@ extra_headers:
 
         let changed = sync_openai_codex_auth_state(
             gcx.clone(),
+            "openai_codex",
             &source,
             &previous_tokens,
             &previous_session_id,

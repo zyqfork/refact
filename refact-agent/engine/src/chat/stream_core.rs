@@ -103,14 +103,21 @@ async fn send_llm_http_request(
         .map_err(|e| format!("LLM request failed: {}", e))
 }
 
+fn openai_codex_instance_id(model_rec: &BaseModelRecord) -> Option<&str> {
+    let (provider_name, _) = model_rec.id.split_once('/')?;
+    (model_rec.endpoint.contains("chatgpt.com/backend-api")
+        && (provider_name == "openai_codex" || provider_name.starts_with("openai_codex_")))
+    .then_some(provider_name)
+}
+
 fn is_openai_codex_chatgpt_backend(model_rec: &BaseModelRecord) -> bool {
-    model_rec.id.starts_with("openai_codex/")
-        && model_rec.endpoint.contains("chatgpt.com/backend-api")
+    openai_codex_instance_id(model_rec).is_some()
 }
 
 async fn force_refresh_openai_codex_for_retry(
     gcx: Arc<ARwLock<GlobalContext>>,
     http_client: &reqwest::Client,
+    provider_instance_id: &str,
     status: reqwest::StatusCode,
     current_access_token: &str,
 ) -> Result<Option<String>, String> {
@@ -120,7 +127,7 @@ async fn force_refresh_openai_codex_for_retry(
         let gcx_locked = gcx.read().await;
         let registry = gcx_locked.providers.read().await;
         let provider = registry
-            .get("openai_codex")
+            .get(provider_instance_id)
             .and_then(|p| {
                 p.as_any()
                     .downcast_ref::<crate::providers::openai_codex::OpenAICodexProvider>()
@@ -166,7 +173,7 @@ async fn force_refresh_openai_codex_for_retry(
     let previous_tokens = provider.oauth_tokens.clone();
     let previous_session_id = provider.session_id.clone();
     let refresh_result = provider
-        .force_refresh_after_auth_rejection(http_client, &config_dir)
+        .force_refresh_after_auth_rejection(http_client, &config_dir, provider_instance_id)
         .await;
 
     if !provider.auth_state_matches(&previous_tokens, &previous_session_id) {
@@ -174,7 +181,7 @@ async fn force_refresh_openai_codex_for_retry(
             let gcx_locked = gcx.read().await;
             let mut registry = gcx_locked.providers.write().await;
             registry
-                .get_mut("openai_codex")
+                .get_mut(provider_instance_id)
                 .and_then(|p| {
                     p.as_any_mut()
                         .downcast_mut::<crate::providers::openai_codex::OpenAICodexProvider>()
@@ -1091,9 +1098,12 @@ pub async fn run_llm_stream<C: StreamCollector>(
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
         )
     {
+        let provider_instance_id =
+            openai_codex_instance_id(&params.model_rec).unwrap_or("openai_codex");
         match force_refresh_openai_codex_for_retry(
             gcx.clone(),
             &client,
+            provider_instance_id,
             status,
             &params.model_rec.api_key,
         )

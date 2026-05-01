@@ -504,6 +504,7 @@ pub trait ProviderTrait: Send + Sync {
         &mut self,
         _http_client: &reqwest::Client,
         _config_dir: &std::path::Path,
+        _instance_id: &str,
     ) -> Result<(), String> {
         Ok(())
     }

@@ -22,6 +22,7 @@ pub struct PkceSession {
     pub verifier: String,
     pub redirect_uri: String,
     pub created_at: i64,
+    pub provider_instance_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -286,10 +287,14 @@ async fn prune_expired_sessions(sessions: &mut HashMap<String, PkceSession>) {
 
 /// Returns (session_id, authorize_url, callback_port).
 /// The callback_port is the port used in the redirect_uri (1455 if available, fallback otherwise).
-pub async fn start_oauth_session(fallback_port: u16) -> (String, String, u16) {
+pub async fn start_oauth_session(
+    fallback_port: u16,
+    provider_instance_id: impl Into<String>,
+) -> (String, String, u16) {
     let verifier = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
     let session_id = uuid::Uuid::new_v4().to_string();
+    let provider_instance_id = provider_instance_id.into();
 
     // Use port 1455 (Codex CLI default) as primary; fall back to app port
     let callback_port = if port_available(CODEX_CALLBACK_PORT) {
@@ -310,6 +315,7 @@ pub async fn start_oauth_session(fallback_port: u16) -> (String, String, u16) {
         verifier,
         redirect_uri,
         created_at: chrono::Utc::now().timestamp(),
+        provider_instance_id,
     };
 
     let mut sessions = PENDING_SESSIONS.lock().await;
@@ -319,21 +325,36 @@ pub async fn start_oauth_session(fallback_port: u16) -> (String, String, u16) {
     (session_id, authorize_url, callback_port)
 }
 
+#[cfg(test)]
+pub async fn pending_session_provider_instance_id(session_id: &str) -> Option<String> {
+    let sessions = PENDING_SESSIONS.lock().await;
+    sessions
+        .get(session_id)
+        .map(|session| session.provider_instance_id.clone())
+}
+
+#[cfg(test)]
+pub async fn clear_pending_sessions_for_test() {
+    let mut sessions = PENDING_SESSIONS.lock().await;
+    sessions.clear();
+}
+
 fn port_available(port: u16) -> bool {
     std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok()
 }
 
-pub async fn exchange_code(
+pub async fn exchange_code_for_session(
     http_client: &reqwest::Client,
     session_id: &str,
     code: &str,
-) -> Result<OAuthTokens, String> {
+) -> Result<(OAuthTokens, String), String> {
     let session = {
         let mut sessions = PENDING_SESSIONS.lock().await;
         sessions
             .remove(session_id)
             .ok_or_else(|| "Invalid or expired OAuth session".to_string())?
     };
+    let provider_instance_id = session.provider_instance_id.clone();
 
     let params = [
         ("grant_type", "authorization_code"),
@@ -389,14 +410,17 @@ pub async fn exchange_code(
         )
     };
 
-    Ok(OAuthTokens {
-        access_token: token_resp.access_token,
-        refresh_token: token_resp.refresh_token,
-        expires_at,
-        openai_api_key,
-        chatgpt_account_id,
-        api_key_exchange_error,
-    })
+    Ok((
+        OAuthTokens {
+            access_token: token_resp.access_token,
+            refresh_token: token_resp.refresh_token,
+            expires_at,
+            openai_api_key,
+            chatgpt_account_id,
+            api_key_exchange_error,
+        },
+        provider_instance_id,
+    ))
 }
 
 pub async fn refresh_access_token(
@@ -500,13 +524,10 @@ async fn obtain_openai_api_key(
     Ok(body.access_token)
 }
 
-/// Starts a temporary HTTP listener on the given port to handle the OAuth callback.
-/// Returns a JoinHandle that resolves when the callback is received or timeout expires.
-/// The callback exchanges the authorization code for tokens and returns them.
 pub async fn start_callback_listener(
     port: u16,
     http_client: reqwest::Client,
-) -> Result<tokio::task::JoinHandle<Option<OAuthTokens>>, String> {
+) -> Result<tokio::task::JoinHandle<Option<(OAuthTokens, String)>>, String> {
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
         .map_err(|e| format!("Cannot bind callback listener on port {}: {}", port, e))?;
@@ -600,8 +621,8 @@ pub async fn start_callback_listener(
             }
         };
 
-        match exchange_code(&http_client, &session_id, &code).await {
-            Ok(tokens) => {
+        match exchange_code_for_session(&http_client, &session_id, &code).await {
+            Ok((tokens, provider_instance_id)) => {
                 send_http_response(
                     &mut stream,
                     200,
@@ -611,7 +632,7 @@ pub async fn start_callback_listener(
                     ),
                 )
                 .await;
-                Some(tokens)
+                Some((tokens, provider_instance_id))
             }
             Err(e) => {
                 tracing::warn!("OpenAI Codex OAuth: token exchange failed: {}", e);
@@ -686,6 +707,18 @@ fn callback_html(success: bool, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pending_oauth_session_tracks_provider_instance_id() {
+        clear_pending_sessions_for_test().await;
+        let (session_id, _authorize_url, _callback_port) =
+            start_oauth_session(8001, "openai_codex_work").await;
+
+        let provider_instance_id = pending_session_provider_instance_id(&session_id).await;
+        assert_eq!(provider_instance_id.as_deref(), Some("openai_codex_work"));
+
+        clear_pending_sessions_for_test().await;
+    }
 
     #[test]
     fn raw_callback_http_response_includes_csp() {

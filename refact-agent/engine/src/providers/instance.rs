@@ -193,9 +193,10 @@ impl ProviderTrait for ProviderInstance {
         &mut self,
         http_client: &reqwest::Client,
         config_dir: &Path,
+        _instance_id: &str,
     ) -> Result<(), String> {
         self.inner
-            .startup_refresh_and_sync(http_client, config_dir)
+            .startup_refresh_and_sync(http_client, config_dir, &self.instance_id)
             .await
     }
 

@@ -55,9 +55,13 @@ impl ClaudeCodeProvider {
         now_ms >= expires_at - REFRESH_BEFORE_EXPIRY_MS
     }
 
-    async fn save_oauth_tokens_config(&self, config_dir: &std::path::Path) -> Result<(), String> {
+    async fn save_oauth_tokens_config(
+        &self,
+        config_dir: &std::path::Path,
+        instance_id: &str,
+    ) -> Result<(), String> {
         let providers_dir = config_dir.join("providers.d");
-        let config_path = providers_dir.join("claude_code.yaml");
+        let config_path = providers_dir.join(format!("{}.yaml", instance_id));
 
         tokio::fs::create_dir_all(&providers_dir)
             .await
@@ -617,6 +621,7 @@ available:
         &mut self,
         http_client: &reqwest::Client,
         config_dir: &std::path::Path,
+        instance_id: &str,
     ) -> Result<(), String> {
         if self.oauth_tokens.is_empty() || self.oauth_tokens.refresh_token.is_empty() {
             return Ok(());
@@ -636,7 +641,7 @@ available:
             Ok(refreshed) => refreshed,
             Err(e) if crate::providers::oauth_refresh::is_permanent_refresh_error(&e) => {
                 crate::providers::oauth_refresh::mark_invalid_refresh_token(
-                    "claude_code",
+                    instance_id,
                     &self.oauth_tokens.refresh_token,
                 );
                 tracing::warn!(
@@ -644,7 +649,8 @@ available:
                     e
                 );
                 self.oauth_tokens = OAuthTokens::default();
-                self.save_oauth_tokens_config(config_dir).await?;
+                self.save_oauth_tokens_config(config_dir, instance_id)
+                    .await?;
                 return Ok(());
             }
             Err(e) => return Err(e),
@@ -656,7 +662,7 @@ available:
         }
         self.oauth_tokens.expires_at = refreshed.expires_at;
 
-        self.save_oauth_tokens_config(config_dir).await
+        self.save_oauth_tokens_config(config_dir, instance_id).await
     }
 }
 

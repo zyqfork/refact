@@ -224,8 +224,9 @@ pub async fn load_providers_from_config(
     }
 
     for provider in registry.providers.iter_mut() {
+        let instance_id = provider.name().to_string();
         if let Err(e) = provider
-            .startup_refresh_and_sync(http_client, config_dir)
+            .startup_refresh_and_sync(http_client, config_dir, &instance_id)
             .await
         {
             tracing::warn!(

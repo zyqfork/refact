@@ -1,20 +1,18 @@
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock as ARwLock;
 
 use crate::global_context::GlobalContext;
 use crate::providers::create_provider;
 
 const REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
-const REFRESH_BEFORE_EXPIRY_MS: i64 = 5 * 60 * 1000; // 5 minutes before expiry
-
-static CLAUDE_CODE_OAUTH_FAILED: AtomicBool = AtomicBool::new(false);
-static OPENAI_CODEX_OAUTH_FAILED: AtomicBool = AtomicBool::new(false);
+const REFRESH_BEFORE_EXPIRY_MS: i64 = 5 * 60 * 1000;
 
 lazy_static::lazy_static! {
     static ref INVALID_REFRESH_TOKENS: std::sync::Mutex<HashSet<String>> =
+        std::sync::Mutex::new(HashSet::new());
+    static ref OAUTH_FAILED_INSTANCES: std::sync::Mutex<HashSet<String>> =
         std::sync::Mutex::new(HashSet::new());
 }
 
@@ -48,6 +46,56 @@ fn refresh_token_key(provider_name: &str, refresh_token: &str) -> String {
     format!("{}:{:x}", provider_name, hasher.finish())
 }
 
+fn mark_oauth_failure(instance_id: &str) -> bool {
+    OAUTH_FAILED_INSTANCES
+        .lock()
+        .map(|mut failures| failures.insert(instance_id.to_string()))
+        .unwrap_or(true)
+}
+
+fn clear_oauth_failure(instance_id: &str) -> bool {
+    OAUTH_FAILED_INSTANCES
+        .lock()
+        .map(|mut failures| failures.remove(instance_id))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn oauth_failed_instance_count_for_test() -> usize {
+    OAUTH_FAILED_INSTANCES
+        .lock()
+        .map(|failures| failures.len())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn clear_refresh_tracking_for_test() {
+    if let Ok(mut failures) = OAUTH_FAILED_INSTANCES.lock() {
+        failures.clear();
+    }
+    if let Ok(mut tokens) = INVALID_REFRESH_TOKENS.lock() {
+        tokens.clear();
+    }
+}
+
+#[cfg(test)]
+fn collect_oauth_refresh_instances_for_base(
+    providers: Vec<(String, String)>,
+    base_provider: &str,
+) -> Vec<String> {
+    providers
+        .into_iter()
+        .filter_map(|(instance_id, base)| (base == base_provider).then_some(instance_id))
+        .collect()
+}
+
+#[derive(Clone)]
+struct OAuthRefreshCandidate<T> {
+    instance_id: String,
+    display_name: String,
+    oauth_tokens: T,
+}
+
 pub async fn oauth_token_refresh_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
     loop {
         let shutdown_flag = gcx.read().await.shutdown_flag.clone();
@@ -75,29 +123,50 @@ async fn try_refresh_all_providers(gcx: &Arc<ARwLock<GlobalContext>>) -> () {
         )
     };
 
-    try_refresh_claude_code(gcx, &http_client, &config_dir).await;
-    try_refresh_openai_codex(gcx, &http_client, &config_dir).await;
+    try_refresh_claude_code_instances(gcx, &http_client, &config_dir).await;
+    try_refresh_openai_codex_instances(gcx, &http_client, &config_dir).await;
+}
+
+async fn try_refresh_claude_code_instances(
+    gcx: &Arc<ARwLock<GlobalContext>>,
+    http_client: &reqwest::Client,
+    config_dir: &std::path::Path,
+) {
+    let candidates = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        registry
+            .iter()
+            .filter(|(_, provider)| provider.base_provider_name() == "claude_code")
+            .filter_map(|(_, provider)| {
+                let oauth_tokens = provider
+                    .as_any()
+                    .downcast_ref::<crate::providers::claude_code::ClaudeCodeProvider>()?
+                    .oauth_tokens
+                    .clone();
+                Some(OAuthRefreshCandidate {
+                    instance_id: provider.name().to_string(),
+                    display_name: provider.display_name().to_string(),
+                    oauth_tokens,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for candidate in candidates {
+        try_refresh_claude_code(gcx, http_client, config_dir, candidate).await;
+    }
 }
 
 async fn try_refresh_claude_code(
     gcx: &Arc<ARwLock<GlobalContext>>,
     http_client: &reqwest::Client,
     config_dir: &std::path::Path,
+    candidate: OAuthRefreshCandidate<crate::providers::claude_code_oauth::OAuthTokens>,
 ) {
-    let oauth_tokens = {
-        let gcx_locked = gcx.read().await;
-        let registry = gcx_locked.providers.read().await;
-        let provider = match registry.get("claude_code") {
-            Some(p) => p,
-            None => return,
-        };
-        let any = provider.as_any();
-        let cc = match any.downcast_ref::<crate::providers::claude_code::ClaudeCodeProvider>() {
-            Some(p) => p,
-            None => return,
-        };
-        cc.oauth_tokens.clone()
-    };
+    let oauth_tokens = candidate.oauth_tokens;
+    let instance_id = candidate.instance_id;
+    let display_name = candidate.display_name;
 
     if oauth_tokens.is_empty() || oauth_tokens.refresh_token.is_empty() {
         return;
@@ -107,12 +176,13 @@ async fn try_refresh_claude_code(
         return;
     }
 
-    if is_invalid_refresh_token("claude_code", &oauth_tokens.refresh_token) {
+    if is_invalid_refresh_token(&instance_id, &oauth_tokens.refresh_token) {
         return;
     }
 
     tracing::info!(
-        "Claude Code: refreshing OAuth token (expires_at={})",
+        "{}: refreshing OAuth token (expires_at={})",
+        display_name,
         oauth_tokens.expires_at
     );
 
@@ -123,25 +193,27 @@ async fn try_refresh_claude_code(
     .await
     {
         Ok(new_tokens) => {
-            tracing::info!("Claude Code: OAuth token refreshed successfully");
+            tracing::info!("{}: OAuth token refreshed successfully", display_name);
             if let Err(e) = save_refreshed_tokens(
                 gcx,
                 config_dir,
+                &instance_id,
                 "claude_code",
+                &display_name,
                 &new_tokens.access_token,
                 &new_tokens.refresh_token,
                 new_tokens.expires_at,
             )
             .await
             {
-                tracing::warn!("Claude Code: failed to save refreshed tokens: {}", e);
+                tracing::warn!("{}: failed to save refreshed tokens: {}", display_name, e);
             }
-            if CLAUDE_CODE_OAUTH_FAILED.swap(false, Ordering::SeqCst) {
+            if clear_oauth_failure(&instance_id) {
                 let ev = crate::buddy::actor::make_runtime_event(
                     "connection_restored",
-                    "Claude Code: OAuth token refreshed",
+                    &format!("{}: OAuth token refreshed", display_name),
                     "provider",
-                    "oauth_claude_code",
+                    &format!("oauth_{}", instance_id),
                     "completed",
                     None,
                 );
@@ -149,31 +221,46 @@ async fn try_refresh_claude_code(
             }
         }
         Err(e) => {
-            let first_failure = !CLAUDE_CODE_OAUTH_FAILED.swap(true, Ordering::SeqCst);
+            let first_failure = mark_oauth_failure(&instance_id);
             if is_permanent_refresh_error(&e) {
-                mark_invalid_refresh_token("claude_code", &oauth_tokens.refresh_token);
+                mark_invalid_refresh_token(&instance_id, &oauth_tokens.refresh_token);
                 if first_failure {
                     tracing::warn!(
-                        "Claude Code: OAuth refresh token is invalid; clearing saved OAuth tokens. Please log in again: {}",
+                        "{}: OAuth refresh token is invalid; clearing saved OAuth tokens. Please log in again: {}",
+                        display_name,
                         e
                     );
                 } else {
-                    tracing::debug!("Claude Code: OAuth refresh token is still invalid: {}", e);
+                    tracing::debug!(
+                        "{}: OAuth refresh token is still invalid: {}",
+                        display_name,
+                        e
+                    );
                 }
-                if let Err(save_err) =
-                    save_refreshed_tokens(gcx, config_dir, "claude_code", "", "", 0).await
+                if let Err(save_err) = save_refreshed_tokens(
+                    gcx,
+                    config_dir,
+                    &instance_id,
+                    "claude_code",
+                    &display_name,
+                    "",
+                    "",
+                    0,
+                )
+                .await
                 {
                     tracing::warn!(
-                        "Claude Code: failed to clear invalid OAuth tokens: {}",
+                        "{}: failed to clear invalid OAuth tokens: {}",
+                        display_name,
                         save_err
                     );
                 }
                 if first_failure {
                     let ev = crate::buddy::actor::make_runtime_event(
                         "connection_lost",
-                        "Claude Code OAuth expired — please log in again",
+                        &format!("{} OAuth expired — please log in again", display_name),
                         "provider",
-                        "oauth_claude_code",
+                        &format!("oauth_{}", instance_id),
                         "failed",
                         Some("high"),
                     );
@@ -182,20 +269,51 @@ async fn try_refresh_claude_code(
                 return;
             }
             if first_failure {
-                tracing::warn!("Claude Code: OAuth token refresh failed: {}", e);
+                tracing::warn!("{}: OAuth token refresh failed: {}", display_name, e);
                 let ev = crate::buddy::actor::make_runtime_event(
                     "connection_lost",
-                    "Claude Code: OAuth refresh failed",
+                    &format!("{}: OAuth refresh failed", display_name),
                     "provider",
-                    "oauth_claude_code",
+                    &format!("oauth_{}", instance_id),
                     "failed",
                     Some("high"),
                 );
                 crate::buddy::actor::buddy_enqueue_event((*gcx).clone(), ev).await;
             } else {
-                tracing::debug!("Claude Code: OAuth token refresh still failing: {}", e);
+                tracing::debug!("{}: OAuth token refresh still failing: {}", display_name, e);
             }
         }
+    }
+}
+
+async fn try_refresh_openai_codex_instances(
+    gcx: &Arc<ARwLock<GlobalContext>>,
+    http_client: &reqwest::Client,
+    config_dir: &std::path::Path,
+) {
+    let candidates = {
+        let gcx_locked = gcx.read().await;
+        let registry = gcx_locked.providers.read().await;
+        registry
+            .iter()
+            .filter(|(_, provider)| provider.base_provider_name() == "openai_codex")
+            .filter_map(|(_, provider)| {
+                let oauth_tokens = provider
+                    .as_any()
+                    .downcast_ref::<crate::providers::openai_codex::OpenAICodexProvider>()?
+                    .oauth_tokens
+                    .clone();
+                Some(OAuthRefreshCandidate {
+                    instance_id: provider.name().to_string(),
+                    display_name: provider.display_name().to_string(),
+                    oauth_tokens,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for candidate in candidates {
+        try_refresh_openai_codex(gcx, http_client, config_dir, candidate).await;
     }
 }
 
@@ -203,21 +321,11 @@ async fn try_refresh_openai_codex(
     gcx: &Arc<ARwLock<GlobalContext>>,
     http_client: &reqwest::Client,
     config_dir: &std::path::Path,
+    candidate: OAuthRefreshCandidate<crate::providers::openai_codex_oauth::OAuthTokens>,
 ) {
-    let oauth_tokens = {
-        let gcx_locked = gcx.read().await;
-        let registry = gcx_locked.providers.read().await;
-        let provider = match registry.get("openai_codex") {
-            Some(p) => p,
-            None => return,
-        };
-        let any = provider.as_any();
-        let oc = match any.downcast_ref::<crate::providers::openai_codex::OpenAICodexProvider>() {
-            Some(p) => p,
-            None => return,
-        };
-        oc.oauth_tokens.clone()
-    };
+    let oauth_tokens = candidate.oauth_tokens;
+    let instance_id = candidate.instance_id;
+    let display_name = candidate.display_name;
 
     if oauth_tokens.is_empty() || oauth_tokens.refresh_token.is_empty() {
         return;
@@ -227,12 +335,13 @@ async fn try_refresh_openai_codex(
         return;
     }
 
-    if is_invalid_refresh_token("openai_codex", &oauth_tokens.refresh_token) {
+    if is_invalid_refresh_token(&instance_id, &oauth_tokens.refresh_token) {
         return;
     }
 
     tracing::info!(
-        "OpenAI Codex: refreshing OAuth token (expires_at={})",
+        "{}: refreshing OAuth token (expires_at={})",
+        display_name,
         oauth_tokens.expires_at
     );
 
@@ -243,25 +352,27 @@ async fn try_refresh_openai_codex(
     .await
     {
         Ok(new_tokens) => {
-            tracing::info!("OpenAI Codex: OAuth token refreshed successfully");
+            tracing::info!("{}: OAuth token refreshed successfully", display_name);
             if let Err(e) = save_refreshed_tokens(
                 gcx,
                 config_dir,
+                &instance_id,
                 "openai_codex",
+                &display_name,
                 &new_tokens.access_token,
                 &new_tokens.refresh_token,
                 new_tokens.expires_at,
             )
             .await
             {
-                tracing::warn!("OpenAI Codex: failed to save refreshed tokens: {}", e);
+                tracing::warn!("{}: failed to save refreshed tokens: {}", display_name, e);
             }
-            if OPENAI_CODEX_OAUTH_FAILED.swap(false, Ordering::SeqCst) {
+            if clear_oauth_failure(&instance_id) {
                 let ev = crate::buddy::actor::make_runtime_event(
                     "connection_restored",
-                    "OpenAI Codex: OAuth token refreshed",
+                    &format!("{}: OAuth token refreshed", display_name),
                     "provider",
-                    "oauth_openai_codex",
+                    &format!("oauth_{}", instance_id),
                     "completed",
                     None,
                 );
@@ -269,31 +380,49 @@ async fn try_refresh_openai_codex(
             }
         }
         Err(e) => {
-            let first_failure = !OPENAI_CODEX_OAUTH_FAILED.swap(true, Ordering::SeqCst);
+            let first_failure = mark_oauth_failure(&instance_id);
             if is_permanent_refresh_error(&e) {
-                mark_invalid_refresh_token("openai_codex", &oauth_tokens.refresh_token);
+                mark_invalid_refresh_token(&instance_id, &oauth_tokens.refresh_token);
                 if first_failure {
                     tracing::warn!(
-                        "OpenAI Codex: OAuth refresh token is invalid; clearing saved refresh token. Please log in again if Codex stops working: {}",
+                        "{}: OAuth refresh token is invalid; clearing saved refresh token. Please log in again if Codex stops working: {}",
+                        display_name,
                         e
                     );
                 } else {
-                    tracing::debug!("OpenAI Codex: OAuth refresh token is still invalid: {}", e);
+                    tracing::debug!(
+                        "{}: OAuth refresh token is still invalid: {}",
+                        display_name,
+                        e
+                    );
                 }
-                if let Err(save_err) =
-                    save_refreshed_tokens(gcx, config_dir, "openai_codex", "", "", 0).await
+                if let Err(save_err) = save_refreshed_tokens(
+                    gcx,
+                    config_dir,
+                    &instance_id,
+                    "openai_codex",
+                    &display_name,
+                    "",
+                    "",
+                    0,
+                )
+                .await
                 {
                     tracing::warn!(
-                        "OpenAI Codex: failed to clear invalid OAuth refresh token: {}",
+                        "{}: failed to clear invalid OAuth refresh token: {}",
+                        display_name,
                         save_err
                     );
                 }
                 if first_failure {
                     let ev = crate::buddy::actor::make_runtime_event(
                         "connection_lost",
-                        "OpenAI Codex OAuth expired — please log in again if needed",
+                        &format!(
+                            "{} OAuth expired — please log in again if needed",
+                            display_name
+                        ),
                         "provider",
-                        "oauth_openai_codex",
+                        &format!("oauth_{}", instance_id),
                         "failed",
                         Some("high"),
                     );
@@ -302,18 +431,18 @@ async fn try_refresh_openai_codex(
                 return;
             }
             if first_failure {
-                tracing::warn!("OpenAI Codex: OAuth token refresh failed: {}", e);
+                tracing::warn!("{}: OAuth token refresh failed: {}", display_name, e);
                 let ev = crate::buddy::actor::make_runtime_event(
                     "connection_lost",
-                    "OpenAI Codex: OAuth refresh failed",
+                    &format!("{}: OAuth refresh failed", display_name),
                     "provider",
-                    "oauth_openai_codex",
+                    &format!("oauth_{}", instance_id),
                     "failed",
                     Some("high"),
                 );
                 crate::buddy::actor::buddy_enqueue_event((*gcx).clone(), ev).await;
             } else {
-                tracing::debug!("OpenAI Codex: OAuth token refresh still failing: {}", e);
+                tracing::debug!("{}: OAuth token refresh still failing: {}", display_name, e);
             }
         }
     }
@@ -331,6 +460,8 @@ async fn save_refreshed_tokens(
     gcx: &Arc<ARwLock<GlobalContext>>,
     config_dir: &std::path::Path,
     provider_name: &str,
+    base_provider: &str,
+    display_name: &str,
     access_token: &str,
     refresh_token: &str,
     expires_at: i64,
@@ -355,7 +486,15 @@ async fn save_refreshed_tokens(
         serde_yaml::Mapping::new()
     };
 
-    // Preserve any additional OAuth fields already stored (e.g. openai_api_key)
+    yaml_map.insert(
+        serde_yaml::Value::String("base_provider".to_string()),
+        serde_yaml::Value::String(base_provider.to_string()),
+    );
+    yaml_map.insert(
+        serde_yaml::Value::String("display_name".to_string()),
+        serde_yaml::Value::String(display_name.to_string()),
+    );
+
     let mut tokens_map = yaml_map
         .get(&serde_yaml::Value::String("oauth_tokens".to_string()))
         .and_then(|v| v.as_mapping())
@@ -409,12 +548,21 @@ async fn save_refreshed_tokens(
         let yaml: serde_yaml::Value = serde_yaml::from_str(&full_content)
             .map_err(|e| format!("Invalid YAML after save: {}", e))?;
 
-        let mut provider = create_provider(provider_name)
-            .ok_or_else(|| format!("Failed to create provider '{}'", provider_name))?;
+        let mut provider = create_provider(base_provider)
+            .ok_or_else(|| format!("Failed to create provider '{}'", base_provider))?;
         provider
             .provider_settings_apply(yaml)
             .map_err(|e| format!("Failed to apply settings: {}", e))?;
-        registry.add(provider);
+        if provider_name == base_provider {
+            registry.add(provider);
+        } else {
+            registry.add(Box::new(crate::providers::instance::ProviderInstance::new(
+                provider_name.to_string(),
+                base_provider.to_string(),
+                display_name.to_string(),
+                provider,
+            )));
+        }
     }
 
     {
@@ -440,5 +588,50 @@ mod tests {
         assert!(!super::is_permanent_refresh_error(
             "Token refresh request failed: operation timed out"
         ));
+    }
+
+    #[test]
+    fn invalid_refresh_token_tracking_is_per_instance() {
+        super::clear_refresh_tracking_for_test();
+        super::mark_invalid_refresh_token("openai_codex", "same-refresh-token");
+
+        assert!(super::is_invalid_refresh_token(
+            "openai_codex",
+            "same-refresh-token"
+        ));
+        assert!(!super::is_invalid_refresh_token(
+            "openai_codex_2",
+            "same-refresh-token"
+        ));
+
+        super::clear_refresh_tracking_for_test();
+    }
+
+    #[test]
+    fn oauth_failure_tracking_is_per_instance() {
+        super::clear_refresh_tracking_for_test();
+
+        assert!(super::mark_oauth_failure("claude_code"));
+        assert!(super::mark_oauth_failure("claude_code_2"));
+        assert!(!super::mark_oauth_failure("claude_code"));
+        assert_eq!(super::oauth_failed_instance_count_for_test(), 2);
+        assert!(super::clear_oauth_failure("claude_code"));
+        assert_eq!(super::oauth_failed_instance_count_for_test(), 1);
+
+        super::clear_refresh_tracking_for_test();
+    }
+
+    #[test]
+    fn oauth_refresh_helper_collects_all_instances_for_base() {
+        let providers = vec![
+            ("claude_code".to_string(), "claude_code".to_string()),
+            ("claude_code_work".to_string(), "claude_code".to_string()),
+            ("openai_codex".to_string(), "openai_codex".to_string()),
+        ];
+
+        assert_eq!(
+            super::collect_oauth_refresh_instances_for_base(providers, "claude_code"),
+            vec!["claude_code".to_string(), "claude_code_work".to_string()]
+        );
     }
 }

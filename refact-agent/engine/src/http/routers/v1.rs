@@ -40,16 +40,18 @@ use crate::http::routers::v1::gui_help_handlers::handle_v1_fullpath;
 use crate::http::routers::v1::sync_files::handle_v1_sync_files_extract_tar;
 use crate::http::routers::v1::system_prompt::handle_v1_prepend_system_prompt_and_maybe_more_initial_messages;
 use crate::providers::http::{
-    handle_v1_providers_list, handle_v1_provider_get, handle_v1_provider_schema,
-    handle_v1_provider_update, handle_v1_provider_delete, handle_v1_provider_models,
-    handle_v1_provider_available_models, handle_v1_provider_model_toggle,
-    handle_v1_provider_model_provider_update, handle_v1_openrouter_model_endpoints,
-    handle_v1_provider_add_custom_model, handle_v1_provider_remove_custom_model,
-    handle_v1_provider_remove_custom_model_post, handle_v1_defaults_get, handle_v1_defaults_update,
-    handle_v1_models, handle_v1_provider_oauth_start, handle_v1_provider_oauth_exchange,
-    handle_v1_provider_oauth_logout, handle_v1_provider_oauth_callback,
-    handle_v1_openrouter_account_info, handle_v1_openrouter_health, handle_v1_google_gemini_health,
-    handle_v1_claude_code_usage, handle_v1_openai_codex_usage,
+    handle_v1_claude_code_usage, handle_v1_defaults_get, handle_v1_defaults_update,
+    handle_v1_google_gemini_health, handle_v1_models, handle_v1_openai_codex_usage,
+    handle_v1_openrouter_account_info, handle_v1_openrouter_health,
+    handle_v1_openrouter_model_endpoints, handle_v1_provider_account_info,
+    handle_v1_provider_add_custom_model, handle_v1_provider_available_models,
+    handle_v1_provider_delete, handle_v1_provider_get, handle_v1_provider_health,
+    handle_v1_provider_model_provider_update, handle_v1_provider_model_toggle,
+    handle_v1_provider_models, handle_v1_provider_oauth_callback,
+    handle_v1_provider_oauth_exchange, handle_v1_provider_oauth_logout,
+    handle_v1_provider_oauth_start, handle_v1_provider_remove_custom_model,
+    handle_v1_provider_remove_custom_model_post, handle_v1_provider_schema,
+    handle_v1_provider_update, handle_v1_provider_usage, handle_v1_providers_list,
 };
 
 use crate::http::routers::v1::vecdb::{handle_v1_vecdb_search, handle_v1_vecdb_status};
@@ -359,6 +361,12 @@ pub fn make_v1_router() -> Router {
             "/openrouter/account-info",
             get(handle_v1_openrouter_account_info),
         )
+        .route(
+            "/providers/:name/account-info",
+            get(handle_v1_provider_account_info),
+        )
+        .route("/providers/:name/health", get(handle_v1_provider_health))
+        .route("/providers/:name/usage", get(handle_v1_provider_usage))
         .route(
             "/providers/:name/oauth/start",
             post(handle_v1_provider_oauth_start),

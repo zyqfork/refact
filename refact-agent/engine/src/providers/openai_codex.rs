@@ -207,9 +207,13 @@ impl OpenAICodexProvider {
         now_ms >= expires_at - REFRESH_BEFORE_EXPIRY_MS
     }
 
-    async fn save_oauth_tokens_config(&self, config_dir: &std::path::Path) -> Result<(), String> {
+    async fn save_oauth_tokens_config(
+        &self,
+        config_dir: &std::path::Path,
+        instance_id: &str,
+    ) -> Result<(), String> {
         let providers_dir = config_dir.join("providers.d");
-        let config_path = providers_dir.join("openai_codex.yaml");
+        let config_path = providers_dir.join(format!("{}.yaml", instance_id));
 
         tokio::fs::create_dir_all(&providers_dir)
             .await
@@ -1103,6 +1107,7 @@ impl OpenAICodexProvider {
         &mut self,
         http_client: &reqwest::Client,
         config_dir: &std::path::Path,
+        instance_id: &str,
     ) -> Result<Option<String>, String> {
         if self.oauth_tokens.refresh_token.is_empty() {
             return Ok(None);
@@ -1117,11 +1122,12 @@ impl OpenAICodexProvider {
             Ok(refreshed) => refreshed,
             Err(e) if crate::providers::oauth_refresh::is_permanent_refresh_error(&e) => {
                 crate::providers::oauth_refresh::mark_invalid_refresh_token(
-                    "openai_codex",
+                    instance_id,
                     &self.oauth_tokens.refresh_token,
                 );
                 self.clear_tokens_after_permanent_refresh_error();
-                self.save_oauth_tokens_config(config_dir).await?;
+                self.save_oauth_tokens_config(config_dir, instance_id)
+                    .await?;
                 return Err(format!(
                     "OpenAI Codex OAuth refresh token is invalid. Please log in again in OpenAI Codex provider settings: {}",
                     e
@@ -1138,7 +1144,8 @@ impl OpenAICodexProvider {
         let refreshed = self.merge_refreshed_tokens(refreshed);
         let access_token = refreshed.access_token.clone();
         self.oauth_tokens = refreshed;
-        self.save_oauth_tokens_config(config_dir).await?;
+        self.save_oauth_tokens_config(config_dir, instance_id)
+            .await?;
         Ok((!access_token.is_empty()).then_some(access_token))
     }
 
@@ -1469,6 +1476,7 @@ available:
         &mut self,
         http_client: &reqwest::Client,
         config_dir: &std::path::Path,
+        instance_id: &str,
     ) -> Result<(), String> {
         if self.oauth_tokens.is_empty() || self.oauth_tokens.refresh_token.is_empty() {
             return Ok(());
@@ -1488,7 +1496,7 @@ available:
             Ok(refreshed) => refreshed,
             Err(e) if crate::providers::oauth_refresh::is_permanent_refresh_error(&e) => {
                 crate::providers::oauth_refresh::mark_invalid_refresh_token(
-                    "openai_codex",
+                    instance_id,
                     &self.oauth_tokens.refresh_token,
                 );
                 tracing::warn!(
@@ -1498,7 +1506,8 @@ available:
                 self.oauth_tokens.access_token.clear();
                 self.oauth_tokens.refresh_token.clear();
                 self.oauth_tokens.expires_at = 0;
-                self.save_oauth_tokens_config(config_dir).await?;
+                self.save_oauth_tokens_config(config_dir, instance_id)
+                    .await?;
                 return Ok(());
             }
             Err(e) => return Err(e),
@@ -1515,7 +1524,7 @@ available:
         }
 
         self.oauth_tokens = refreshed;
-        self.save_oauth_tokens_config(config_dir).await
+        self.save_oauth_tokens_config(config_dir, instance_id).await
     }
 }
 
