@@ -229,7 +229,7 @@ fn push_payload_string(lines: &mut Vec<String>, label: &str, value: &serde_json:
 }
 
 fn payload_string_array(value: &serde_json::Value, key: &str, max: usize) -> Vec<String> {
-    value
+    let mut items: Vec<String> = value
         .get(key)
         .and_then(|v| v.as_array())
         .map(|items| {
@@ -238,10 +238,13 @@ fn payload_string_array(value: &serde_json::Value, key: &str, max: usize) -> Vec
                 .filter_map(|item| item.as_str())
                 .map(|item| redact_and_cap_text(item, 120))
                 .filter(|item| !item.is_empty())
-                .take(max)
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    items.sort();
+    items.dedup();
+    items.truncate(max);
+    items
 }
 
 fn memory_fact_to_evidence_line(fact: &BuddyFact) -> String {
@@ -263,17 +266,9 @@ fn memory_fact_to_evidence_line(fact: &BuddyFact) -> String {
     if !doc_ids.is_empty() {
         parts.push(format!("doc_ids={}", doc_ids.join(", ")));
     }
-    if let Some(tags) = fact.payload.get("tags").and_then(|v| v.as_array()) {
-        let tags = tags
-            .iter()
-            .filter_map(|tag| tag.as_str())
-            .map(|tag| redact_and_cap_text(tag, 80))
-            .filter(|tag| !tag.is_empty())
-            .take(8)
-            .collect::<Vec<_>>();
-        if !tags.is_empty() {
-            parts.push(format!("tags={}", tags.join(", ")));
-        }
+    let tags = payload_string_array(&fact.payload, "tags", 8);
+    if !tags.is_empty() {
+        parts.push(format!("tags={}", tags.join(", ")));
     }
     if let Some(title) = fact.payload.get("title").and_then(|v| v.as_str()) {
         parts.push(format!("title={}", redact_and_cap_text(title, 160)));
@@ -346,7 +341,35 @@ fn memory_gardener_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence>
     })
 }
 
+fn stale_conflict_fact_actionable(fact: &BuddyFact) -> bool {
+    if fact.kind != BuddyFactKind::MemoryStaleConflict {
+        return false;
+    }
+    !payload_string_array(&fact.payload, "doc_ids", 1).is_empty()
+        || !payload_string_array(&fact.payload, "memory_ids", 1).is_empty()
+        || fact
+            .payload
+            .get("conflict_summary")
+            .or_else(|| fact.payload.get("summary"))
+            .and_then(|v| v.as_str())
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false)
+}
+
 fn knowledge_conflict_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEvidence> {
+    let facts = stable_facts(ctx.facts.iter().filter(|fact| {
+        matches!(
+            memory_route_for_fact_kind(fact.kind),
+            Some(MemoryRouting::KnowledgeConflictResolver)
+        ) && stale_conflict_fact_actionable(fact)
+    }))
+    .into_iter()
+    .take(MAX_FACT_EVIDENCE_ITEMS)
+    .collect::<Vec<_>>();
+    if facts.is_empty() {
+        return None;
+    }
+
     let mut lines = Vec::new();
     if ctx.pulse.memory.stale_conflicts > 0 {
         lines.push(format!(
@@ -354,21 +377,8 @@ fn knowledge_conflict_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEviden
             ctx.pulse.memory.stale_conflicts
         ));
     }
-    for fact in stable_facts(ctx.facts.iter().filter(|fact| {
-        matches!(
-            memory_route_for_fact_kind(fact.kind),
-            Some(MemoryRouting::KnowledgeConflictResolver)
-        )
-    }))
-    .into_iter()
-    .take(MAX_FACT_EVIDENCE_ITEMS)
-    {
+    for fact in facts {
         lines.push(memory_fact_to_evidence_line(fact));
-    }
-    if !lines.iter().any(|line| {
-        line.contains("memory_stale_conflict") || line.starts_with("memory_pulse stale_conflicts=")
-    }) {
-        return None;
     }
     Some(AutonomousEvidence {
         prompt: "Review stale/conflicting knowledge signals and propose a safe resolution plan. Use only doc ids and conflict summaries from evidence; never infer full document bodies.".to_string(),
@@ -624,15 +634,13 @@ struct BehaviorTrajectoryMeta {
     path: PathBuf,
 }
 
-fn extract_json_string_field(content: &str, field: &str) -> Option<String> {
-    let needle = format!("\"{}\"", field);
-    let start = content.find(&needle)?;
-    let after_field = &content[start + needle.len()..];
-    let colon = after_field.find(':')?;
-    let after_colon = after_field[colon + 1..].trim_start();
-    let value = after_colon.strip_prefix('"')?;
+fn parse_json_string_at(content: &str, start: usize) -> Option<(String, usize)> {
+    if content.as_bytes().get(start) != Some(&b'"') {
+        return None;
+    }
     let mut escaped = false;
-    for (idx, ch) in value.char_indices() {
+    for (offset, ch) in content[start + 1..].char_indices() {
+        let idx = start + 1 + offset;
         if escaped {
             escaped = false;
             continue;
@@ -642,20 +650,117 @@ fn extract_json_string_field(content: &str, field: &str) -> Option<String> {
             continue;
         }
         if ch == '"' {
-            let raw = &value[..idx];
-            return serde_json::from_str::<String>(&format!("\"{}\"", raw)).ok();
+            let raw = &content[start..=idx];
+            let parsed = serde_json::from_str::<String>(raw).ok()?;
+            return Some((parsed, idx + 1));
         }
     }
     None
 }
 
+fn skip_json_ws(content: &str, mut idx: usize) -> usize {
+    let bytes = content.as_bytes();
+    while bytes
+        .get(idx)
+        .map(|byte| byte.is_ascii_whitespace())
+        .unwrap_or(false)
+    {
+        idx += 1;
+    }
+    idx
+}
+
+fn skip_json_value(content: &str, idx: usize) -> Option<usize> {
+    let mut idx = skip_json_ws(content, idx);
+    let bytes = content.as_bytes();
+    match bytes.get(idx).copied()? {
+        b'"' => parse_json_string_at(content, idx).map(|(_, next)| next),
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            while idx < bytes.len() {
+                match bytes[idx] {
+                    b'"' => idx = parse_json_string_at(content, idx)?.1,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        idx += 1;
+                    }
+                    b'}' | b']' => {
+                        depth = depth.checked_sub(1)?;
+                        idx += 1;
+                        if depth == 0 {
+                            return Some(idx);
+                        }
+                    }
+                    _ => idx += 1,
+                }
+            }
+            None
+        }
+        _ => {
+            while idx < bytes.len() && !matches!(bytes[idx], b',' | b'}') {
+                idx += 1;
+            }
+            Some(idx)
+        }
+    }
+}
+
+fn top_level_json_strings(content: &str, fields: &[&str]) -> HashMap<String, String> {
+    let bytes = content.as_bytes();
+    let mut idx = skip_json_ws(content, 0);
+    let mut values = HashMap::new();
+    if bytes.get(idx) != Some(&b'{') {
+        return values;
+    }
+    idx += 1;
+    while idx < bytes.len() {
+        idx = skip_json_ws(content, idx);
+        match bytes.get(idx).copied() {
+            Some(b'}') | None => break,
+            Some(b',') => {
+                idx += 1;
+                continue;
+            }
+            Some(b'"') => {}
+            _ => break,
+        }
+        let Some((key, next)) = parse_json_string_at(content, idx) else {
+            break;
+        };
+        idx = skip_json_ws(content, next);
+        if bytes.get(idx) != Some(&b':') {
+            break;
+        }
+        idx = skip_json_ws(content, idx + 1);
+        if fields.contains(&key.as_str()) && bytes.get(idx) == Some(&b'"') {
+            let Some((value, next)) = parse_json_string_at(content, idx) else {
+                break;
+            };
+            values.entry(key).or_insert(value);
+            idx = next;
+        } else {
+            let Some(next) = skip_json_value(content, idx) else {
+                break;
+            };
+            idx = next;
+        }
+    }
+    values
+}
+
+fn top_level_json_string(content: &str, fields: &[&str]) -> Option<String> {
+    let values = top_level_json_strings(content, fields);
+    fields.iter().find_map(|field| values.get(*field).cloned())
+}
+
 fn parse_behavior_trajectory_meta(content: &str, path: PathBuf) -> Option<BehaviorTrajectoryMeta> {
-    let id = extract_json_string_field(content, "id")?;
-    let updated_at = extract_json_string_field(content, "updated_at")?;
+    let id = top_level_json_string(content, &["id", "chat_id"])?;
+    let updated_at =
+        top_level_json_string(content, &["updated_at", "last_message_at", "created_at"])?;
     Some(BehaviorTrajectoryMeta {
         id,
-        title: extract_json_string_field(content, "title").unwrap_or_default(),
-        mode: extract_json_string_field(content, "mode").unwrap_or_default(),
+        title: top_level_json_string(content, &["title"]).unwrap_or_default(),
+        mode: top_level_json_string(content, &["mode"]).unwrap_or_default(),
         updated_at,
         path,
     })
@@ -692,7 +797,12 @@ fn collect_behavior_trajectory_metas_from_dir(
         if std::io::Read::read_to_string(&mut reader, &mut content).is_err() {
             continue;
         }
-        let Some(meta) = parse_behavior_trajectory_meta(&content, path) else {
+        let meta = parse_behavior_trajectory_meta(&content, path.clone()).or_else(|| {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| parse_behavior_trajectory_meta(&content, path.clone()))
+        });
+        let Some(meta) = meta else {
             continue;
         };
         if seen.insert(meta.id.clone()) {
@@ -2989,7 +3099,62 @@ mod tests {
 
         ctx.facts.clear();
         assert!(memory_gardener_evidence(&ctx).is_none());
+        assert!(knowledge_conflict_evidence(&ctx).is_none());
+    }
+
+    #[test]
+    fn pulse_only_stale_conflict_does_not_trigger_conflict_report() {
+        let mut ctx = context_with_last_result(None);
+        ctx.pulse.memory.stale_conflicts = 3;
+
+        assert!(knowledge_conflict_evidence(&ctx).is_none());
+
+        ctx.facts = vec![test_fact(
+            BuddyFactKind::MemoryStaleConflict,
+            serde_json::json!({"count": 3}),
+        )];
+        assert!(knowledge_conflict_evidence(&ctx).is_none());
+
+        ctx.facts = vec![test_fact(
+            BuddyFactKind::MemoryStaleConflict,
+            serde_json::json!({"summary": "doc-a contradicts doc-b"}),
+        )];
         assert!(knowledge_conflict_evidence(&ctx).is_some());
+    }
+
+    #[test]
+    fn fact_payload_arrays_are_sorted_and_deduped_for_stable_signal() {
+        let mut first = context_with_last_result(None);
+        first.pulse.memory.orphan = 1;
+        first.facts = vec![test_fact(
+            BuddyFactKind::MemoryOrphan,
+            serde_json::json!({
+                "memory_ids": ["mem-b", "mem-a", "mem-b"],
+                "doc_ids": ["doc-c", "doc-a", "doc-c"],
+                "tags": ["rust", "agent", "rust"]
+            }),
+        )];
+        let mut second = context_with_last_result(None);
+        second.pulse.memory.orphan = 1;
+        second.facts = vec![test_fact(
+            BuddyFactKind::MemoryOrphan,
+            serde_json::json!({
+                "memory_ids": ["mem-a", "mem-b"],
+                "doc_ids": ["doc-a", "doc-c"],
+                "tags": ["agent", "rust"]
+            }),
+        )];
+
+        let first_evidence = memory_gardener_evidence(&first).unwrap();
+        let second_evidence = memory_gardener_evidence(&second).unwrap();
+        let first_spec = build_spec("buddy_memory_gardener", first_evidence.clone());
+        let second_spec = build_spec("buddy_memory_gardener", second_evidence.clone());
+
+        assert_eq!(first_evidence.evidence, second_evidence.evidence);
+        assert!(first_evidence.evidence.contains("memory_ids=mem-a, mem-b"));
+        assert!(first_evidence.evidence.contains("doc_ids=doc-a, doc-c"));
+        assert!(first_evidence.evidence.contains("tags=agent, rust"));
+        assert_eq!(first_spec.signal_hash, second_spec.signal_hash);
     }
 
     #[test]
@@ -3131,6 +3296,49 @@ mod tests {
 
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].id, "small");
+    }
+
+    #[test]
+    fn behavior_trajectory_meta_accepts_realistic_schema_aliases() {
+        let path = PathBuf::from("realistic.json");
+        let meta = parse_behavior_trajectory_meta(
+            &serde_json::json!({
+                "chat_id": "chat-realistic",
+                "title": "Realistic Chat",
+                "mode": "agent",
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_message_at": "2026-01-02T00:00:00Z",
+                "messages": [{
+                    "id": "nested-message-id",
+                    "role": "user",
+                    "content": "I prefer concise answers."
+                }]
+            })
+            .to_string(),
+            path.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(meta.id, "chat-realistic");
+        assert_eq!(meta.title, "Realistic Chat");
+        assert_eq!(meta.mode, "agent");
+        assert_eq!(meta.updated_at, "2026-01-02T00:00:00Z");
+        assert_eq!(meta.path, path);
+    }
+
+    #[test]
+    fn behavior_trajectory_meta_uses_top_level_id_only() {
+        let meta = parse_behavior_trajectory_meta(
+            &serde_json::json!({
+                "title": "Nested Only",
+                "created_at": "2026-01-01T00:00:00Z",
+                "messages": [{"id": "nested-message-id", "role": "user"}]
+            })
+            .to_string(),
+            PathBuf::from("nested.json"),
+        );
+
+        assert!(meta.is_none());
     }
 
     #[test]

@@ -1,9 +1,14 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::stats::event::{LlmCallEvent, canonicalize_mode_for_stats};
+
+const RECENT_STATS_MIN_TAIL_BYTES: u64 = 64 * 1024;
+const RECENT_STATS_MAX_TAIL_BYTES: u64 = 2 * 1024 * 1024;
+const RECENT_STATS_BYTES_PER_EVENT: u64 = 4 * 1024;
 
 #[allow(dead_code)]
 pub fn read_all_stats_events(stats_dir: &Path) -> Vec<LlmCallEvent> {
@@ -23,11 +28,11 @@ pub fn read_stats_events_from_dirs(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Vec<LlmCallEvent> {
+    let mut seen_ids = HashSet::new();
     let mut all_events = Vec::new();
-    let mut seen_prior_dir_ids = HashSet::new();
     for stats_dir in stats_dirs {
         let dir_events = read_stats_events_from_single_dir(stats_dir, from, to);
-        merge_dir_events(&mut all_events, &mut seen_prior_dir_ids, dir_events);
+        merge_events(&mut all_events, &mut seen_ids, dir_events);
     }
     sort_events(&mut all_events);
     all_events
@@ -40,11 +45,11 @@ pub fn read_recent_stats_events_from_dirs(
     if max_events == 0 {
         return Vec::new();
     }
+    let mut seen_ids = HashSet::new();
     let mut all_events = Vec::new();
-    let mut seen_prior_dir_ids = HashSet::new();
     for stats_dir in stats_dirs {
         let dir_events = read_recent_stats_events_from_single_dir(stats_dir, max_events);
-        merge_dir_events(&mut all_events, &mut seen_prior_dir_ids, dir_events);
+        merge_events(&mut all_events, &mut seen_ids, dir_events);
     }
     sort_events(&mut all_events);
     if all_events.len() > max_events {
@@ -53,22 +58,23 @@ pub fn read_recent_stats_events_from_dirs(
     all_events
 }
 
-fn merge_dir_events(
+fn merge_events(
     all_events: &mut Vec<LlmCallEvent>,
-    seen_prior_dir_ids: &mut HashSet<String>,
-    dir_events: Vec<LlmCallEvent>,
+    seen_ids: &mut HashSet<String>,
+    events: Vec<LlmCallEvent>,
 ) {
-    let mut current_dir_ids = HashSet::new();
-    for event in dir_events {
-        if !event.id.is_empty() && seen_prior_dir_ids.contains(&event.id) {
+    let mut batch_seen_ids = HashSet::new();
+    for event in events {
+        if event.id.is_empty() {
+            all_events.push(event);
             continue;
         }
-        if !event.id.is_empty() {
-            current_dir_ids.insert(event.id.clone());
+        if seen_ids.contains(&event.id) || !batch_seen_ids.insert(event.id.clone()) {
+            continue;
         }
         all_events.push(event);
     }
-    seen_prior_dir_ids.extend(current_dir_ids);
+    seen_ids.extend(batch_seen_ids);
 }
 
 fn sort_events(events: &mut Vec<LlmCallEvent>) {
@@ -147,16 +153,18 @@ fn read_recent_stats_events_from_single_dir(
     };
     files.sort();
 
+    let mut seen_ids = HashSet::new();
     let mut events = Vec::new();
-    for path in files.iter().rev() {
-        let content = match std::fs::read_to_string(path) {
+    let tail_bytes = recent_tail_window(max_events);
+    for path in &files {
+        let content = match read_file_tail_to_string(path, tail_bytes) {
             Ok(c) => c,
             Err(e) => {
                 warn!("stats reader: failed to read {:?}: {}", path, e);
                 continue;
             }
         };
-        for line in content.lines().rev() {
+        for line in content.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -164,10 +172,10 @@ fn read_recent_stats_events_from_single_dir(
             match serde_json::from_str::<LlmCallEvent>(line) {
                 Ok(mut event) => {
                     event.mode = canonicalize_mode_for_stats(&event.mode);
-                    events.push(event);
-                    if events.len() >= max_events {
-                        return events;
+                    if !event.id.is_empty() && !seen_ids.insert(event.id.clone()) {
+                        continue;
                     }
+                    events.push(event);
                 }
                 Err(e) => {
                     warn!("stats reader: skipping malformed line in {:?}: {}", path, e);
@@ -175,7 +183,44 @@ fn read_recent_stats_events_from_single_dir(
             }
         }
     }
+    sort_events(&mut events);
+    if events.len() > max_events {
+        events.drain(0..events.len() - max_events);
+    }
     events
+}
+
+fn recent_tail_window(max_events: usize) -> u64 {
+    (max_events as u64)
+        .saturating_mul(RECENT_STATS_BYTES_PER_EVENT)
+        .clamp(RECENT_STATS_MIN_TAIL_BYTES, RECENT_STATS_MAX_TAIL_BYTES)
+}
+
+fn read_file_tail_to_string(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len <= max_bytes {
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        return Ok(content);
+    }
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start - 1))?;
+    let mut previous = [0u8; 1];
+    file.read_exact(&mut previous)?;
+    let partial_first_line = previous[0] != b'\n';
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let mut content = String::from_utf8_lossy(&bytes).into_owned();
+    if partial_first_line {
+        if let Some(newline) = content.find('\n') {
+            content.drain(..=newline);
+        } else {
+            content.clear();
+        }
+    }
+    Ok(content)
 }
 
 fn cmp_f64_desc(a: f64, b: f64) -> Ordering {
@@ -459,7 +504,7 @@ pub fn aggregate_summary(
         day_acc.total_duration_ms += event.duration_ms;
 
         let mode_acc = by_mode_map
-            .entry(event.mode.to_lowercase())
+            .entry(canonicalize_mode_for_stats(&event.mode))
             .or_insert_with(|| ModeAcc {
                 total_calls: 0,
                 total_tokens: 0,
@@ -692,7 +737,10 @@ mod tests {
         let file_path = dir.path().join("00000001.jsonl");
         let event = make_event(1, true);
         let valid_line = serde_json::to_string(&event).unwrap();
-        let content = format!("{}\nthis is not json\n{}\n", valid_line, valid_line);
+        let mut second = make_event(2, true);
+        second.id = "test-id-2".to_string();
+        let second_line = serde_json::to_string(&second).unwrap();
+        let content = format!("{}\nthis is not json\n{}\n", valid_line, second_line);
         std::fs::write(&file_path, &content).unwrap();
 
         let events = read_all_stats_events(dir.path());
@@ -877,7 +925,38 @@ mod tests {
                 .count(),
             1
         );
+        assert!(events.iter().any(|event| event.chat_id == "workspace-chat"));
         assert!(events.iter().any(|event| event.chat_id == "unique-chat"));
+    }
+
+    #[test]
+    fn test_read_stats_events_dedupes_duplicate_event_ids_within_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("00000001.jsonl");
+
+        let mut first = make_event(1, true);
+        first.id = "duplicate-id".to_string();
+        first.chat_id = "first-chat".to_string();
+        first.ts_start = "2026-02-02T00:00:00Z".to_string();
+
+        let mut duplicate = first.clone();
+        duplicate.chat_id = "duplicate-chat".to_string();
+        duplicate.ts_start = "2026-02-03T00:00:00Z".to_string();
+
+        std::fs::write(
+            &file_path,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&first).unwrap(),
+                serde_json::to_string(&duplicate).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let events = read_all_stats_events(dir.path());
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].chat_id, "first-chat");
     }
 
     #[test]
@@ -899,14 +978,79 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert!(events
             .iter()
-            .all(|event| event.ts_start.as_str() >= "2026-02-05T00:00:00Z"));
+            .all(|event| event.ts_start.as_str() >= "2026-02-04T00:00:00Z"));
         assert_eq!(
             events
                 .iter()
                 .filter(|event| event.id == "test-id-5")
                 .count(),
-            2
+            1
         );
+    }
+
+    #[test]
+    fn test_read_recent_stats_events_tail_reads_large_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("00000001.jsonl");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+
+        let mut old = make_event(1, true);
+        old.id = "old-id".to_string();
+        old.chat_id = "old-chat".to_string();
+        writeln!(file, "{}", serde_json::to_string(&old).unwrap()).unwrap();
+        writeln!(
+            file,
+            "{}",
+            "x".repeat((RECENT_STATS_MIN_TAIL_BYTES as usize) + 1024)
+        )
+        .unwrap();
+        for i in 10u64..=11 {
+            let mut event = make_event(i, true);
+            event.id = format!("tail-id-{i}");
+            event.chat_id = format!("tail-chat-{i}");
+            writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+        }
+
+        let events = read_recent_stats_events_from_dirs(&[dir.path().to_path_buf()], 2);
+
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.id.starts_with("tail-id-")));
+        assert!(!events.iter().any(|event| event.id == "old-id"));
+    }
+
+    #[test]
+    fn test_read_recent_stats_events_dedupes_across_dirs() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+
+        let mut first = make_event(1, true);
+        first.id = "duplicate-id".to_string();
+        first.chat_id = "workspace-chat".to_string();
+
+        let mut duplicate = first.clone();
+        duplicate.chat_id = "config-chat".to_string();
+
+        std::fs::write(
+            workspace_dir.path().join("00000001.jsonl"),
+            format!("{}\n", serde_json::to_string(&first).unwrap()),
+        )
+        .unwrap();
+        std::fs::write(
+            config_dir.path().join("00000001.jsonl"),
+            format!("{}\n", serde_json::to_string(&duplicate).unwrap()),
+        )
+        .unwrap();
+
+        let events = read_recent_stats_events_from_dirs(
+            &[
+                workspace_dir.path().to_path_buf(),
+                config_dir.path().to_path_buf(),
+            ],
+            10,
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].chat_id, "workspace-chat");
     }
 
     #[test]
@@ -940,6 +1084,7 @@ mod tests {
         e1.cache_creation_tokens = Some(100);
 
         let mut e2 = make_event(1, true);
+        e2.id = "test-id-1b".to_string();
         e2.chat_id = "chat-1b".to_string();
         e2.cache_read_tokens = Some(50);
         e2.cache_creation_tokens = None;
@@ -998,6 +1143,20 @@ mod tests {
 
         assert_eq!(summary.by_mode.len(), 1);
         assert_eq!(summary.by_mode[0].mode, "task_agent");
+        assert_eq!(summary.by_mode[0].total_calls, 2);
+    }
+
+    #[test]
+    fn test_summary_canonicalizes_no_tools_and_explore_modes() {
+        let mut no_tools = make_event(1, true);
+        no_tools.mode = "NO_TOOLS".to_string();
+        let mut explore = make_event(2, true);
+        explore.mode = "explore".to_string();
+
+        let summary = aggregate_summary(&[no_tools, explore], None, None);
+
+        assert_eq!(summary.by_mode.len(), 1);
+        assert_eq!(summary.by_mode[0].mode, "explore");
         assert_eq!(summary.by_mode[0].total_calls, 2);
     }
 
