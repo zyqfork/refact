@@ -156,7 +156,7 @@ pub fn create_worktree(
         .map_err(|e| format!("Failed to find base commit: {}", e))?;
 
     let ref_name = format!("refs/heads/{}", branch_name);
-    let (branch_ref, branch_was_created) = match repo.find_reference(&ref_name) {
+    let branch_was_created = match repo.find_reference(&ref_name) {
         Ok(_) => {
             return Err(format!(
                 "Branch '{}' already exists; choose a new worktree branch name or attach the existing worktree",
@@ -164,18 +164,14 @@ pub fn create_worktree(
             ));
         }
         Err(e) if e.code() == git2::ErrorCode::NotFound => {
-            let reference = repo
-                .branch(branch_name, &commit, false)
-                .map_err(|e| format!("Failed to create branch '{}': {}", branch_name, e))?
-                .into_reference();
-            (reference, true)
+            repo.branch(branch_name, &commit, false)
+                .map_err(|e| format!("Failed to create branch '{}': {}", branch_name, e))?;
+            true
         }
         Err(e) => return Err(format!("Failed to look up branch '{}': {}", branch_name, e)),
     };
 
-    let mut options = git2::WorktreeAddOptions::new();
-    options.reference(Some(&branch_ref));
-    if let Err(e) = repo.worktree(worktree_name, worktree_path, Some(&mut options)) {
+    if let Err(e) = add_worktree_with_git(source_root, worktree_path, branch_name) {
         if branch_was_created {
             let _ = repo
                 .find_branch(branch_name, git2::BranchType::Local)
@@ -194,6 +190,25 @@ pub fn create_worktree(
         base_commit,
         dirty_source,
     })
+}
+
+fn add_worktree_with_git(
+    source_root: &Path,
+    worktree_path: &Path,
+    branch_name: &str,
+) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["worktree", "add"])
+        .arg(worktree_path)
+        .arg(branch_name)
+        .current_dir(source_root)
+        .output()
+        .map_err(|e| format!("Failed to run git worktree add: {}", e))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
 }
 
 pub fn remove_worktree(
