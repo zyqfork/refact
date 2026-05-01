@@ -161,7 +161,6 @@ interface PlannerPanelProps {
   plannerChats: PlannerInfo[];
   activeChat: ActiveChat;
   activePlannerId: string | null;
-  onNewPlanner: () => void;
   onSelectPlanner: (chatId: string) => void;
   onRemovePlanner: (chatId: string) => void;
 }
@@ -252,25 +251,11 @@ const PlannerPanel: React.FC<PlannerPanelProps> = ({
   plannerChats,
   activeChat,
   activePlannerId,
-  onNewPlanner,
   onSelectPlanner,
   onRemovePlanner,
 }) => {
   return (
     <Box className={styles.panelList}>
-      <Flex className={styles.panelHeader}>
-        <Text size="1" color="gray" className={styles.panelLabel}>
-          Planners
-        </Text>
-        <button
-          type="button"
-          className={styles.panelActionButton}
-          onClick={onNewPlanner}
-          aria-label="New planner"
-        >
-          <PlusIcon />
-        </button>
-      </Flex>
       <Box className={styles.panelContent}>
         {plannerChats.length === 0 ? (
           <Flex align="center" justify="center" style={{ flex: 1 }}>
@@ -327,10 +312,6 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({
     (c) => c.column === "failed" && c.agent_chat_id,
   );
 
-  const total =
-    completedAgents.length + failedAgents.length + activeAgents.length;
-  const done = completedAgents.length;
-
   const renderAgentItem = (
     card: BoardCard,
     status: "doing" | "done" | "failed",
@@ -364,16 +345,6 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({
 
   return (
     <Box className={styles.panelList}>
-      <Flex className={styles.panelHeader}>
-        <Text size="1" color="gray" className={styles.panelLabel}>
-          Agents
-        </Text>
-        {total > 0 && (
-          <Badge size="1" color="gray">
-            {done}/{total} done
-          </Badge>
-        )}
-      </Flex>
       <Box className={styles.panelContent}>
         {activeAgents.length === 0 &&
         completedAgents.length === 0 &&
@@ -1223,42 +1194,50 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
           </Box>
 
           <Box className={styles.panelsWrapper}>
-            <Flex
-              className={styles.panelsHeader}
-              align="center"
-              gap="2"
-              px="2"
-              py="1"
-            >
-              <Button
+            <div className={styles.panelsHeader}>
+              <button
                 type="button"
-                size="1"
-                variant="ghost"
-                color="gray"
                 onClick={handleTogglePanelsExpanded}
+                aria-expanded={panelsExpanded}
                 aria-label={panelsToggleLabel}
                 title={panelsToggleLabel}
-                className={styles.panelsExpandButton}
+                className={styles.sectionHeaderToggle}
               >
                 <ChevronDownIcon
                   className={`${styles.chevron} ${
                     panelsExpanded ? styles.chevronExpanded : ""
                   }`}
                 />
-              </Button>
-              <Text size="1" color="gray" className={styles.panelsHeaderLabel}>
-                Planners / Agents
-              </Text>
-              <Badge size="1" color="gray" variant="soft">
-                {plannerChats.length} planner
-                {plannerChats.length === 1 ? "" : "s"}
-              </Badge>
-              {agentChats.length > 0 && (
+                <Text
+                  size="1"
+                  weight="bold"
+                  color="gray"
+                  className={styles.sectionHeaderLabel}
+                >
+                  Planners / Agents
+                </Text>
+              </button>
+              <Flex align="center" gap="2" className={styles.sectionHeaderMeta}>
                 <Badge size="1" color="gray" variant="soft">
-                  {doneAgentChats.length}/{agentChats.length} agents
+                  {plannerChats.length} planner
+                  {plannerChats.length === 1 ? "" : "s"}
                 </Badge>
-              )}
-            </Flex>
+                {agentChats.length > 0 && (
+                  <Badge size="1" color="gray" variant="soft">
+                    {doneAgentChats.length}/{agentChats.length} agents
+                  </Badge>
+                )}
+                <button
+                  type="button"
+                  className={styles.sectionHeaderActionButton}
+                  onClick={handleNewPlanner}
+                  aria-label="New planner"
+                  title="New planner"
+                >
+                  <PlusIcon />
+                </button>
+              </Flex>
+            </div>
 
             {panelsExpanded && (
               <Flex className={styles.panelsSection}>
@@ -1266,7 +1245,6 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
                   plannerChats={plannerChats}
                   activeChat={activeChat}
                   activePlannerId={activePlannerId}
-                  onNewPlanner={handleNewPlanner}
                   onSelectPlanner={handleSelectPlanner}
                   onRemovePlanner={handleRemovePlanner}
                 />
@@ -1284,36 +1262,35 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
       )}
 
       <Box className={styles.chatSection}>
-        <Flex
-          className={styles.chatHeader}
-          align="center"
-          gap="2"
-          px="2"
-          py="1"
-        >
-          <Button
-            type="button"
-            size="1"
-            variant="ghost"
-            color="gray"
-            onClick={handleToggleChatExpanded}
-            aria-label={chatToggleLabel}
-            title={chatToggleLabel}
-            className={styles.chatExpandButton}
-          >
-            <ChevronDownIcon
-              className={`${styles.chevron} ${
-                chatExpanded ? styles.chevronExpanded : ""
-              }`}
-            />
-          </Button>
-          <Text size="1" color="gray" className={styles.chatPanelLabel}>
-            Chat
-          </Text>
+        <div className={styles.chatHeader}>
+          <Flex align="center" gap="2" className={styles.sectionHeaderTitle}>
+            <button
+              type="button"
+              onClick={handleToggleChatExpanded}
+              aria-expanded={chatExpanded}
+              aria-label={chatToggleLabel}
+              title={chatToggleLabel}
+              className={styles.sectionHeaderIconButton}
+            >
+              <ChevronDownIcon
+                className={`${styles.chevron} ${
+                  chatExpanded ? styles.chevronExpanded : ""
+                }`}
+              />
+            </button>
+            <Text
+              size="1"
+              weight="bold"
+              color="gray"
+              className={styles.sectionHeaderLabel}
+            >
+              Chat
+            </Text>
+          </Flex>
           <Text size="1" color="gray" className={styles.chatHeaderLabel}>
             {chatLabel}
           </Text>
-        </Flex>
+        </div>
         <Box className={styles.chatContent}>
           {activeChat ? (
             <InternalLinkProvider onInternalLink={handleInternalLink}>

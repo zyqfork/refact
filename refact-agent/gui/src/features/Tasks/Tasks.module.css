@@ -89,24 +89,29 @@
 .panelsWrapper {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-3);
+  gap: 0;
+  padding: 0;
   border-bottom: 1px solid var(--gray-a4);
 }
 
-.panelsHeader {
+.panelsHeader,
+.chatHeader {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
   justify-content: space-between;
+  gap: var(--space-2);
   background: transparent;
   user-select: none;
-  min-height: 22px;
-  padding: 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
 }
 
 .panelsSection {
   display: flex;
   gap: var(--space-4);
-  padding-top: var(--space-1);
+  padding: var(--space-2) var(--space-3);
   min-height: 120px;
   max-height: 240px;
   overflow: hidden;
@@ -120,23 +125,7 @@
   flex-direction: column;
 }
 
-.panelHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 0 var(--space-1);
-  border-bottom: 1px solid var(--gray-a4);
-  margin-bottom: var(--space-1);
-  min-height: 20px;
-}
-
-.panelLabel {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.panelActionButton {
+.sectionHeaderActionButton {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -148,15 +137,16 @@
   background: transparent;
   color: var(--gray-11);
   cursor: pointer;
+  flex-shrink: 0;
 }
 
-.panelActionButton:hover,
-.panelActionButton:focus-visible {
+.sectionHeaderActionButton:hover,
+.sectionHeaderActionButton:focus-visible {
   background: var(--gray-a3);
   border-color: var(--gray-a7);
 }
 
-.panelActionButton:focus-visible {
+.sectionHeaderActionButton:focus-visible {
   outline: 2px solid var(--accent-8);
   outline-offset: 1px;
 }
@@ -182,12 +172,7 @@
 }
 
 .chatHeader {
-  flex-shrink: 0;
   border-bottom: 1px solid var(--gray-a4);
-  background: transparent;
-  user-select: none;
-  min-height: 22px;
-  padding: 0 var(--space-3);
 }
 
 .chevron {
@@ -201,25 +186,70 @@
   transform: rotate(180deg);
 }
 
-.chatExpandButton,
-.panelsExpandButton {
-  min-width: 18px;
-  height: 18px;
-  margin-left: calc(-1 * var(--space-1));
+.sectionHeaderToggle,
+.sectionHeaderIconButton {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-2);
+  color: var(--gray-11);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
 }
 
-.chatHeaderLabel,
-.panelsHeaderLabel {
+.sectionHeaderToggle {
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+
+.sectionHeaderIconButton {
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.sectionHeaderToggle:hover,
+.sectionHeaderIconButton:hover {
+  background: var(--gray-a3);
+}
+
+.sectionHeaderToggle:focus-visible,
+.sectionHeaderIconButton:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 1px;
+}
+
+.sectionHeaderTitle {
+  flex: 1;
+  min-width: 0;
+}
+
+.sectionHeaderLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chatPanelLabel {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.sectionHeaderMeta {
   flex-shrink: 0;
+}
+
+.chatHeaderLabel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .chatContent {
