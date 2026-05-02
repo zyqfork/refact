@@ -649,6 +649,18 @@ mod tests {
         std::fs::write(path, content).unwrap();
     }
 
+    fn load_default_registry_for_tests() -> ProjectRegistry {
+        use crate::yaml_configs::project_configs_bootstrap::global_configs_try_create_all;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            global_configs_try_create_all(&config_dir).await.unwrap();
+            load_registry_from_dir(&config_dir).await
+        })
+    }
+
     fn base_agent_mode() -> ModeConfig {
         ModeConfig {
             schema_version: 1,
@@ -1164,6 +1176,262 @@ mod tests {
                 assert_mode_inherits_agent_surface(&agent, &resolved);
             }
         });
+    }
+
+    #[test]
+    fn test_default_gemini3_agent_overlay_inherits_agent_surface() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        for model_id in ["gemini-3.1-pro-preview", "google/gemini-3-flash"] {
+            let resolved = resolve_mode_for_model(&registry, "agent", Some(model_id))
+                .expect("agent mode should resolve");
+
+            assert!(resolved.prompt.contains("Gemini 3"));
+            assert!(resolved.prompt.contains("functionCall.id"));
+            assert!(resolved.prompt.contains("high thinking"));
+            assert!(resolved.prompt.contains("medium thinking"));
+            assert_eq!(
+                resolved
+                    .model_defaults
+                    .default
+                    .as_ref()
+                    .and_then(|defaults| defaults.reasoning_effort.as_deref()),
+                Some("high")
+            );
+            assert_mode_inherits_agent_surface(&agent, &resolved);
+        }
+    }
+
+    #[test]
+    fn test_default_kimi_k26_agent_overlay_inherits_agent_surface() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        for model_id in ["kimi-k2.6", "moonshot/kimi-k2.6"] {
+            let resolved = resolve_mode_for_model(&registry, "agent", Some(model_id))
+                .expect("agent mode should resolve");
+
+            assert!(resolved.prompt.contains("Kimi K2.6"));
+            assert!(resolved.prompt.contains("reasoning_content"));
+            assert!(resolved.prompt.contains("strict tool schemas"));
+            assert_eq!(
+                resolved
+                    .model_defaults
+                    .default
+                    .as_ref()
+                    .and_then(|defaults| defaults.temperature),
+                Some(1.0)
+            );
+            assert_mode_inherits_agent_surface(&agent, &resolved);
+        }
+    }
+
+    #[test]
+    fn test_kimi_k26_agent_overlay_beats_broad_oss_overlay() {
+        let mut registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+        registry
+            .mode_overrides
+            .push(mode_override("future_oss_kimi", &["kimi*"], "broad oss"));
+
+        let resolved = resolve_mode_for_model(&registry, "agent", Some("kimi-k2.6"))
+            .expect("agent mode should resolve");
+
+        assert!(resolved.prompt.contains("Kimi K2.6"));
+        assert_ne!(resolved.prompt, "broad oss");
+        assert_mode_inherits_agent_surface(&agent, &resolved);
+    }
+
+    #[test]
+    fn test_default_glm51_agent_overlay_inherits_agent_surface() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+        assert!(registry
+            .mode_overrides
+            .iter()
+            .any(|mode| mode.id == "glm51_agent"));
+
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        for model_id in ["glm-5.1", "GLM-5.1", "zhipu/glm-5.1"] {
+            let resolved = resolve_mode_for_model(&registry, "agent", Some(model_id))
+                .expect("agent mode should resolve");
+
+            assert!(resolved.prompt.contains("GLM-5.1"));
+            assert!(resolved.prompt.contains("`reasoning_content`"));
+            assert_eq!(
+                resolved
+                    .model_defaults
+                    .default
+                    .as_ref()
+                    .and_then(|defaults| defaults.temperature),
+                Some(1.0)
+            );
+            assert_mode_inherits_agent_surface(&agent, &resolved);
+        }
+    }
+
+    #[test]
+    fn test_default_minimax_m27_agent_overlay_inherits_agent_surface() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+        assert!(registry
+            .mode_overrides
+            .iter()
+            .any(|mode| mode.id == "minimax_m27_agent"));
+
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        for model_id in [
+            "MiniMax-M2.7",
+            "minimax-m2.7",
+            "minimax/MiniMax-M2.7-highspeed",
+        ] {
+            let resolved = resolve_mode_for_model(&registry, "agent", Some(model_id))
+                .expect("agent mode should resolve");
+
+            assert!(resolved.prompt.contains("MiniMax M2.7"));
+            assert!(resolved
+                .prompt
+                .contains("complete assistant content arrays"));
+            assert!(resolved.prompt.contains("Anthropic-style `tool_use`"));
+            assert_eq!(
+                resolved
+                    .model_defaults
+                    .default
+                    .as_ref()
+                    .and_then(|defaults| defaults.temperature),
+                Some(1.0)
+            );
+            assert_eq!(
+                resolved
+                    .model_defaults
+                    .default
+                    .as_ref()
+                    .and_then(|defaults| defaults.top_p),
+                Some(0.95)
+            );
+            assert_mode_inherits_agent_surface(&agent, &resolved);
+        }
+    }
+
+    #[test]
+    fn test_default_qwen36_agent_overlay_matches_specific_models_and_inherits_agent_surface() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        for model_id in [
+            "qwen3.6-flash",
+            "qwen-3.6-35b",
+            "Qwen/Qwen3.6-35B-A3B",
+            "modelstudio/qwen3.6-flash",
+        ] {
+            let resolved = resolve_mode_for_model(&registry, "agent", Some(model_id))
+                .expect("agent mode should resolve");
+
+            assert!(
+                resolved.prompt.contains("Qwen3.6 coding models"),
+                "{} should resolve to Qwen3.6 prompt: {}",
+                model_id,
+                resolved.prompt
+            );
+            assert!(resolved
+                .prompt
+                .contains("Preserve thinking and reasoning content"));
+            assert!(resolved.prompt.contains("exact JSON tool arguments"));
+            assert!(resolved.prompt.contains("ReAct stopword assumptions"));
+            assert_eq!(
+                resolved
+                    .model_defaults
+                    .default
+                    .as_ref()
+                    .and_then(|defaults| defaults.temperature),
+                Some(1.0)
+            );
+            assert_mode_inherits_agent_surface(&agent, &resolved);
+        }
+    }
+
+    #[test]
+    fn test_default_qwen36_agent_overlay_beats_broad_qwen_and_preserves_generic_qwen_fallback() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        assert!(model_matches_pattern("qwen3.6-flash", "qwen*"));
+        let qwen36 = resolve_mode_for_model(&registry, "agent", Some("qwen3.6-flash"))
+            .expect("agent mode should resolve");
+        assert!(qwen36.prompt.contains("Qwen3.6 coding models"));
+        assert!(!qwen36.prompt.contains("open-source or local model"));
+        assert_mode_inherits_agent_surface(&agent, &qwen36);
+
+        let qwen25 = resolve_mode_for_model(&registry, "agent", Some("qwen2.5-coder"))
+            .expect("agent mode should resolve");
+        assert!(qwen25.prompt.contains("open-source or local model"));
+        assert!(!qwen25.prompt.contains("Qwen3.6 coding models"));
+        assert_mode_inherits_agent_surface(&agent, &qwen25);
+    }
+
+    #[test]
+    fn test_default_provider_agent_overlays_parse_together_and_inherit_agent_surface() {
+        let registry = load_default_registry_for_tests();
+        assert!(registry.errors.is_empty(), "{:?}", registry.errors);
+        let agent = registry
+            .modes
+            .get("agent")
+            .expect("base agent should exist")
+            .clone();
+
+        for overlay in registry
+            .mode_overrides
+            .iter()
+            .filter(|overlay| overlay.base.as_deref() == Some("agent"))
+            .filter(|overlay| overlay.id != "openai_agent")
+        {
+            let resolved = agent.apply_override(
+                overlay
+                    .override_config
+                    .as_ref()
+                    .expect("provider overlay should define override"),
+            );
+
+            assert_mode_inherits_agent_surface(&agent, &resolved);
+        }
     }
 
     #[test]
