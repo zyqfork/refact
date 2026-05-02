@@ -77,6 +77,10 @@ import {
   buildWorktreeConflictPrompt,
   worktreeErrorText,
 } from "../Worktrees";
+import {
+  loadTaskWorkspaceLayout,
+  saveTaskWorkspaceLayout,
+} from "../../utils/chatUiPersistence";
 
 type ActiveChat =
   | { type: "planner"; chatId: string }
@@ -197,7 +201,6 @@ function formatAgentChatTitle(
   return cardId ? `Agent: ${cardId} ${cardTitle}` : `Agent: ${cardTitle}`;
 }
 
-const TASK_BOARD_HEIGHT_STORAGE_KEY = "tasks:v1:board_height_px";
 const DEFAULT_BOARD_HEIGHT_PX = 180;
 const MIN_BOARD_HEIGHT_PX = 80;
 const MAX_BOARD_HEIGHT_RATIO = 0.6;
@@ -210,16 +213,12 @@ function clampBoardHeight(value: number, containerHeight?: number): number {
   return Math.max(MIN_BOARD_HEIGHT_PX, Math.min(maxHeight, value));
 }
 
-function loadBoardHeight(): number {
-  try {
-    const stored = localStorage.getItem(TASK_BOARD_HEIGHT_STORAGE_KEY);
-    const parsed = Number.parseFloat(stored ?? "");
-    return Number.isFinite(parsed)
-      ? clampBoardHeight(parsed)
-      : DEFAULT_BOARD_HEIGHT_PX;
-  } catch {
-    return DEFAULT_BOARD_HEIGHT_PX;
-  }
+function defaultTaskWorkspaceLayout() {
+  return {
+    chatExpanded: false,
+    panelsExpanded: false,
+    boardHeightPx: DEFAULT_BOARD_HEIGHT_PX,
+  };
 }
 
 const PlannerItem: React.FC<PlannerItemProps> = ({
@@ -671,10 +670,13 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   } | null>(null);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
-  const [chatExpanded, setChatExpanded] = useState(false);
-  const [panelsExpanded, setPanelsExpanded] = useState(false);
-  const [boardHeightPx, setBoardHeightPx] = useState(loadBoardHeight);
+  const [layout, setLayout] = useState(() =>
+    loadTaskWorkspaceLayout(taskId, defaultTaskWorkspaceLayout()),
+  );
   const prevTaskStatusRef = React.useRef<string | undefined>(undefined);
+  const chatExpanded = layout.chatExpanded;
+  const panelsExpanded = layout.panelsExpanded;
+  const boardHeightPx = layout.boardHeightPx;
   const worktreeRecords = useMemo(
     () => worktreesData?.worktrees ?? [],
     [worktreesData?.worktrees],
@@ -973,36 +975,45 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   );
 
   const handleToggleChatExpanded = useCallback(() => {
-    setChatExpanded((prev) => !prev);
-  }, []);
+    setLayout((prev) => {
+      const next = { ...prev, chatExpanded: !prev.chatExpanded };
+      saveTaskWorkspaceLayout(taskId, next);
+      return next;
+    });
+  }, [taskId]);
 
   const handleTogglePanelsExpanded = useCallback(() => {
-    setPanelsExpanded((prev) => !prev);
-  }, []);
+    setLayout((prev) => {
+      const next = { ...prev, panelsExpanded: !prev.panelsExpanded };
+      saveTaskWorkspaceLayout(taskId, next);
+      return next;
+    });
+  }, [taskId]);
 
-  const handleBoardResizeDrag = useCallback((clientY: number) => {
-    const container = taskWorkspaceRef.current;
-    const rect = container?.getBoundingClientRect();
-    const nextHeight = clampBoardHeight(
-      rect ? clientY - rect.top : clientY,
-      rect?.height,
-    );
-    setBoardHeightPx(nextHeight);
-    try {
-      localStorage.setItem(TASK_BOARD_HEIGHT_STORAGE_KEY, String(nextHeight));
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  const handleBoardResizeDrag = useCallback(
+    (clientY: number) => {
+      const container = taskWorkspaceRef.current;
+      const rect = container?.getBoundingClientRect();
+      const nextHeight = clampBoardHeight(
+        rect ? clientY - rect.top : clientY,
+        rect?.height,
+      );
+      setLayout((prev) => {
+        const next = { ...prev, boardHeightPx: nextHeight };
+        saveTaskWorkspaceLayout(taskId, next);
+        return next;
+      });
+    },
+    [taskId],
+  );
 
   const handleBoardResizeReset = useCallback(() => {
-    setBoardHeightPx(DEFAULT_BOARD_HEIGHT_PX);
-    try {
-      localStorage.removeItem(TASK_BOARD_HEIGHT_STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
-  }, []);
+    setLayout((prev) => {
+      const next = { ...prev, boardHeightPx: DEFAULT_BOARD_HEIGHT_PX };
+      saveTaskWorkspaceLayout(taskId, next);
+      return next;
+    });
+  }, [taskId]);
 
   const handleModelChange = useCallback(
     (model: string) => {

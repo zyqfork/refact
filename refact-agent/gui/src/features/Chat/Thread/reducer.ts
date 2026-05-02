@@ -78,6 +78,7 @@ import {
 } from "./actions";
 import { applyDeltaOps } from "../../../services/refact/chatSubscription";
 import type { WorktreeMeta } from "../../../services/refact/worktrees";
+import { loadPersistedChatTabs } from "../../../utils/chatUiPersistence";
 import {
   AssistantMessage,
   ChatMessages,
@@ -148,6 +149,34 @@ const createThreadRuntime = (
   };
 };
 
+function createPersistedThreadRuntime(
+  tab: ReturnType<typeof loadPersistedChatTabs>["tabs"][number],
+  fallbackToolUse: ToolUse,
+): ChatThreadRuntime {
+  const toolUse = tab.tool_use ?? fallbackToolUse;
+  const runtime = createThreadRuntime(
+    toolUse,
+    null,
+    normalizeLegacyMode(tab.mode),
+  );
+
+  runtime.thread.id = tab.id;
+  runtime.thread.title = tab.title ?? "New Chat";
+  runtime.thread.tool_use = toolUse;
+  runtime.thread.mode = normalizeLegacyMode(tab.mode);
+  runtime.session_state = tab.session_state;
+
+  if (tab.is_buddy_chat) {
+    runtime.thread.buddy_meta = {
+      is_buddy_chat: true,
+      buddy_chat_kind: "conversation",
+      workflow_id: null,
+    };
+  }
+
+  return runtime;
+}
+
 const getThreadMode = ({
   integration,
 }: {
@@ -175,10 +204,24 @@ const normalizeMessage = (msg: ChatMessages[number]): ChatMessages[number] => {
 };
 
 const createInitialState = (): Chat => {
+  const persistedTabs = loadPersistedChatTabs();
+  const threads: Chat["threads"] = {};
+
+  for (const tab of persistedTabs.tabs) {
+    threads[tab.id] = createPersistedThreadRuntime(tab, "agent");
+  }
+
+  const openThreadIds = persistedTabs.openThreadIds.filter(
+    (id) => threads[id] !== undefined,
+  );
+  const currentThreadId = openThreadIds.includes(persistedTabs.currentThreadId)
+    ? persistedTabs.currentThreadId
+    : openThreadIds[openThreadIds.length - 1] ?? "";
+
   return {
-    current_thread_id: "",
-    open_thread_ids: [],
-    threads: {},
+    current_thread_id: currentThreadId,
+    open_thread_ids: openThreadIds,
+    threads,
     system_prompt: {},
     tool_use: "agent",
     checkpoints_enabled: true,

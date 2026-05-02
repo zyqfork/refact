@@ -1,5 +1,9 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { RootState } from "../../app/store";
+import {
+  loadPersistedTasksUIState,
+  savePersistedTasksUIState,
+} from "../../utils/chatUiPersistence";
 
 type ActiveChat =
   | { type: "planner"; chatId: string }
@@ -25,9 +29,18 @@ export interface TasksUIState {
   openTasks: OpenTask[];
 }
 
-const initialState: TasksUIState = {
-  openTasks: [],
-};
+function persistTasksUIState(state: TasksUIState): void {
+  savePersistedTasksUIState({
+    openTasks: state.openTasks.map((task) => ({
+      id: task.id,
+      name: task.name,
+      plannerChats: task.plannerChats.map((planner) => ({ ...planner })),
+      activeChat: task.activeChat ? { ...task.activeChat } : null,
+    })),
+  });
+}
+
+const initialState: TasksUIState = loadPersistedTasksUIState();
 
 export const tasksSlice = createSlice({
   name: "tasksUI",
@@ -52,9 +65,11 @@ export const tasksSlice = createSlice({
           activeChat: null,
         });
       }
+      persistTasksUIState(state);
     },
     closeTask: (state, action: PayloadAction<string>) => {
       state.openTasks = state.openTasks.filter((t) => t.id !== action.payload);
+      persistTasksUIState(state);
     },
     updateTaskName: (
       state,
@@ -63,6 +78,7 @@ export const tasksSlice = createSlice({
       const task = state.openTasks.find((t) => t.id === action.payload.id);
       if (task) {
         task.name = action.payload.name;
+        persistTasksUIState(state);
       }
     },
     addPlannerChat: (
@@ -75,6 +91,7 @@ export const tasksSlice = createSlice({
         !task.plannerChats.some((p) => p.id === action.payload.planner.id)
       ) {
         task.plannerChats.push(action.payload.planner);
+        persistTasksUIState(state);
       }
     },
     updatePlannerChat: (
@@ -94,6 +111,7 @@ export const tasksSlice = createSlice({
             ...task.plannerChats[idx],
             ...action.payload.planner,
           };
+          persistTasksUIState(state);
         }
       }
     },
@@ -106,6 +124,7 @@ export const tasksSlice = createSlice({
         task.plannerChats = task.plannerChats.filter(
           (p) => p.id !== action.payload.chatId,
         );
+        persistTasksUIState(state);
       }
     },
     setTaskActiveChat: (
@@ -115,6 +134,7 @@ export const tasksSlice = createSlice({
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task) {
         task.activeChat = action.payload.activeChat;
+        persistTasksUIState(state);
       }
     },
   },

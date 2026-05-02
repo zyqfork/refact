@@ -42,10 +42,14 @@ import {
   setThinkingBudget,
   setTemperature,
   setMaxTokens,
+  updateChatRuntimeFromSessionState,
+  openBuddyChat,
+  newBuddyChatAction,
   buildThreadParamsPatch,
   buildThreadScopePatch,
 } from "../features/Chat/Thread";
 import { saveLastThreadParams } from "../utils/threadStorage";
+import { savePersistedChatTabs } from "../utils/chatUiPersistence";
 import { integrationsApi } from "../services/refact/integrations";
 import { capsApi, isCapsErrorResponse } from "../services/refact/caps";
 import { promptsApi } from "../services/refact/prompts";
@@ -91,6 +95,56 @@ const startListening = listenerMiddleware.startListening.withTypes<
   RootState,
   AppDispatch
 >();
+
+function persistOpenChatTabs(state: RootState): void {
+  savePersistedChatTabs({
+    openThreadIds: state.chat.open_thread_ids,
+    currentThreadId: state.chat.current_thread_id,
+    tabs: state.chat.open_thread_ids.map((id) => {
+      const runtime = state.chat.threads[id];
+      const historyItem = state.history.chats[id] as
+        | (typeof state.history.chats)[string]
+        | undefined;
+      return {
+        id,
+        title: runtime?.thread.title ?? historyItem?.title,
+        mode: runtime?.thread.mode ?? historyItem?.mode,
+        tool_use: runtime?.thread.tool_use,
+        session_state: runtime?.session_state ?? historyItem?.session_state,
+        is_buddy_chat: Boolean(runtime?.thread.buddy_meta?.is_buddy_chat),
+      };
+    }),
+  });
+}
+
+startListening({
+  matcher: isAnyOf(
+    newChatAction,
+    restoreChat,
+    newIntegrationChat,
+    closeThread,
+    switchToThread,
+    saveTitle,
+    createChatWithId,
+    updateChatRuntimeFromSessionState,
+    openBuddyChat,
+    newBuddyChatAction,
+    applyChatEvent,
+  ),
+  effect: (action, listenerApi) => {
+    if (
+      applyChatEvent.match(action) &&
+      action.payload.type !== "snapshot" &&
+      action.payload.type !== "thread_updated" &&
+      action.payload.type !== "runtime_updated" &&
+      action.payload.type !== "stream_finished"
+    ) {
+      return;
+    }
+
+    persistOpenChatTabs(listenerApi.getState());
+  },
+});
 
 startListening({
   actionCreator: setError,

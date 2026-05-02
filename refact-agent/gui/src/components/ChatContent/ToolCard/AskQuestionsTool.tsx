@@ -31,6 +31,12 @@ import {
   isUserMessage,
   isToolMessage,
 } from "../../../services/refact/types";
+import {
+  clearAskQuestionsDraft,
+  loadAskQuestionsDraft,
+  saveAskQuestionsDraft,
+  type AskQuestionsDraftValue,
+} from "../../../utils/chatUiPersistence";
 import styles from "./AskQuestionsTool.module.css";
 
 interface QuestionItem {
@@ -223,8 +229,12 @@ export const AskQuestionsTool: React.FC<AskQuestionsToolProps> = ({
 }) => {
   const storeKey = toolCall.id ? `tc:${toolCall.id}` : undefined;
   const [isOpen, handleToggle, setIsOpen] = useStoredOpen(storeKey, true);
-  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
-  const [additionalText, setAdditionalText] = useState("");
+  const [answers, setAnswers] = useState<
+    Record<string, AskQuestionsDraftValue>
+  >(() => loadAskQuestionsDraft(toolCall.id)?.answers ?? {});
+  const [additionalText, setAdditionalText] = useState(
+    () => loadAskQuestionsDraft(toolCall.id)?.additionalText ?? "",
+  );
   const hasCollapsedManualRef = useRef(false);
 
   const { submit } = useChatActions();
@@ -305,6 +315,23 @@ export const AskQuestionsTool: React.FC<AskQuestionsToolProps> = ({
     }
   }, [nextUserMessage, answeredViaForm, setIsOpen]);
 
+  const hasNextMessage = !!nextUserMessage;
+
+  useEffect(() => {
+    if (hasNextMessage) {
+      clearAskQuestionsDraft(toolCall.id);
+      return;
+    }
+
+    const hasAnswers = Object.keys(answers).length > 0;
+    if (!hasAnswers && additionalText.trim().length === 0) {
+      clearAskQuestionsDraft(toolCall.id);
+      return;
+    }
+
+    saveAskQuestionsDraft(toolCall.id, answers, additionalText);
+  }, [additionalText, answers, hasNextMessage, toolCall.id]);
+
   const handleSubmit = useCallback(() => {
     if (!data) return;
     const formatted = formatAnswers(
@@ -315,8 +342,6 @@ export const AskQuestionsTool: React.FC<AskQuestionsToolProps> = ({
     );
     void submit(formatted);
   }, [data, marker, answers, additionalText, submit]);
-
-  const hasNextMessage = !!nextUserMessage;
 
   if (!hasNextMessage && data) {
     return (

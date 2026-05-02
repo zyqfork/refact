@@ -6,7 +6,13 @@ import React, {
   useState,
 } from "react";
 import { Flex } from "@radix-ui/themes";
-import { Chat, selectChatId, selectIsStreaming } from "./Chat";
+import {
+  Chat,
+  selectAllThreads,
+  selectChatId,
+  selectIsStreaming,
+  switchToThread,
+} from "./Chat";
 
 import {
   useAppSelector,
@@ -43,7 +49,7 @@ import { Integrations } from "./Integrations";
 import { Providers } from "./Providers";
 import { integrationsApi } from "../services/refact";
 import { LoginPage } from "./Login";
-import { TaskList, TaskWorkspace } from "./Tasks";
+import { selectOpenTasksFromRoot, TaskList, TaskWorkspace } from "./Tasks";
 import { KnowledgeWorkspace } from "./Knowledge";
 import { Customization } from "./Customization";
 import { Extensions } from "./Extensions";
@@ -72,6 +78,10 @@ import styles from "./App.module.css";
 import classNames from "classnames";
 import { usePatchesAndDiffsEventsForIDE } from "../hooks/usePatchesAndDiffEventsForIDE";
 import { hasAnyUsableActiveProvider } from "./Login/providerAccess";
+import {
+  loadPersistedActiveTab,
+  savePersistedActiveTab,
+} from "../utils/chatUiPersistence";
 
 export interface AppProps {
   style?: React.CSSProperties;
@@ -82,9 +92,12 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const sawZeroHeightRef = useRef(false);
   const crashSessionStartedRef = useRef(false);
+  const restoredActiveTabRef = useRef(false);
 
   const pages = useAppSelector(selectPages);
   const isStreaming = useAppSelector(selectIsStreaming);
+  const allThreads = useAppSelector(selectAllThreads);
+  const openTasks = useAppSelector(selectOpenTasksFromRoot);
 
   const isPageInHistory = useCallback(
     (pageName: string) => {
@@ -342,6 +355,48 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
       };
     }
   }, [desiredPage, chatId]);
+
+  useEffect(() => {
+    if (!restoredActiveTabRef.current) return;
+    if (!activeTab) return;
+    if (activeTab.type === "chat" && !activeTab.id) return;
+
+    if (activeTab.type === "task") {
+      savePersistedActiveTab({ type: "task", taskId: activeTab.taskId });
+      return;
+    }
+
+    savePersistedActiveTab(activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (restoredActiveTabRef.current) return;
+    if (!canAccessApp || !isLoggedIn) return;
+
+    restoredActiveTabRef.current = true;
+    const persistedActiveTab = loadPersistedActiveTab();
+    if (!persistedActiveTab) return;
+
+    if (persistedActiveTab.type === "dashboard") {
+      dispatch(popBackTo({ name: "history" }));
+      return;
+    }
+
+    if (persistedActiveTab.type === "chat") {
+      if (!allThreads[persistedActiveTab.id]) return;
+      dispatch(switchToThread({ id: persistedActiveTab.id }));
+      dispatch(popBackTo({ name: "history" }));
+      dispatch(push({ name: "chat" }));
+      return;
+    }
+
+    if (openTasks.some((task) => task.id === persistedActiveTab.taskId)) {
+      dispatch(popBackTo({ name: "history" }));
+      dispatch(
+        push({ name: "task workspace", taskId: persistedActiveTab.taskId }),
+      );
+    }
+  }, [allThreads, canAccessApp, dispatch, isLoggedIn, openTasks]);
 
   return (
     <Flex
