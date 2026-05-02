@@ -2009,8 +2009,9 @@ describe("buildBuddySceneSpeech", () => {
     );
     expect(speech?.controls.map((control) => control.action)).toEqual([
       "investigate_error",
-      "dismiss",
+      "dismiss_runtime_event",
     ]);
+    expect(speech?.controls[1]?.action_param).toBe("context-error");
   });
 
   it("converts suggestion dismiss controls into dismiss_suggestion actions", () => {

@@ -97,13 +97,13 @@ type ToolbarIconButtonProps = {
   disabled?: boolean;
 };
 
-const ToolbarIconButton: React.FC<ToolbarIconButtonProps> = ({
+const ToolbarIconButton = ({
   label,
   onClick,
   children,
   className,
   disabled,
-}) => (
+}: ToolbarIconButtonProps) => (
   <HoverCard.Root>
     <HoverCard.Trigger>
       <button
