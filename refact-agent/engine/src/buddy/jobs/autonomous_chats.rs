@@ -1691,6 +1691,7 @@ struct DiagnosticEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityFinding {
     pub path: String,
+    pub source: String,
     pub kind: String,
     pub preview: String,
 }
@@ -1737,6 +1738,12 @@ struct LocalGitEvidence {
     additions: usize,
     deletions: usize,
     security_findings: Vec<SecurityFinding>,
+}
+
+#[derive(Debug, Clone)]
+struct SecurityScanContent {
+    source: &'static str,
+    content: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2012,29 +2019,38 @@ fn collect_local_git_evidence(
     let mut changed_paths = Vec::new();
     let mut seen = HashSet::new();
     let mut security_findings = Vec::new();
+    let mut seen_security_findings = HashSet::new();
+    let mut status_entries = statuses
+        .iter()
+        .filter_map(|entry| {
+            let status = entry.status();
+            if status.is_empty() {
+                return None;
+            }
+            entry.path().map(|path| (path.to_string(), status))
+        })
+        .collect::<Vec<_>>();
+    status_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    for entry in statuses.iter() {
-        let status = entry.status();
-        if status.is_empty() {
-            continue;
-        }
-        let Some(path) = entry.path() else {
-            continue;
-        };
-        if seen.insert(path.to_string()) {
+    for (path, status) in status_entries {
+        if seen.insert(path.clone()) {
             changed_paths.push(PathStatus {
-                path: path.to_string(),
+                path: path.clone(),
                 status: git_status_label(status).to_string(),
             });
         }
         if scan_security && security_findings.len() < MAX_SECURITY_FINDINGS {
-            if let Ok(Some(content)) = git_blob_or_workdir_content(&repo, &repo_root, path, status)
-            {
-                security_findings.extend(scan_security_findings(
-                    path,
-                    &content,
-                    MAX_SECURITY_FINDINGS - security_findings.len(),
-                ));
+            for scan_content in git_security_scan_contents(&repo, &repo_root, &path, status) {
+                push_security_findings(
+                    &mut security_findings,
+                    &mut seen_security_findings,
+                    &path,
+                    scan_content.source,
+                    &scan_content.content,
+                );
+                if security_findings.len() >= MAX_SECURITY_FINDINGS {
+                    break;
+                }
             }
         }
     }
@@ -2066,26 +2082,58 @@ fn git_status_label(status: git2::Status) -> &'static str {
     }
 }
 
-fn git_blob_or_workdir_content(
+fn should_scan_index_status(status: git2::Status) -> bool {
+    status.intersects(
+        git2::Status::INDEX_NEW
+            | git2::Status::INDEX_MODIFIED
+            | git2::Status::INDEX_RENAMED
+            | git2::Status::INDEX_TYPECHANGE,
+    )
+}
+
+fn should_scan_worktree_status(status: git2::Status) -> bool {
+    status.intersects(
+        git2::Status::WT_NEW
+            | git2::Status::WT_MODIFIED
+            | git2::Status::WT_RENAMED
+            | git2::Status::WT_TYPECHANGE,
+    )
+}
+
+fn git_security_scan_contents(
     repo: &git2::Repository,
     repo_root: &Path,
     path: &str,
     status: git2::Status,
-) -> Result<Option<String>, String> {
-    if status.is_wt_deleted() || status.is_index_deleted() {
-        return Ok(None);
-    }
-    let workdir_path = repo_root.join(path);
-    if workdir_path.is_file() {
-        let metadata = std::fs::metadata(&workdir_path).map_err(|e| e.to_string())?;
-        if metadata.len() > MAX_UNTRACKED_CONTENT_BYTES {
-            return Ok(None);
+) -> Vec<SecurityScanContent> {
+    let mut contents = Vec::new();
+    if should_scan_index_status(status) {
+        if let Ok(Some(content)) = git_index_content(repo, path) {
+            contents.push(SecurityScanContent {
+                source: "index",
+                content,
+            });
         }
-        return std::fs::read_to_string(&workdir_path)
-            .map(Some)
-            .map_err(|e| e.to_string());
     }
 
+    if should_scan_worktree_status(status) {
+        if let Ok(Some(content)) = git_workdir_content(repo_root, path) {
+            contents.push(SecurityScanContent {
+                source: "worktree",
+                content,
+            });
+        }
+    }
+
+    contents
+}
+
+fn git_workdir_content(repo_root: &Path, path: &str) -> Result<Option<String>, String> {
+    let workdir_path = repo_root.join(path);
+    read_file_to_string_capped(&workdir_path, MAX_UNTRACKED_CONTENT_BYTES)
+}
+
+fn git_index_content(repo: &git2::Repository, path: &str) -> Result<Option<String>, String> {
     let index = repo.index().map_err(|e| e.to_string())?;
     let Some(entry) = index.get_path(Path::new(path), 0) else {
         return Ok(None);
@@ -2094,9 +2142,28 @@ fn git_blob_or_workdir_content(
     if blob.size() > MAX_UNTRACKED_CONTENT_BYTES as usize {
         return Ok(None);
     }
-    Ok(std::str::from_utf8(blob.content())
-        .ok()
-        .map(ToString::to_string))
+    let Ok(content) = std::str::from_utf8(blob.content()) else {
+        return Ok(None);
+    };
+    if content.contains('\0') {
+        return Ok(None);
+    }
+    Ok(Some(content.to_string()))
+}
+
+fn read_file_to_string_capped(path: &Path, max_bytes: u64) -> Result<Option<String>, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > max_bytes {
+        return Ok(None);
+    }
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut content = String::new();
+    let mut reader = std::io::Read::take(file, max_bytes);
+    std::io::Read::read_to_string(&mut reader, &mut content).map_err(|e| e.to_string())?;
+    if content.contains('\0') {
+        return Ok(None);
+    }
+    Ok(Some(content))
 }
 
 fn diff_stats(repo: &git2::Repository) -> Option<(usize, usize)> {
@@ -2110,16 +2177,24 @@ fn diff_stats(repo: &git2::Repository) -> Option<(usize, usize)> {
     let mut deletions = 0usize;
     accumulate_numstat(&staged_numstat, &mut additions, &mut deletions);
     accumulate_numstat(&unstaged_numstat, &mut additions, &mut deletions);
-    for rel in untracked_numstat
+    let mut untracked_paths = untracked_numstat
         .lines()
         .filter(|line| !line.trim().is_empty())
-    {
+        .collect::<Vec<_>>();
+    untracked_paths.sort_unstable();
+    for rel in untracked_paths.into_iter().take(MAX_PATH_EVIDENCE) {
         let path = root.join(rel);
-        if let Ok(content) = std::fs::read_to_string(path) {
+        if let Some(content) = read_untracked_diffstat_content(&path) {
             additions = additions.saturating_add(content.lines().count());
         }
     }
     Some((additions, deletions))
+}
+
+fn read_untracked_diffstat_content(path: &Path) -> Option<String> {
+    read_file_to_string_capped(path, MAX_UNTRACKED_CONTENT_BYTES)
+        .ok()
+        .flatten()
 }
 
 fn accumulate_numstat(output: &str, additions: &mut usize, deletions: &mut usize) {
@@ -2135,6 +2210,15 @@ fn accumulate_numstat(output: &str, additions: &mut usize, deletions: &mut usize
 }
 
 fn scan_security_findings(path: &str, content: &str, limit: usize) -> Vec<SecurityFinding> {
+    scan_security_findings_from_source(path, "worktree", content, limit)
+}
+
+fn scan_security_findings_from_source(
+    path: &str,
+    source: &str,
+    content: &str,
+    limit: usize,
+) -> Vec<SecurityFinding> {
     if limit == 0 {
         return Vec::new();
     }
@@ -2144,12 +2228,37 @@ fn scan_security_findings(path: &str, content: &str, limit: usize) -> Vec<Securi
         .flat_map(|(kind, regex)| {
             regex.find_iter(content).map(move |m| SecurityFinding {
                 path: path.to_string(),
+                source: source.to_string(),
                 kind: (*kind).to_string(),
                 preview: security_preview(content, m.start(), m.end()),
             })
         })
         .take(limit)
         .collect()
+}
+
+fn push_security_findings(
+    findings: &mut Vec<SecurityFinding>,
+    seen: &mut HashSet<(String, String, String, String)>,
+    path: &str,
+    source: &str,
+    content: &str,
+) {
+    for finding in scan_security_findings_from_source(path, source, content, MAX_SECURITY_FINDINGS)
+    {
+        let key = (
+            finding.path.clone(),
+            finding.source.clone(),
+            finding.kind.clone(),
+            finding.preview.clone(),
+        );
+        if seen.insert(key) {
+            findings.push(finding);
+            if findings.len() >= MAX_SECURITY_FINDINGS {
+                break;
+            }
+        }
+    }
 }
 
 fn secret_patterns() -> &'static [(&'static str, Regex)] {
@@ -2216,12 +2325,26 @@ fn diagnostic_security_findings(diagnostics: &[DiagnosticContext]) -> Vec<Securi
 fn render_security_evidence(findings: &[SecurityFinding]) -> String {
     let mut lines = vec!["Redacted local security findings:".to_string()];
     for finding in findings.iter().take(MAX_SECURITY_FINDINGS) {
-        lines.push(format!(
-            "- path={} kind={} preview={}",
-            clean_evidence_value(&finding.path),
-            clean_evidence_value(&finding.kind),
-            finding.preview
-        ));
+        let include_source = finding.source != "worktree"
+            || findings
+                .iter()
+                .any(|other| other.path == finding.path && other.source != finding.source);
+        if include_source {
+            lines.push(format!(
+                "- path={} source={} kind={} preview={}",
+                clean_evidence_value(&finding.path),
+                clean_evidence_value(&finding.source),
+                clean_evidence_value(&finding.kind),
+                finding.preview
+            ));
+        } else {
+            lines.push(format!(
+                "- path={} kind={} preview={}",
+                clean_evidence_value(&finding.path),
+                clean_evidence_value(&finding.kind),
+                finding.preview
+            ));
+        }
     }
     lines.join("\n")
 }
@@ -2896,6 +3019,26 @@ mod tests {
     use crate::call_validation::ChatContent;
     use crate::stats::event::LlmCallEvent;
     use crate::yaml_configs::customization_types::SubagentConfig;
+
+    fn init_temp_git_repo() -> (tempfile::TempDir, git2::Repository) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("test", "test@test.com").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
+        }
+        (dir, repo)
+    }
+
+    fn git_add(repo: &git2::Repository, path: &str) {
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(path)).unwrap();
+        index.write().unwrap();
+    }
 
     fn test_fact(kind: BuddyFactKind, payload: serde_json::Value) -> BuddyFact {
         BuddyFact {
@@ -3937,6 +4080,114 @@ mod tests {
         assert!(!rendered.contains("plainsecret"));
         assert!(rendered.contains("[REDACTED"));
         assert!(rendered.contains("src/config.ts"));
+    }
+
+    #[test]
+    fn staged_index_only_secret_is_detected_after_worktree_cleaned() {
+        let (dir, repo) = init_temp_git_repo();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/config.ts"),
+            "const token = \"ghp_abcdefghijklmnopqrstuvwxyz\";\n",
+        )
+        .unwrap();
+        git_add(&repo, "src/config.ts");
+        std::fs::write(
+            root.join("src/config.ts"),
+            "const token = \"not-secret\";\n",
+        )
+        .unwrap();
+
+        let evidence = collect_local_git_evidence(root, true).unwrap();
+        let rendered = render_security_evidence(&evidence.security_findings);
+
+        assert_eq!(evidence.security_findings.len(), 1);
+        assert_eq!(evidence.security_findings[0].path, "src/config.ts");
+        assert_eq!(evidence.security_findings[0].source, "index");
+        assert!(rendered.contains("source=index"));
+        assert!(rendered.contains("kind=github_token"));
+        assert!(rendered.contains("[REDACTED"));
+        assert!(!rendered.contains("ghp_abcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn mixed_staged_and_worktree_versions_scan_both_sources() {
+        let (dir, repo) = init_temp_git_repo();
+        let root = dir.path();
+        std::fs::write(root.join("config.env"), "token=stagedsecret\n").unwrap();
+        git_add(&repo, "config.env");
+        std::fs::write(root.join("config.env"), "token=worktreesecret\n").unwrap();
+
+        let evidence = collect_local_git_evidence(root, true).unwrap();
+        let rendered = render_security_evidence(&evidence.security_findings);
+        let mut keys = evidence
+            .security_findings
+            .iter()
+            .map(|finding| {
+                (
+                    finding.path.as_str(),
+                    finding.source.as_str(),
+                    finding.kind.as_str(),
+                    finding.preview.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys.dedup();
+
+        assert_eq!(keys.len(), evidence.security_findings.len());
+        assert!(evidence
+            .security_findings
+            .iter()
+            .any(|finding| finding.source == "index"));
+        assert!(evidence
+            .security_findings
+            .iter()
+            .any(|finding| finding.source == "worktree"));
+        assert!(rendered.contains("source=index"));
+        assert!(rendered.contains("source=worktree"));
+        assert!(!rendered.contains("stagedsecret"));
+        assert!(!rendered.contains("worktreesecret"));
+        assert!(rendered.contains("[REDACTED"));
+    }
+
+    #[test]
+    fn large_untracked_file_is_skipped_by_diff_stats() {
+        let (dir, repo) = init_temp_git_repo();
+        let root = dir.path();
+        std::fs::write(root.join("small.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(
+            root.join("large.txt"),
+            format!("{}\n", "x".repeat(MAX_UNTRACKED_CONTENT_BYTES as usize + 1)),
+        )
+        .unwrap();
+
+        let (additions, deletions) = diff_stats(&repo).unwrap();
+
+        assert_eq!(additions, 3);
+        assert_eq!(deletions, 0);
+    }
+
+    #[test]
+    fn binary_untracked_file_does_not_fail_evidence_collection() {
+        let (dir, repo) = init_temp_git_repo();
+        let root = dir.path();
+        std::fs::write(root.join("binary.dat"), b"abc\0def\xff").unwrap();
+        std::fs::write(root.join("notes.txt"), "hello\nworld\n").unwrap();
+
+        let evidence = collect_local_git_evidence(root, true).unwrap();
+        let (additions, deletions) = diff_stats(&repo).unwrap();
+
+        assert_eq!(additions, 2);
+        assert_eq!(deletions, 0);
+        assert_eq!(evidence.additions, 2);
+        assert_eq!(evidence.deletions, 0);
+        assert!(evidence.security_findings.is_empty());
+        assert!(evidence
+            .changed_paths
+            .iter()
+            .any(|path| path.path == "binary.dat"));
     }
 
     #[test]
