@@ -47,6 +47,8 @@ const MAX_UNTRACKED_CONTENT_BYTES: u64 = 64 * 1024;
 const MAX_BEHAVIOR_TRAJECTORY_BYTES: u64 = 1_024 * 1_024;
 const MAX_BEHAVIOR_TRAJECTORY_META_BYTES: u64 = 32 * 1024;
 const MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES: usize = 5_000;
+const MAX_BEHAVIOR_TRAJECTORY_SCAN_ENTRIES: usize = 5_000;
+const MAX_BEHAVIOR_TASK_DIR_SCAN_ENTRIES: usize = 1_000;
 const MODEL_COST_RECENT_EVENT_LIMIT: usize = 500;
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -627,6 +629,12 @@ struct BehaviorTrajectoryCandidate {
     path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct BehaviorTrajectoryScanStats {
+    visited_entries: usize,
+    matching_files_considered: usize,
+}
+
 fn parse_json_string_at(content: &str, start: usize) -> Option<(String, usize)> {
     if content.as_bytes().get(start) != Some(&b'"') {
         return None;
@@ -804,34 +812,59 @@ fn collect_behavior_trajectory_candidates_from_dir(
     dir: &Path,
     heap: &mut BinaryHeap<Reverse<BehaviorTrajectoryCandidate>>,
     max_files: usize,
+    max_visited_entries: usize,
+    stats: &mut BehaviorTrajectoryScanStats,
 ) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    if max_visited_entries == 0 || stats.visited_entries >= max_visited_entries {
         return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = entry.metadata() else {
+    }
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        if stats.visited_entries >= max_visited_entries {
+            return;
+        }
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
             continue;
         };
-        if metadata.is_dir() {
-            collect_behavior_trajectory_candidates_from_dir(&path, heap, max_files);
-            continue;
+        let remaining = max_visited_entries.saturating_sub(stats.visited_entries);
+        let mut entries = Vec::new();
+        for entry in read_dir.take(remaining) {
+            stats.visited_entries += 1;
+            let Ok(entry) = entry else {
+                continue;
+            };
+            entries.push(entry);
         }
-        if !metadata.is_file() {
-            continue;
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            if metadata.len() > MAX_BEHAVIOR_TRAJECTORY_BYTES {
+                continue;
+            }
+            stats.matching_files_considered += 1;
+            let modified_key = metadata.modified().map(system_time_key).unwrap_or_default();
+            push_behavior_trajectory_candidate(
+                heap,
+                BehaviorTrajectoryCandidate { modified_key, path },
+                max_files,
+            );
         }
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        if metadata.len() > MAX_BEHAVIOR_TRAJECTORY_BYTES {
-            continue;
-        }
-        let modified_key = metadata.modified().map(system_time_key).unwrap_or_default();
-        push_behavior_trajectory_candidate(
-            heap,
-            BehaviorTrajectoryCandidate { modified_key, path },
-            max_files,
-        );
     }
 }
 
@@ -839,9 +872,41 @@ fn collect_behavior_trajectory_candidates_from_dirs(
     dirs: &[PathBuf],
     max_files: usize,
 ) -> Vec<BehaviorTrajectoryCandidate> {
+    collect_behavior_trajectory_candidates_from_dirs_with_stats(
+        dirs,
+        max_files,
+        MAX_BEHAVIOR_TRAJECTORY_SCAN_ENTRIES,
+    )
+    .0
+}
+
+fn collect_behavior_trajectory_candidates_from_dirs_with_stats(
+    dirs: &[PathBuf],
+    max_files: usize,
+    max_visited_entries: usize,
+) -> (
+    Vec<BehaviorTrajectoryCandidate>,
+    BehaviorTrajectoryScanStats,
+) {
     let mut heap = BinaryHeap::new();
+    let mut stats = BehaviorTrajectoryScanStats::default();
     for dir in dirs {
-        collect_behavior_trajectory_candidates_from_dir(dir, &mut heap, max_files);
+        if stats.visited_entries >= max_visited_entries {
+            break;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(dir) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        collect_behavior_trajectory_candidates_from_dir(
+            dir,
+            &mut heap,
+            max_files,
+            max_visited_entries,
+            &mut stats,
+        );
     }
     let mut candidates = heap
         .into_iter()
@@ -852,7 +917,7 @@ fn collect_behavior_trajectory_candidates_from_dirs(
             .cmp(&a.modified_key)
             .then_with(|| a.path.cmp(&b.path))
     });
-    candidates
+    (candidates, stats)
 }
 
 fn parse_behavior_trajectory_meta_from_path(path: &Path) -> Option<BehaviorTrajectoryMeta> {
@@ -886,32 +951,67 @@ fn collect_behavior_trajectory_metas_from_candidates(
     }
 }
 
+fn collect_behavior_task_trajectory_dirs(
+    tasks_dirs: &[PathBuf],
+    max_visited_entries: usize,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut visited_entries = 0usize;
+    for tasks_dir in tasks_dirs {
+        if visited_entries >= max_visited_entries {
+            break;
+        }
+        let Ok(tasks_metadata) = std::fs::symlink_metadata(tasks_dir) else {
+            continue;
+        };
+        if tasks_metadata.file_type().is_symlink() || !tasks_metadata.is_dir() {
+            continue;
+        }
+        let Ok(read_dir) = std::fs::read_dir(tasks_dir) else {
+            continue;
+        };
+        let remaining = max_visited_entries.saturating_sub(visited_entries);
+        let mut task_entries = Vec::new();
+        for task_entry in read_dir.take(remaining) {
+            visited_entries += 1;
+            let Ok(task_entry) = task_entry else {
+                continue;
+            };
+            task_entries.push(task_entry);
+        }
+        task_entries.sort_by_key(|entry| entry.path());
+        for task_entry in task_entries {
+            let task_dir = task_entry.path();
+            let Ok(task_metadata) = std::fs::symlink_metadata(&task_dir) else {
+                continue;
+            };
+            if task_metadata.file_type().is_symlink() || !task_metadata.is_dir() {
+                continue;
+            }
+            for role in ["planner", "agents"] {
+                let role_dir = task_dir.join("trajectories").join(role);
+                let Ok(role_metadata) = std::fs::symlink_metadata(&role_dir) else {
+                    continue;
+                };
+                if !role_metadata.file_type().is_symlink() && role_metadata.is_dir() {
+                    dirs.push(role_dir);
+                }
+            }
+        }
+    }
+    dirs
+}
+
 async fn collect_behavior_trajectory_metas(
     gcx: Arc<ARwLock<GlobalContext>>,
 ) -> Vec<BehaviorTrajectoryMeta> {
     let mut dirs = crate::chat::trajectories::get_all_trajectories_dirs(gcx.clone()).await;
     let tasks_dirs = crate::tasks::storage::get_all_tasks_dirs(gcx).await;
     tokio::task::spawn_blocking(move || {
-        for tasks_dir in tasks_dirs {
-            if !tasks_dir.exists() {
-                continue;
-            }
-            let Ok(task_entries) = std::fs::read_dir(&tasks_dir) else {
-                continue;
-            };
-            for task_entry in task_entries.flatten() {
-                let task_dir = task_entry.path();
-                if !task_dir.is_dir() {
-                    continue;
-                }
-                for role in ["planner", "agents"] {
-                    let role_dir = task_dir.join("trajectories").join(role);
-                    if role_dir.exists() {
-                        dirs.push(role_dir);
-                    }
-                }
-            }
-        }
+        dirs.extend(collect_behavior_task_trajectory_dirs(
+            &tasks_dirs,
+            MAX_BEHAVIOR_TASK_DIR_SCAN_ENTRIES,
+        ));
         let mut metas = Vec::new();
         let mut seen = HashSet::new();
         let candidates = collect_behavior_trajectory_candidates_from_dirs(
@@ -3166,6 +3266,34 @@ mod tests {
         }
     }
 
+    fn write_behavior_trajectory(path: &Path, id: &str, modified_secs: i64) {
+        std::fs::write(
+            path,
+            serde_json::json!({
+                "id": id,
+                "updated_at": "2026-01-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(modified_secs, 0))
+            .unwrap();
+    }
+
+    fn behavior_candidate_file_names(candidates: &[BehaviorTrajectoryCandidate]) -> Vec<String> {
+        candidates
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect()
+    }
+
     #[test]
     fn signal_hash_is_stable_and_changes_with_signal() {
         let first = signal_hash(["buddy_error_detective", "a", "b"]);
@@ -3530,17 +3658,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for idx in 0..5 {
             let path = dir.path().join(format!("chat_{idx}.json"));
-            std::fs::write(
-                &path,
-                serde_json::json!({
-                    "id": format!("chat-{idx}"),
-                    "updated_at": format!("2026-01-{:02}T00:00:00Z", idx + 1)
-                })
-                .to_string(),
-            )
-            .unwrap();
-            let modified = filetime::FileTime::from_unix_time(100 + idx as i64, 0);
-            filetime::set_file_mtime(&path, modified).unwrap();
+            write_behavior_trajectory(&path, &format!("chat-{idx}"), 100 + idx as i64);
         }
 
         let candidates =
@@ -3556,33 +3674,96 @@ mod tests {
     }
 
     #[test]
+    fn behavior_trajectory_candidate_scan_stops_at_visit_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        for idx in 0..8 {
+            write_behavior_trajectory(
+                &dir.path().join(format!("chat_{idx}.json")),
+                &format!("chat-{idx}"),
+                100 + idx as i64,
+            );
+        }
+
+        let (candidates, stats) = collect_behavior_trajectory_candidates_from_dirs_with_stats(
+            &[dir.path().to_path_buf()],
+            8,
+            4,
+        );
+
+        assert_eq!(stats.visited_entries, 4);
+        assert_eq!(candidates.len(), 4);
+        assert_eq!(stats.matching_files_considered, candidates.len());
+        assert!(stats.matching_files_considered < 8);
+    }
+
+    #[test]
+    fn behavior_trajectory_candidate_scan_skips_symlinked_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("real");
+        let loop_dir = dir.path().join("loop");
+        let linked_dir = dir.path().join("linked");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        write_behavior_trajectory(&real_dir.join("real.json"), "real", 200);
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path(), &loop_dir).unwrap();
+            std::os::unix::fs::symlink(&real_dir, &linked_dir).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(dir.path(), &loop_dir).unwrap();
+            std::os::windows::fs::symlink_dir(&real_dir, &linked_dir).unwrap();
+        }
+
+        let (candidates, stats) = collect_behavior_trajectory_candidates_from_dirs_with_stats(
+            &[dir.path().to_path_buf()],
+            8,
+            16,
+        );
+        let names = behavior_candidate_file_names(&candidates);
+
+        assert_eq!(names, vec!["real.json"]);
+        assert_eq!(stats.matching_files_considered, 1);
+        assert!(stats.visited_entries <= 4);
+    }
+
+    #[test]
+    fn behavior_trajectory_recent_bias_applies_within_visit_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let visited_dir = dir.path().join("visited");
+        let unvisited_dir = dir.path().join("unvisited");
+        std::fs::create_dir_all(&visited_dir).unwrap();
+        std::fs::create_dir_all(&unvisited_dir).unwrap();
+        for idx in 0..4 {
+            write_behavior_trajectory(
+                &visited_dir.join(format!("chat_{idx}.json")),
+                &format!("chat-{idx}"),
+                100 + idx as i64,
+            );
+        }
+        write_behavior_trajectory(&unvisited_dir.join("chat_newest.json"), "newest", 10_000);
+
+        let (candidates, stats) = collect_behavior_trajectory_candidates_from_dirs_with_stats(
+            &[visited_dir, unvisited_dir],
+            2,
+            4,
+        );
+        let names = behavior_candidate_file_names(&candidates);
+
+        assert_eq!(stats.visited_entries, 4);
+        assert_eq!(names, vec!["chat_3.json", "chat_2.json"]);
+    }
+
+    #[test]
     fn behavior_trajectory_meta_collection_includes_newer_files_beyond_cap_boundary() {
         let dir = tempfile::tempdir().unwrap();
         for idx in 0..4 {
             let path = dir.path().join(format!("a_old_{idx}.json"));
-            std::fs::write(
-                &path,
-                serde_json::json!({
-                    "id": format!("old-{idx}"),
-                    "updated_at": format!("2026-01-{:02}T00:00:00Z", idx + 1)
-                })
-                .to_string(),
-            )
-            .unwrap();
-            let modified = filetime::FileTime::from_unix_time(100 + idx as i64, 0);
-            filetime::set_file_mtime(&path, modified).unwrap();
+            write_behavior_trajectory(&path, &format!("old-{idx}"), 100 + idx as i64);
         }
         let new_path = dir.path().join("z_new.json");
-        std::fs::write(
-            &new_path,
-            serde_json::json!({
-                "id": "newest",
-                "updated_at": "2026-02-01T00:00:00Z"
-            })
-            .to_string(),
-        )
-        .unwrap();
-        filetime::set_file_mtime(&new_path, filetime::FileTime::from_unix_time(10_000, 0)).unwrap();
+        write_behavior_trajectory(&new_path, "newest", 10_000);
 
         let candidates =
             collect_behavior_trajectory_candidates_from_dirs(&[dir.path().to_path_buf()], 3);
