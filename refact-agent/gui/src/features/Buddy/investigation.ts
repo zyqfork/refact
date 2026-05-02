@@ -279,7 +279,10 @@ export function buildBuddyInvestigationPrompt(
     input.repoOwner,
     DEFAULT_REPO_OWNER,
   );
-  const repoName = sanitizeGithubSlugFragment(input.repoName, DEFAULT_REPO_NAME);
+  const repoName = sanitizeGithubSlugFragment(
+    input.repoName,
+    DEFAULT_REPO_NAME,
+  );
 
   return [
     "Start a Buddy investigation for a possible Refact product issue.",

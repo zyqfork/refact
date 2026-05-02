@@ -843,7 +843,11 @@ function weatherFromState(
     };
   }
 
-  if (pet?.condition?.sleeping && pulse && hasProviderModelPulseProblem(pulse)) {
+  if (
+    pet?.condition?.sleeping &&
+    pulse &&
+    hasProviderModelPulseProblem(pulse)
+  ) {
     return {
       weather: "storm",
       weatherLabel: "Bug storm",
