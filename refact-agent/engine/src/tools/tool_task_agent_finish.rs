@@ -8,7 +8,6 @@ use tokio::sync::Mutex as AMutex;
 use tokio::sync::RwLock as ARwLock;
 use async_trait::async_trait;
 use chrono::Utc;
-use uuid::Uuid;
 
 use crate::global_context::GlobalContext;
 use crate::agentic::generate_commit_message::generate_commit_message_by_diff;
@@ -21,8 +20,6 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
 use crate::tasks::types::{BoardCard, StatusUpdate};
 use crate::worktrees::types::WorktreeMeta;
-use crate::chat::{get_or_create_session_with_trajectory, process_command_queue};
-use crate::chat::types::{ChatCommand, CommandRequest};
 
 async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>) -> Result<String, String> {
     let ccx_lock = ccx.lock().await;
@@ -396,7 +393,7 @@ impl Tool for ToolTaskAgentFinish {
                 )
             } else {
                 format!(
-                    "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nPlanner will be notified when all agents complete.",
+                    "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nPlanner notified. Other agents are still running.",
                     card_title, report
                 )
             }
@@ -408,7 +405,7 @@ impl Tool for ToolTaskAgentFinish {
                 )
             } else {
                 format!(
-                    "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nPlanner will be notified when all agents complete.",
+                    "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nPlanner notified. Other agents are still running.",
                     card_title, report
                 )
             }
@@ -421,110 +418,13 @@ impl Tool for ToolTaskAgentFinish {
             report.chars().take(100).collect::<String>()
         );
 
-        if all_finished {
-            let since = match storage::load_task_meta(gcx.clone(), &task_id).await {
-                Ok(meta) => meta
-                    .last_agents_summary_at
-                    .as_deref()
-                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-                    .map(|dt| dt.with_timezone(&Utc)),
-                Err(_) => None,
-            };
-
-            let mut results = Vec::new();
-            for card in &board.cards {
-                if card.agent_chat_id.is_none() {
-                    continue;
-                }
-                if let Some(ref since_dt) = since {
-                    let Some(completed_at) = card
-                        .completed_at
-                        .as_deref()
-                        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-                        .map(|dt| dt.with_timezone(&Utc))
-                    else {
-                        continue;
-                    };
-                    if completed_at < *since_dt {
-                        continue;
-                    }
-                }
-                let status = if card.column == "done" {
-                    "✅ done"
-                } else if card.column == "failed" {
-                    "❌ failed"
-                } else {
-                    continue;
-                };
-                let report_preview: String = card
-                    .final_report
-                    .as_deref()
-                    .unwrap_or("")
-                    .chars()
-                    .take(200)
-                    .collect();
-                results.push(format!(
-                    "**{} ({})**: {}\n{}",
-                    card.id, card.title, status, report_preview
-                ));
-            }
-
-            let planner_message = format!(
-                "**All agents have completed.**\n\n{}\n\nRun `task_board_get(card_id)` to see full details for any card.",
-                if results.is_empty() {
-                    let note = since
-                        .as_ref()
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_else(|| "(unknown)".to_string());
-                    format!("_(No newly-finished cards detected since {}.)_", note)
-                } else {
-                    results.join("\n\n")
-                }
-            );
-
-            let sessions = {
-                let gcx_locked = gcx.read().await;
-                gcx_locked.chat_sessions.clone()
-            };
-
-            let planner_chat_id = storage::get_planner_chat_id(gcx.clone(), &task_id).await?;
-            let planner_session =
-                get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id)
-                    .await;
-
-            let request = CommandRequest {
-                client_request_id: format!("task-all-finished-{}", Uuid::new_v4()),
-                priority: true,
-                command: ChatCommand::UserMessage {
-                    content: serde_json::Value::String(planner_message),
-                    attachments: vec![],
-                    context_files: vec![],
-                    suppress_auto_enrichment: false,
-                },
-            };
-
-            let processor_flag = {
-                let mut session = planner_session.lock().await;
-                session.command_queue.push_back(request);
-                session.emit_queue_update();
-                session.queue_notify.notify_one();
-                session.queue_processor_running.clone()
-            };
-
-            if !processor_flag.swap(true, Ordering::SeqCst) {
-                tokio::spawn(process_command_queue(
-                    gcx.clone(),
-                    planner_session.clone(),
-                    processor_flag,
-                ));
-            }
-
-            // Best-effort: mark summary as emitted to avoid repeating historical cards.
-            if let Ok(mut meta) = storage::load_task_meta(gcx.clone(), &task_id).await {
-                meta.last_agents_summary_at = Some(Utc::now().to_rfc3339());
-                let _ = storage::save_task_meta(gcx.clone(), &task_id, &meta).await;
-            }
-        }
+        crate::chat::task_agent_monitor::notify_planner_agents_finished(
+            gcx.clone(),
+            &task_id,
+            &board,
+            all_finished,
+        )
+        .await?;
 
         {
             let ccx_lock = ccx.lock().await;

@@ -172,18 +172,17 @@ async fn mark_agent_as_failed(
         }
     }
 
-    if all_finished {
-        notify_planner_all_agents_done(gcx, task_id, &board).await?;
-    }
+    notify_planner_agents_finished(gcx, task_id, &board, all_finished).await?;
 
     Ok(())
 }
 
-/// Notify planner that all agents have completed (same logic as task_agent_finish)
-async fn notify_planner_all_agents_done(
+/// Notify planner about newly finished agents without waiting for the full batch to end.
+pub(crate) async fn notify_planner_agents_finished(
     gcx: Arc<ARwLock<GlobalContext>>,
     task_id: &str,
     board: &crate::tasks::types::TaskBoard,
+    all_finished: bool,
 ) -> Result<(), String> {
     let since = match storage::load_task_meta(gcx.clone(), task_id).await {
         Ok(meta) => meta
@@ -232,8 +231,20 @@ async fn notify_planner_all_agents_done(
         ));
     }
 
+    let heading = if all_finished {
+        "**All agents have completed.**"
+    } else {
+        "**Task agent finished.**"
+    };
+    let footer = if all_finished {
+        "Run `task_board_get(card_id)` to see full details for any card."
+    } else {
+        "Other agents may still be running. Run `task_check_agents` to see live status or `task_board_get(card_id)` for full details."
+    };
+
     let planner_message = format!(
-        "**All agents have completed.**\n\n{}\n\nRun `task_board_get(card_id)` to see full details for any card.",
+        "{}\n\n{}\n\n{}",
+        heading,
         if results.is_empty() {
             let note = since
                 .as_ref()
@@ -242,7 +253,8 @@ async fn notify_planner_all_agents_done(
             format!("_(No newly-finished cards detected since {}.)_", note)
         } else {
             results.join("\n\n")
-        }
+        },
+        footer
     );
 
     let sessions = {
@@ -255,7 +267,7 @@ async fn notify_planner_all_agents_done(
         get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id).await;
 
     let request = CommandRequest {
-        client_request_id: format!("task-all-finished-{}", uuid::Uuid::new_v4()),
+        client_request_id: format!("task-agent-finished-{}", uuid::Uuid::new_v4()),
         priority: true,
         command: ChatCommand::UserMessage {
             content: serde_json::Value::String(planner_message),
