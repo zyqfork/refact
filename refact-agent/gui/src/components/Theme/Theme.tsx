@@ -1,10 +1,8 @@
 import React from "react";
 import { Theme as RadixTheme } from "@radix-ui/themes";
-import { MoonIcon, SunIcon } from "@radix-ui/react-icons";
 import "@radix-ui/themes/styles.css";
 import "./theme-config.css";
 import "../shared/tokens.css";
-import styles from "./Theme.module.css";
 import { useAppearance, useConfig } from "../../hooks";
 
 export type ThemeProps = {
@@ -46,37 +44,9 @@ export type ThemeProps = {
   hasBackground?: boolean;
 };
 
-const ThemeWithDarkMode: React.FC<ThemeProps> = ({ children, ...props }) => {
-  const { isDarkMode, toggle } = useAppearance();
-  const Icon = isDarkMode ? MoonIcon : SunIcon;
-  return (
-    <RadixTheme {...props} appearance={isDarkMode ? "dark" : "light"}>
-      <button
-        type="button"
-        className={styles.themeToggle}
-        title="toggle dark mode"
-        onClick={toggle}
-        aria-label="Toggle dark mode"
-      >
-        <Icon />
-      </button>
-      {/** TODO: remove this in production */}
-      {/** use cmd + c to open and close */}
-      {/* <ThemePanel defaultOpen={false} /> */}
-      {children}
-    </RadixTheme>
-  );
-};
-
 export const Theme: React.FC<ThemeProps> = (props) => {
-  const { host, themeProps } = useConfig();
+  const { themeProps } = useConfig();
   const { appearance } = useAppearance();
-
-  if (host === "web") {
-    return (
-      <ThemeWithDarkMode {...themeProps} {...props} appearance={appearance} />
-    );
-  }
 
   return <RadixTheme {...themeProps} {...props} appearance={appearance} />;
 };

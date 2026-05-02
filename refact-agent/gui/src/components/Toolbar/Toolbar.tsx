@@ -1,6 +1,13 @@
 import { TextField, HoverCard, Text, Badge } from "@radix-ui/themes";
 import { Dropdown, DropdownNavigationOptions } from "./Dropdown";
-import { Cross1Icon, PlusIcon, CheckboxIcon } from "@radix-ui/react-icons";
+import {
+  Cross1Icon,
+  PlusIcon,
+  CheckboxIcon,
+  ExternalLinkIcon,
+  MoonIcon,
+  SunIcon,
+} from "@radix-ui/react-icons";
 import classNames from "classnames";
 import { RefactIcon } from "../../images";
 import { newChatAction } from "../../events";
@@ -43,6 +50,8 @@ import { StatusDot } from "../StatusDot";
 import {
   useAppDispatch,
   useAppSelector,
+  useAppearance,
+  useConfig,
   useEventsBusForIDE,
 } from "../../hooks";
 import { useGetChatModesQuery } from "../../services/refact/chatModes";
@@ -80,10 +89,47 @@ export type ToolbarProps = {
   activeTab: Tab;
 };
 
+type ToolbarIconButtonProps = {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+  className?: string;
+  disabled?: boolean;
+};
+
+const ToolbarIconButton: React.FC<ToolbarIconButtonProps> = ({
+  label,
+  onClick,
+  children,
+  className,
+  disabled,
+}) => (
+  <HoverCard.Root>
+    <HoverCard.Trigger>
+      <button
+        type="button"
+        className={classNames(styles.iconButton, className)}
+        onClick={onClick}
+        aria-label={label}
+        disabled={disabled}
+      >
+        {children}
+      </button>
+    </HoverCard.Trigger>
+    <HoverCard.Content size="1" side="bottom">
+      <Text as="p" size="2">
+        {label}
+      </Text>
+    </HoverCard.Content>
+  </HoverCard.Root>
+);
+
 export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const dispatch = useAppDispatch();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
+  const config = useConfig();
+  const { isDarkMode, toggle: toggleDarkMode } = useAppearance();
 
   const tabs = useAppSelector(selectTabsDisplayData);
   const allThreads = useAppSelector(selectAllThreads);
@@ -92,7 +138,8 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const { data: modesData } = useGetChatModesQuery(undefined);
   const { data: tasksList = [] } = useListTasksQuery(undefined);
 
-  const { openSettings, openHotKeys } = useEventsBusForIDE();
+  const { openSettings, openHotKeys, openChatInNewTab } =
+    useEventsBusForIDE();
   const [createTask] = useCreateTaskMutation();
 
   const [renameState, setRenameState] = useState<{
@@ -167,6 +214,22 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
         /* handled by RTK Query */
       });
   }, [createTask, dispatch]);
+
+  const onOpenChatInBrowser = useCallback(() => {
+    if (config.host === "web") {
+      window.open(window.location.href, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    const currentThread = allThreads[currentChatId]?.thread;
+
+    if (currentThread) {
+      openChatInNewTab(currentThread);
+      return;
+    }
+
+    window.open(window.location.href, "_blank", "noopener,noreferrer");
+  }, [allThreads, config.host, currentChatId, openChatInNewTab]);
 
   const goToTab = useCallback(
     (tab: Tab) => {
@@ -308,26 +371,16 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   return (
     <div className={styles.toolbar}>
       <div className={styles.toolbarSection}>
-        <HoverCard.Root>
-          <HoverCard.Trigger>
-            <button
-              type="button"
-              className={classNames(styles.iconButton, styles.homeButton)}
-              onClick={() => {
-                setRenameState(null);
-                goToTab({ type: "dashboard" });
-              }}
-              aria-label="Home"
-            >
-              <RefactIcon style={{ color: "#E7150D" }} />
-            </button>
-          </HoverCard.Trigger>
-          <HoverCard.Content size="1" side="bottom">
-            <Text as="p" size="2">
-              Home
-            </Text>
-          </HoverCard.Content>
-        </HoverCard.Root>
+        <ToolbarIconButton
+          label="Home"
+          className={styles.homeButton}
+          onClick={() => {
+            setRenameState(null);
+            goToTab({ type: "dashboard" });
+          }}
+        >
+          <RefactIcon style={{ color: "#E7150D" }} />
+        </ToolbarIconButton>
       </div>
 
       <div className={styles.toolbarDivider} />
@@ -484,42 +537,33 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
 
       <div className={styles.toolbarSection}>
         <ConnectionStatusIndicator />
+      </div>
 
-        <HoverCard.Root>
-          <HoverCard.Trigger>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={onCreateNewTask}
-              aria-label="New Task"
-            >
-              <CheckboxIcon />
-            </button>
-          </HoverCard.Trigger>
-          <HoverCard.Content size="1" side="bottom">
-            <Text as="p" size="2">
-              New Task
-            </Text>
-          </HoverCard.Content>
-        </HoverCard.Root>
+      <div className={styles.toolbarDivider} />
 
-        <HoverCard.Root>
-          <HoverCard.Trigger>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={onCreateNewChat}
-              aria-label="New Chat"
-            >
-              <PlusIcon />
-            </button>
-          </HoverCard.Trigger>
-          <HoverCard.Content size="1" side="bottom">
-            <Text as="p" size="2">
-              New Chat
-            </Text>
-          </HoverCard.Content>
-        </HoverCard.Root>
+      <div className={styles.toolbarSection}>
+        <ToolbarIconButton label="New Chat" onClick={onCreateNewChat}>
+          <PlusIcon />
+        </ToolbarIconButton>
+
+        <ToolbarIconButton label="New Task" onClick={onCreateNewTask}>
+          <CheckboxIcon />
+        </ToolbarIconButton>
+      </div>
+
+      <div className={styles.toolbarDivider} />
+
+      <div className={styles.toolbarSection}>
+        <ToolbarIconButton
+          label="Open Chat in Browser"
+          onClick={onOpenChatInBrowser}
+        >
+          <ExternalLinkIcon />
+        </ToolbarIconButton>
+
+        <ToolbarIconButton label="Toggle Dark Mode" onClick={toggleDarkMode}>
+          {isDarkMode ? <MoonIcon /> : <SunIcon />}
+        </ToolbarIconButton>
 
         <Dropdown handleNavigation={handleNavigation} useGhostTrigger />
       </div>
