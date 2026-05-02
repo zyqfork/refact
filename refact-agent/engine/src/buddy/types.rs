@@ -633,6 +633,16 @@ pub struct MemoryPulse {
     pub orphan: u32,
     pub stale_conflicts: u32,
     #[serde(default)]
+    pub duplicate_candidates: u32,
+    #[serde(default)]
+    pub merge_candidates: u32,
+    #[serde(default)]
+    pub archive_candidates: u32,
+    #[serde(default)]
+    pub review_candidates: u32,
+    #[serde(default)]
+    pub conflict_candidates: u32,
+    #[serde(default)]
     pub pending_ops: u32,
     #[serde(default)]
     pub applied_ops: u32,

@@ -175,8 +175,15 @@ pub fn create_frontmatter(
         related_entities: Vec::new(),
         content_hash: None,
         source_tool: None,
+        source_confidence: None,
         source_trajectory_id: None,
         source_message_range: None,
+        source_commit: None,
+        topic: None,
+        last_used_at: None,
+        use_count: 0,
+        last_injected_at: None,
+        dismissed_count: 0,
     }
 }
 
@@ -1768,8 +1775,15 @@ pub async fn memories_add_enriched(
         related_entities,
         content_hash: Some(content_hash),
         source_tool: Some("memories_add_enriched".to_string()),
+        source_confidence: None,
         source_trajectory_id: None,
         source_message_range: None,
+        source_commit: None,
+        topic: None,
+        last_used_at: None,
+        use_count: 0,
+        last_injected_at: None,
+        dismissed_count: 0,
     };
 
     let file_path = memories_add(gcx.clone(), &frontmatter, content).await?;

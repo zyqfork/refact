@@ -637,7 +637,7 @@ mod rules {
 
     pub fn memory_garden(
         store: &crate::buddy::facts::FactStore,
-        _pulse: &BuddyPulse,
+        pulse: &BuddyPulse,
         _queue: &OpportunityQueue,
         now: DateTime<Utc>,
     ) -> Vec<BuddyOpportunity> {
@@ -651,6 +651,11 @@ mod rules {
             .flat_map(|k| store.recent_at(*k, Duration::hours(24), now))
             .collect();
         let fact_keys: Vec<String> = recent.iter().map(|f| f.key.clone()).collect();
+        let lifecycle_attention = pulse.memory.duplicate_candidates
+            + pulse.memory.merge_candidates
+            + pulse.memory.archive_candidates
+            + pulse.memory.review_candidates
+            + pulse.memory.conflict_candidates;
         let memory_ids: Vec<String> = recent
             .iter()
             .flat_map(|f| {
@@ -659,12 +664,20 @@ mod rules {
                 ids
             })
             .collect();
-        if fact_keys.is_empty() {
+        if fact_keys.is_empty() && lifecycle_attention == 0 {
             return vec![];
         }
+        let summary = if lifecycle_attention > 0 {
+            format!(
+                "Knowledge base needs attention: {} lifecycle candidate(s)",
+                lifecycle_attention
+            )
+        } else {
+            "Knowledge base needs attention".to_string()
+        };
         let mut o = opp(
             BuddyOpportunityKind::MemoryGarden,
-            "Knowledge base needs attention",
+            summary,
             BuddyPriority::Normal,
             0.8,
             fact_keys,
@@ -1201,5 +1214,25 @@ pub fn primary_fact_kind_for_opportunity(
         BuddyOpportunityKind::DiagnosticInvestigation => BuddyFactKind::DiagnosticCluster,
         BuddyOpportunityKind::GitHygiene => BuddyFactKind::UncommittedPressure,
         BuddyOpportunityKind::WorktreeCleanup => BuddyFactKind::WorktreeHygiene,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buddy::facts::FactStore;
+
+    #[test]
+    fn memory_garden_uses_lifecycle_pulse_counts_without_recent_facts() {
+        let mut pulse = BuddyPulse::default();
+        pulse.memory.duplicate_candidates = 1;
+        pulse.memory.merge_candidates = 2;
+        let queue = OpportunityQueue::new();
+
+        let opps = rules::memory_garden(&FactStore::new(), &pulse, &queue, Utc::now());
+
+        assert_eq!(opps.len(), 1);
+        assert!(opps[0].summary.contains("3 lifecycle candidate"));
+        assert_eq!(opps[0].kind, BuddyOpportunityKind::MemoryGarden);
     }
 }

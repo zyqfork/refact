@@ -51,9 +51,23 @@ pub struct KnowledgeFrontmatter {
     #[serde(default)]
     pub source_tool: Option<String>,
     #[serde(default)]
+    pub source_confidence: Option<f32>,
+    #[serde(default)]
     pub source_trajectory_id: Option<String>,
     #[serde(default)]
     pub source_message_range: Option<String>,
+    #[serde(default)]
+    pub source_commit: Option<String>,
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub use_count: u32,
+    #[serde(default)]
+    pub last_injected_at: Option<String>,
+    #[serde(default)]
+    pub dismissed_count: u32,
 }
 
 impl KnowledgeFrontmatter {
@@ -198,6 +212,9 @@ impl KnowledgeFrontmatter {
                 source_tool.replace('"', "\\\"")
             ));
         }
+        if let Some(source_confidence) = self.source_confidence {
+            lines.push(format!("source_confidence: {:.3}", source_confidence));
+        }
         if let Some(source_trajectory_id) = &self.source_trajectory_id {
             lines.push(format!(
                 "source_trajectory_id: \"{}\"",
@@ -209,6 +226,33 @@ impl KnowledgeFrontmatter {
                 "source_message_range: \"{}\"",
                 source_message_range.replace('"', "\\\"")
             ));
+        }
+        if let Some(source_commit) = &self.source_commit {
+            lines.push(format!(
+                "source_commit: \"{}\"",
+                source_commit.replace('"', "\\\"")
+            ));
+        }
+        if let Some(topic) = &self.topic {
+            lines.push(format!("topic: \"{}\"", topic.replace('"', "\\\"")));
+        }
+        if let Some(last_used_at) = &self.last_used_at {
+            lines.push(format!(
+                "last_used_at: \"{}\"",
+                last_used_at.replace('"', "\\\"")
+            ));
+        }
+        if self.use_count > 0 {
+            lines.push(format!("use_count: {}", self.use_count));
+        }
+        if let Some(last_injected_at) = &self.last_injected_at {
+            lines.push(format!(
+                "last_injected_at: \"{}\"",
+                last_injected_at.replace('"', "\\\"")
+            ));
+        }
+        if self.dismissed_count > 0 {
+            lines.push(format!("dismissed_count: {}", self.dismissed_count));
         }
 
         lines.push("---".to_string());
@@ -225,6 +269,10 @@ impl KnowledgeFrontmatter {
 
     pub fn is_archived(&self) -> bool {
         self.status.as_deref() == Some("archived")
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.status.as_deref() == Some("pinned")
     }
 
     pub fn kind_or_default(&self) -> &str {

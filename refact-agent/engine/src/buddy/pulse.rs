@@ -5,6 +5,7 @@ use chrono::Utc;
 use tokio::sync::RwLock;
 
 use crate::buddy::facts::FactStore;
+use crate::buddy::memory_lifecycle::memory_lifecycle_op_counts;
 use crate::buddy::types::{
     BuddyFactKind, BuddyPulse, CompetitorImportPulse, CustomizationPulse, DiagnosticPulse,
     GitPulse, McpPulse, MemoryPulse, ProviderPulse, TaskPulse, TrajectoryPulse, WorktreePulse,
@@ -23,7 +24,7 @@ pub async fn build_pulse(
 
     p.tasks = build_tasks_pulse(gcx.clone(), fact_store).await;
     p.trajectories = build_trajectories_pulse(project_root).await;
-    p.memory = build_memory_pulse(project_root, fact_store);
+    p.memory = build_memory_pulse(project_root, fact_store).await;
     p.providers = build_providers_pulse(gcx.clone()).await;
     p.mcp = build_mcp_pulse(gcx.clone(), fact_store).await;
     p.customization = build_customization_pulse(gcx.clone()).await;
@@ -67,7 +68,7 @@ async fn build_trajectories_pulse(project_root: &std::path::Path) -> TrajectoryP
     }
 }
 
-fn build_memory_pulse(project_root: &std::path::Path, fact_store: &FactStore) -> MemoryPulse {
+async fn build_memory_pulse(project_root: &std::path::Path, fact_store: &FactStore) -> MemoryPulse {
     let mut pulse = MemoryPulse::default();
     let orphan_facts = fact_store.recent(BuddyFactKind::MemoryOrphan, chrono::Duration::hours(24));
     pulse.orphan = orphan_facts.len() as u32;
@@ -82,6 +83,18 @@ fn build_memory_pulse(project_root: &std::path::Path, fact_store: &FactStore) ->
             pulse.total = rd.count() as u32;
         }
     }
+    let memory_ops = crate::buddy::storage::load_memory_ops(project_root).await;
+    pulse.pending_ops = memory_ops
+        .pending_count
+        .saturating_add(memory_ops.approved_count);
+    pulse.applied_ops = memory_ops.applied_count;
+    pulse.failed_ops = memory_ops.failed_count;
+    let counts = memory_lifecycle_op_counts(&memory_ops.ops);
+    pulse.duplicate_candidates = counts.duplicate_candidates;
+    pulse.merge_candidates = counts.merge_candidates;
+    pulse.archive_candidates = counts.archive_candidates;
+    pulse.review_candidates = counts.review_candidates;
+    pulse.conflict_candidates = counts.conflict_candidates;
     pulse
 }
 
@@ -357,6 +370,10 @@ fn compute_diff_lines_4h(repo: &git2::Repository) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buddy::memory_lifecycle::{
+        MemoryLifecycleOp, MemoryOpStatus, MemoryOpType, MemorySource,
+    };
+    use crate::buddy::storage::enqueue_memory_op;
     use crate::ext::competitor_import::manifest::write_last_report;
     use crate::ext::competitor_import::types::{
         Competitor, ImportCandidateSummary, ImportKind, ImportOutcome, ImportScope,
@@ -384,6 +401,28 @@ mod tests {
     async fn write_summary_report(scope_root: &Path, mut summary: ImportSummary) {
         summary.mark_completed();
         write_last_report(scope_root, &summary).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn memory_pulse_includes_lifecycle_op_counts() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut op = MemoryLifecycleOp::pending(
+            "op-merge",
+            MemorySource::MemoryGarden,
+            MemoryOpType::MergeArchive,
+            vec![".refact/knowledge/old.md".to_string()],
+            "exact content_hash duplicate",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        op.status = MemoryOpStatus::Pending;
+        enqueue_memory_op(temp.path(), op).await.unwrap();
+
+        let pulse = build_memory_pulse(temp.path(), &FactStore::new()).await;
+
+        assert_eq!(pulse.pending_ops, 1);
+        assert_eq!(pulse.merge_candidates, 1);
+        assert_eq!(pulse.duplicate_candidates, 1);
     }
 
     #[tokio::test]

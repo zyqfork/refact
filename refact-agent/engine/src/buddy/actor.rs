@@ -15,7 +15,9 @@ use super::drafts::{
 use super::events::BuddyEvent;
 use super::facts::FactStore;
 use super::humor::{HumorPlan, HumorService};
-use super::memory_lifecycle::MemoryOpsState;
+use super::memory_lifecycle::{
+    detect_memory_lifecycle_ops_from_knowledge_dirs, memory_lifecycle_op_counts, MemoryOpsState,
+};
 use super::observers::{build_observer_registry, BuddyObserver, ObserverContext};
 use super::opportunities::{primary_fact_kind_for_opportunity, OpportunityDetector, OpportunityQueue};
 use super::policy::{evaluate, PolicyDecision};
@@ -405,6 +407,12 @@ impl BuddyService {
         pulse.memory.pending_ops = self.memory_ops.pending_count + self.memory_ops.approved_count;
         pulse.memory.applied_ops = self.memory_ops.applied_count;
         pulse.memory.failed_ops = self.memory_ops.failed_count;
+        let counts = memory_lifecycle_op_counts(&self.memory_ops.ops);
+        pulse.memory.duplicate_candidates = counts.duplicate_candidates;
+        pulse.memory.merge_candidates = counts.merge_candidates;
+        pulse.memory.archive_candidates = counts.archive_candidates;
+        pulse.memory.review_candidates = counts.review_candidates;
+        pulse.memory.conflict_candidates = counts.conflict_candidates;
     }
 
     pub fn create_draft(
@@ -1437,6 +1445,29 @@ pub async fn buddy_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
                 let mut tmp_store = FactStore::new();
                 for f in facts {
                     tmp_store.ingest(f);
+                }
+                let knowledge_dirs = crate::files_correction::get_project_dirs(gcx.clone())
+                    .await
+                    .into_iter()
+                    .map(|dir| dir.join(crate::file_filter::KNOWLEDGE_FOLDER_NAME))
+                    .filter(|dir| dir.exists())
+                    .collect::<Vec<_>>();
+                let lifecycle_ops =
+                    detect_memory_lifecycle_ops_from_knowledge_dirs(&knowledge_dirs, now).await;
+                if !lifecycle_ops.is_empty() {
+                    let mut memory_ops = super::storage::load_memory_ops(&project_root).await;
+                    for op in lifecycle_ops {
+                        match super::storage::enqueue_memory_op(&project_root, op).await {
+                            Ok(updated) => memory_ops = updated,
+                            Err(err) => {
+                                warn!("buddy: failed to enqueue memory lifecycle op: {}", err)
+                            }
+                        }
+                    }
+                    let mut buddy = buddy_arc.lock().await;
+                    if let Some(svc) = buddy.as_mut() {
+                        svc.memory_ops = memory_ops;
+                    }
                 }
                 let new_pulse =
                     super::pulse::build_pulse(gcx.clone(), &project_root, &tmp_store).await;

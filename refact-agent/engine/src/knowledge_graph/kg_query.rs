@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use super::kg_structs::{KnowledgeDoc, KnowledgeGraph};
 
@@ -36,7 +36,7 @@ impl KnowledgeGraph {
             return vec![];
         };
 
-        let mut scores: HashMap<String, f64> = HashMap::new();
+        let mut scores: BTreeMap<String, f64> = BTreeMap::new();
 
         for tag in &doc.frontmatter.tags {
             for related_id in self.docs_with_tag(tag) {
@@ -73,11 +73,7 @@ impl KnowledgeGraph {
             .map(|(id, score)| RelatedDoc { id, score })
             .collect();
 
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        results.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
         results.truncate(max_results);
         results
     }
@@ -115,7 +111,7 @@ impl KnowledgeGraph {
         filenames: &[String],
         entities: &[String],
     ) -> Vec<(String, f64)> {
-        let mut scores: HashMap<String, f64> = HashMap::new();
+        let mut scores: BTreeMap<String, f64> = BTreeMap::new();
 
         for tag in tags {
             for id in self.docs_with_tag(tag) {
@@ -145,7 +141,7 @@ impl KnowledgeGraph {
             })
             .collect();
 
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         results
     }
 
@@ -173,5 +169,51 @@ impl KnowledgeGraph {
             })
             .take(10)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::kg_structs::{KnowledgeDoc, KnowledgeFrontmatter, KnowledgeGraph};
+    use std::path::PathBuf;
+
+    fn doc(id: &str, tags: &[&str], filenames: &[&str], entities: &[&str]) -> KnowledgeDoc {
+        KnowledgeDoc {
+            path: PathBuf::from(format!("/tmp/{id}.md")),
+            frontmatter: KnowledgeFrontmatter {
+                id: Some(id.to_string()),
+                tags: tags.iter().map(|value| value.to_string()).collect(),
+                filenames: filenames.iter().map(|value| value.to_string()).collect(),
+                status: Some("active".to_string()),
+                ..Default::default()
+            },
+            content: String::new(),
+            entities: entities.iter().map(|value| value.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn find_similar_docs_tie_breaks_by_id() {
+        let mut graph = KnowledgeGraph::new();
+        graph.add_doc(doc("z-doc", &["component:buddy"], &[], &[]));
+        graph.add_doc(doc("a-doc", &["component:buddy"], &[], &[]));
+
+        let results = graph.find_similar_docs(&["component:buddy".to_string()], &[], &[]);
+
+        assert_eq!(results[0].0, "a-doc");
+        assert_eq!(results[1].0, "z-doc");
+    }
+
+    #[test]
+    fn find_related_tie_breaks_by_id() {
+        let mut graph = KnowledgeGraph::new();
+        graph.add_doc(doc("root", &["component:buddy"], &[], &[]));
+        graph.add_doc(doc("z-doc", &["component:buddy"], &[], &[]));
+        graph.add_doc(doc("a-doc", &["component:buddy"], &[], &[]));
+
+        let related = graph.find_related("root", 10);
+
+        assert_eq!(related[0].id, "a-doc");
+        assert_eq!(related[1].id, "z-doc");
     }
 }
