@@ -1,6 +1,8 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 use regex::Regex;
@@ -45,6 +47,24 @@ const SETUP_COACH_WORKFLOW_ID: &str = "buddy_setup_coach";
 const DEPENDENCY_RADAR_WORKFLOW_ID: &str = "buddy_dependency_radar";
 const DOCS_GARDENER_WORKFLOW_ID: &str = "buddy_docs_gardener";
 const ARCHITECTURE_DRIFT_WORKFLOW_ID: &str = "buddy_architecture_drift_watcher";
+const MEMORY_GARDENER_WORKFLOW_ID: &str = "buddy_memory_gardener";
+const KNOWLEDGE_CONFLICT_WORKFLOW_ID: &str = "buddy_knowledge_conflict_resolver";
+const BEHAVIOR_LEARNER_WORKFLOW_ID: &str = "buddy_behavior_learner";
+const USER_HABIT_COACH_WORKFLOW_ID: &str = "buddy_user_habit_coach";
+const MODEL_COST_OPTIMIZER_WORKFLOW_ID: &str = "buddy_model_cost_optimizer";
+const AUTONOMOUS_BUDDY_WORKFLOW_IDS: &[&str] = &[
+    ERROR_DETECTIVE_WORKFLOW_ID,
+    SECURITY_WHISPERER_WORKFLOW_ID,
+    SETUP_COACH_WORKFLOW_ID,
+    DEPENDENCY_RADAR_WORKFLOW_ID,
+    DOCS_GARDENER_WORKFLOW_ID,
+    ARCHITECTURE_DRIFT_WORKFLOW_ID,
+    MEMORY_GARDENER_WORKFLOW_ID,
+    KNOWLEDGE_CONFLICT_WORKFLOW_ID,
+    BEHAVIOR_LEARNER_WORKFLOW_ID,
+    USER_HABIT_COACH_WORKFLOW_ID,
+    MODEL_COST_OPTIMIZER_WORKFLOW_ID,
+];
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,22 +409,22 @@ fn knowledge_conflict_evidence(ctx: &BuddyJobContext) -> Option<AutonomousEviden
 
 fn title_for_workflow(workflow_id: &str) -> &'static str {
     match workflow_id {
-        "buddy_memory_gardener" => "Memory Gardener",
-        "buddy_knowledge_conflict_resolver" => "Knowledge Conflict Resolver",
-        "buddy_behavior_learner" => "Behavior Learner",
-        "buddy_user_habit_coach" => "User Habit Coach",
-        "buddy_model_cost_optimizer" => "Model/Cost Optimizer",
+        MEMORY_GARDENER_WORKFLOW_ID => "Memory Gardener",
+        KNOWLEDGE_CONFLICT_WORKFLOW_ID => "Knowledge Conflict Resolver",
+        BEHAVIOR_LEARNER_WORKFLOW_ID => "Behavior Learner",
+        USER_HABIT_COACH_WORKFLOW_ID => "User Habit Coach",
+        MODEL_COST_OPTIMIZER_WORKFLOW_ID => "Model/Cost Optimizer",
         _ => "Buddy Autonomous Report",
     }
 }
 
 fn display_for_workflow(workflow_id: &str) -> (&'static str, &'static str, &'static str) {
     match workflow_id {
-        "buddy_memory_gardener" => ("🌿", "Memory", "normal"),
-        "buddy_knowledge_conflict_resolver" => ("🧩", "Knowledge", "normal"),
-        "buddy_behavior_learner" => ("🧭", "Preferences", "normal"),
-        "buddy_user_habit_coach" => ("🏃", "Habits", "normal"),
-        "buddy_model_cost_optimizer" => ("💸", "Model/Cost", "normal"),
+        MEMORY_GARDENER_WORKFLOW_ID => ("🌿", "Memory", "normal"),
+        KNOWLEDGE_CONFLICT_WORKFLOW_ID => ("🧩", "Knowledge", "normal"),
+        BEHAVIOR_LEARNER_WORKFLOW_ID => ("🧭", "Preferences", "normal"),
+        USER_HABIT_COACH_WORKFLOW_ID => ("🏃", "Habits", "normal"),
+        MODEL_COST_OPTIMIZER_WORKFLOW_ID => ("💸", "Model/Cost", "normal"),
         _ => ("🤖", "Buddy", "normal"),
     }
 }
@@ -635,6 +655,12 @@ struct BehaviorTrajectoryMeta {
     path: PathBuf,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct BehaviorTrajectoryCandidate {
+    modified_key: u64,
+    path: PathBuf,
+}
+
 fn parse_json_string_at(content: &str, start: usize) -> Option<(String, usize)> {
     if content.as_bytes().get(start) != Some(&b'"') {
         return None;
@@ -773,68 +799,119 @@ fn collect_behavior_trajectory_metas_from_dir(
     metas: &mut Vec<BehaviorTrajectoryMeta>,
     seen: &mut HashSet<String>,
 ) {
-    let mut scanned_files = 0;
-    collect_behavior_trajectory_metas_from_dir_with_cap(
-        dir,
-        metas,
-        seen,
-        &mut scanned_files,
+    let candidates = collect_behavior_trajectory_candidates_from_dirs(
+        std::slice::from_ref(&dir.to_path_buf()),
         MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES,
     );
+    collect_behavior_trajectory_metas_from_candidates(candidates, metas, seen);
 }
 
-fn collect_behavior_trajectory_metas_from_dir_with_cap(
-    dir: &Path,
-    metas: &mut Vec<BehaviorTrajectoryMeta>,
-    seen: &mut HashSet<String>,
-    scanned_files: &mut usize,
+fn system_time_key(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn push_behavior_trajectory_candidate(
+    heap: &mut BinaryHeap<Reverse<BehaviorTrajectoryCandidate>>,
+    candidate: BehaviorTrajectoryCandidate,
     max_files: usize,
 ) {
-    if *scanned_files >= max_files {
+    if max_files == 0 {
         return;
     }
+    if heap.len() < max_files {
+        heap.push(Reverse(candidate));
+        return;
+    }
+    let should_replace = heap
+        .peek()
+        .map(|oldest| candidate > oldest.0)
+        .unwrap_or(false);
+    if should_replace {
+        heap.pop();
+        heap.push(Reverse(candidate));
+    }
+}
+
+fn collect_behavior_trajectory_candidates_from_dir(
+    dir: &Path,
+    heap: &mut BinaryHeap<Reverse<BehaviorTrajectoryCandidate>>,
+    max_files: usize,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if *scanned_files >= max_files {
-            return;
-        }
         let path = entry.path();
-        if path.is_dir() {
-            collect_behavior_trajectory_metas_from_dir_with_cap(
-                &path,
-                metas,
-                seen,
-                scanned_files,
-                max_files,
-            );
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_behavior_trajectory_candidates_from_dir(&path, heap, max_files);
             continue;
         }
-        *scanned_files += 1;
+        if !metadata.is_file() {
+            continue;
+        }
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let Ok(metadata) = std::fs::metadata(&path) else {
-            continue;
-        };
         if metadata.len() > MAX_BEHAVIOR_TRAJECTORY_BYTES {
             continue;
         }
-        let Ok(file) = std::fs::File::open(&path) else {
-            continue;
-        };
-        let mut content = String::new();
-        let mut reader = std::io::Read::take(file, MAX_BEHAVIOR_TRAJECTORY_META_BYTES);
-        if std::io::Read::read_to_string(&mut reader, &mut content).is_err() {
-            continue;
-        }
-        let meta = parse_behavior_trajectory_meta(&content, path.clone()).or_else(|| {
-            std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|content| parse_behavior_trajectory_meta(&content, path.clone()))
-        });
-        let Some(meta) = meta else {
+        let modified_key = metadata.modified().map(system_time_key).unwrap_or_default();
+        push_behavior_trajectory_candidate(
+            heap,
+            BehaviorTrajectoryCandidate { modified_key, path },
+            max_files,
+        );
+    }
+}
+
+fn collect_behavior_trajectory_candidates_from_dirs(
+    dirs: &[PathBuf],
+    max_files: usize,
+) -> Vec<BehaviorTrajectoryCandidate> {
+    let mut heap = BinaryHeap::new();
+    for dir in dirs {
+        collect_behavior_trajectory_candidates_from_dir(dir, &mut heap, max_files);
+    }
+    let mut candidates = heap
+        .into_iter()
+        .map(|Reverse(candidate)| candidate)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| {
+        b.modified_key
+            .cmp(&a.modified_key)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    candidates
+}
+
+fn parse_behavior_trajectory_meta_from_path(path: &Path) -> Option<BehaviorTrajectoryMeta> {
+    let Ok(file) = std::fs::File::open(path) else {
+        return None;
+    };
+    let mut content = String::new();
+    let mut reader = std::io::Read::take(file, MAX_BEHAVIOR_TRAJECTORY_META_BYTES);
+    if std::io::Read::read_to_string(&mut reader, &mut content).is_err() {
+        return None;
+    }
+    parse_behavior_trajectory_meta(&content, path.to_path_buf()).or_else(|| {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| parse_behavior_trajectory_meta(&content, path.to_path_buf()))
+    })
+}
+
+fn collect_behavior_trajectory_metas_from_candidates(
+    candidates: Vec<BehaviorTrajectoryCandidate>,
+    metas: &mut Vec<BehaviorTrajectoryMeta>,
+    seen: &mut HashSet<String>,
+) {
+    for candidate in candidates {
+        let Some(meta) = parse_behavior_trajectory_meta_from_path(&candidate.path) else {
             continue;
         };
         if seen.insert(meta.id.clone()) {
@@ -871,19 +948,11 @@ async fn collect_behavior_trajectory_metas(
         }
         let mut metas = Vec::new();
         let mut seen = HashSet::new();
-        let mut scanned_files = 0;
-        for dir in dirs {
-            collect_behavior_trajectory_metas_from_dir_with_cap(
-                &dir,
-                &mut metas,
-                &mut seen,
-                &mut scanned_files,
-                MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES,
-            );
-            if scanned_files >= MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES {
-                break;
-            }
-        }
+        let candidates = collect_behavior_trajectory_candidates_from_dirs(
+            &dirs,
+            MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES,
+        );
+        collect_behavior_trajectory_metas_from_candidates(candidates, &mut metas, &mut seen);
         metas.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
@@ -1141,52 +1210,31 @@ fn bucket_duration_ms(value: u64) -> String {
     }
 }
 
-fn is_buddy_autonomous_model_cost_event(event: &LlmCallEvent) -> bool {
-    let task_role = event
-        .task_role
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let task_id = event
-        .task_id
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let agent_id = event
-        .agent_id
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let card_id = event
-        .card_id
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let chat_id = event.chat_id.to_ascii_lowercase();
-    let root_chat_id = event
-        .root_chat_id
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let identifiers = [
-        &task_role,
-        &task_id,
-        &agent_id,
-        &card_id,
-        &chat_id,
-        &root_chat_id,
-    ];
-    identifiers.iter().any(|value| {
-        value.contains("buddy_model_cost_optimizer")
-            || value.contains("buddy_autonomous")
-            || value.contains("buddy-buddy_model_cost_optimizer")
+fn is_autonomous_buddy_workflow_identifier(identifier: &str) -> bool {
+    let normalized = identifier.to_ascii_lowercase();
+    AUTONOMOUS_BUDDY_WORKFLOW_IDS.iter().any(|workflow_id| {
+        normalized == *workflow_id || normalized.starts_with(&format!("buddy-{}-", workflow_id))
     })
+}
+
+fn is_buddy_autonomous_report_event(event: &LlmCallEvent) -> bool {
+    let identifiers = [
+        event.chat_id.as_str(),
+        event.root_chat_id.as_deref().unwrap_or_default(),
+        event.task_id.as_deref().unwrap_or_default(),
+        event.task_role.as_deref().unwrap_or_default(),
+        event.agent_id.as_deref().unwrap_or_default(),
+        event.card_id.as_deref().unwrap_or_default(),
+    ];
+    identifiers
+        .iter()
+        .any(|identifier| is_autonomous_buddy_workflow_identifier(identifier))
 }
 
 fn model_cost_input_events(events: &[LlmCallEvent]) -> Vec<LlmCallEvent> {
     let mut filtered = events
         .iter()
-        .filter(|event| !is_buddy_autonomous_model_cost_event(event))
+        .filter(|event| !is_buddy_autonomous_report_event(event))
         .cloned()
         .collect::<Vec<_>>();
     filtered.sort_by(|a, b| {
@@ -1289,7 +1337,7 @@ async fn model_cost_evidence(gcx: Arc<ARwLock<GlobalContext>>) -> Option<Autonom
 #[async_trait::async_trait]
 impl BuddyJob for BuddyMemoryGardenerJob {
     fn id(&self) -> &str {
-        "buddy_memory_gardener"
+        MEMORY_GARDENER_WORKFLOW_ID
     }
 
     fn cooldown_seconds(&self) -> u64 {
@@ -1322,7 +1370,7 @@ impl BuddyJob for BuddyMemoryGardenerJob {
 #[async_trait::async_trait]
 impl BuddyJob for BuddyKnowledgeConflictResolverJob {
     fn id(&self) -> &str {
-        "buddy_knowledge_conflict_resolver"
+        KNOWLEDGE_CONFLICT_WORKFLOW_ID
     }
 
     fn cooldown_seconds(&self) -> u64 {
@@ -1355,7 +1403,7 @@ impl BuddyJob for BuddyKnowledgeConflictResolverJob {
 #[async_trait::async_trait]
 impl BuddyJob for BuddyBehaviorLearnerJob {
     fn id(&self) -> &str {
-        "buddy_behavior_learner"
+        BEHAVIOR_LEARNER_WORKFLOW_ID
     }
 
     fn cooldown_seconds(&self) -> u64 {
@@ -1406,7 +1454,7 @@ impl BuddyJob for BuddyBehaviorLearnerJob {
 #[async_trait::async_trait]
 impl BuddyJob for BuddyUserHabitCoachJob {
     fn id(&self) -> &str {
-        "buddy_user_habit_coach"
+        USER_HABIT_COACH_WORKFLOW_ID
     }
 
     fn cooldown_seconds(&self) -> u64 {
@@ -1439,7 +1487,7 @@ impl BuddyJob for BuddyUserHabitCoachJob {
 #[async_trait::async_trait]
 impl BuddyJob for BuddyModelCostOptimizerJob {
     fn id(&self) -> &str {
-        "buddy_model_cost_optimizer"
+        MODEL_COST_OPTIMIZER_WORKFLOW_ID
     }
 
     fn cooldown_seconds(&self) -> u64 {
@@ -3234,8 +3282,8 @@ mod tests {
 
         let first_evidence = memory_gardener_evidence(&first).unwrap();
         let second_evidence = memory_gardener_evidence(&second).unwrap();
-        let first_spec = build_spec("buddy_memory_gardener", first_evidence.clone());
-        let second_spec = build_spec("buddy_memory_gardener", second_evidence.clone());
+        let first_spec = build_spec(MEMORY_GARDENER_WORKFLOW_ID, first_evidence.clone());
+        let second_spec = build_spec(MEMORY_GARDENER_WORKFLOW_ID, second_evidence.clone());
 
         assert_eq!(first_evidence.evidence, second_evidence.evidence);
         assert!(first_evidence.evidence.contains("memory_ids=mem-a, mem-b"));
@@ -3386,12 +3434,12 @@ mod tests {
     }
 
     #[test]
-    fn behavior_trajectory_meta_collection_stops_at_file_count_cap() {
+    fn behavior_trajectory_candidate_collection_is_bounded_and_recent_biased() {
         let dir = tempfile::tempdir().unwrap();
         for idx in 0..5 {
             let path = dir.path().join(format!("chat_{idx}.json"));
             std::fs::write(
-                path,
+                &path,
                 serde_json::json!({
                     "id": format!("chat-{idx}"),
                     "updated_at": format!("2026-01-{:02}T00:00:00Z", idx + 1)
@@ -3399,20 +3447,58 @@ mod tests {
                 .to_string(),
             )
             .unwrap();
+            let modified = filetime::FileTime::from_unix_time(100 + idx as i64, 0);
+            filetime::set_file_mtime(&path, modified).unwrap();
         }
+
+        let candidates =
+            collect_behavior_trajectory_candidates_from_dirs(&[dir.path().to_path_buf()], 3);
         let mut metas = Vec::new();
         let mut seen = HashSet::new();
-        let mut scanned_files = 0;
+        collect_behavior_trajectory_metas_from_candidates(candidates, &mut metas, &mut seen);
 
-        collect_behavior_trajectory_metas_from_dir_with_cap(
-            dir.path(),
-            &mut metas,
-            &mut seen,
-            &mut scanned_files,
-            3,
-        );
+        assert_eq!(metas.len(), 3);
+        assert_eq!(metas[0].id, "chat-4");
+        assert_eq!(metas[1].id, "chat-3");
+        assert_eq!(metas[2].id, "chat-2");
+    }
 
-        assert_eq!(scanned_files, 3);
+    #[test]
+    fn behavior_trajectory_meta_collection_includes_newer_files_beyond_cap_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        for idx in 0..4 {
+            let path = dir.path().join(format!("a_old_{idx}.json"));
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "id": format!("old-{idx}"),
+                    "updated_at": format!("2026-01-{:02}T00:00:00Z", idx + 1)
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let modified = filetime::FileTime::from_unix_time(100 + idx as i64, 0);
+            filetime::set_file_mtime(&path, modified).unwrap();
+        }
+        let new_path = dir.path().join("z_new.json");
+        std::fs::write(
+            &new_path,
+            serde_json::json!({
+                "id": "newest",
+                "updated_at": "2026-02-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        filetime::set_file_mtime(&new_path, filetime::FileTime::from_unix_time(10_000, 0)).unwrap();
+
+        let candidates =
+            collect_behavior_trajectory_candidates_from_dirs(&[dir.path().to_path_buf()], 3);
+        let mut metas = Vec::new();
+        let mut seen = HashSet::new();
+        collect_behavior_trajectory_metas_from_candidates(candidates, &mut metas, &mut seen);
+
+        assert!(metas.iter().any(|meta| meta.id == "newest"));
         assert_eq!(metas.len(), 3);
     }
 
@@ -3489,8 +3575,8 @@ mod tests {
 
         let first_evidence = habit_evidence(&first).unwrap();
         let second_evidence = habit_evidence(&second).unwrap();
-        let first_spec = build_spec("buddy_user_habit_coach", first_evidence.clone());
-        let second_spec = build_spec("buddy_user_habit_coach", second_evidence.clone());
+        let first_spec = build_spec(USER_HABIT_COACH_WORKFLOW_ID, first_evidence.clone());
+        let second_spec = build_spec(USER_HABIT_COACH_WORKFLOW_ID, second_evidence.clone());
 
         assert_eq!(first_evidence.evidence, second_evidence.evidence);
         assert!(
@@ -3527,10 +3613,14 @@ mod tests {
         let mut events = (0..5)
             .map(|i| test_llm_event(i, true, 1_000, 1_000, 0.01))
             .collect::<Vec<_>>();
-        let mut buddy_report = test_llm_event(20, false, 60_000, 1_000_000, 10.0);
-        buddy_report.mode = "buddy".to_string();
-        buddy_report.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
-        events.push(buddy_report);
+        let mut model_cost_report = test_llm_event(20, false, 60_000, 1_000_000, 10.0);
+        model_cost_report.mode = "buddy".to_string();
+        model_cost_report.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
+        let mut error_report = test_llm_event(21, false, 60_000, 1_000_000, 10.0);
+        error_report.mode = "buddy".to_string();
+        error_report.chat_id = "buddy-buddy_error_detective-report".to_string();
+        events.push(model_cost_report);
+        events.push(error_report);
 
         assert!(model_cost_evidence_from_events(&events).is_none());
 
@@ -3538,7 +3628,7 @@ mod tests {
         assert_eq!(input_events.len(), 5);
         assert!(input_events
             .iter()
-            .all(|event| !event.chat_id.contains("buddy_model_cost_optimizer")));
+            .all(|event| !is_buddy_autonomous_report_event(event)));
     }
 
     #[test]
@@ -3548,10 +3638,16 @@ mod tests {
         buddy_event.chat_id = "user-buddy-conversation".to_string();
         let mut report_event = test_llm_event(2, true, 1_000, 1_000, 0.01);
         report_event.mode = "buddy".to_string();
-        report_event.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
+        report_event.chat_id = "buddy-buddy_error_detective-report".to_string();
 
         let input_events = model_cost_input_events(&[buddy_event.clone(), report_event]);
 
+        assert!(is_autonomous_buddy_workflow_identifier(
+            "buddy-buddy_error_detective-550e8400-e29b-41d4-a716-446655440000"
+        ));
+        assert!(!is_autonomous_buddy_workflow_identifier(
+            "user-buddy-conversation"
+        ));
         assert_eq!(input_events.len(), 1);
         assert_eq!(input_events[0].id, buddy_event.id);
         assert_eq!(input_events[0].mode, "buddy");
@@ -3563,7 +3659,7 @@ mod tests {
             .map(|i| test_llm_event(i, i >= 4, 25_000, 50_000, 0.20))
             .collect::<Vec<_>>();
         let first = build_spec(
-            "buddy_model_cost_optimizer",
+            MODEL_COST_OPTIMIZER_WORKFLOW_ID,
             model_cost_evidence_from_events(&events).unwrap(),
         );
         let mut with_report = events.clone();
@@ -3572,7 +3668,7 @@ mod tests {
         report.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
         with_report.push(report);
         let second = build_spec(
-            "buddy_model_cost_optimizer",
+            MODEL_COST_OPTIMIZER_WORKFLOW_ID,
             model_cost_evidence_from_events(&with_report).unwrap(),
         );
 
@@ -3621,7 +3717,7 @@ mod tests {
             serde_json::json!({"memory_ids": ["mem-a"], "count": 1}),
         )];
         let spec = build_spec(
-            "buddy_memory_gardener",
+            MEMORY_GARDENER_WORKFLOW_ID,
             memory_gardener_evidence(&ctx).unwrap(),
         );
         ctx.job_state.last_result = Some(serialize_last_autonomous_result(&AutonomousLastResult {

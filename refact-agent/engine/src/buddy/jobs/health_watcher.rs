@@ -1,7 +1,8 @@
 use std::sync::Arc;
+
+use super::super::actor::make_runtime_event;
 use super::super::scheduler::{BuddyJob, BuddyJobContext, BuddyJobResult};
 use super::super::types::{BuddyActivity, BuddyRuntimeEvent, BuddySuggestion};
-use super::super::actor::make_runtime_event;
 
 pub struct HealthWatcherJob;
 
@@ -17,7 +18,7 @@ impl BuddyJob for HealthWatcherJob {
         4
     }
     fn produces_suggestion(&self) -> bool {
-        false
+        true
     }
 
     async fn should_run(
@@ -117,5 +118,17 @@ impl BuddyJob for HealthWatcherJob {
             last_result: Some("healthy".to_string()),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_watcher_declares_suggestion_output() {
+        let job = HealthWatcherJob;
+
+        assert!(job.produces_suggestion());
     }
 }

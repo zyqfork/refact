@@ -1,6 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
@@ -27,6 +30,12 @@ struct KnowledgeEntry {
     status: Option<String>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct KnowledgeCandidate {
+    modified_key: u64,
+    path: PathBuf,
+}
+
 async fn scan_knowledge_dirs(gcx: Arc<RwLock<GlobalContext>>) -> Vec<KnowledgeEntry> {
     let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
     let mut dirs: Vec<PathBuf> = project_dirs
@@ -42,38 +51,10 @@ async fn scan_knowledge_dirs(gcx: Arc<RwLock<GlobalContext>>) -> Vec<KnowledgeEn
 }
 
 async fn scan_knowledge_dirs_from_paths(dirs: Vec<PathBuf>) -> Vec<KnowledgeEntry> {
-    let mut candidates = Vec::new();
-    for dir in dirs {
-        for entry in walkdir::WalkDir::new(&dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "md" && ext != "mdx" {
-                continue;
-            }
-            let metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(_) => continue,
-            };
-            if metadata.len() > MAX_FILE_BYTES {
-                continue;
-            }
-            let modified = metadata
-                .modified()
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            candidates.push((modified, path.to_path_buf()));
-        }
-    }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-
+    let candidates = collect_knowledge_candidates_from_dirs(&dirs, MAX_MEMORY_FILES);
     let mut entries = Vec::new();
-    for (_, path) in candidates.into_iter().take(MAX_MEMORY_FILES) {
-        let text = match tokio::fs::read_to_string(&path).await {
+    for candidate in candidates {
+        let text = match tokio::fs::read_to_string(&candidate.path).await {
             Ok(t) => t,
             Err(_) => continue,
         };
@@ -84,19 +65,103 @@ async fn scan_knowledge_dirs_from_paths(dirs: Vec<PathBuf>) -> Vec<KnowledgeEntr
         let id = fm
             .id
             .clone()
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+            .unwrap_or_else(|| candidate.path.to_string_lossy().to_string());
         let title = fm.title.clone().unwrap_or_default();
         entries.push(KnowledgeEntry {
             id,
             title,
             tags: fm.tags.clone(),
             related_files: fm.related_files.clone(),
-            file_path: path,
+            file_path: candidate.path,
             created_at: fm.created_at.clone().or_else(|| fm.created.clone()),
             status: fm.status.clone(),
         });
     }
     entries
+}
+
+fn system_time_key(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn push_knowledge_candidate(
+    heap: &mut BinaryHeap<Reverse<KnowledgeCandidate>>,
+    candidate: KnowledgeCandidate,
+    max_candidates: usize,
+) {
+    if max_candidates == 0 {
+        return;
+    }
+    if heap.len() < max_candidates {
+        heap.push(Reverse(candidate));
+        return;
+    }
+    let should_replace = heap
+        .peek()
+        .map(|oldest| candidate > oldest.0)
+        .unwrap_or(false);
+    if should_replace {
+        heap.pop();
+        heap.push(Reverse(candidate));
+    }
+}
+
+fn collect_knowledge_candidates_from_dir(
+    dir: &std::path::Path,
+    heap: &mut BinaryHeap<Reverse<KnowledgeCandidate>>,
+    max_candidates: usize,
+) {
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "md" && ext != "mdx" {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let modified_key = metadata.modified().map(system_time_key).unwrap_or_default();
+        push_knowledge_candidate(
+            heap,
+            KnowledgeCandidate {
+                modified_key,
+                path: path.to_path_buf(),
+            },
+            max_candidates,
+        );
+    }
+}
+
+fn collect_knowledge_candidates_from_dirs(
+    dirs: &[PathBuf],
+    max_candidates: usize,
+) -> Vec<KnowledgeCandidate> {
+    let mut heap = BinaryHeap::new();
+    for dir in dirs {
+        collect_knowledge_candidates_from_dir(dir, &mut heap, max_candidates);
+    }
+    let mut candidates = heap
+        .into_iter()
+        .map(|Reverse(candidate)| candidate)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| {
+        b.modified_key
+            .cmp(&a.modified_key)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    candidates
 }
 
 #[cfg(test)]
@@ -146,16 +211,16 @@ fn normalized_negation_subject(title: &str) -> Option<(bool, String)> {
         .collect::<Vec<_>>()
         .join(" ");
     let pairs = [
+        (true, "do not use "),
+        (true, "don't use "),
+        (true, "do not "),
+        (true, "don't "),
+        (true, "avoid "),
+        (true, "disable "),
         (false, "use "),
         (false, "enable "),
         (false, "prefer "),
         (false, "do "),
-        (true, "avoid "),
-        (true, "disable "),
-        (true, "don't use "),
-        (true, "do not use "),
-        (true, "don't "),
-        (true, "do not "),
     ];
     for (negated, prefix) in pairs {
         let Some(subject) = normalized.strip_prefix(prefix) else {
@@ -408,5 +473,67 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("negation subject: x"));
+    }
+
+    #[test]
+    fn detects_do_not_use_before_positive_do_prefix() {
+        let entries = vec![
+            test_entry("use-pnpm", "Use pnpm"),
+            test_entry("do-not-use-pnpm", "Do not use pnpm"),
+        ];
+        let facts = memory_garden_facts_from_entries(&entries, Utc::now());
+
+        let conflict = facts
+            .iter()
+            .find(|fact| fact.kind == BuddyFactKind::MemoryStaleConflict)
+            .expect("expected do-not-use conflict");
+        assert_eq!(
+            conflict.payload["doc_ids"],
+            serde_json::json!(["do-not-use-pnpm", "use-pnpm"])
+        );
+        assert!(conflict.payload["conflict_summary"]
+            .as_str()
+            .unwrap()
+            .contains("negation subject: pnpm"));
+    }
+
+    #[test]
+    fn detects_do_not_before_positive_do_prefix() {
+        let positive = normalized_negation_subject("Do deploy previews").unwrap();
+        let negative = normalized_negation_subject("Do not deploy previews").unwrap();
+
+        assert_eq!(positive, (false, "deploy previews".to_string()));
+        assert_eq!(negative, (true, "deploy previews".to_string()));
+        assert_eq!(
+            has_negation_conflict("Do deploy previews", "Do not deploy previews").as_deref(),
+            Some("negation subject: deploy previews")
+        );
+    }
+
+    #[test]
+    fn knowledge_candidate_collection_is_bounded_and_recent_biased() {
+        let dir = tempfile::tempdir().unwrap();
+        for idx in 0..5 {
+            let path = dir.path().join(format!("memory_{idx}.md"));
+            std::fs::write(&path, format!("# Memory {idx}\n")).unwrap();
+            let modified = filetime::FileTime::from_unix_time(100 + idx as i64, 0);
+            filetime::set_file_mtime(&path, modified).unwrap();
+        }
+
+        let candidates = collect_knowledge_candidates_from_dirs(&[dir.path().to_path_buf()], 3);
+        let names = candidates
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(names, vec!["memory_4.md", "memory_3.md", "memory_2.md"]);
     }
 }
