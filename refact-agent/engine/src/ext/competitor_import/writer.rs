@@ -659,14 +659,85 @@ async fn copy_directory_atomically(source_dir: &Path, dest_path: &Path) -> Resul
     let staging = parent.join(format!(".{}.{}.tmp", dest_name, uuid::Uuid::new_v4()));
     let copy_result = async {
         copy_directory_contents(source_dir, &staging).await?;
-        remove_existing_path(dest_path).await?;
-        tokio::fs::rename(&staging, dest_path).await
+        replace_directory_staging(&staging, dest_path).await
     }
     .await;
     if copy_result.is_err() {
         let _ = tokio::fs::remove_dir_all(&staging).await;
     }
     copy_result
+}
+
+async fn replace_directory_staging(staging: &Path, dest_path: &Path) -> Result<()> {
+    replace_directory_staging_inner(staging, dest_path, || Ok(())).await
+}
+
+async fn replace_directory_staging_inner<F>(
+    staging: &Path,
+    dest_path: &Path,
+    after_backup: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let existing = match tokio::fs::symlink_metadata(dest_path).await {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+    if existing.is_none() {
+        return tokio::fs::rename(staging, dest_path).await;
+    }
+
+    let parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
+    let dest_name = dest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("import");
+    let backup = parent.join(format!(".{}.{}.bak", dest_name, uuid::Uuid::new_v4()));
+    tokio::fs::rename(dest_path, &backup).await?;
+
+    let replace_result = match after_backup() {
+        Ok(()) => tokio::fs::rename(staging, dest_path).await,
+        Err(err) => Err(err),
+    };
+    if let Err(err) = replace_result {
+        let restore_result = restore_directory_backup(dest_path, &backup).await;
+        let _ = remove_existing_path(staging).await;
+        if let Err(restore_err) = restore_result {
+            return Err(Error::new(
+                err.kind(),
+                format!(
+                    "failed to replace directory: {err}; failed to restore backup: {restore_err}"
+                ),
+            ));
+        }
+        return Err(err);
+    }
+
+    remove_existing_path(&backup).await
+}
+
+async fn restore_directory_backup(dest_path: &Path, backup: &Path) -> Result<()> {
+    match tokio::fs::symlink_metadata(dest_path).await {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => tokio::fs::rename(backup, dest_path).await,
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+async fn replace_directory_staging_failing_after_backup(
+    staging: &Path,
+    dest_path: &Path,
+) -> Result<()> {
+    replace_directory_staging_inner(staging, dest_path, || {
+        Err(Error::new(
+            ErrorKind::Other,
+            "injected directory replacement failure",
+        ))
+    })
+    .await
 }
 
 async fn copy_directory_contents(source_dir: &Path, staging: &Path) -> Result<()> {
@@ -933,6 +1004,19 @@ mod tests {
             .outcomes
             .get(index)
             .map(|outcome| outcome.status.clone())
+    }
+
+    fn backup_paths(parent: &Path, dest_name: &str) -> Vec<PathBuf> {
+        let prefix = format!(".{dest_name}.");
+        std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".bak"))
+            })
+            .collect()
     }
 
     async fn write_manifest_entry(scope_root: &Path, entry: ImportManifestEntry) {
@@ -1408,6 +1492,113 @@ mod tests {
         assert!(!dest_path.join("link.md").exists());
         assert_eq!(
             hash_directory(&source_dir).unwrap(),
+            hash_directory(&dest_path).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn directory_replacement_success_removes_backup() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path();
+        let dest_path = parent.join("skill");
+        let staging = parent.join(".skill.test.tmp");
+        tokio::fs::create_dir_all(&dest_path).await.unwrap();
+        tokio::fs::write(dest_path.join("old.txt"), "old")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+        tokio::fs::write(staging.join("new.txt"), "new")
+            .await
+            .unwrap();
+
+        replace_directory_staging(&staging, &dest_path)
+            .await
+            .unwrap();
+
+        assert!(!staging.exists());
+        assert!(!dest_path.join("old.txt").exists());
+        assert_eq!(
+            tokio::fs::read_to_string(dest_path.join("new.txt"))
+                .await
+                .unwrap(),
+            "new"
+        );
+        assert!(backup_paths(parent, "skill").is_empty());
+    }
+
+    #[tokio::test]
+    async fn directory_replacement_failure_restores_backup() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path();
+        let dest_path = parent.join("skill");
+        let staging = parent.join(".skill.test.tmp");
+        tokio::fs::create_dir_all(&dest_path).await.unwrap();
+        tokio::fs::write(dest_path.join("old.txt"), "old")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+        tokio::fs::write(staging.join("new.txt"), "new")
+            .await
+            .unwrap();
+
+        let err = replace_directory_staging_failing_after_backup(&staging, &dest_path)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("injected"));
+        assert!(!staging.exists());
+        assert_eq!(
+            tokio::fs::read_to_string(dest_path.join("old.txt"))
+                .await
+                .unwrap(),
+            "old"
+        );
+        assert!(!dest_path.join("new.txt").exists());
+        assert!(backup_paths(parent, "skill").is_empty());
+    }
+
+    #[tokio::test]
+    async fn changed_directory_source_updates_generated_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let scope_root = temp.path().join("refact");
+        let source_dir = temp.path().join("source_skill");
+        tokio::fs::create_dir_all(&source_dir).await.unwrap();
+        tokio::fs::write(source_dir.join("SKILL.md"), "skill")
+            .await
+            .unwrap();
+        tokio::fs::write(source_dir.join("note.txt"), "one")
+            .await
+            .unwrap();
+        let dest_rel = PathBuf::from("skills").join("skill");
+        let dest_path = scope_root.join(&dest_rel);
+        write_candidates(
+            &scope_root,
+            &[directory_candidate(source_dir.clone(), dest_rel.clone())],
+        )
+        .await;
+        tokio::fs::write(source_dir.join("note.txt"), "two")
+            .await
+            .unwrap();
+
+        let summary = write_candidates(
+            &scope_root,
+            &[directory_candidate(source_dir.clone(), dest_rel)],
+        )
+        .await;
+        let manifest = ImportManifest::read_from_path(&manifest_path_for_scope_root(&scope_root))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome_status(&summary, 0), Some(ImportStatus::Updated));
+        assert_eq!(
+            tokio::fs::read_to_string(dest_path.join("note.txt"))
+                .await
+                .unwrap(),
+            "two"
+        );
+        assert!(backup_paths(dest_path.parent().unwrap(), "skill").is_empty());
+        assert_eq!(
+            manifest.entries[0].dest_hash,
             hash_directory(&dest_path).unwrap()
         );
     }
