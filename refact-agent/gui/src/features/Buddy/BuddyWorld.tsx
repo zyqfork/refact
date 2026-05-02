@@ -97,6 +97,7 @@ const DIRECTOR_CHARM_SPEECH_COOLDOWN_MS = 12_000;
 const DIRECTOR_ACTIONABLE_SPEECH_COOLDOWN_MS = 20_000;
 const DIRECTOR_REPEAT_KIND_COOLDOWN_MS = 30_000;
 const MAX_RECENT_DIRECTOR_INTENTS = 12;
+const LONG_COMPACT_SPEECH_LENGTH = 72;
 
 const RANDOM_IDLE_REACTIONS = [
   "Buddy does a tiny spin.",
@@ -132,7 +133,14 @@ function clampBuddySceneX(x: number): number {
   return Math.max(BUDDY_MIN_X, Math.min(BUDDY_MAX_X, x));
 }
 
-function bubblePositionForSceneX(x: number): BubblePosition {
+export function bubblePositionForSceneX(
+  x: number,
+  compact = false,
+  speechText: string | null = null,
+): BubblePosition {
+  if (compact && (speechText?.length ?? 0) > LONG_COMPACT_SPEECH_LENGTH) {
+    return "top";
+  }
   if (x < 42) return "right";
   if (x > 58) return "left";
   return "top";
@@ -408,7 +416,28 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   const characterDepthScale = showcaseRun
     ? 1
     : effectiveDirectorIntent?.depthScale;
-  const bubblePosition = bubblePositionForSceneX(characterSceneX);
+  const directorSpeech = effectiveDirectorIntent?.speech ?? null;
+  const speechOverride = resolveBuddyWorldSpeechOverride({
+    activeSpeechText: activeSpeech?.text ?? null,
+    showcaseActive: showcaseRun !== null,
+    showcaseSpeech: showcaseRun?.speech ?? null,
+    directorSpeech,
+    reaction,
+  });
+  const speechSource = activeSpeech
+    ? "active"
+    : showcaseRun
+      ? "showcase"
+      : directorSpeech
+        ? "director"
+        : reaction
+          ? "reaction"
+          : "none";
+  const bubblePosition = bubblePositionForSceneX(
+    characterSceneX,
+    compact,
+    speechOverride,
+  );
 
   useEffect(() => {
     setActiveWaypointIndex(0);
@@ -808,23 +837,6 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   const directorPose = effectiveDirectorIntent?.pose ?? null;
   const characterPose: BuddyScenePose =
     showcasePose ?? directorPose ?? randomPose;
-  const directorSpeech = effectiveDirectorIntent?.speech ?? null;
-  const speechOverride = resolveBuddyWorldSpeechOverride({
-    activeSpeechText: activeSpeech?.text ?? null,
-    showcaseActive: showcaseRun !== null,
-    showcaseSpeech: showcaseRun?.speech ?? null,
-    directorSpeech,
-    reaction,
-  });
-  const speechSource = activeSpeech
-    ? "active"
-    : showcaseRun
-      ? "showcase"
-      : directorSpeech
-        ? "director"
-        : reaction
-          ? "reaction"
-          : "none";
 
   return (
     <section

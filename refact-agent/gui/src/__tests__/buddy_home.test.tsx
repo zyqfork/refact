@@ -20,7 +20,10 @@ import { BuddyWorkshop } from "../features/Buddy/BuddyWorkshop";
 import { BuddyDraftPreview } from "../features/Buddy/BuddyDraftPreview";
 import { BuddySettingsPanel } from "../features/Buddy/BuddySettingsPanel";
 import { BuddyPanel } from "../features/Buddy/BuddyPanel";
-import { BuddyWorld } from "../features/Buddy/BuddyWorld";
+import {
+  BuddyWorld,
+  bubblePositionForSceneX,
+} from "../features/Buddy/BuddyWorld";
 import { buildBuddyWorldState } from "../features/Buddy/buddyWorldModel";
 import { buildBuddySceneSpeech } from "../features/Buddy/buddySceneSpeech";
 import { useExecuteBuddyAction } from "../features/Buddy/hooks/useExecuteBuddyAction";
@@ -1464,6 +1467,68 @@ describe("BuddyWorld_dynamic_environment", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps side bubbles for ordinary speech but lifts long compact speech", () => {
+    const longSpeech =
+      "The observatory has a very long update that should avoid narrow side clipping in compact scenes.";
+
+    expect(bubblePositionForSceneX(67, false, longSpeech)).toBe("left");
+    expect(bubblePositionForSceneX(67, true, "Short update.")).toBe("left");
+    expect(bubblePositionForSceneX(38, true, "Short update.")).toBe("right");
+    expect(bubblePositionForSceneX(67, true, longSpeech)).toBe("top");
+    expect(bubblePositionForSceneX(38, true, longSpeech)).toBe("top");
+  });
+
+  it("keeps compact long active speech on top after moving to a side target", async () => {
+    const longSpeech =
+      "The observatory has a very long update that should avoid narrow side clipping in compact scenes.";
+    const onOpenPage = vi.fn();
+
+    const { user } = render(
+      <BuddyWorld
+        palette={PALETTES[0]}
+        stage={STAGES[2]}
+        state={makeSemanticState()}
+        pulse={{
+          ...makePulse(),
+          providers: { defaults_ok: true, broken_refs: 0, quota_warnings: 0 },
+        }}
+        pet={makeSnapshot().state.pet}
+        nowPlaying={null}
+        activeQuest={null}
+        activeSpeech={{ text: longSpeech, controls: [] }}
+        setupNeeded={false}
+        compact
+        now={new Date("2024-01-01T14:00:00")}
+        onCanvasEvent={vi.fn()}
+        onCare={vi.fn()}
+        onOpenPage={onOpenPage}
+        onRunMode={vi.fn()}
+        onDismissSetup={vi.fn()}
+        onSpeechControl={vi.fn()}
+      />,
+      { preloadedState: CONFIG_STATE },
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /open model observatory/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("buddy-world-character")).toHaveStyle({
+        left: "67%",
+      });
+    });
+    expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
+      "data-bubble-position",
+      "top",
+    );
+    expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+      "data-speech-text",
+      longSpeech,
+    );
+    expect(onOpenPage).toHaveBeenCalledWith({ type: "default_models" });
   });
 
   it("active speech immediately suppresses a rendered director intent", async () => {

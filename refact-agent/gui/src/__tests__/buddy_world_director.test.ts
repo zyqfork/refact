@@ -353,6 +353,27 @@ describe("buddy world director", () => {
     expectSafeIntent(intent);
   });
 
+  it("keeps blocked critical provider storms ahead of competing memory and runtime work", () => {
+    const intent = buildIntent({
+      pulse: makePulse({
+        providers: { defaults_ok: true, broken_refs: 1, quota_warnings: 0 },
+        memory: { total: 40, orphan: 4, stale_conflicts: 1 },
+      }),
+      nowPlaying: makeRuntimeEvent({
+        signal_type: "tool_used",
+        title: "Running browser checks",
+        source: "browser",
+        status: "progress",
+      }),
+      previousIntent: makePreviousIntent("seek_toy"),
+      recentIntentKinds: ["stabilize_crystal", "inspect_provider"],
+    });
+
+    expect(["stabilize_crystal", "inspect_provider"]).toContain(intent?.kind);
+    expect(intent?.objectId).toBe("providers");
+    expectSafeIntent(intent);
+  });
+
   it("does not let a recent high-priority candidate bypass cooldown without matching previous intent", () => {
     const intent = buildIntent({
       pulse: makePulse({

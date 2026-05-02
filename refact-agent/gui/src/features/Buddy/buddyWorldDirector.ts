@@ -265,6 +265,14 @@ function pickIntent(
       return blockedCriticalIntent;
     }
 
+    if (
+      blockedCriticalIntent &&
+      isProviderIntent(blockedCriticalIntent.kind) &&
+      !isProviderIntent(candidate.kind)
+    ) {
+      return blockedCriticalIntent;
+    }
+
     if (!recentKinds.has(candidate.kind)) return candidate;
     if (canContinueRecentIntent(candidate, previousIntent)) return candidate;
 

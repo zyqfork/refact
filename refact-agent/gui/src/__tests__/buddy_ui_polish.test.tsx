@@ -310,6 +310,8 @@ describe("buddy UI polish", () => {
     const source = await readGuiSource("features/Buddy/BuddyWorld.tsx");
 
     expect(source).toContain("function bubblePositionForSceneX");
+    expect(source).toContain("LONG_COMPACT_SPEECH_LENGTH");
+    expect(source).toContain("compact && (speechText?.length ?? 0)");
     expect(source).toContain('if (x < 42) return "right"');
     expect(source).toContain('if (x > 58) return "left"');
     expect(source).toContain('return "top"');
@@ -343,6 +345,14 @@ describe("buddy UI polish", () => {
     expect(source).toContain(".toneWarning::before");
     expect(source).toContain(".toneDanger::before");
     expect(source).toContain(".homeHotspot::before");
+  });
+
+  it("BuddyWorld_keeps_narrow_object_tooltips_available", async () => {
+    const source = await readGuiSource("features/Buddy/BuddyWorld.module.css");
+
+    expect(source).toContain("@media (max-width: 720px)");
+    expect(source).toContain("max-width: min(108px, 32vw)");
+    expect(source).not.toMatch(/\.objectTooltip\s*\{[^}]*display:\s*none/u);
   });
 
   it("BuddyWorld_reschedules_idle_loop_after_noop_branch", async () => {

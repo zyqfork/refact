@@ -829,4 +829,15 @@ describe("drawBuddyWorld", () => {
     expectHealthyDraw(starOnlyCtx);
     expectHealthyDraw(structuresOnlyCtx);
   });
+
+  it("draws one bounded aurora pass from the atmosphere layer", () => {
+    const world = makeWorld({ now: new Date("2024-01-01T23:00:00") });
+    const ctx = drawWorld(world);
+
+    expect(world.weather).toBe("aurora");
+    expect(world.atmosphere.layers).toContain("aurora");
+    expect(strokeStyleCount(ctx, "#2DD4BF")).toBe(2);
+    expect(strokeStyleCount(ctx, "#A855F7")).toBe(2);
+    expectHealthyDraw(ctx);
+  });
 });

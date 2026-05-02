@@ -872,7 +872,6 @@ export function drawWeatherAtmosphere(args: DrawBuddyWorldBaseArgs): void {
   if (weather === "wind") drawWind(args);
   if (weather === "busy") drawBusyCurrents(args);
   if (weather === "dream") drawDreamLetters(args);
-  if (weather === "aurora") drawAurora(args, 0.45);
   if (weather === "storm" || hasWorldLayer(args.world, "provider_storm")) {
     drawProviderStorm(args);
   }

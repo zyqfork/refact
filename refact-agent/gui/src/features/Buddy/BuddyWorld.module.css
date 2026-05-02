@@ -537,7 +537,15 @@
   }
 
   .objectTooltip {
-    display: none;
+    bottom: calc(100% + 4px);
+    min-width: 72px;
+    max-width: min(108px, 32vw);
+    padding: 3px 5px;
+  }
+
+  .objectLabel,
+  .objectValue {
+    max-width: 92px;
   }
 
   .setupDock,
