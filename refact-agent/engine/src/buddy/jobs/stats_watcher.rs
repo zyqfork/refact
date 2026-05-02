@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use super::super::scheduler::{BuddyJob, BuddyJobContext, BuddyJobResult};
 use super::super::types::{BuddyActivity, BuddySpeechItem, BuddySuggestion};
 
@@ -19,7 +20,7 @@ impl BuddyJob for StatsWatcherJob {
         5
     }
     fn produces_suggestion(&self) -> bool {
-        false
+        true
     }
 
     async fn should_run(
@@ -110,5 +111,61 @@ impl BuddyJob for StatsWatcherJob {
             last_result: Some(runs.to_string()),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buddy::diagnostics::{DiagnosticContext, DiagnosticSeverity};
+    use crate::buddy::settings::BuddySettings;
+    use crate::buddy::types::{BuddyJobState, BuddyOnboarding, BuddyPetState, BuddyPulse};
+
+    fn test_context(runs: u64, diagnostics_count: usize) -> BuddyJobContext {
+        let collected_at = chrono::Utc::now().to_rfc3339();
+        let recent_diagnostics = (0..diagnostics_count)
+            .map(|idx| DiagnosticContext {
+                error_type: "timeout".to_string(),
+                error_message: format!("timeout {idx}"),
+                source_file: None,
+                tool_name: None,
+                chat_id: None,
+                collected_at: collected_at.clone(),
+                severity: DiagnosticSeverity::High,
+            })
+            .collect();
+        BuddyJobContext {
+            identity_name: "Pixel".to_string(),
+            onboarding: BuddyOnboarding::default(),
+            recent_diagnostics,
+            project_root: std::path::PathBuf::from("/tmp/project"),
+            job_state: BuddyJobState::default(),
+            total_workflow_runs: runs,
+            suggestion_state: vec![],
+            pet: BuddyPetState::default(),
+            active_quest: None,
+            settings: BuddySettings::default(),
+            pulse: BuddyPulse::default(),
+            facts: vec![],
+        }
+    }
+
+    #[test]
+    fn stats_watcher_declares_suggestion_output() {
+        let job = StatsWatcherJob;
+
+        assert!(job.produces_suggestion());
+    }
+
+    #[tokio::test]
+    async fn stats_watcher_error_burst_returns_suggestion() {
+        let job = StatsWatcherJob;
+        let ctx = test_context(1, 5);
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+
+        let result = job.execute(gcx, ctx).await;
+
+        assert!(result.suggestion.is_some());
+        assert_eq!(result.last_result.as_deref(), Some("1"));
     }
 }

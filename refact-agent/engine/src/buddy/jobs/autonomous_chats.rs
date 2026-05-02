@@ -37,6 +37,7 @@ const MAX_MANIFEST_WALK_FILES: usize = 5_000;
 const MAX_UNTRACKED_CONTENT_BYTES: u64 = 64 * 1024;
 const MAX_BEHAVIOR_TRAJECTORY_BYTES: u64 = 1_024 * 1_024;
 const MAX_BEHAVIOR_TRAJECTORY_META_BYTES: u64 = 32 * 1024;
+const MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES: usize = 5_000;
 const MODEL_COST_RECENT_EVENT_LIMIT: usize = 500;
 const ERROR_DETECTIVE_WORKFLOW_ID: &str = "buddy_error_detective";
 const SECURITY_WHISPERER_WORKFLOW_ID: &str = "buddy_security_whisperer";
@@ -766,20 +767,51 @@ fn parse_behavior_trajectory_meta(content: &str, path: PathBuf) -> Option<Behavi
     })
 }
 
+#[cfg(test)]
 fn collect_behavior_trajectory_metas_from_dir(
     dir: &Path,
     metas: &mut Vec<BehaviorTrajectoryMeta>,
     seen: &mut HashSet<String>,
 ) {
+    let mut scanned_files = 0;
+    collect_behavior_trajectory_metas_from_dir_with_cap(
+        dir,
+        metas,
+        seen,
+        &mut scanned_files,
+        MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES,
+    );
+}
+
+fn collect_behavior_trajectory_metas_from_dir_with_cap(
+    dir: &Path,
+    metas: &mut Vec<BehaviorTrajectoryMeta>,
+    seen: &mut HashSet<String>,
+    scanned_files: &mut usize,
+    max_files: usize,
+) {
+    if *scanned_files >= max_files {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
+        if *scanned_files >= max_files {
+            return;
+        }
         let path = entry.path();
         if path.is_dir() {
-            collect_behavior_trajectory_metas_from_dir(&path, metas, seen);
+            collect_behavior_trajectory_metas_from_dir_with_cap(
+                &path,
+                metas,
+                seen,
+                scanned_files,
+                max_files,
+            );
             continue;
         }
+        *scanned_files += 1;
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
@@ -839,8 +871,18 @@ async fn collect_behavior_trajectory_metas(
         }
         let mut metas = Vec::new();
         let mut seen = HashSet::new();
+        let mut scanned_files = 0;
         for dir in dirs {
-            collect_behavior_trajectory_metas_from_dir(&dir, &mut metas, &mut seen);
+            collect_behavior_trajectory_metas_from_dir_with_cap(
+                &dir,
+                &mut metas,
+                &mut seen,
+                &mut scanned_files,
+                MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES,
+            );
+            if scanned_files >= MAX_BEHAVIOR_TRAJECTORY_SCAN_FILES {
+                break;
+            }
         }
         metas.sort_by(|a, b| {
             b.updated_at
@@ -1100,7 +1142,6 @@ fn bucket_duration_ms(value: u64) -> String {
 }
 
 fn is_buddy_autonomous_model_cost_event(event: &LlmCallEvent) -> bool {
-    let mode = event.mode.to_ascii_lowercase();
     let task_role = event
         .task_role
         .as_deref()
@@ -1135,12 +1176,11 @@ fn is_buddy_autonomous_model_cost_event(event: &LlmCallEvent) -> bool {
         &chat_id,
         &root_chat_id,
     ];
-    mode == "buddy"
-        || identifiers.iter().any(|value| {
-            value.contains("buddy_model_cost_optimizer")
-                || value.contains("buddy_autonomous")
-                || value.contains("buddy-buddy_model_cost_optimizer")
-        })
+    identifiers.iter().any(|value| {
+        value.contains("buddy_model_cost_optimizer")
+            || value.contains("buddy_autonomous")
+            || value.contains("buddy-buddy_model_cost_optimizer")
+    })
 }
 
 fn model_cost_input_events(events: &[LlmCallEvent]) -> Vec<LlmCallEvent> {
@@ -1779,19 +1819,26 @@ fn architecture_drift_definition() -> AutonomousJobDefinition {
     }
 }
 
+fn build_autonomous_job_spec(
+    definition: AutonomousJobDefinition,
+    evidence: String,
+) -> AutonomousBuddyChatSpec {
+    AutonomousBuddyChatSpec::new(
+        definition.workflow_id,
+        definition.title,
+        definition.prompt,
+        evidence,
+    )
+    .with_display(definition.icon, definition.badge, definition.priority)
+}
+
 async fn execute_autonomous_job(
     gcx: Arc<ARwLock<GlobalContext>>,
     ctx: &BuddyJobContext,
     definition: AutonomousJobDefinition,
     evidence: String,
 ) -> BuddyJobResult {
-    let spec = AutonomousBuddyChatSpec::new(
-        definition.workflow_id,
-        definition.title,
-        definition.prompt,
-        evidence,
-    )
-    .with_display(definition.icon, definition.badge, definition.priority);
+    let spec = build_autonomous_job_spec(definition, evidence);
 
     if same_signal(ctx, &spec.signal_hash) {
         return BuddyJobResult::default();
@@ -2545,7 +2592,14 @@ impl BuddyJob for ErrorDetectiveJob {
     }
 
     async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
-        diagnostic_evidence(ctx).is_some()
+        let Some(evidence) = diagnostic_evidence(ctx) else {
+            return false;
+        };
+        let spec = build_autonomous_job_spec(
+            error_detective_definition(),
+            render_diagnostic_evidence(&evidence),
+        );
+        !same_signal(ctx, &spec.signal_hash)
     }
 
     async fn execute(
@@ -2581,18 +2635,24 @@ impl BuddyJob for SecurityWhispererJob {
     }
 
     async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
-        let diagnostic_findings = diagnostic_security_findings(&ctx.recent_diagnostics);
-        if !diagnostic_findings.is_empty() {
-            return true;
-        }
         let root = ctx.project_root.clone();
-        tokio::task::spawn_blocking(move || {
+        let mut findings = tokio::task::spawn_blocking(move || {
             collect_local_git_evidence(&root, true)
-                .map(|evidence| !evidence.security_findings.is_empty())
-                .unwrap_or(false)
+                .map(|evidence| evidence.security_findings)
+                .unwrap_or_default()
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_default();
+        findings.extend(diagnostic_security_findings(&ctx.recent_diagnostics));
+        findings.truncate(MAX_SECURITY_FINDINGS);
+        if findings.is_empty() {
+            return false;
+        }
+        let spec = build_autonomous_job_spec(
+            security_whisperer_definition(),
+            render_security_evidence(&findings),
+        );
+        !same_signal(ctx, &spec.signal_hash)
     }
 
     async fn execute(
@@ -2638,7 +2698,11 @@ impl BuddyJob for SetupCoachJob {
     }
 
     async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
-        setup_evidence(&ctx.project_root).is_some()
+        let Some(evidence) = setup_evidence(&ctx.project_root) else {
+            return false;
+        };
+        let spec = build_autonomous_job_spec(setup_coach_definition(), evidence);
+        !same_signal(ctx, &spec.signal_hash)
     }
 
     async fn execute(
@@ -2669,12 +2733,20 @@ impl BuddyJob for DependencyRadarJob {
 
     async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
         let root = ctx.project_root.clone();
-        tokio::task::spawn_blocking(move || {
+        let evidence = tokio::task::spawn_blocking(move || {
             let git = collect_local_git_evidence(&root, false);
-            dependency_manifest_trigger(&dependency_manifest_evidence(git.as_ref(), &root))
+            dependency_manifest_evidence(git.as_ref(), &root)
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_default();
+        if !dependency_manifest_trigger(&evidence) {
+            return false;
+        }
+        let spec = build_autonomous_job_spec(
+            dependency_radar_definition(),
+            render_dependency_evidence(&evidence),
+        );
+        !same_signal(ctx, &spec.signal_hash)
     }
 
     async fn execute(
@@ -2718,12 +2790,18 @@ impl BuddyJob for DocsGardenerJob {
 
     async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
         let root = ctx.project_root.clone();
-        tokio::task::spawn_blocking(move || {
+        let evidence = tokio::task::spawn_blocking(move || {
             let git = collect_local_git_evidence(&root, false);
-            docs_trigger(&docs_evidence(git.as_ref(), &root))
+            docs_evidence(git.as_ref(), &root)
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_default();
+        if !docs_trigger(&evidence) {
+            return false;
+        }
+        let spec =
+            build_autonomous_job_spec(docs_gardener_definition(), render_docs_evidence(&evidence));
+        !same_signal(ctx, &spec.signal_hash)
     }
 
     async fn execute(
@@ -2767,13 +2845,22 @@ impl BuddyJob for ArchitectureDriftWatcherJob {
 
     async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
         let root = ctx.project_root.clone();
-        tokio::task::spawn_blocking(move || {
-            collect_local_git_evidence(&root, false)
-                .map(|git| architecture_trigger(&architecture_evidence(&git)))
-                .unwrap_or(false)
+        let evidence = tokio::task::spawn_blocking(move || {
+            collect_local_git_evidence(&root, false).map(|git| architecture_evidence(&git))
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or(None);
+        let Some(evidence) = evidence else {
+            return false;
+        };
+        if !architecture_trigger(&evidence) {
+            return false;
+        }
+        let spec = build_autonomous_job_spec(
+            architecture_drift_definition(),
+            render_architecture_evidence(&evidence),
+        );
+        !same_signal(ctx, &spec.signal_hash)
     }
 
     async fn execute(
@@ -3299,6 +3386,37 @@ mod tests {
     }
 
     #[test]
+    fn behavior_trajectory_meta_collection_stops_at_file_count_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        for idx in 0..5 {
+            let path = dir.path().join(format!("chat_{idx}.json"));
+            std::fs::write(
+                path,
+                serde_json::json!({
+                    "id": format!("chat-{idx}"),
+                    "updated_at": format!("2026-01-{:02}T00:00:00Z", idx + 1)
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        let mut metas = Vec::new();
+        let mut seen = HashSet::new();
+        let mut scanned_files = 0;
+
+        collect_behavior_trajectory_metas_from_dir_with_cap(
+            dir.path(),
+            &mut metas,
+            &mut seen,
+            &mut scanned_files,
+            3,
+        );
+
+        assert_eq!(scanned_files, 3);
+        assert_eq!(metas.len(), 3);
+    }
+
+    #[test]
     fn behavior_trajectory_meta_accepts_realistic_schema_aliases() {
         let path = PathBuf::from("realistic.json");
         let meta = parse_behavior_trajectory_meta(
@@ -3421,6 +3539,22 @@ mod tests {
         assert!(input_events
             .iter()
             .all(|event| !event.chat_id.contains("buddy_model_cost_optimizer")));
+    }
+
+    #[test]
+    fn model_cost_input_includes_normal_buddy_mode_user_events() {
+        let mut buddy_event = test_llm_event(1, true, 1_000, 1_000, 0.01);
+        buddy_event.mode = "buddy".to_string();
+        buddy_event.chat_id = "user-buddy-conversation".to_string();
+        let mut report_event = test_llm_event(2, true, 1_000, 1_000, 0.01);
+        report_event.mode = "buddy".to_string();
+        report_event.chat_id = "buddy-buddy_model_cost_optimizer-report".to_string();
+
+        let input_events = model_cost_input_events(&[buddy_event.clone(), report_event]);
+
+        assert_eq!(input_events.len(), 1);
+        assert_eq!(input_events[0].id, buddy_event.id);
+        assert_eq!(input_events[0].mode, "buddy");
     }
 
     #[test]
@@ -3758,11 +3892,9 @@ mod tests {
 
     #[test]
     fn unchanged_signal_produces_no_chat_in_helper_logic() {
-        let spec = AutonomousBuddyChatSpec::new(
-            DEPENDENCY_RADAR_WORKFLOW_ID,
-            "Dependency Radar",
-            dependency_radar_definition().prompt,
-            "Local dependency manifest evidence:\n- total_manifest_count: 12",
+        let spec = build_autonomous_job_spec(
+            dependency_radar_definition(),
+            "Local dependency manifest evidence:\n- total_manifest_count: 12".to_string(),
         );
         let result = AutonomousLastResult {
             signal_hash: spec.signal_hash.clone(),
@@ -3771,6 +3903,28 @@ mod tests {
         };
         let ctx = context_with_last_result(Some(serialize_last_autonomous_result(&result)));
 
+        assert!(same_signal(&ctx, &spec.signal_hash));
+    }
+
+    #[test]
+    fn local_signal_should_run_helper_skips_same_signal() {
+        let evidence = DependencyManifestEvidence {
+            manifest_counts: BTreeMap::from([("javascript".to_string(), 12)]),
+            total_manifest_count: 12,
+            ..Default::default()
+        };
+        let spec = build_autonomous_job_spec(
+            dependency_radar_definition(),
+            render_dependency_evidence(&evidence),
+        );
+        let result = AutonomousLastResult {
+            signal_hash: spec.signal_hash.clone(),
+            chat_id: "chat-a".to_string(),
+            completed_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let ctx = context_with_last_result(Some(serialize_last_autonomous_result(&result)));
+
+        assert!(dependency_manifest_trigger(&evidence));
         assert!(same_signal(&ctx, &spec.signal_hash));
     }
 

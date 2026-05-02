@@ -138,32 +138,52 @@ fn tags_hash(tags: &[String]) -> String {
     format!("{:x}", h.finish())
 }
 
-fn has_negation_conflict(a_title: &str, b_title: &str) -> Option<String> {
-    let neg_pairs = [
-        ("use ", "avoid "),
-        ("enable ", "disable "),
-        ("prefer ", "avoid "),
-        ("use ", "don't use "),
-        ("do ", "don't "),
+fn normalized_negation_subject(title: &str) -> Option<(bool, String)> {
+    let normalized = title
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let pairs = [
+        (false, "use "),
+        (false, "enable "),
+        (false, "prefer "),
+        (false, "do "),
+        (true, "avoid "),
+        (true, "disable "),
+        (true, "don't use "),
+        (true, "do not use "),
+        (true, "don't "),
+        (true, "do not "),
     ];
-    let al = a_title.to_lowercase();
-    let bl = b_title.to_lowercase();
-    for (pos, neg) in &neg_pairs {
-        if al.starts_with(pos) && bl.starts_with(neg) {
-            return Some(format!("negation: '{}' vs '{}'", pos.trim(), neg.trim()));
-        }
-        if bl.starts_with(pos) && al.starts_with(neg) {
-            return Some(format!("negation: '{}' vs '{}'", pos.trim(), neg.trim()));
+    for (negated, prefix) in pairs {
+        let Some(subject) = normalized.strip_prefix(prefix) else {
+            continue;
+        };
+        let subject = subject
+            .trim_matches(|ch: char| ch.is_ascii_punctuation() || ch.is_whitespace())
+            .to_string();
+        if !subject.is_empty() {
+            return Some((negated, subject));
         }
     }
     None
 }
 
-async fn detect_memory_garden(
-    gcx: Arc<RwLock<GlobalContext>>,
+fn has_negation_conflict(a_title: &str, b_title: &str) -> Option<String> {
+    let (a_negated, a_subject) = normalized_negation_subject(a_title)?;
+    let (b_negated, b_subject) = normalized_negation_subject(b_title)?;
+    if a_subject == b_subject && a_negated != b_negated {
+        return Some(format!("negation subject: {}", a_subject));
+    }
+    None
+}
+
+fn memory_garden_facts_from_entries(
+    entries: &[KnowledgeEntry],
     now: DateTime<Utc>,
 ) -> Vec<BuddyFact> {
-    let entries = scan_knowledge_dirs(gcx).await;
     let mut facts = vec![];
 
     let all_referenced: HashSet<String> = entries
@@ -172,7 +192,7 @@ async fn detect_memory_garden(
         .collect();
 
     let mut orphan_ids: Vec<String> = Vec::new();
-    for entry in &entries {
+    for entry in entries {
         let file_name = entry
             .file_path
             .file_name()
@@ -220,11 +240,17 @@ async fn detect_memory_garden(
     }
 
     let mut conflict_groups: HashMap<String, Vec<&KnowledgeEntry>> = HashMap::new();
-    for entry in &entries {
+    for entry in entries {
         let normalized_title = entry.title.trim().to_lowercase();
         if !normalized_title.is_empty() {
             conflict_groups
                 .entry(format!("title:{}", normalized_title))
+                .or_default()
+                .push(entry);
+        }
+        if let Some((_, subject)) = normalized_negation_subject(&entry.title) {
+            conflict_groups
+                .entry(format!("negation_subject:{}", subject))
                 .or_default()
                 .push(entry);
         }
@@ -270,7 +296,7 @@ async fn detect_memory_garden(
 
     let mut by_tag_hash: HashMap<String, Vec<&KnowledgeEntry>> = HashMap::new();
     let cutoff = now - chrono::Duration::days(14);
-    for entry in &entries {
+    for entry in entries {
         let days = age_days(entry.created_at.as_deref(), now);
         if days > 14 {
             continue;
@@ -313,6 +339,14 @@ async fn detect_memory_garden(
     facts
 }
 
+async fn detect_memory_garden(
+    gcx: Arc<RwLock<GlobalContext>>,
+    now: DateTime<Utc>,
+) -> Vec<BuddyFact> {
+    let entries = scan_knowledge_dirs(gcx).await;
+    memory_garden_facts_from_entries(&entries, now)
+}
+
 #[async_trait::async_trait]
 impl BuddyObserver for MemoryGardenObserver {
     fn id(&self) -> &'static str {
@@ -335,5 +369,44 @@ impl BuddyObserver for MemoryGardenObserver {
         ctx: &ObserverContext,
     ) -> Vec<BuddyFact> {
         detect_memory_garden(gcx, ctx.now).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_entry(id: &str, title: &str) -> KnowledgeEntry {
+        KnowledgeEntry {
+            id: id.to_string(),
+            title: title.to_string(),
+            tags: vec![],
+            related_files: vec![id.to_string()],
+            file_path: PathBuf::from(format!("{id}.md")),
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            status: None,
+        }
+    }
+
+    #[test]
+    fn detects_untagged_use_avoid_title_conflict() {
+        let entries = vec![
+            test_entry("use-x", "Use X"),
+            test_entry("avoid-x", "Avoid X"),
+        ];
+        let facts = memory_garden_facts_from_entries(&entries, Utc::now());
+
+        let conflict = facts
+            .iter()
+            .find(|fact| fact.kind == BuddyFactKind::MemoryStaleConflict)
+            .expect("expected title conflict");
+        assert_eq!(
+            conflict.payload["doc_ids"],
+            serde_json::json!(["avoid-x", "use-x"])
+        );
+        assert!(conflict.payload["conflict_summary"]
+            .as_str()
+            .unwrap()
+            .contains("negation subject: x"));
     }
 }
