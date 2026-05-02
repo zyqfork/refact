@@ -32,6 +32,9 @@ messages:
     ### Memory/Knowledge Files
     {memory_list}
 
+    ### Context Budget
+    {budget_summary}
+
     ## Your Task
 
     Analyze this conversation and output what should be preserved for the new chat. Use the EXACT IDs and paths provided above.
@@ -50,6 +53,7 @@ messages:
     List file paths to include in the new chat. One per line.
     For edited files, they will be included with full content.
     For referenced files, just the path will be noted.
+    Keep files and memories within the file/memory budget above.
     Example:
     /src/main.rs
     /src/config.rs
@@ -58,6 +62,7 @@ messages:
     <messages_to_preserve>
     List MSG_IDs of messages to keep verbatim. One per line.
     Only include truly essential exchanges (user requirements, key decisions).
+    Keep preserved messages, tool outputs, summary, pending tasks, and handoff message within the message budget above.
     Example:
     MSG_ID:5
     MSG_ID:12
@@ -72,6 +77,7 @@ messages:
     <tool_outputs_to_include>
     List MSG_IDs of tool outputs that contain important results (e.g., search results, code analysis, web research).
     These will be included as reference context in the new chat. One per line.
+    Prefer compact/high-signal outputs; the backend will truncate outputs if needed to enforce the message budget.
     Example:
     MSG_ID:7
     MSG_ID:15
@@ -85,6 +91,6 @@ messages:
     A brief message to start the new chat, telling the assistant what to continue working on.
     </handoff_message>
 
-    Be thorough but selective. The goal is to preserve everything important while keeping the new chat focused.
+    Be thorough but selective. The goal is to preserve everything important while keeping the new chat focused. Do not select more than one image-bearing message unless it is absolutely necessary; only one image can be carried over.
 
 tools: []
