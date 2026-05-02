@@ -4,7 +4,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 
-use crate::subchat::run_subchat_once_with_parent;
+use crate::subchat::{run_subchat, resolve_subchat_config_with_parent};
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolSource, ToolSourceType, MatchConfirmDeny, MatchConfirmDenyResult,
     json_schema_from_params,
@@ -13,6 +13,7 @@ use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::global_context::GlobalContext;
 use crate::yaml_configs::customization_registry::get_subagent_config;
+use crate::yaml_configs::customization_types::SubagentConfig;
 use crate::knowledge_index::format_related_memories_section;
 use tokio::sync::RwLock as ARwLock;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
@@ -23,6 +24,65 @@ const SUBAGENT_ID: &str = "deep_research";
 
 pub struct ToolDeepResearch {
     pub config_path: String,
+}
+
+fn render_research_template(template: &str, research_query: &str) -> String {
+    template
+        .replace("{{research_query}}", research_query)
+        .replace("{{query}}", research_query)
+        .replace("{{task}}", research_query)
+}
+
+fn template_includes_research_query(template: &str) -> bool {
+    template.contains("{{research_query}}")
+        || template.contains("{{query}}")
+        || template.contains("{{task}}")
+}
+
+fn build_deep_research_messages(
+    subagent_config: &SubagentConfig,
+    research_query: &str,
+) -> Vec<ChatMessage> {
+    let mut messages = Vec::new();
+
+    if let Some(system_prompt) = subagent_config.messages.system_prompt.as_ref() {
+        messages.push(ChatMessage::new(
+            "system".to_string(),
+            system_prompt.clone(),
+        ));
+    }
+
+    for pre_msg in &subagent_config.messages.pre_messages {
+        messages.push(ChatMessage::new(
+            pre_msg.role.clone(),
+            render_research_template(&pre_msg.content, research_query),
+        ));
+    }
+
+    let mut query_was_rendered = false;
+    if let Some(researcher_prompt) = subagent_config.messages.user_template.as_ref() {
+        query_was_rendered = template_includes_research_query(researcher_prompt);
+        messages.push(ChatMessage::new(
+            "user".to_string(),
+            render_research_template(researcher_prompt, research_query),
+        ));
+    }
+
+    if !query_was_rendered {
+        messages.push(ChatMessage::new(
+            "user".to_string(),
+            format!("# Research Query\n\n{}", research_query),
+        ));
+    }
+
+    for post_msg in &subagent_config.messages.post_messages {
+        messages.push(ChatMessage::new(
+            post_msg.role.clone(),
+            render_research_template(&post_msg.content, research_query),
+        ));
+    }
+
+    messages
 }
 
 async fn execute_deep_research(
@@ -39,34 +99,43 @@ async fn execute_deep_research(
         .await
         .ok_or_else(|| format!("subagent config '{}' not found", SUBAGENT_ID))?;
 
-    let researcher_prompt = subagent_config
-        .messages
-        .user_template
-        .as_ref()
-        .ok_or_else(|| {
-            format!(
-                "messages.user_template not defined for subagent '{}'",
-                SUBAGENT_ID
-            )
-        })?;
+    let messages = build_deep_research_messages(&subagent_config, &research_query);
+    let tools = if subagent_config.tools.is_empty() {
+        None
+    } else {
+        Some(subagent_config.tools.clone())
+    };
+    let max_steps = subagent_config
+        .subchat
+        .max_steps
+        .unwrap_or(20)
+        .min(50)
+        .max(1);
 
-    let messages = vec![
-        ChatMessage::new("user".to_string(), researcher_prompt.clone()),
-        ChatMessage::new("user".to_string(), research_query),
-    ];
-
-    let subchat_result = run_subchat_once_with_parent(
-        gcx,
+    let config = resolve_subchat_config_with_parent(
+        gcx.clone(),
         SUBAGENT_ID,
-        messages,
-        tool_call_id.clone(),
-        subchat_tx,
-        abort_flag,
-        parent_depth,
+        subagent_config.subchat.stateful,
+        None,
+        Some("Deep Research".to_string()),
+        None,
+        None,
+        None,
+        tools,
+        max_steps,
+        false,
+        None,
+        "agent".to_string(),
         parent_task_meta,
         parent_worktree,
+        Some(tool_call_id.clone()),
+        Some(subchat_tx),
+        Some(abort_flag),
+        parent_depth + 1,
     )
     .await?;
+
+    let subchat_result = run_subchat(gcx, messages, config).await?;
     let reply = subchat_result
         .messages
         .last()
