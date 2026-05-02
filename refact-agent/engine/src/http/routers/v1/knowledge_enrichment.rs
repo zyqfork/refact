@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Component, Path as FilePath, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock as ARwLock;
 use regex::Regex;
@@ -10,6 +10,7 @@ use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::call_validation::{ChatContent, ChatMessage, ContextFile};
+use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
 use crate::global_context::GlobalContext;
 use crate::memories::memories_search;
 use crate::subchat::{resolve_subchat_config, run_subchat};
@@ -382,25 +383,87 @@ fn get_existing_context_file_paths(messages: &[ChatMessage]) -> HashSet<String> 
     paths
 }
 
-/// Returns all directories that memory/trajectory files may legitimately live in.
 async fn get_allowed_enrichment_dirs(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let config_dir = gcx.read().await.config_dir.clone();
-    dirs.push(config_dir.clone());
-
-    let traj_dirs = crate::chat::trajectories::get_all_trajectories_dirs(gcx.clone()).await;
-    dirs.extend(traj_dirs);
-
+    let mut candidates = Vec::new();
     let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
     for pd in project_dirs {
-        dirs.push(pd.join(".refact"));
+        candidates.push(pd.join(KNOWLEDGE_FOLDER_NAME));
+    }
+    candidates.push(config_dir.join("knowledge"));
+
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        if let Some(canonical) = canonicalize_allowed_enrichment_root(&candidate).await {
+            if seen.insert(canonical.clone()) {
+                dirs.push(canonical);
+            }
+        }
     }
 
     dirs
 }
 
-fn is_path_in_allowed_dirs(path: &std::path::Path, allowed: &[PathBuf]) -> bool {
-    allowed.iter().any(|root| path.starts_with(root))
+async fn canonicalize_allowed_enrichment_root(root: &FilePath) -> Option<PathBuf> {
+    let metadata = match tokio::fs::symlink_metadata(root).await {
+        Ok(metadata) => metadata,
+        Err(_) => return None,
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        tracing::warn!(
+            "preview: skipping unsafe enrichment root: {}",
+            root.display()
+        );
+        return None;
+    }
+    let canonical = match tokio::fs::canonicalize(root).await {
+        Ok(canonical) => canonical,
+        Err(_) => return None,
+    };
+    Some(dunce::simplified(&canonical).to_path_buf())
+}
+
+fn path_has_unsafe_component(path: &FilePath) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+}
+
+fn path_has_markdown_extension(path: &FilePath) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("mdx"))
+        .unwrap_or(false)
+}
+
+fn canonicalize_enrichment_candidate(raw_path: &str, allowed_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let path_str = strip_line_range_suffix(raw_path);
+    let path_str = path_str.trim();
+    if path_str.is_empty() || path_str.contains('\0') {
+        return None;
+    }
+
+    let path = FilePath::new(path_str);
+    if !path.is_absolute() || path_has_unsafe_component(path) {
+        return None;
+    }
+
+    let canonical = std::fs::canonicalize(path).ok()?;
+    let canonical = dunce::simplified(&canonical).to_path_buf();
+    if !std::fs::metadata(&canonical)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    if !path_has_markdown_extension(&canonical) {
+        return None;
+    }
+    if !allowed_dirs.iter().any(|root| canonical.starts_with(root)) {
+        return None;
+    }
+
+    Some(canonical)
 }
 
 fn strip_line_range_suffix(path: &str) -> String {
@@ -454,18 +517,19 @@ fn push_enrichment_item(
     kind: String,
     content: String,
 ) {
-    let path_str = strip_line_range_suffix(raw_path);
+    let path = match canonicalize_enrichment_candidate(raw_path, allowed_dirs) {
+        Some(path) => path,
+        None => {
+            tracing::warn!(
+                "preview: skipping enrichment path outside allowed roots: {}",
+                strip_line_range_suffix(raw_path)
+            );
+            return;
+        }
+    };
+    let path_str = path.to_string_lossy().to_string();
 
-    if path_str.is_empty() || seen_paths.contains(&path_str) {
-        return;
-    }
-
-    let path = std::path::Path::new(&path_str);
-    if !is_path_in_allowed_dirs(path, allowed_dirs) {
-        tracing::warn!(
-            "preview: skipping enrichment path outside allowed roots: {}",
-            path_str
-        );
+    if seen_paths.contains(&path_str) {
         return;
     }
 
@@ -605,6 +669,24 @@ fn extract_items_from_tool_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn write_file(path: &FilePath, content: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn canonical(path: &FilePath) -> PathBuf {
+        dunce::simplified(&fs::canonicalize(path).unwrap()).to_path_buf()
+    }
+
+    fn extract_from_single_path(path: &FilePath, allowed_dirs: &[PathBuf]) -> Vec<EnrichmentItem> {
+        let message = format!(
+            "📄 {}:1-3\n📌 Memory Title\n📦 decision\nbody\n\n---\n",
+            path.display()
+        );
+        extract_items_from_tool_results(&[tool_message(&message)], allowed_dirs)
+    }
 
     fn tool_message(content: &str) -> ChatMessage {
         ChatMessage {
@@ -616,34 +698,122 @@ mod tests {
 
     #[test]
     fn extract_items_from_tool_results_parses_knowledge_tool_blocks() {
-        let messages = vec![tool_message(
-            "📄 /tmp/project/.refact/knowledge/memory.md:1-3\n📌 Memory Title\n📦 decision\nbody\n\n---\n",
-        )];
-        let items =
-            extract_items_from_tool_results(&messages, &[PathBuf::from("/tmp/project/.refact")]);
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        let path = knowledge_dir.join("memory.md");
+        write_file(&path, "memory body");
+        let items = extract_from_single_path(&path, &[canonical(&knowledge_dir)]);
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "Memory Title");
         assert_eq!(items[0].kind, "memory");
         assert_eq!(
             items[0].context_file.file_name,
-            "/tmp/project/.refact/knowledge/memory.md"
+            canonical(&path).display().to_string()
         );
     }
 
     #[test]
     fn extract_items_from_tool_results_parses_related_memory_bullets() {
-        let messages = vec![tool_message(
-            "## Related memories (short form)\n\n- Related Title (/tmp/project/.refact/knowledge/related.md)\n  short desc\n",
-        )];
-        let items =
-            extract_items_from_tool_results(&messages, &[PathBuf::from("/tmp/project/.refact")]);
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        let path = knowledge_dir.join("related.md");
+        write_file(&path, "related body");
+        let messages = vec![tool_message(&format!(
+            "## Related memories (short form)\n\n- Related Title ({})\n  short desc\n",
+            path.display()
+        ))];
+        let items = extract_items_from_tool_results(&messages, &[canonical(&knowledge_dir)]);
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "Related Title");
         assert_eq!(
             items[0].context_file.file_name,
-            "/tmp/project/.refact/knowledge/related.md"
+            canonical(&path).display().to_string()
+        );
+    }
+
+    #[test]
+    fn extract_items_from_tool_results_rejects_parent_component_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        write_file(&knowledge_dir.join("allowed.md"), "allowed body");
+        write_file(&dir.path().join(".refact/secrets.json"), "{}");
+        let traversal = knowledge_dir.join("../secrets.json");
+
+        let items = extract_from_single_path(&traversal, &[canonical(&knowledge_dir)]);
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn extract_items_from_tool_results_rejects_config_dir_non_knowledge_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let knowledge_dir = config_dir.join("knowledge");
+        let provider_file = config_dir.join("providers.d/provider.md");
+        write_file(&knowledge_dir.join("memory.md"), "memory body");
+        write_file(&provider_file, "provider body");
+
+        let items = extract_from_single_path(&provider_file, &[canonical(&knowledge_dir)]);
+
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_allowed_enrichment_dirs_skips_symlinked_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let outside = dir.path().join("outside-knowledge");
+        tokio::fs::create_dir_all(workspace.join(".refact"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, workspace.join(KNOWLEDGE_FOLDER_NAME)).unwrap();
+
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() = vec![workspace];
+        }
+
+        let allowed_dirs = get_allowed_enrichment_dirs(gcx).await;
+
+        #[cfg(unix)]
+        assert!(allowed_dirs.is_empty());
+    }
+
+    #[test]
+    fn extract_items_from_tool_results_rejects_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        let outside = dir.path().join("outside.md");
+        let link = knowledge_dir.join("link.md");
+        write_file(&knowledge_dir.join("memory.md"), "memory body");
+        write_file(&outside, "outside body");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let items = extract_from_single_path(&link, &[canonical(&knowledge_dir)]);
+
+        #[cfg(unix)]
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn extract_items_from_tool_results_accepts_valid_canonical_knowledge_doc() {
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        let path = knowledge_dir.join("valid.md");
+        write_file(&path, "valid body");
+
+        let items = extract_from_single_path(&path, &[canonical(&knowledge_dir)]);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].context_file.file_name,
+            canonical(&path).display().to_string()
         );
     }
 }
