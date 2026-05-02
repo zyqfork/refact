@@ -936,6 +936,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         displaySize={compact ? 230 : 282}
         bubblePosition={bubblePosition}
         randomizeBubblePosition={false}
+        compactBubble={compact}
         sceneXPercent={characterSceneX}
         sceneYPercent={characterSceneY}
         sceneDepthScale={characterDepthScale}

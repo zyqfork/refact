@@ -174,6 +174,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
   onSpeechControlClick,
   bubblePosition = "top",
   randomizeBubblePosition = false,
+  compactBubble: compactBubbleOverride = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<BuddyAnimState>(createInitialAnimState());
@@ -255,7 +256,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         const walkOffsetPx = Math.round(
           (anim.walkOffsetX / CANVAS_SIZE) * displaySize,
         );
-        const compactBubble = displaySize <= 180;
+        const compactBubble = compactBubbleOverride || displaySize <= 180;
         const overrideText = speechOverrideRef.current ?? "";
         const rawText = overrideText || anim.statusText || "";
         const text = ellipsizeMiddle(rawText, compactBubble ? 120 : 170);
@@ -268,7 +269,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
         const fixedWidth = hasControls || isLongText;
         const width: BubbleView["width"] = compactBubble
           ? isLongText
-            ? "240px"
+            ? "220px"
             : hasControls
               ? "200px"
               : isMediumText
@@ -326,7 +327,13 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
     };
     frameIdRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameIdRef.current);
-  }, [displaySize, emit, randomizeBubblePosition, speechControlCount]);
+  }, [
+    compactBubbleOverride,
+    displaySize,
+    emit,
+    randomizeBubblePosition,
+    speechControlCount,
+  ]);
 
   const toCanvasCoords = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -446,7 +453,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
       {displaySize >= 100 &&
         (() => {
           const pos = BUBBLE_STYLES[bubbleView.position];
-          const compactBubble = displaySize <= 180;
+          const compactBubble = compactBubbleOverride || displaySize <= 180;
           const tailColor: React.CSSProperties =
             bubbleView.position === "left"
               ? {
@@ -489,7 +496,7 @@ export const BuddyCanvas: React.FC<BuddyCanvasProps> = ({
             lineHeight: 1.36,
             whiteSpace: bubbleView.whiteSpace,
             width: bubbleView.width,
-            maxWidth: "300px",
+            maxWidth: compactBubble ? "220px" : "300px",
             overflowWrap: "break-word",
             overflow: "visible",
             pointerEvents: speechControlCount > 0 ? "auto" : "none",

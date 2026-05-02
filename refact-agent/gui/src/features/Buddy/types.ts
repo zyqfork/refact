@@ -458,6 +458,7 @@ export interface BuddyCanvasProps {
   bubblePosition?: BubblePosition;
   /** If true, each new saying picks top, left, or right at random. */
   randomizeBubblePosition?: boolean;
+  compactBubble?: boolean;
 }
 
 export interface BuddyIdentity {

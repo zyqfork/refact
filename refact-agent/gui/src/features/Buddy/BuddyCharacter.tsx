@@ -19,6 +19,7 @@ interface BuddyCharacterProps {
   showStageBadge?: boolean;
   bubblePosition?: BubblePosition;
   randomizeBubblePosition?: boolean;
+  compactBubble?: boolean;
   sceneXPercent?: number;
   sceneYPercent?: number;
   sceneDepthScale?: number;
@@ -59,6 +60,7 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
   showStageBadge = false,
   bubblePosition = "top",
   randomizeBubblePosition = false,
+  compactBubble = false,
   sceneXPercent,
   sceneYPercent,
   sceneDepthScale,
@@ -76,6 +78,7 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
       sceneDepthScale,
     })}
     data-bubble-position={bubblePosition}
+    data-compact-bubble={String(compactBubble)}
     data-pose={scenePose}
     data-randomize-bubble-position={String(randomizeBubblePosition)}
     data-testid="buddy-world-character"
@@ -90,6 +93,7 @@ export const BuddyCharacter: React.FC<BuddyCharacterProps> = ({
         onSpeechControlClick={onSpeechControl}
         bubblePosition={bubblePosition}
         randomizeBubblePosition={randomizeBubblePosition}
+        compactBubble={compactBubble}
       />
       {showStageBadge && (
         <div

@@ -323,12 +323,17 @@ describe("buddy UI polish", () => {
     const characterSource = await readGuiSource(
       "features/Buddy/BuddyCharacter.tsx",
     );
+    const canvasSource = await readGuiSource("features/Buddy/BuddyCanvas.tsx");
     const styleSource = await readGuiSource(
       "features/Buddy/BuddyWorld.module.css",
     );
 
     expect(characterSource).toContain("styles.characterAnchor");
     expect(characterSource).toContain("styles.characterBody");
+    expect(characterSource).toContain("compactBubble={compactBubble}");
+    expect(canvasSource).toContain(
+      "compactBubbleOverride || displaySize <= 180",
+    );
     expect(styleSource).toContain(".characterAnchor");
     expect(styleSource).toContain("bottom 3.8s cubic-bezier");
     expect(styleSource).toContain("transform 3.8s cubic-bezier");
@@ -353,6 +358,14 @@ describe("buddy UI polish", () => {
     expect(source).toContain("@media (max-width: 720px)");
     expect(source).toContain("max-width: min(108px, 32vw)");
     expect(source).not.toMatch(/\.objectTooltip\s*\{[^}]*display:\s*none/u);
+  });
+
+  it("BuddyWorld_preserves_compact_height_in_narrow_media", async () => {
+    const source = await readGuiSource("features/Buddy/BuddyWorld.module.css");
+
+    expect(source).toContain(".compact {\n  height: 210px;");
+    expect(source).toContain("@media (max-width: 720px)");
+    expect(source).toContain(".scene:not(.compact) {\n    height: 250px;");
   });
 
   it("BuddyWorld_reschedules_idle_loop_after_noop_branch", async () => {

@@ -47,6 +47,7 @@ vi.mock("../features/Buddy/BuddyCharacter", async () => {
     BuddyCharacter: ({
       bubblePosition,
       randomizeBubblePosition,
+      compactBubble,
       scenePose = "idle",
       sceneXPercent,
       sceneYPercent,
@@ -55,6 +56,7 @@ vi.mock("../features/Buddy/BuddyCharacter", async () => {
     }: {
       bubblePosition?: string;
       randomizeBubblePosition?: boolean;
+      compactBubble?: boolean;
       scenePose?: string;
       sceneXPercent?: number;
       sceneYPercent?: number;
@@ -66,6 +68,7 @@ vi.mock("../features/Buddy/BuddyCharacter", async () => {
         {
           "data-bubble-position": bubblePosition,
           "data-depth-scale": sceneDepthScale,
+          "data-compact-bubble": String(compactBubble),
           "data-pose": scenePose,
           "data-randomize-bubble-position": String(randomizeBubblePosition),
           "data-testid": "buddy-world-character",
@@ -671,6 +674,10 @@ describe("BuddyWorld_dynamic_environment", () => {
       "data-randomize-bubble-position",
       "false",
     );
+    expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
+      "data-compact-bubble",
+      "false",
+    );
 
     await user.click(screen.getByRole("button", { name: /play in sun/i }));
     expect(onCare).toHaveBeenCalledWith("play", "scroll");
@@ -770,6 +777,10 @@ describe("BuddyWorld_dynamic_environment", () => {
     );
 
     expect(screen.getByTestId("buddy-world")).toHaveClass(/compact/u);
+    expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
+      "data-compact-bubble",
+      "true",
+    );
     expect(
       screen.getByRole("button", { name: /water buddy garden/i }),
     ).toBeInTheDocument();
@@ -1523,6 +1534,10 @@ describe("BuddyWorld_dynamic_environment", () => {
     expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
       "data-bubble-position",
       "top",
+    );
+    expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
+      "data-compact-bubble",
+      "true",
     );
     expect(screen.getByTestId("buddy-world")).toHaveAttribute(
       "data-speech-text",

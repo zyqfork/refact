@@ -527,7 +527,7 @@
 }
 
 @media (max-width: 720px) {
-  .scene {
+  .scene:not(.compact) {
     height: 250px;
   }
 
