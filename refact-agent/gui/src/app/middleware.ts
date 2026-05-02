@@ -720,6 +720,7 @@ startListening({
     const sourceRuntime = state.chat.threads[event.chat_id];
     const isTaskChat = sourceRuntime?.thread.is_task_chat ?? false;
     const taskMeta = sourceRuntime?.thread.task_meta;
+    const worktree = sourceRuntime?.thread.worktree;
 
     listenerApi.dispatch(
       createChatWithId({
@@ -728,6 +729,7 @@ startListening({
         taskMeta,
         parentId: event.chat_id,
         linkType: "mode_transition",
+        worktree,
         mode:
           isTaskChat && taskMeta?.role === "planner"
             ? "TASK_PLANNER"

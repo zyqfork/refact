@@ -16,6 +16,7 @@ import {
   requestSseRefresh,
   closeThread,
 } from "../../features/Chat/Thread/actions";
+import { selectThreadById } from "../../features/Chat/Thread/selectors";
 import { push } from "../../features/Pages/pagesSlice";
 import { useAppDispatch, useAppSelector } from "../../hooks";
 import { selectLspPort, selectApiKey } from "../../features/Config/configSlice";
@@ -62,6 +63,10 @@ export const ModeTransitionDialog: React.FC<ModeTransitionDialogProps> = ({
   const dispatch = useAppDispatch();
   const port = useAppSelector(selectLspPort);
   const apiKey = useAppSelector(selectApiKey);
+  const sourceThread = useAppSelector((state) =>
+    selectThreadById(state, chatId),
+  );
+  const sourceWorktree = sourceThread?.worktree;
   const [error, setError] = useState<string | null>(null);
 
   const [applyMutation, { isLoading: isApplying }] =
@@ -91,6 +96,7 @@ export const ModeTransitionDialog: React.FC<ModeTransitionDialogProps> = ({
           mode: targetMode,
           parentId: chatId,
           linkType: "mode_transition",
+          worktree: sourceWorktree,
         }),
       );
       dispatch(requestSseRefresh({ chatId: result.new_chat_id }));
@@ -110,6 +116,7 @@ export const ModeTransitionDialog: React.FC<ModeTransitionDialogProps> = ({
     onOpenChange,
     port,
     apiKey,
+    sourceWorktree,
   ]);
 
   const handleOpenChange = useCallback(

@@ -24,6 +24,7 @@ import { selectLspPort, selectApiKey } from "../../features/Config/configSlice";
 import {
   selectMessages,
   selectCurrentThreadId,
+  selectThreadWorktree,
 } from "../../features/Chat/Thread";
 import { regenerate } from "../../services/refact/chatCommands";
 import {
@@ -70,6 +71,7 @@ export const TaskPlannerDialog: React.FC<TaskPlannerDialogProps> = ({
   const apiKey = useAppSelector(selectApiKey);
   const messages = useAppSelector(selectMessages);
   const sourceChatId = useAppSelector(selectCurrentThreadId);
+  const sourceWorktree = useAppSelector(selectThreadWorktree);
 
   const [error, setError] = useState<string | null>(null);
   // Cache the created task so retries after a planner-creation failure don't
@@ -131,6 +133,7 @@ export const TaskPlannerDialog: React.FC<TaskPlannerDialogProps> = ({
           isTaskChat: true,
           mode: "TASK_PLANNER",
           taskMeta: { task_id: resolved.id, role: "planner" },
+          worktree: sourceWorktree,
         }),
       );
       dispatch(requestSseRefresh({ chatId: newChatId }));
@@ -182,6 +185,7 @@ export const TaskPlannerDialog: React.FC<TaskPlannerDialogProps> = ({
     onOpenChange,
     port,
     apiKey,
+    sourceWorktree,
   ]);
 
   const handleOpenChange = useCallback(

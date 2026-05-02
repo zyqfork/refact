@@ -140,6 +140,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
           title,
           parentId: renderChatId,
           linkType: "branch",
+          worktree: thread?.worktree,
         }),
       );
 
@@ -156,7 +157,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
         console.error("Failed to branch chat:", err);
       });
     },
-    [dispatch, thread?.title, renderChatId, lspPort, apiKey],
+    [dispatch, thread?.title, thread?.worktree, renderChatId, lspPort, apiKey],
   );
 
   const handleDelete = useCallback(

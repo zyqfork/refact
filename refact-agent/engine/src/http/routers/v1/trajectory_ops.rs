@@ -345,79 +345,20 @@ pub async fn handle_handoff_apply(
 
 async fn save_trajectory_snapshot_with_parent(
     gcx: Arc<ARwLock<GlobalContext>>,
-    snapshot: TrajectorySnapshot,
+    mut snapshot: TrajectorySnapshot,
     parent_id: &str,
     link_type: &str,
 ) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let messages_json: Vec<serde_json::Value> = snapshot
-        .messages
-        .iter()
-        .map(|m| serde_json::to_value(m).unwrap_or_default())
-        .collect();
-
-    let mut trajectory = serde_json::json!({
-        "id": snapshot.chat_id,
-        "title": snapshot.title,
-        "model": snapshot.model,
-        "mode": snapshot.mode,
-        "tool_use": snapshot.tool_use,
-        "messages": messages_json,
-        "created_at": snapshot.created_at,
-        "updated_at": now,
-        "boost_reasoning": snapshot.boost_reasoning,
-        "checkpoints_enabled": snapshot.checkpoints_enabled,
-        "context_tokens_cap": snapshot.context_tokens_cap,
-        "include_project_info": snapshot.include_project_info,
-        "isTitleGenerated": snapshot.is_title_generated,
-        "auto_approve_editing_tools": snapshot.auto_approve_editing_tools,
-        "auto_approve_dangerous_commands": snapshot.auto_approve_dangerous_commands,
-        "parent_id": parent_id,
-        "link_type": link_type,
-    });
-
-    if let Some(ref root_chat_id) = snapshot.root_chat_id {
-        trajectory["root_chat_id"] = serde_json::Value::String(root_chat_id.clone());
-    }
-
-    if let Some(ref task_meta) = snapshot.task_meta {
-        trajectory["task_meta"] = serde_json::to_value(task_meta).unwrap_or_default();
-    }
-
-    let file_path = if let Some(ref task_meta) = snapshot.task_meta {
-        let task_dir =
-            crate::tasks::storage::find_task_dir(gcx.clone(), &task_meta.task_id).await?;
-        let traj_dir = crate::tasks::storage::get_task_trajectory_dir(
-            &task_dir,
-            &task_meta.role,
-            task_meta.agent_id.as_deref(),
-        );
-        tokio::fs::create_dir_all(&traj_dir)
-            .await
-            .map_err(|e| format!("Failed to create task trajectories dir: {}", e))?;
-        traj_dir.join(format!("{}.json", snapshot.chat_id))
-    } else {
-        let trajectories_dir = crate::chat::trajectories::get_trajectories_dir(gcx.clone()).await?;
-        tokio::fs::create_dir_all(&trajectories_dir)
-            .await
-            .map_err(|e| format!("Failed to create trajectories dir: {}", e))?;
-        trajectories_dir.join(format!("{}.json", snapshot.chat_id))
-    };
-
-    let tmp_path = file_path.with_extension("json.tmp");
-    let json_str = serde_json::to_string_pretty(&trajectory)
-        .map_err(|e| format!("Failed to serialize trajectory: {}", e))?;
-    tokio::fs::write(&tmp_path, &json_str)
-        .await
-        .map_err(|e| format!("Failed to write trajectory: {}", e))?;
-    crate::chat::trajectories::atomic_write_file(&tmp_path, &file_path).await?;
+    snapshot.parent_id = Some(parent_id.to_string());
+    snapshot.link_type = Some(link_type.to_string());
+    let chat_id = snapshot.chat_id.clone();
+    crate::chat::trajectories::save_trajectory_snapshot(gcx, snapshot).await?;
 
     tracing::info!(
-        "Saved handoff trajectory {} (parent: {}, link: {}) to {:?}",
-        snapshot.chat_id,
+        "Saved handoff trajectory {} (parent: {}, link: {})",
+        chat_id,
         parent_id,
-        link_type,
-        file_path
+        link_type
     );
 
     Ok(())
@@ -657,4 +598,93 @@ pub async fn handle_planner_from_transition(
         .header("Content-Type", "application/json")
         .body(Body::from(body))
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_worktree(root: &std::path::Path) -> crate::worktrees::types::WorktreeMeta {
+        crate::worktrees::types::WorktreeMeta {
+            id: "wt-transition".to_string(),
+            kind: "chat".to_string(),
+            root: root.join("worktree"),
+            source_workspace_root: root.to_path_buf(),
+            repo_root: root.to_path_buf(),
+            branch: Some("refact/chat/preserve".to_string()),
+            base_branch: Some("dev".to_string()),
+            base_commit: Some("abc123".to_string()),
+            task_id: None,
+            card_id: None,
+            agent_id: None,
+            enforce: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn save_transition_snapshot_preserves_worktree_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+                vec![dir.path().to_path_buf()];
+            drop(gcx_lock);
+            gcx.write().await.cache_dir = dir.path().join("cache");
+        }
+        let snapshot = TrajectorySnapshot {
+            chat_id: "transition-chat".to_string(),
+            title: String::new(),
+            model: "gpt-4".to_string(),
+            mode: "agent".to_string(),
+            tool_use: "agent".to_string(),
+            messages: vec![crate::call_validation::ChatMessage::new(
+                "user".to_string(),
+                "hello".to_string(),
+            )],
+            created_at: chrono::Utc::now().to_rfc3339(),
+            boost_reasoning: false,
+            checkpoints_enabled: true,
+            context_tokens_cap: None,
+            include_project_info: true,
+            is_title_generated: false,
+            auto_approve_editing_tools: false,
+            auto_approve_dangerous_commands: false,
+            version: 1,
+            task_meta: None,
+            worktree: Some(sample_worktree(dir.path())),
+            parent_id: None,
+            link_type: None,
+            root_chat_id: Some("source-chat".to_string()),
+            reasoning_effort: None,
+            thinking_budget: None,
+            temperature: None,
+            frequency_penalty: None,
+            max_tokens: None,
+            parallel_tool_calls: None,
+            previous_response_id: None,
+            active_skill: None,
+            auto_enrichment_enabled: None,
+            buddy_meta: None,
+        };
+
+        save_trajectory_snapshot_with_parent(gcx, snapshot, "source-chat", "mode_transition")
+            .await
+            .unwrap();
+
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join("transition-chat.json");
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(raw["parent_id"], "source-chat");
+        assert_eq!(raw["link_type"], "mode_transition");
+        assert_eq!(raw["worktree"]["id"], "wt-transition");
+        assert_eq!(
+            raw["worktree"]["root"],
+            dir.path().join("worktree").display().to_string()
+        );
+    }
 }

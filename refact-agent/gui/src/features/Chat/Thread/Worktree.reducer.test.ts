@@ -173,6 +173,28 @@ describe("Worktree chat thread reducer", () => {
     expect(state.threads["chat-initial"]?.thread.worktree).toEqual(worktree);
   });
 
+  test("createChatWithId preserves source worktree for transition chats", () => {
+    const worktree = makeWorktreeMeta("wt-transition");
+
+    const state = chatReducer(
+      emptyChatState(),
+      createChatWithId({
+        id: "chat-transition",
+        parentId: "source-chat",
+        linkType: "mode_transition",
+        worktree,
+      }),
+    );
+
+    expect(state.threads["chat-transition"]?.thread.worktree).toEqual(worktree);
+    expect(state.threads["chat-transition"]?.thread.parent_id).toBe(
+      "source-chat",
+    );
+    expect(state.threads["chat-transition"]?.thread.link_type).toBe(
+      "mode_transition",
+    );
+  });
+
   test("thread params patch preserves worktree by id only", () => {
     const thread: ChatThread = {
       id: "chat-patch",

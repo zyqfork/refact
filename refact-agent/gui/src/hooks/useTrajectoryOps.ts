@@ -158,6 +158,7 @@ export function useTrajectoryOps() {
             taskMeta: { task_id: taskId, role: "planner" },
             parentId: oldChatId,
             linkType: "handoff",
+            worktree: thread.worktree,
           }),
         );
 
@@ -198,6 +199,7 @@ export function useTrajectoryOps() {
             id: result.new_chat_id,
             parentId: oldChatId,
             linkType: "handoff",
+            worktree: thread.worktree,
           }),
         );
         dispatch(requestSseRefresh({ chatId: result.new_chat_id }));

@@ -575,6 +575,36 @@ async fn remove_thread_reference(
     }
 }
 
+async fn add_thread_worktree_reference(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    chat_id: &str,
+    thread: &ThreadParams,
+    worktree: &WorktreeMeta,
+) -> Option<WorktreeMeta> {
+    let service = match worktree_service_from_gcx(gcx, Some(&worktree.source_workspace_root)).await
+    {
+        Ok(service) => service,
+        Err(e) => {
+            warn!(
+                "Failed to resolve worktree service while preserving '{}': {}",
+                worktree.id, e
+            );
+            return None;
+        }
+    };
+    let reference = reference_for_thread(chat_id, thread, &worktree.kind);
+    match service.add_reference(&worktree.id, reference).await {
+        Ok(view) => Some(view.meta),
+        Err(e) => {
+            warn!(
+                "Failed to add worktree reference '{}' for chat '{}': {}",
+                worktree.id, chat_id, e
+            );
+            None
+        }
+    }
+}
+
 pub async fn resolve_worktree_setparams_update(
     gcx: Arc<ARwLock<GlobalContext>>,
     chat_id: &str,
@@ -1242,7 +1272,7 @@ pub async fn process_command_queue(
                 )
                 .await;
 
-                let (messages_to_copy, root_id) = {
+                let (messages_to_copy, root_id, source_worktree) = {
                     let source_session = source_session_arc.lock().await;
                     let mut msgs = Vec::new();
                     let mut found = false;
@@ -1267,7 +1297,7 @@ pub async fn process_command_queue(
                         .root_chat_id
                         .clone()
                         .unwrap_or_else(|| source_chat_id.clone());
-                    (msgs, root)
+                    (msgs, root, source_session.thread.worktree.clone())
                 };
 
                 let mut session = session_arc.lock().await;
@@ -1278,7 +1308,21 @@ pub async fn process_command_queue(
                 for msg in messages_to_copy {
                     session.add_message(msg);
                 }
+                let target_thread = session.thread.clone();
                 drop(session);
+                if let Some(worktree) = source_worktree.as_ref() {
+                    if let Some(validated) = add_thread_worktree_reference(
+                        gcx.clone(),
+                        &target_thread.id,
+                        &target_thread,
+                        worktree,
+                    )
+                    .await
+                    {
+                        let mut session = session_arc.lock().await;
+                        session.thread.worktree = Some(validated);
+                    }
+                }
                 maybe_save_trajectory(gcx.clone(), session_arc.clone()).await;
             }
             ChatCommand::BrowserContextDecision {
@@ -2116,6 +2160,49 @@ mod tests {
         assert!(update.worktree.is_none());
         let registry = service.load_registry().await.unwrap();
         assert!(registry.records[0].references.is_empty());
+    }
+
+    #[tokio::test]
+    async fn worktree_branch_reference_preserves_scope_for_new_chat() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        let cache = temp.path().join("cache");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() = vec![source.clone()];
+            drop(gcx_lock);
+            gcx.write().await.cache_dir = cache.clone();
+        }
+        let service = WorktreeService::new(cache, source).unwrap();
+        let created = service
+            .create_worktree(crate::worktrees::types::CreateWorktreeRequest {
+                branch: Some("refact/chat/branch-preserve".to_string()),
+                chat_id: Some("source-chat".to_string()),
+                kind: Some("chat".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let mut target = ThreadParams::default();
+        target.id = "target-chat".to_string();
+        let validated =
+            add_thread_worktree_reference(gcx, "target-chat", &target, &created.worktree.meta)
+                .await
+                .unwrap();
+
+        assert_eq!(validated.id, created.worktree.meta.id);
+        let registry = service.load_registry().await.unwrap();
+        let record = &registry.records[0];
+        assert!(record.references.iter().any(|reference| {
+            reference.kind == "chat" && reference.chat_id.as_deref() == Some("source-chat")
+        }));
+        assert!(record.references.iter().any(|reference| {
+            reference.kind == "chat" && reference.chat_id.as_deref() == Some("target-chat")
+        }));
     }
 
     #[test]
