@@ -8,7 +8,6 @@ use crate::files_correction::get_project_dirs;
 use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
 use crate::global_context::GlobalContext;
 use crate::knowledge_graph::kg_structs::KnowledgeFrontmatter;
-use crate::memories::delete_document_from_disk;
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeCard {
@@ -94,9 +93,24 @@ fn first_nonempty_line(text: &str) -> Option<String> {
     None
 }
 
+fn retain_cards_not_at_path(index: &mut HashMap<String, Vec<KnowledgeCard>>, file_path: &Path) {
+    index.retain(|_, cards| {
+        cards.retain(|card| card.file_path != file_path);
+        !cards.is_empty()
+    });
+}
+
 impl KnowledgeIndex {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    pub fn remove_path(&mut self, file_path: &Path) {
+        retain_cards_not_at_path(&mut self.by_filename, file_path);
+        retain_cards_not_at_path(&mut self.by_tag, file_path);
+        retain_cards_not_at_path(&mut self.by_entity, file_path);
+        retain_cards_not_at_path(&mut self.by_related_filename, file_path);
+        retain_cards_not_at_path(&mut self.by_related_entity, file_path);
     }
 
     pub fn add_card(&mut self, card: KnowledgeCard) {
@@ -341,14 +355,6 @@ pub async fn build_knowledge_index(gcx: Arc<ARwLock<GlobalContext>>) -> Knowledg
                 continue;
             }
             if path_has_component(path, "archive") {
-                let path_buf = path.to_path_buf();
-                if let Err(e) = delete_document_from_disk(gcx.clone(), &path_buf).await {
-                    tracing::warn!(
-                        "knowledge_index: failed to delete archived memory {}: {}",
-                        path.display(),
-                        e
-                    );
-                }
                 continue;
             }
 
@@ -359,13 +365,6 @@ pub async fn build_knowledge_index(gcx: Arc<ARwLock<GlobalContext>>) -> Knowledg
             };
             let (fm, content_start) = KnowledgeFrontmatter::parse(&text);
             if fm.is_archived() || fm.is_deprecated() {
-                if let Err(e) = delete_document_from_disk(gcx.clone(), &path_buf).await {
-                    tracing::warn!(
-                        "knowledge_index: failed to delete inactive memory {}: {}",
-                        path.display(),
-                        e
-                    );
-                }
                 continue;
             }
 
@@ -382,7 +381,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn build_index_deletes_archived_and_deprecated_memories() {
+    async fn build_index_skips_archived_and_deprecated_memories() {
         let dir = tempfile::tempdir().unwrap();
         let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
         tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
@@ -419,8 +418,8 @@ mod tests {
 
         let index = build_knowledge_index(gcx).await;
 
-        assert!(!archived_path.exists());
-        assert!(!deprecated_path.exists());
+        assert!(archived_path.exists());
+        assert!(deprecated_path.exists());
         assert!(active_path.exists());
         assert_eq!(index.related_for_tags(&vec!["new".to_string()], 5).len(), 1);
     }

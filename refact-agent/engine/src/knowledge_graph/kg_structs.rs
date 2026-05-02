@@ -216,7 +216,7 @@ impl KnowledgeFrontmatter {
     }
 
     pub fn is_active(&self) -> bool {
-        self.status.as_deref().unwrap_or("active") == "active"
+        !self.is_archived() && !self.is_deprecated()
     }
 
     pub fn is_deprecated(&self) -> bool {

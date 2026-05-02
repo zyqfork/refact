@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock as ARwLock;
 use tokio::sync::Mutex as AMutex;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -633,9 +634,7 @@ pub async fn memories_add(
     }
 
     let md_content = format!("{}\n\n{}", frontmatter.to_yaml(), content);
-    fs::write(&file_path, &md_content)
-        .await
-        .map_err(|e| format!("Failed to write knowledge file: {}", e))?;
+    atomic_write_text(&file_path, &md_content).await?;
 
     info!("Created knowledge entry: {}", file_path.display());
 
@@ -1425,10 +1424,123 @@ async fn memories_search_fallback(
 pub async fn deprecate_document(
     gcx: Arc<ARwLock<GlobalContext>>,
     doc_path: &PathBuf,
-    _superseded_by: Option<&str>,
+    superseded_by: Option<&str>,
     _reason: &str,
 ) -> Result<(), String> {
-    delete_document_from_disk(gcx, doc_path).await
+    update_memory_document_frontmatter(gcx, doc_path, |frontmatter| {
+        frontmatter.status = Some("deprecated".to_string());
+        frontmatter.deprecated_at = Some(Local::now().format("%Y-%m-%d").to_string());
+        frontmatter.updated = Some(Local::now().format("%Y-%m-%d").to_string());
+        if let Some(superseded_by) = superseded_by {
+            frontmatter.superseded_by = Some(superseded_by.to_string());
+        }
+        Ok(true)
+    })
+    .await
+    .map(|_| ())
+}
+
+pub async fn update_memory_document_frontmatter<F>(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    doc_path: &Path,
+    update: F,
+) -> Result<bool, String>
+where
+    F: FnOnce(&mut KnowledgeFrontmatter) -> Result<bool, String>,
+{
+    let existing_text = fs::read_to_string(doc_path)
+        .await
+        .map_err(|e| format!("Failed to read memory file: {}", e))?;
+    let (mut frontmatter, content_start) = KnowledgeFrontmatter::parse(&existing_text);
+    if content_start == 0 && existing_text.starts_with("---") {
+        return Err("Failed to parse memory frontmatter".to_string());
+    }
+    let body = existing_text.get(content_start..).unwrap_or("").to_string();
+    if !update(&mut frontmatter)? {
+        return Ok(false);
+    }
+    rewrite_memory_document(gcx, doc_path, &frontmatter, &body)
+        .await
+        .map(|_| true)
+}
+
+pub async fn rewrite_memory_document(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    doc_path: &Path,
+    frontmatter: &KnowledgeFrontmatter,
+    body: &str,
+) -> Result<(), String> {
+    let content = format!("{}\n\n{}", frontmatter.to_yaml(), body.trim());
+    atomic_write_text(doc_path, &content).await?;
+
+    let path_buf = doc_path.to_path_buf();
+    {
+        let gcx_read = gcx.read().await;
+        let mut idx = gcx_read.knowledge_index.lock().await;
+        idx.remove_path(&path_buf);
+        if !frontmatter.is_archived() && !frontmatter.is_deprecated() {
+            idx.add_from_frontmatter(path_buf.clone(), frontmatter, Some(body));
+        }
+    }
+
+    let vec_db = gcx.read().await.vec_db.clone();
+    if let Some(vecdb) = vec_db.lock().await.as_ref() {
+        if frontmatter.is_archived() || frontmatter.is_deprecated() {
+            let _ = vecdb.remove_file(&path_buf).await;
+        } else {
+            vecdb
+                .vectorizer_enqueue_files(&vec![path_buf.to_string_lossy().to_string()], true)
+                .await;
+        }
+    }
+
+    gcx.write()
+        .await
+        .documents_state
+        .memory_document_map
+        .remove(&path_buf);
+
+    Ok(())
+}
+
+async fn atomic_write_text(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Invalid memory path: missing parent".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid memory path: missing file name".to_string())?;
+    let tmp_path = parent.join(format!(".{}.tmp-{}", file_name, Uuid::new_v4()));
+    let write_result = async {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)
+            .await
+            .map_err(|e| format!("Failed to create temporary memory file: {}", e))?;
+        file.write_all(content.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write temporary memory file: {}", e))?;
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to flush temporary memory file: {}", e))?;
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(path)
+                .await
+                .map_err(|e| format!("Failed to replace memory file: {}", e))?;
+        }
+        fs::rename(&tmp_path, path)
+            .await
+            .map_err(|e| format!("Failed to replace memory file: {}", e))
+    }
+    .await;
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp_path).await;
+    }
+    write_result
 }
 
 pub async fn delete_document_from_disk(
@@ -1801,7 +1913,7 @@ mod tests {
         assert!(tags.contains(&"entity:save_trajectory_as".to_string()));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn memories_add_preference_if_new_dedupes_existing_preferences() {
         let dir = tempfile::tempdir().unwrap();
         let gcx = crate::global_context::tests::make_test_gcx().await;
@@ -1830,5 +1942,49 @@ mod tests {
 
         assert!(first.is_some());
         assert!(duplicate.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deprecate_document_marks_inactive_without_deleting_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        let path = knowledge_dir.join("memory.md");
+        let mut frontmatter = create_frontmatter(
+            Some("Memory"),
+            &vec!["old".to_string()],
+            &Vec::new(),
+            &Vec::new(),
+            "domain",
+        );
+        frontmatter.id = Some("old-doc".to_string());
+        let body = "Original body";
+        tokio::fs::write(&path, format!("{}\n\n{}", frontmatter.to_yaml(), body))
+            .await
+            .unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() =
+                vec![dir.path().to_path_buf()];
+        }
+
+        deprecate_document(
+            gcx.clone(),
+            &path,
+            Some("new-doc"),
+            "superseded by canonical memory",
+        )
+        .await
+        .unwrap();
+
+        assert!(path.exists());
+        let text = tokio::fs::read_to_string(&path).await.unwrap();
+        let (updated, content_start) = KnowledgeFrontmatter::parse(&text);
+        assert_eq!(updated.status.as_deref(), Some("deprecated"));
+        assert_eq!(updated.superseded_by.as_deref(), Some("new-doc"));
+        assert_eq!(text[content_start..].trim(), body);
+        let found = load_memories_by_tags(gcx, &["old"], 10).await.unwrap();
+        assert!(found.is_empty());
     }
 }

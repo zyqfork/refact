@@ -1,10 +1,23 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use chrono::{Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::sync::RwLock as ARwLock;
+
+use crate::file_filter::KNOWLEDGE_FOLDER_NAME;
+use crate::files_correction::get_project_dirs;
+use crate::global_context::GlobalContext;
+use crate::memories::{
+    create_frontmatter, get_global_knowledge_dir, memories_add, normalize_memory_tags,
+    update_memory_document_frontmatter,
+};
 
 const HIGH_CONFIDENCE_APPROVAL_THRESHOLD: f32 = 0.85;
+const PAYLOAD_CONTENT_MAX_CHARS: usize = 12000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -142,12 +155,77 @@ impl MemoryCandidateStatus {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryCreatePayload {
+    pub title: Option<String>,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub kind: String,
+    pub filenames: Vec<String>,
+    pub related_files: Vec<String>,
+    pub links: Vec<String>,
+    pub review_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryLifecyclePayload {
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub kind: Option<String>,
+    pub filenames: Option<Vec<String>>,
+    pub related_files: Option<Vec<String>>,
+    pub links: Option<Vec<String>>,
+    pub review_after: Option<String>,
+    pub superseded_by: Option<String>,
+    pub superseded_paths: Vec<String>,
+    pub canonical: Option<MemoryCreatePayload>,
+}
+
+impl MemoryCreatePayload {
+    pub fn normalized(mut self) -> Self {
+        self.title = normalize_optional_text(self.title.as_deref());
+        self.content = redact_and_cap_payload_text(&self.content, PAYLOAD_CONTENT_MAX_CHARS);
+        self.tags = normalize_tags(&self.tags);
+        self.kind = normalize_kind(&self.kind);
+        self.filenames = normalize_paths(&self.filenames);
+        self.related_files = normalize_paths(&self.related_files);
+        self.links = normalize_strings(&self.links);
+        self.review_after = normalize_review_after(self.review_after.as_deref());
+        self
+    }
+}
+
+impl MemoryLifecyclePayload {
+    pub fn normalized(mut self) -> Self {
+        self.title = normalize_optional_text(self.title.as_deref());
+        self.content = self
+            .content
+            .as_deref()
+            .map(|content| redact_and_cap_payload_text(content, PAYLOAD_CONTENT_MAX_CHARS))
+            .filter(|content| !content.is_empty());
+        self.tags = self.tags.map(|tags| normalize_tags(&tags));
+        self.kind = self.kind.as_deref().map(normalize_kind);
+        self.filenames = self.filenames.map(|paths| normalize_paths(&paths));
+        self.related_files = self.related_files.map(|paths| normalize_paths(&paths));
+        self.links = self.links.map(|links| normalize_strings(&links));
+        self.review_after = normalize_review_after(self.review_after.as_deref());
+        self.superseded_by = normalize_optional_string(self.superseded_by.as_deref());
+        self.superseded_paths = normalize_paths(&self.superseded_paths);
+        self.canonical = self.canonical.map(|canonical| canonical.normalized());
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryLifecycleOp {
     pub op_id: String,
     pub source: MemorySource,
     pub op_type: MemoryOpType,
+    pub payload: MemoryLifecyclePayload,
     pub target_paths: Vec<String>,
     pub evidence: String,
     pub confidence: f32,
@@ -165,6 +243,7 @@ impl Default for MemoryLifecycleOp {
             op_id: String::new(),
             source: MemorySource::default(),
             op_type: MemoryOpType::default(),
+            payload: MemoryLifecyclePayload::default(),
             target_paths: Vec::new(),
             evidence: String::new(),
             confidence: 0.0,
@@ -205,6 +284,7 @@ impl MemoryLifecycleOp {
             op_id: op_id.into(),
             source,
             op_type,
+            payload: MemoryLifecyclePayload::default(),
             target_paths,
             evidence,
             confidence,
@@ -222,6 +302,7 @@ impl MemoryLifecycleOp {
         self.created_at = self.created_at.trim().to_string();
         self.idempotency_key = self.idempotency_key.trim().to_string();
         self.target_paths = normalize_paths(&self.target_paths);
+        self.payload = self.payload.normalized();
         self.applied_at = normalize_optional_string(self.applied_at.as_deref());
         self.error = normalize_optional_string(self.error.as_deref());
         if self.idempotency_key.trim().is_empty() {
@@ -375,7 +456,11 @@ fn remove_indexed_key(index: &mut HashMap<String, usize>, key: &str, expected_in
 
 fn nonempty_key(value: &str) -> Option<&str> {
     let value = value.trim();
-    if value.is_empty() { None } else { Some(value) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -630,6 +715,556 @@ pub fn default_requires_approval(op_type: MemoryOpType, confidence: f32) -> bool
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryApplyOutcome {
+    pub status: MemoryOpStatus,
+    pub applied_paths: Vec<PathBuf>,
+    pub message: Option<String>,
+}
+
+impl MemoryApplyOutcome {
+    fn applied(paths: Vec<PathBuf>) -> Self {
+        Self {
+            status: MemoryOpStatus::Applied,
+            applied_paths: paths,
+            message: None,
+        }
+    }
+
+    fn skipped(message: impl Into<String>) -> Self {
+        Self {
+            status: MemoryOpStatus::Skipped,
+            applied_paths: Vec::new(),
+            message: Some(message.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct KnowledgeRoots {
+    local: Vec<PathBuf>,
+    global: PathBuf,
+}
+
+impl KnowledgeRoots {
+    fn all(&self) -> Vec<PathBuf> {
+        let mut roots = self.local.clone();
+        roots.push(self.global.clone());
+        roots
+    }
+}
+
+pub async fn apply_memory_lifecycle_op(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+) -> Result<MemoryApplyOutcome, String> {
+    let op = op.clone().normalized();
+    if matches!(
+        op.status,
+        MemoryOpStatus::Applied | MemoryOpStatus::Skipped | MemoryOpStatus::Rejected
+    ) {
+        return Ok(MemoryApplyOutcome::skipped("operation already finalized"));
+    }
+    if op.requires_approval && op.status != MemoryOpStatus::Approved {
+        return Err("operation requires approval".to_string());
+    }
+    if destructive_memory_op(op.op_type) && op.status != MemoryOpStatus::Approved {
+        return Err("archive, delete, and merge operations require approval".to_string());
+    }
+
+    match op.op_type {
+        MemoryOpType::CreateMemory => apply_create_memory(gcx, &op).await,
+        MemoryOpType::Retag => apply_retag(gcx, &op).await,
+        MemoryOpType::RepairLinks => apply_repair_links(gcx, &op).await,
+        MemoryOpType::MarkReviewNeeded => apply_review_status(gcx, &op, "review_needed").await,
+        MemoryOpType::MarkStale => apply_review_status(gcx, &op, "stale").await,
+        MemoryOpType::Archive | MemoryOpType::ArchiveCandidate => {
+            apply_archive(gcx, &op, None).await
+        }
+        MemoryOpType::MergeArchive => apply_merge_archive(gcx, &op).await,
+        MemoryOpType::DeleteCandidate => {
+            Err("hard delete is not supported by memory lifecycle applier".to_string())
+        }
+        _ => Err(format!(
+            "unsupported memory lifecycle operation: {}",
+            op.op_type.as_str()
+        )),
+    }
+}
+
+pub async fn apply_memory_lifecycle_op_status(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+) -> MemoryLifecycleOp {
+    let mut updated = op.clone().normalized();
+    match apply_memory_lifecycle_op(gcx, &updated).await {
+        Ok(outcome) => {
+            updated.status = outcome.status;
+            updated.error = outcome.message;
+            if updated.status == MemoryOpStatus::Applied {
+                updated.applied_at = Some(Utc::now().to_rfc3339());
+            }
+        }
+        Err(err) => {
+            updated.status = MemoryOpStatus::Failed;
+            updated.error = Some(err);
+        }
+    }
+    updated
+}
+
+fn destructive_memory_op(op_type: MemoryOpType) -> bool {
+    matches!(
+        op_type,
+        MemoryOpType::ArchiveCandidate
+            | MemoryOpType::Archive
+            | MemoryOpType::MergeArchive
+            | MemoryOpType::DeleteCandidate
+    )
+}
+
+async fn apply_create_memory(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+) -> Result<MemoryApplyOutcome, String> {
+    let payload = op
+        .payload
+        .canonical
+        .clone()
+        .unwrap_or_else(|| MemoryCreatePayload {
+            title: op.payload.title.clone(),
+            content: op
+                .payload
+                .content
+                .clone()
+                .unwrap_or_else(|| op.evidence.clone()),
+            tags: op.payload.tags.clone().unwrap_or_default(),
+            kind: op
+                .payload
+                .kind
+                .clone()
+                .unwrap_or_else(|| "domain".to_string()),
+            filenames: op.payload.filenames.clone().unwrap_or_default(),
+            related_files: op.payload.related_files.clone().unwrap_or_default(),
+            links: op.payload.links.clone().unwrap_or_default(),
+            review_after: op.payload.review_after.clone(),
+        })
+        .normalized();
+
+    let content = if payload.content.trim().is_empty() {
+        return Err("create_memory payload content is empty".to_string());
+    } else {
+        payload.content.trim().to_string()
+    };
+
+    let mut tags = payload.tags.clone();
+    if tags.is_empty() {
+        tags.push("memory".to_string());
+    }
+    let links = payload.links.clone();
+    let mut frontmatter = create_frontmatter(
+        payload.title.as_deref(),
+        &tags,
+        &payload.filenames,
+        &links,
+        &payload.kind,
+    );
+    frontmatter.related_files = payload.related_files;
+    frontmatter.status = Some(
+        if op.source.is_autonomous()
+            && !(op.status == MemoryOpStatus::Approved
+                || (!op.requires_approval && op.confidence >= HIGH_CONFIDENCE_APPROVAL_THRESHOLD))
+        {
+            "proposed".to_string()
+        } else {
+            "active".to_string()
+        },
+    );
+    if let Some(review_after) = payload.review_after {
+        frontmatter.review_after = Some(review_after);
+    }
+    frontmatter.source_tool = Some(format!("buddy_memory_lifecycle:{}", op.source.as_str()));
+    frontmatter.content_hash = Some(compute_content_hash(&content));
+
+    let path = memories_add(gcx, &frontmatter, &content).await?;
+    Ok(MemoryApplyOutcome::applied(vec![path]))
+}
+
+async fn apply_retag(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+) -> Result<MemoryApplyOutcome, String> {
+    let tags = op
+        .payload
+        .tags
+        .clone()
+        .ok_or_else(|| "retag payload missing tags".to_string())?;
+    let roots = knowledge_roots(gcx.clone()).await;
+    let mut paths = Vec::new();
+    for target in &op.target_paths {
+        let path = validate_existing_memory_path(target, &roots).await?;
+        let changed = update_memory_document_frontmatter(gcx.clone(), &path, |frontmatter| {
+            let new_tags = normalize_memory_tags(&tags, 16);
+            if frontmatter.tags == new_tags {
+                return Ok(false);
+            }
+            frontmatter.tags = new_tags;
+            frontmatter.updated = Some(today_string());
+            Ok(true)
+        })
+        .await?;
+        if changed {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        Ok(MemoryApplyOutcome::skipped("retag already applied"))
+    } else {
+        Ok(MemoryApplyOutcome::applied(paths))
+    }
+}
+
+async fn apply_repair_links(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+) -> Result<MemoryApplyOutcome, String> {
+    if op.payload.filenames.is_none()
+        && op.payload.related_files.is_none()
+        && op.payload.links.is_none()
+    {
+        return Err("repair_links payload has no link fields".to_string());
+    }
+    let roots = knowledge_roots(gcx.clone()).await;
+    let mut paths = Vec::new();
+    for target in &op.target_paths {
+        let path = validate_existing_memory_path(target, &roots).await?;
+        let changed = update_memory_document_frontmatter(gcx.clone(), &path, |frontmatter| {
+            let old = (
+                frontmatter.filenames.clone(),
+                frontmatter.related_files.clone(),
+                frontmatter.links.clone(),
+            );
+            if let Some(filenames) = &op.payload.filenames {
+                frontmatter.filenames = filenames.clone();
+            }
+            if let Some(related_files) = &op.payload.related_files {
+                frontmatter.related_files = related_files.clone();
+            }
+            if let Some(links) = &op.payload.links {
+                frontmatter.links = links.clone();
+            }
+            let new = (
+                frontmatter.filenames.clone(),
+                frontmatter.related_files.clone(),
+                frontmatter.links.clone(),
+            );
+            if old == new {
+                return Ok(false);
+            }
+            frontmatter.updated = Some(today_string());
+            Ok(true)
+        })
+        .await?;
+        if changed {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        Ok(MemoryApplyOutcome::skipped("links already repaired"))
+    } else {
+        Ok(MemoryApplyOutcome::applied(paths))
+    }
+}
+
+async fn apply_review_status(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+    status: &str,
+) -> Result<MemoryApplyOutcome, String> {
+    let roots = knowledge_roots(gcx.clone()).await;
+    let review_after = op.payload.review_after.clone().unwrap_or_else(today_string);
+    let mut paths = Vec::new();
+    for target in &op.target_paths {
+        let path = validate_existing_memory_path(target, &roots).await?;
+        let changed = update_memory_document_frontmatter(gcx.clone(), &path, |frontmatter| {
+            if frontmatter.status.as_deref() == Some(status)
+                && frontmatter.review_after.as_deref() == Some(review_after.as_str())
+            {
+                return Ok(false);
+            }
+            frontmatter.status = Some(status.to_string());
+            frontmatter.review_after = Some(review_after.clone());
+            frontmatter.updated = Some(today_string());
+            Ok(true)
+        })
+        .await?;
+        if changed {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        Ok(MemoryApplyOutcome::skipped("review status already applied"))
+    } else {
+        Ok(MemoryApplyOutcome::applied(paths))
+    }
+}
+
+async fn apply_archive(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+    superseded_by: Option<&str>,
+) -> Result<MemoryApplyOutcome, String> {
+    let roots = knowledge_roots(gcx.clone()).await;
+    let mut paths = Vec::new();
+    for target in &op.target_paths {
+        let path = validate_existing_memory_path(target, &roots).await?;
+        let changed = archive_memory_file(
+            gcx.clone(),
+            &path,
+            superseded_by.or(op.payload.superseded_by.as_deref()),
+        )
+        .await?;
+        if changed {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        Ok(MemoryApplyOutcome::skipped("memory already archived"))
+    } else {
+        Ok(MemoryApplyOutcome::applied(paths))
+    }
+}
+
+async fn apply_merge_archive(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op: &MemoryLifecycleOp,
+) -> Result<MemoryApplyOutcome, String> {
+    if op.status != MemoryOpStatus::Approved {
+        return Err("merge_archive requires approval".to_string());
+    }
+
+    let canonical = op
+        .payload
+        .canonical
+        .clone()
+        .ok_or_else(|| "merge_archive payload missing canonical memory".to_string())?
+        .normalized();
+    if canonical.content.trim().is_empty() {
+        return Err("merge_archive canonical content is empty".to_string());
+    }
+
+    let roots = knowledge_roots(gcx.clone()).await;
+    let superseded_targets = if op.payload.superseded_paths.is_empty() {
+        op.target_paths.clone()
+    } else {
+        op.payload.superseded_paths.clone()
+    };
+    let mut superseded_paths = Vec::new();
+    for target in &superseded_targets {
+        superseded_paths.push(validate_existing_memory_path(target, &roots).await?);
+    }
+
+    let mut tags = canonical.tags.clone();
+    if tags.is_empty() {
+        tags.push("memory".to_string());
+    }
+    let mut frontmatter = create_frontmatter(
+        canonical.title.as_deref(),
+        &tags,
+        &canonical.filenames,
+        &canonical.links,
+        &canonical.kind,
+    );
+    frontmatter.related_files = canonical.related_files;
+    frontmatter.content_hash = Some(compute_content_hash(&canonical.content));
+    if let Some(review_after) = canonical.review_after {
+        frontmatter.review_after = Some(review_after);
+    }
+    frontmatter.source_tool = Some(format!("buddy_memory_lifecycle:{}", op.source.as_str()));
+
+    let canonical_path = memories_add(gcx.clone(), &frontmatter, canonical.content.trim()).await?;
+    let canonical_id = frontmatter
+        .id
+        .clone()
+        .unwrap_or_else(|| canonical_path.to_string_lossy().to_string());
+
+    let mut paths = vec![canonical_path];
+    for path in superseded_paths {
+        let changed = archive_memory_file(gcx.clone(), &path, Some(&canonical_id)).await?;
+        if changed {
+            paths.push(path);
+        }
+    }
+
+    Ok(MemoryApplyOutcome::applied(paths))
+}
+
+async fn archive_memory_file(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    path: &Path,
+    superseded_by: Option<&str>,
+) -> Result<bool, String> {
+    update_memory_document_frontmatter(gcx, path, |frontmatter| {
+        if frontmatter.is_archived() {
+            return Ok(false);
+        }
+        frontmatter.status = Some("archived".to_string());
+        frontmatter.deprecated_at = Some(today_string());
+        frontmatter.updated = Some(today_string());
+        if let Some(superseded_by) = superseded_by {
+            frontmatter.superseded_by = Some(superseded_by.to_string());
+        }
+        Ok(true)
+    })
+    .await
+}
+
+async fn knowledge_roots(gcx: Arc<ARwLock<GlobalContext>>) -> KnowledgeRoots {
+    let local = get_project_dirs(gcx.clone())
+        .await
+        .into_iter()
+        .map(|dir| dir.join(KNOWLEDGE_FOLDER_NAME))
+        .collect();
+    let global = get_global_knowledge_dir(gcx).await;
+    KnowledgeRoots { local, global }
+}
+
+async fn validate_existing_memory_path(
+    path: &str,
+    roots: &KnowledgeRoots,
+) -> Result<PathBuf, String> {
+    let normalized = normalize_path(path).ok_or_else(|| "empty memory path".to_string())?;
+    reject_unsafe_path(&normalized)?;
+    let candidate = PathBuf::from(&normalized);
+    validate_memory_extension(&candidate)?;
+
+    let absolute_candidate = if candidate.is_absolute() {
+        candidate
+    } else {
+        let roots_all = roots.all();
+        let mut resolved = None;
+        for root in &roots_all {
+            if normalized.starts_with(&format!("{}/", KNOWLEDGE_FOLDER_NAME)) {
+                if let Some(parent) = root.parent() {
+                    let candidate = parent.join(&normalized);
+                    if candidate.exists() {
+                        resolved = Some(candidate);
+                        break;
+                    }
+                }
+            }
+            let candidate = root.join(&normalized);
+            if candidate.exists() {
+                resolved = Some(candidate);
+                break;
+            }
+        }
+        resolved.ok_or_else(|| format!("memory path not found: {}", normalized))?
+    };
+
+    let canonical = canonical_existing_file_no_symlink(&absolute_candidate).await?;
+    let canonical_roots = canonicalize_existing_roots(roots).await?;
+    if !canonical_roots
+        .iter()
+        .any(|root| canonical.starts_with(root))
+    {
+        return Err("memory path outside knowledge directories".to_string());
+    }
+    Ok(canonical)
+}
+
+fn reject_unsafe_path(path: &str) -> Result<(), String> {
+    if path.contains('\0') {
+        return Err("memory path contains nul byte".to_string());
+    }
+    let parsed = Path::new(path);
+    for component in parsed.components() {
+        match component {
+            Component::ParentDir => return Err("memory path cannot contain '..'".to_string()),
+            Component::Prefix(_) => {
+                return Err("windows drive prefixes are not allowed".to_string())
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_memory_extension(path: &Path) -> Result<(), String> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("md") | Some("mdx") => Ok(()),
+        _ => Err("memory path must be .md or .mdx".to_string()),
+    }
+}
+
+async fn canonical_existing_file_no_symlink(path: &Path) -> Result<PathBuf, String> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .map_err(|e| format!("memory path not accessible: {}", e))?;
+    if metadata.file_type().is_symlink() {
+        return Err("memory path cannot be a symlink".to_string());
+    }
+    if !metadata.is_file() {
+        return Err("memory path must be a file".to_string());
+    }
+    tokio::fs::canonicalize(path)
+        .await
+        .map(|path| dunce::simplified(&path).to_path_buf())
+        .map_err(|e| format!("failed to canonicalize memory path: {}", e))
+}
+
+async fn canonicalize_existing_roots(roots: &KnowledgeRoots) -> Result<Vec<PathBuf>, String> {
+    let mut out = Vec::new();
+    for root in roots.all() {
+        if !root.exists() {
+            continue;
+        }
+        let metadata = tokio::fs::symlink_metadata(&root)
+            .await
+            .map_err(|e| format!("knowledge root inaccessible: {}", e))?;
+        if metadata.file_type().is_symlink() {
+            return Err("knowledge root cannot be a symlink".to_string());
+        }
+        let canonical = tokio::fs::canonicalize(&root)
+            .await
+            .map(|path| dunce::simplified(&path).to_path_buf())
+            .map_err(|e| format!("failed to canonicalize knowledge root: {}", e))?;
+        out.push(canonical);
+    }
+    if out.is_empty() {
+        return Err("no knowledge directories available".to_string());
+    }
+    Ok(out)
+}
+
+fn normalize_strings(values: &[String]) -> Vec<String> {
+    let mut normalized: Vec<String> = values
+        .iter()
+        .filter_map(|value| normalize_optional_string(Some(value)))
+        .collect();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn normalize_review_after(value: Option<&str>) -> Option<String> {
+    let value = normalize_optional_string(value)?;
+    NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+        .ok()
+        .map(|date| date.format("%Y-%m-%d").to_string())
+}
+
+fn today_string() -> String {
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn redact_and_cap_payload_text(text: &str, max_chars: usize) -> String {
+    let redacted = crate::buddy::actor::redact_sensitive(text);
+    crate::llm::safe_truncate(&redacted, max_chars)
+        .trim()
+        .to_string()
+}
+
 pub fn default_review_after_days(
     kind: &str,
     source: MemorySource,
@@ -672,10 +1307,18 @@ pub fn default_review_after_date(
 }
 
 fn normalize_path_parts(path: &str) -> Vec<String> {
-    path.split('/')
-        .filter(|part| !part.is_empty() && *part != ".")
-        .map(|part| part.to_string())
-        .collect()
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            parts.push(part.to_string());
+            continue;
+        }
+        parts.push(part.to_string());
+    }
+    parts
 }
 
 fn normalize_optional_string(value: Option<&str>) -> Option<String> {
@@ -723,6 +1366,7 @@ fn hash_list(h: &mut Sha256, name: &str, values: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::knowledge_graph::kg_structs::KnowledgeFrontmatter;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -740,6 +1384,39 @@ mod tests {
         );
         op.status = status;
         op
+    }
+
+    async fn test_gcx_with_workspace(dir: &Path) -> Arc<ARwLock<GlobalContext>> {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            let gcx_lock = gcx.read().await;
+            *gcx_lock.documents_state.workspace_folders.lock().unwrap() = vec![dir.to_path_buf()];
+        }
+        gcx
+    }
+
+    fn frontmatter_and_body(text: &str) -> (KnowledgeFrontmatter, String) {
+        let (frontmatter, content_start) = KnowledgeFrontmatter::parse(text);
+        (frontmatter, text[content_start..].trim().to_string())
+    }
+
+    async fn write_memory_file(path: &Path, frontmatter: KnowledgeFrontmatter, body: &str) {
+        tokio::fs::write(path, format!("{}\n\n{}", frontmatter.to_yaml(), body))
+            .await
+            .unwrap();
+    }
+
+    fn active_frontmatter(title: &str, tags: &[&str]) -> KnowledgeFrontmatter {
+        KnowledgeFrontmatter {
+            id: Some(title.to_string()),
+            title: Some(title.to_string()),
+            status: Some("active".to_string()),
+            tags: strings(tags),
+            created: Some("2026-05-02".to_string()),
+            updated: Some("2026-05-02".to_string()),
+            kind: Some("domain".to_string()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -852,6 +1529,10 @@ mod tests {
         assert_eq!(
             normalize_path(" ./relative//path/ "),
             Some("relative/path".to_string())
+        );
+        assert_eq!(
+            normalize_path("../outside.md"),
+            Some("../outside.md".to_string())
         );
         assert_eq!(
             normalize_path("src\\buddy//memory_lifecycle.rs"),
@@ -982,5 +1663,309 @@ mod tests {
         assert_eq!(compacted.ops, vec![second.normalized(), third.normalized()]);
         assert_eq!(compacted.failed_count, 1);
         assert_eq!(compacted.applied_count, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_memory_op_writes_frontmatter_body_with_normalized_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let mut op = MemoryLifecycleOp::pending(
+            "op-create",
+            MemorySource::BehaviorLearner,
+            MemoryOpType::CreateMemory,
+            Vec::new(),
+            "evidence",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        op.payload = MemoryLifecyclePayload {
+            title: Some(" Useful Memory ".to_string()),
+            content: Some("# Useful Memory\n\nBody".to_string()),
+            tags: Some(strings(&[" Buddy ", "MEMORY", "buddy"])),
+            kind: Some("Preference".to_string()),
+            filenames: Some(strings(&["src//lib.rs"])),
+            related_files: Some(strings(&["src/main.rs"])),
+            ..Default::default()
+        };
+
+        let outcome = apply_memory_lifecycle_op(gcx, &op).await.unwrap();
+
+        assert_eq!(outcome.status, MemoryOpStatus::Applied);
+        assert_eq!(outcome.applied_paths.len(), 1);
+        let text = tokio::fs::read_to_string(&outcome.applied_paths[0])
+            .await
+            .unwrap();
+        let (frontmatter, body) = frontmatter_and_body(&text);
+        assert_eq!(frontmatter.title.as_deref(), Some("Useful Memory"));
+        assert_eq!(frontmatter.tags, strings(&["buddy", "memory"]));
+        assert_eq!(frontmatter.kind.as_deref(), Some("preference"));
+        assert_eq!(frontmatter.status.as_deref(), Some("active"));
+        assert_eq!(frontmatter.filenames, strings(&["src/lib.rs"]));
+        assert_eq!(frontmatter.related_files, strings(&["src/main.rs"]));
+        assert_eq!(body, "# Useful Memory\n\nBody");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn autonomous_create_memory_defaults_to_proposed_without_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let mut op = MemoryLifecycleOp::pending(
+            "op-create-proposed",
+            MemorySource::MemoryGarden,
+            MemoryOpType::CreateMemory,
+            Vec::new(),
+            "Unapproved autonomous evidence",
+            0.50,
+            "2026-05-02T00:00:00Z",
+        );
+        op.requires_approval = false;
+        op.payload.content = Some("Autonomous body".to_string());
+
+        let outcome = apply_memory_lifecycle_op(gcx, &op).await.unwrap();
+        let text = tokio::fs::read_to_string(&outcome.applied_paths[0])
+            .await
+            .unwrap();
+        let (frontmatter, _) = frontmatter_and_body(&text);
+
+        assert_eq!(frontmatter.status.as_deref(), Some("proposed"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retag_and_repair_links_preserve_body_and_parseable_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        let path = knowledge_dir.join("memory.md");
+        let mut frontmatter = active_frontmatter("memory", &["old"]);
+        frontmatter.filenames = strings(&["old.rs"]);
+        frontmatter.related_files = strings(&["old-related.rs"]);
+        frontmatter.links = strings(&["old-link"]);
+        write_memory_file(&path, frontmatter, "# Heading\n\nOriginal body").await;
+
+        let mut retag = MemoryLifecycleOp::pending(
+            "op-retag",
+            MemorySource::MemoryGarden,
+            MemoryOpType::Retag,
+            vec![path.to_string_lossy().to_string()],
+            "retag",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        retag.payload.tags = Some(strings(&["New", "buddy"]));
+        apply_memory_lifecycle_op(gcx.clone(), &retag)
+            .await
+            .unwrap();
+
+        let mut repair = MemoryLifecycleOp::pending(
+            "op-repair",
+            MemorySource::MemoryGarden,
+            MemoryOpType::RepairLinks,
+            vec![path.to_string_lossy().to_string()],
+            "repair",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        repair.payload.filenames = Some(strings(&["src/lib.rs"]));
+        repair.payload.related_files = Some(strings(&["src/main.rs"]));
+        repair.payload.links = Some(strings(&["new-link"]));
+        apply_memory_lifecycle_op(gcx, &repair).await.unwrap();
+
+        let text = tokio::fs::read_to_string(&path).await.unwrap();
+        let (frontmatter, body) = frontmatter_and_body(&text);
+        assert_eq!(frontmatter.tags, strings(&["buddy", "new"]));
+        assert_eq!(frontmatter.filenames, strings(&["src/lib.rs"]));
+        assert_eq!(frontmatter.related_files, strings(&["src/main.rs"]));
+        assert_eq!(frontmatter.links, strings(&["new-link"]));
+        assert_eq!(body, "# Heading\n\nOriginal body");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn archive_op_preserves_content_and_makes_doc_inactive() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        let path = knowledge_dir.join("memory.md");
+        write_memory_file(
+            &path,
+            active_frontmatter("memory", &["old"]),
+            "Archive body",
+        )
+        .await;
+
+        let mut op = MemoryLifecycleOp::pending(
+            "op-archive",
+            MemorySource::MemoryGarden,
+            MemoryOpType::Archive,
+            vec![path.to_string_lossy().to_string()],
+            "archive",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        op.status = MemoryOpStatus::Approved;
+
+        apply_memory_lifecycle_op(gcx.clone(), &op).await.unwrap();
+
+        assert!(path.exists());
+        let text = tokio::fs::read_to_string(&path).await.unwrap();
+        let (frontmatter, body) = frontmatter_and_body(&text);
+        assert_eq!(frontmatter.status.as_deref(), Some("archived"));
+        assert_eq!(body, "Archive body");
+        let kg = crate::knowledge_graph::build_knowledge_graph(gcx.clone()).await;
+        assert!(kg.active_docs().all(|doc| doc.path != path));
+        let found = crate::memories::load_memories_by_tags(gcx, &["old"], 10)
+            .await
+            .unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invalid_path_traversal_and_symlink_escape_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        let outside = dir.path().join("outside.md");
+        write_memory_file(&outside, active_frontmatter("outside", &["old"]), "Outside").await;
+        let link = knowledge_dir.join("link.md");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&outside, &link).unwrap();
+
+        let mut traversal = MemoryLifecycleOp::pending(
+            "op-traversal",
+            MemorySource::MemoryGarden,
+            MemoryOpType::Retag,
+            strings(&["../outside.md"]),
+            "retag",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        traversal.payload.tags = Some(strings(&["new"]));
+        let traversal_err = apply_memory_lifecycle_op(gcx.clone(), &traversal)
+            .await
+            .unwrap_err();
+        assert!(traversal_err.contains(".."));
+
+        let mut symlink = MemoryLifecycleOp::pending(
+            "op-symlink",
+            MemorySource::MemoryGarden,
+            MemoryOpType::Retag,
+            vec![link.to_string_lossy().to_string()],
+            "retag",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        symlink.payload.tags = Some(strings(&["new"]));
+        let symlink_err = apply_memory_lifecycle_op(gcx, &symlink).await.unwrap_err();
+        assert!(symlink_err.contains("symlink"));
+
+        let text = tokio::fs::read_to_string(&outside).await.unwrap();
+        let (frontmatter, body) = frontmatter_and_body(&text);
+        assert_eq!(frontmatter.tags, strings(&["old"]));
+        assert_eq!(body, "Outside");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn merge_archive_requires_approval_and_archives_after_canonical_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        let old_path = knowledge_dir.join("old.md");
+        write_memory_file(&old_path, active_frontmatter("old", &["old"]), "Old body").await;
+
+        let mut op = MemoryLifecycleOp::pending(
+            "op-merge",
+            MemorySource::MemoryGarden,
+            MemoryOpType::MergeArchive,
+            vec![old_path.to_string_lossy().to_string()],
+            "merge",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        op.payload.canonical = Some(MemoryCreatePayload {
+            title: Some("Canonical".to_string()),
+            content: "Canonical body".to_string(),
+            tags: strings(&["canonical"]),
+            kind: "domain".to_string(),
+            ..Default::default()
+        });
+
+        let err = apply_memory_lifecycle_op(gcx.clone(), &op)
+            .await
+            .unwrap_err();
+        assert!(err.contains("approval"));
+        let old_text = tokio::fs::read_to_string(&old_path).await.unwrap();
+        assert_eq!(
+            frontmatter_and_body(&old_text).0.status.as_deref(),
+            Some("active")
+        );
+
+        op.status = MemoryOpStatus::Approved;
+        let outcome = apply_memory_lifecycle_op(gcx, &op).await.unwrap();
+        assert_eq!(outcome.status, MemoryOpStatus::Applied);
+        assert_eq!(outcome.applied_paths.len(), 2);
+        let old_text = tokio::fs::read_to_string(&old_path).await.unwrap();
+        let (old_frontmatter, old_body) = frontmatter_and_body(&old_text);
+        assert_eq!(old_frontmatter.status.as_deref(), Some("archived"));
+        assert!(old_frontmatter.superseded_by.is_some());
+        assert_eq!(old_body, "Old body");
+        let canonical_text = tokio::fs::read_to_string(&outcome.applied_paths[0])
+            .await
+            .unwrap();
+        let (canonical_frontmatter, canonical_body) = frontmatter_and_body(&canonical_text);
+        assert_eq!(canonical_frontmatter.title.as_deref(), Some("Canonical"));
+        assert_eq!(canonical_body, "Canonical body");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_apply_leaves_original_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let knowledge_dir = dir.path().join(KNOWLEDGE_FOLDER_NAME);
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        let path = knowledge_dir.join("memory.md");
+        write_memory_file(&path, active_frontmatter("memory", &["old"]), "Body").await;
+        let before = tokio::fs::read_to_string(&path).await.unwrap();
+
+        let op = MemoryLifecycleOp::pending(
+            "op-fail",
+            MemorySource::MemoryGarden,
+            MemoryOpType::Retag,
+            vec![path.to_string_lossy().to_string()],
+            "retag",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+
+        let err = apply_memory_lifecycle_op(gcx, &op).await.unwrap_err();
+        assert!(err.contains("missing tags"));
+        let after = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replay_of_applied_op_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = test_gcx_with_workspace(dir.path()).await;
+        let mut op = MemoryLifecycleOp::pending(
+            "op-applied",
+            MemorySource::BehaviorLearner,
+            MemoryOpType::CreateMemory,
+            Vec::new(),
+            "evidence",
+            0.91,
+            "2026-05-02T00:00:00Z",
+        );
+        op.status = MemoryOpStatus::Applied;
+        op.payload.content = Some("Should not be written".to_string());
+
+        let outcome = apply_memory_lifecycle_op(gcx, &op).await.unwrap();
+
+        assert_eq!(outcome.status, MemoryOpStatus::Skipped);
+        assert!(dir.path().join(KNOWLEDGE_FOLDER_NAME).read_dir().is_err());
     }
 }

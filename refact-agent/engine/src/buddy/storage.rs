@@ -1,17 +1,23 @@
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock as ARwLock;
 use tracing::warn;
 
 use super::diagnostics::DiagnosticContext;
-use super::memory_lifecycle::{MemoryLifecycleOp, MemoryOpsRecord, MemoryOpsState};
+use super::memory_lifecycle::{
+    apply_memory_lifecycle_op_status, MemoryLifecycleOp, MemoryOpStatus, MemoryOpsRecord,
+    MemoryOpsState,
+};
 use super::runtime_queue::RuntimeQueue;
 use super::state::default_buddy_state;
 use super::types::BuddyRuntimeEvent;
+use crate::global_context::GlobalContext;
 
 /// Maximum number of items kept after replay+cap on load. Mirrors the in-memory cap.
 const RUNTIME_QUEUE_MAX_ITEMS: usize = 100;
@@ -315,6 +321,25 @@ pub async fn compact_memory_ops(project_root: &Path) -> Result<MemoryOpsState, S
     Ok(state)
 }
 
+#[allow(dead_code)]
+pub async fn apply_queued_memory_ops(
+    project_root: &Path,
+    gcx: Arc<ARwLock<GlobalContext>>,
+) -> Result<MemoryOpsState, String> {
+    let state = load_memory_ops(project_root).await;
+    for op in state.ops {
+        if !matches!(
+            op.status,
+            MemoryOpStatus::Pending | MemoryOpStatus::Approved
+        ) {
+            continue;
+        }
+        let updated = apply_memory_lifecycle_op_status(gcx.clone(), &op).await;
+        enqueue_memory_op(project_root, updated).await?;
+    }
+    Ok(load_memory_ops(project_root).await)
+}
+
 pub async fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> Result<(), String> {
     let tmp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
@@ -496,7 +521,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let path = memory_ops_path(root);
-        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
         let valid = MemoryOpsRecord::Op {
             op: test_op("op-1", "first", MemoryOpStatus::Pending),
         };
@@ -546,7 +573,9 @@ mod tests {
         enqueue_memory_op(root, third.clone()).await.unwrap();
         let compacted = compact_memory_ops(root).await.unwrap();
         let replayed = load_memory_ops(root).await;
-        let content = tokio::fs::read_to_string(memory_ops_path(root)).await.unwrap();
+        let content = tokio::fs::read_to_string(memory_ops_path(root))
+            .await
+            .unwrap();
 
         assert_eq!(compacted.ops, vec![second.normalized(), third.normalized()]);
         assert_eq!(replayed.ops, compacted.ops);
@@ -565,6 +594,11 @@ mod tests {
 
         assert!(loaded.is_empty());
         assert!(compacted.is_empty());
-        assert_eq!(tokio::fs::read_to_string(memory_ops_path(root)).await.unwrap(), "");
+        assert_eq!(
+            tokio::fs::read_to_string(memory_ops_path(root))
+                .await
+                .unwrap(),
+            ""
+        );
     }
 }
