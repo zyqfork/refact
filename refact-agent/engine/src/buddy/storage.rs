@@ -11,8 +11,8 @@ use tracing::warn;
 
 use super::diagnostics::DiagnosticContext;
 use super::memory_lifecycle::{
-    apply_memory_lifecycle_op_status, MemoryLifecycleOp, MemoryOpStatus, MemoryOpsRecord,
-    MemoryOpsState,
+    apply_memory_lifecycle_op_status, memory_op_duplicate_should_replace, MemoryLifecycleOp,
+    MemoryOpStatus, MemoryOpsRecord, MemoryOpsState,
 };
 use super::runtime_queue::RuntimeQueue;
 use super::state::default_buddy_state;
@@ -221,15 +221,21 @@ pub async fn enqueue_memory_op(
     project_root: &Path,
     op: MemoryLifecycleOp,
 ) -> Result<MemoryOpsState, String> {
+    let op = op.normalized();
+    let current = load_memory_ops(project_root).await;
+    if let Some(existing) = current.matching_op(&op) {
+        if !memory_op_duplicate_should_replace(existing.status, op.status) {
+            return Ok(current);
+        }
+    }
+
     let path = memory_ops_path(project_root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .await
             .map_err(|e| format!("Failed to create dir {:?}: {}", parent, e))?;
     }
-    let record = MemoryOpsRecord::Op {
-        op: op.normalized(),
-    };
+    let record = MemoryOpsRecord::Op { op };
     let line = format!(
         "{}\n",
         serde_json::to_string(&record)
@@ -556,6 +562,59 @@ mod tests {
         assert_eq!(state.ops.len(), 1);
         assert_eq!(state.ops[0], second.normalized());
         assert_eq!(state.applied_count, 1);
+    }
+
+    #[tokio::test]
+    async fn memory_ops_enqueue_pending_duplicate_does_not_reopen_finalized_or_approved() {
+        let statuses = [
+            MemoryOpStatus::Applied,
+            MemoryOpStatus::Rejected,
+            MemoryOpStatus::Approved,
+        ];
+        for status in statuses {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let first = test_op(
+                &format!("op-{}-first", status.as_str()),
+                status.as_str(),
+                status,
+            );
+            let mut pending = test_op(
+                &format!("op-{}-pending", status.as_str()),
+                "new pending",
+                MemoryOpStatus::Pending,
+            );
+            pending.idempotency_key = first.idempotency_key.clone();
+
+            enqueue_memory_op(root, first.clone()).await.unwrap();
+            let state = enqueue_memory_op(root, pending).await.unwrap();
+            let content = tokio::fs::read_to_string(memory_ops_path(root))
+                .await
+                .unwrap();
+
+            assert_eq!(state.ops, vec![first.normalized()]);
+            assert_eq!(state.pending_count, 0);
+            assert_eq!(content.lines().count(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_ops_enqueue_pending_duplicate_still_coalesces() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let first = test_op("op-pending-first", "same", MemoryOpStatus::Pending);
+        let mut second = test_op("op-pending-second", "new pending", MemoryOpStatus::Pending);
+        second.idempotency_key = first.idempotency_key.clone();
+
+        enqueue_memory_op(root, first).await.unwrap();
+        let state = enqueue_memory_op(root, second.clone()).await.unwrap();
+        let content = tokio::fs::read_to_string(memory_ops_path(root))
+            .await
+            .unwrap();
+
+        assert_eq!(state.ops, vec![second.normalized()]);
+        assert_eq!(state.pending_count, 1);
+        assert_eq!(content.lines().count(), 2);
     }
 
     #[tokio::test]

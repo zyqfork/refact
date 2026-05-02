@@ -394,12 +394,13 @@ impl MemoryOpsState {
 
             match existing_index {
                 Some(index) => {
-                    if let Some(old) = ops.get(index).cloned() {
+                    if memory_op_duplicate_should_replace(ops[index].status, op.status) {
+                        let old = ops[index].clone();
                         remove_indexed_key(&mut op_id_index, &old.op_id, index);
                         remove_indexed_key(&mut idempotency_index, &old.idempotency_key, index);
+                        ops[index] = op.clone();
+                        insert_op_indexes(&op, index, &mut op_id_index, &mut idempotency_index);
                     }
-                    ops[index] = op.clone();
-                    insert_op_indexes(&op, index, &mut op_id_index, &mut idempotency_index);
                 }
                 None => {
                     let index = ops.len();
@@ -431,6 +432,24 @@ impl MemoryOpsState {
 
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+
+    pub fn matching_op(&self, op: &MemoryLifecycleOp) -> Option<&MemoryLifecycleOp> {
+        if let Some(key) = nonempty_key(&op.idempotency_key) {
+            for existing in &self.ops {
+                if nonempty_key(&existing.idempotency_key) == Some(key) {
+                    return Some(existing);
+                }
+            }
+        }
+        if let Some(key) = nonempty_key(&op.op_id) {
+            for existing in &self.ops {
+                if nonempty_key(&existing.op_id) == Some(key) {
+                    return Some(existing);
+                }
+            }
+        }
+        None
     }
 
     fn recount(&mut self) {
@@ -484,6 +503,30 @@ fn nonempty_key(value: &str) -> Option<&str> {
     } else {
         Some(value)
     }
+}
+
+pub(crate) fn memory_op_duplicate_should_replace(
+    existing: MemoryOpStatus,
+    incoming: MemoryOpStatus,
+) -> bool {
+    match existing {
+        MemoryOpStatus::Pending => true,
+        MemoryOpStatus::Approved => incoming != MemoryOpStatus::Pending,
+        MemoryOpStatus::Applied
+        | MemoryOpStatus::Rejected
+        | MemoryOpStatus::Failed
+        | MemoryOpStatus::Skipped => memory_op_status_is_finalized(incoming),
+    }
+}
+
+fn memory_op_status_is_finalized(status: MemoryOpStatus) -> bool {
+    matches!(
+        status,
+        MemoryOpStatus::Applied
+            | MemoryOpStatus::Rejected
+            | MemoryOpStatus::Failed
+            | MemoryOpStatus::Skipped
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3868,6 +3911,84 @@ mod tests {
         assert_eq!(state.ops[0].op_id, "op-2");
         assert_eq!(state.ops[0].status, MemoryOpStatus::Applied);
         assert_eq!(state.applied_count, 1);
+    }
+
+    #[test]
+    fn memory_ops_state_duplicate_pending_does_not_reopen_finalized_or_approved() {
+        let statuses = [
+            MemoryOpStatus::Applied,
+            MemoryOpStatus::Rejected,
+            MemoryOpStatus::Skipped,
+            MemoryOpStatus::Failed,
+            MemoryOpStatus::Approved,
+        ];
+        for status in statuses {
+            let first = test_op(
+                &format!("op-{}-first", status.as_str()),
+                status.as_str(),
+                status,
+            );
+            let mut pending = test_op(
+                &format!("op-{}-pending", status.as_str()),
+                "new pending",
+                MemoryOpStatus::Pending,
+            );
+            pending.idempotency_key = first.idempotency_key.clone();
+
+            let state = MemoryOpsState::from_records(vec![
+                MemoryOpsRecord::Op { op: first.clone() },
+                MemoryOpsRecord::Op { op: pending },
+            ]);
+            let compacted = MemoryOpsState::from_records(state.canonical_records());
+
+            assert_eq!(state.ops, vec![first.normalized()]);
+            assert_eq!(compacted.ops, state.ops);
+        }
+    }
+
+    #[test]
+    fn memory_ops_state_duplicate_pending_replaces_pending() {
+        let first = test_op("op-pending-first", "same", MemoryOpStatus::Pending);
+        let mut second = test_op("op-pending-second", "new pending", MemoryOpStatus::Pending);
+        second.idempotency_key = first.idempotency_key.clone();
+
+        let state = MemoryOpsState::from_records(vec![
+            MemoryOpsRecord::Op { op: first },
+            MemoryOpsRecord::Op { op: second.clone() },
+        ]);
+
+        assert_eq!(state.ops, vec![second.normalized()]);
+        assert_eq!(state.pending_count, 1);
+    }
+
+    #[test]
+    fn memory_ops_state_pending_duplicate_replaced_by_applied() {
+        let first = test_op("op-pending-first", "same", MemoryOpStatus::Pending);
+        let mut second = test_op("op-applied-second", "applied", MemoryOpStatus::Applied);
+        second.idempotency_key = first.idempotency_key.clone();
+
+        let state = MemoryOpsState::from_records(vec![
+            MemoryOpsRecord::Op { op: first },
+            MemoryOpsRecord::Op { op: second.clone() },
+        ]);
+
+        assert_eq!(state.ops, vec![second.normalized()]);
+        assert_eq!(state.applied_count, 1);
+    }
+
+    #[test]
+    fn memory_ops_state_approved_duplicate_replaced_by_finalized() {
+        let first = test_op("op-approved-first", "same", MemoryOpStatus::Approved);
+        let mut second = test_op("op-rejected-second", "rejected", MemoryOpStatus::Rejected);
+        second.idempotency_key = first.idempotency_key.clone();
+
+        let state = MemoryOpsState::from_records(vec![
+            MemoryOpsRecord::Op { op: first },
+            MemoryOpsRecord::Op { op: second.clone() },
+        ]);
+
+        assert_eq!(state.ops, vec![second.normalized()]);
+        assert_eq!(state.rejected_count, 1);
     }
 
     #[test]
