@@ -200,9 +200,7 @@ describe("buddy world director", () => {
       }),
     });
 
-    expect(["stabilize_crystal", "inspect_provider"]).toContain(
-      intent?.kind,
-    );
+    expect(["stabilize_crystal", "inspect_provider"]).toContain(intent?.kind);
     expect(intent?.speechKind).toBe("actionable");
     expect(intent?.objectId).toBe("providers");
     expect(intent?.speech).toMatch(/crystal|observatory|model stars/u);
@@ -211,7 +209,9 @@ describe("buddy world director", () => {
 
   it("chooses memory routines for memory attention and active memory", () => {
     const attentionIntent = buildIntent({
-      pulse: makePulse({ memory: { total: 40, orphan: 3, stale_conflicts: 1 } }),
+      pulse: makePulse({
+        memory: { total: 40, orphan: 3, stale_conflicts: 1 },
+      }),
     });
     const activeIntent = buildIntent({
       nowPlaying: makeRuntimeEvent({
@@ -224,9 +224,7 @@ describe("buddy world director", () => {
     expect(["inspect_memory", "shelve_memory"]).toContain(
       attentionIntent?.kind,
     );
-    expect(["inspect_memory", "shelve_memory"]).toContain(
-      activeIntent?.kind,
-    );
+    expect(["inspect_memory", "shelve_memory"]).toContain(activeIntent?.kind);
     expect(attentionIntent?.objectId).toBe("memory");
     expect(activeIntent?.objectId).toBe("memory");
     expectSafeIntent(attentionIntent);
@@ -304,17 +302,29 @@ describe("buddy world director", () => {
     expect(buildIntent({ showcaseActive: true })).toBeNull();
   });
 
-  it("suppresses duplicate recent intent kinds", () => {
-    const runtimeSuppressed = buildIntent({
-      nowPlaying: makeRuntimeEvent(),
-      recentIntentKinds: ["channel_runtime"],
+  it("keeps persistent high-priority provider storms despite recent kinds", () => {
+    const intent = buildIntent({
+      pulse: makePulse({
+        providers: { defaults_ok: true, broken_refs: 1, quota_warnings: 0 },
+      }),
+      recentIntentKinds: ["stabilize_crystal", "inspect_provider"],
     });
+
+    expect(["stabilize_crystal", "inspect_provider"]).toContain(intent?.kind);
+    expect(intent?.objectId).toBe("providers");
+    expectSafeIntent(intent);
+  });
+
+  it("suppresses duplicate low-priority idle intent kinds", () => {
     const idleSuppressed = buildIntent({
       recentIntentKinds: ["wander_curiously"],
     });
+    const allIdleSuppressed = buildIntent({
+      recentIntentKinds: ["wander_curiously", "watch_observatory"],
+    });
 
-    expect(runtimeSuppressed?.kind).toBe("wander_curiously");
     expect(idleSuppressed?.kind).toBe("watch_observatory");
+    expect(allIdleSuppressed).toBeNull();
   });
 
   it("celebrates recovery from previous serious intent", () => {

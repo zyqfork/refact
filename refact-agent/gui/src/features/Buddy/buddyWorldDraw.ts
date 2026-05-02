@@ -3,8 +3,9 @@ import type { Palette } from "./types";
 import {
   drawAmbientLayers,
   drawCelestial,
-  drawObservatorySky,
+  drawObservatoryStructures,
   drawSkyGradient,
+  drawStarField,
   drawWeatherAtmosphere,
 } from "./buddyWorldDrawAtmosphere";
 import {
@@ -49,7 +50,8 @@ export function drawBuddyWorld(args: DrawBuddyWorldArgs): void {
   args.ctx.imageSmoothingEnabled = false;
 
   drawSkyGradient(drawArgs);
-  drawObservatorySky(drawArgs);
+  drawStarField(drawArgs);
+  drawObservatoryStructures(drawArgs);
   drawCelestial(drawArgs);
   drawAmbientLayers(drawArgs);
   drawDistantHills(drawArgs);

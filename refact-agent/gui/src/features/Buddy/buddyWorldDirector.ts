@@ -238,7 +238,10 @@ function pickIntent(
 ): BuddyWorldIntent | null {
   const recentKinds = new Set(recentIntentKinds ?? []);
   return (
-    candidates.find((candidate) => !recentKinds.has(candidate.kind)) ?? null
+    candidates.find(
+      (candidate) =>
+        candidate.priority >= 50 || !recentKinds.has(candidate.kind),
+    ) ?? null
   );
 }
 
@@ -297,8 +300,7 @@ export function chooseBuddyWorldIntent(
         kind: "inspect_provider",
         target: providerTarget,
         pose: "stargaze",
-        speech:
-          "The model stars are flickering; I’m checking the observatory.",
+        speech: "The model stars are flickering; I’m checking the observatory.",
         speechKind: "actionable",
         durationMs: 10_200,
         priority: 96,

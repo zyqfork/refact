@@ -87,7 +87,7 @@ const CONFIG_STATE = {
   },
 };
 
-function makePulse(): BuddyPulse {
+function makePulse(overrides?: Partial<BuddyPulse>): BuddyPulse {
   return {
     generated_at: "2024-01-01T00:00:00Z",
     tasks: { total: 3, stuck: 1, abandoned: 2, by_status: {} },
@@ -116,6 +116,7 @@ function makePulse(): BuddyPulse {
       unregistered_cache_dirs: 1,
       merged_branches: 2,
     },
+    ...overrides,
   };
 }
 
@@ -1189,34 +1190,35 @@ describe("BuddyWorld_dynamic_environment", () => {
     }
   });
 
-  it("active speech still wins over director speech", async () => {
+  it("active speech immediately suppresses a rendered director intent", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-01-01T14:00:00Z"));
+    const runtimeEvent: BuddyRuntimeEvent = {
+      id: "rt-director-active-speech",
+      signal_type: "indexing",
+      title: "Indexing project files",
+      source: "indexer",
+      status: "progress",
+      priority: "normal",
+      created_at: "2024-01-01T14:00:00Z",
+    };
+    const quietPulse = makePulse({
+      diagnostics: { last_hour: 0, top_error_types: [] },
+      git: { uncommitted_files: 0, diff_lines_4h: 0, branches: 3 },
+      mcp: { total: 4, failing: 0, auth_expiring: 0 },
+      memory: { total: 10, orphan: 0, stale_conflicts: 0 },
+    });
     try {
-      render(
+      const { rerender } = render(
         <BuddyWorld
           palette={PALETTES[0]}
           stage={STAGES[2]}
           state={makeSemanticState()}
-          pulse={{
-            ...makePulse(),
-            diagnostics: { last_hour: 0, top_error_types: [] },
-            git: { uncommitted_files: 0, diff_lines_4h: 0, branches: 3 },
-            mcp: { total: 4, failing: 0, auth_expiring: 0 },
-            memory: { total: 10, orphan: 0, stale_conflicts: 0 },
-          }}
+          pulse={quietPulse}
           pet={makeSnapshot().state.pet}
-          nowPlaying={{
-            id: "rt-director-active-speech",
-            signal_type: "indexing",
-            title: "Indexing project files",
-            source: "indexer",
-            status: "progress",
-            priority: "normal",
-            created_at: "2024-01-01T14:00:00Z",
-          }}
+          nowPlaying={runtimeEvent}
           activeQuest={null}
-          activeSpeech={{ text: "Backend says hello.", controls: [] }}
+          activeSpeech={null}
           setupNeeded={false}
           now={new Date("2024-01-01T14:00:00")}
           onCanvasEvent={vi.fn()}
@@ -1232,6 +1234,39 @@ describe("BuddyWorld_dynamic_environment", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(screen.getByTestId("buddy-world")).toHaveAttribute(
         "data-buddy-intent",
+        "channel_runtime",
+      );
+      expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
+        "data-pose",
+        "meditate",
+      );
+      expect(screen.getByTestId("buddy-world-character")).toHaveStyle({
+        left: "54%",
+      });
+
+      rerender(
+        <BuddyWorld
+          palette={PALETTES[0]}
+          stage={STAGES[2]}
+          state={makeSemanticState()}
+          pulse={quietPulse}
+          pet={makeSnapshot().state.pet}
+          nowPlaying={runtimeEvent}
+          activeQuest={null}
+          activeSpeech={{ text: "Backend says hello.", controls: [] }}
+          setupNeeded={false}
+          now={new Date("2024-01-01T14:00:00")}
+          onCanvasEvent={vi.fn()}
+          onCare={vi.fn()}
+          onOpenPage={vi.fn()}
+          onRunMode={vi.fn()}
+          onDismissSetup={vi.fn()}
+          onSpeechControl={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+        "data-buddy-intent",
         "none",
       );
       expect(screen.getByTestId("buddy-world")).toHaveAttribute(
@@ -1241,6 +1276,129 @@ describe("BuddyWorld_dynamic_environment", () => {
       expect(screen.getByTestId("buddy-world")).toHaveAttribute(
         "data-speech-text",
         "Backend says hello.",
+      );
+      expect(screen.getByTestId("buddy-world-character")).toHaveAttribute(
+        "data-pose",
+        "idle",
+      );
+      expect(screen.getByTestId("buddy-world-character")).toHaveStyle({
+        left: "50%",
+      });
+      expect(screen.getByTestId("buddy-world-character")).not.toHaveAttribute(
+        "data-depth-scale",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors director intent duration before replacing it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-01T14:00:00Z"));
+    const quietPulse = makePulse({
+      providers: { defaults_ok: true, broken_refs: 0, quota_warnings: 0 },
+      diagnostics: { last_hour: 0, top_error_types: [] },
+      git: { uncommitted_files: 0, diff_lines_4h: 0, branches: 3 },
+      mcp: { total: 4, failing: 0, auth_expiring: 0 },
+      memory: { total: 10, orphan: 0, stale_conflicts: 0 },
+    });
+    const pet = makeSnapshot().state.pet;
+    const sleepingPet = {
+      ...pet,
+      condition: {
+        ...pet.condition,
+        sleeping: true,
+      },
+    };
+    const hungryPet = {
+      ...pet,
+      condition: {
+        ...pet.condition,
+        hungry: true,
+      },
+    };
+    try {
+      const { rerender } = render(
+        <BuddyWorld
+          palette={PALETTES[0]}
+          stage={STAGES[2]}
+          state={makeSemanticState()}
+          pulse={quietPulse}
+          pet={sleepingPet}
+          nowPlaying={null}
+          activeQuest={null}
+          activeSpeech={null}
+          setupNeeded={false}
+          now={new Date("2024-01-01T14:00:00")}
+          onCanvasEvent={vi.fn()}
+          onCare={vi.fn()}
+          onOpenPage={vi.fn()}
+          onRunMode={vi.fn()}
+          onDismissSetup={vi.fn()}
+          onSpeechControl={vi.fn()}
+        />,
+        { preloadedState: CONFIG_STATE },
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+        "data-buddy-intent",
+        "rest_home",
+      );
+
+      await vi.advanceTimersByTimeAsync(7_100);
+      vi.setSystemTime(new Date("2024-01-01T14:00:07.101Z"));
+      rerender(
+        <BuddyWorld
+          palette={PALETTES[0]}
+          stage={STAGES[2]}
+          state={makeSemanticState()}
+          pulse={quietPulse}
+          pet={hungryPet}
+          nowPlaying={null}
+          activeQuest={null}
+          activeSpeech={null}
+          setupNeeded={false}
+          now={new Date("2024-01-01T14:00:07.101Z")}
+          onCanvasEvent={vi.fn()}
+          onCare={vi.fn()}
+          onOpenPage={vi.fn()}
+          onRunMode={vi.fn()}
+          onDismissSetup={vi.fn()}
+          onSpeechControl={vi.fn()}
+        />,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+        "data-buddy-intent",
+        "rest_home",
+      );
+
+      vi.setSystemTime(new Date("2024-01-01T14:00:12.101Z"));
+      rerender(
+        <BuddyWorld
+          palette={PALETTES[0]}
+          stage={STAGES[2]}
+          state={makeSemanticState()}
+          pulse={quietPulse}
+          pet={hungryPet}
+          nowPlaying={null}
+          activeQuest={null}
+          activeSpeech={null}
+          setupNeeded={false}
+          now={new Date("2024-01-01T14:00:12.101Z")}
+          onCanvasEvent={vi.fn()}
+          onCare={vi.fn()}
+          onOpenPage={vi.fn()}
+          onRunMode={vi.fn()}
+          onDismissSetup={vi.fn()}
+          onSpeechControl={vi.fn()}
+        />,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      expect(screen.getByTestId("buddy-world")).toHaveAttribute(
+        "data-buddy-intent",
+        "seek_food",
       );
     } finally {
       vi.useRealTimers();

@@ -186,13 +186,12 @@ function drawSkyStructures(args: DrawBuddyWorldBaseArgs): void {
   );
 }
 
-export function drawObservatorySky(args: DrawBuddyWorldBaseArgs): void {
+export function drawStarField(args: DrawBuddyWorldBaseArgs): void {
   const width = safeDimension(args.width, 720);
   const height = safeDimension(args.height, 260);
   const phase = worldPhase(args.world);
   const hint = worldPaletteHint(args.world);
   const frame = safeFrame(args.frame);
-  const intensity = worldIntensity(args.world);
   const starCount = countForMotion(
     hint === "storm" ? 72 : 54,
     args.compact,
@@ -222,6 +221,13 @@ export function drawObservatorySky(args: DrawBuddyWorldBaseArgs): void {
       starAlpha * (0.58 + seededUnit(31, index) * 0.34 + twinkle),
     );
   }
+}
+
+export function drawObservatoryStructures(args: DrawBuddyWorldBaseArgs): void {
+  const width = safeDimension(args.width, 720);
+  const height = safeDimension(args.height, 260);
+  const hint = worldPaletteHint(args.world);
+  const intensity = worldIntensity(args.world);
 
   if (hint === "storm") {
     fillCircle(
@@ -390,7 +396,6 @@ export function drawAmbientLayers(args: DrawBuddyWorldBaseArgs): void {
   if (hasWorldLayer(args.world, "sun_motes")) drawSunMotes(args);
   if (hasWorldLayer(args.world, "moths")) drawMoths(args);
   if (hasWorldLayer(args.world, "fireflies")) drawFireflies(args);
-  if (hasWorldLayer(args.world, "stars")) drawObservatorySky(args);
   if (hasWorldLayer(args.world, "aurora")) drawAurora(args, 0.42);
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { drawBuddyWorld } from "../features/Buddy/buddyWorldDraw";
+import { drawStarField } from "../features/Buddy/buddyWorldDrawAtmosphere";
 import {
   buildBuddyWorldState,
   type BuddyWorldState,
@@ -30,6 +31,7 @@ type MockCanvasContext = Pick<
 type RecordedCanvasContext = CanvasRenderingContext2D & {
   alphaWrites: number[];
   drawOps: string[];
+  fillRectStyles: string[];
 };
 
 function makeCanvasContext(): RecordedCanvasContext {
@@ -41,6 +43,7 @@ function makeCanvasContext(): RecordedCanvasContext {
   } as unknown as CanvasGradient;
   const alphaWrites: number[] = [];
   const drawOps: string[] = [];
+  const fillRectStyles: string[] = [];
   let globalAlphaValue = 1;
   let fillStyleValue: CanvasRenderingContext2D["fillStyle"] = "#000000";
   let strokeStyleValue: CanvasRenderingContext2D["strokeStyle"] = "#000000";
@@ -48,9 +51,11 @@ function makeCanvasContext(): RecordedCanvasContext {
   const ctx: MockCanvasContext & {
     alphaWrites: number[];
     drawOps: string[];
+    fillRectStyles: string[];
   } = {
     alphaWrites,
     drawOps,
+    fillRectStyles,
     arc: vi.fn(
       (
         x: number,
@@ -126,6 +131,7 @@ function makeCanvasContext(): RecordedCanvasContext {
       drawOps.push(`fill:${String(fillStyleValue)}:${globalAlphaValue}`),
     ),
     fillRect: vi.fn((x: number, y: number, width: number, height: number) => {
+      fillRectStyles.push(String(fillStyleValue));
       drawOps.push(
         `fillRect:${formatNumber(x)}:${formatNumber(y)}:${formatNumber(
           width,
@@ -457,5 +463,36 @@ describe("drawBuddyWorld", () => {
     drawBuddyWorld({ ctx: secondCtx, ...args });
 
     expect(secondCtx.drawOps).toEqual(firstCtx.drawOps);
+  });
+
+  it("draws night star and observatory passes once", () => {
+    const world = makeWorld({ now: new Date("2024-01-01T23:00:00") });
+    const ctx = drawWorld(world);
+    const fullStarOps = ctx.fillRectStyles.filter(
+      (style) => style === "#FFFFFF" || style === "#FDE68A",
+    );
+    const starOnlyCtx = makeCanvasContext();
+    drawStarField({
+      ctx: starOnlyCtx,
+      world,
+      palette: PALETTES[0],
+      frame: 120,
+      width: 720,
+      height: 260,
+      compact: false,
+      reducedMotion: false,
+    });
+    const starOnlyOps = starOnlyCtx.fillRectStyles.filter(
+      (style) => style === "#FFFFFF" || style === "#FDE68A",
+    );
+    const structureOps = ctx.fillRectStyles.filter(
+      (style) => style === "#CBD5E1",
+    );
+
+    expect(fullStarOps).toHaveLength(starOnlyOps.length + 107);
+    expect(starOnlyOps).toHaveLength(54);
+    expect(structureOps).toHaveLength(5);
+    expectHealthyDraw(ctx);
+    expectHealthyDraw(starOnlyCtx);
   });
 });

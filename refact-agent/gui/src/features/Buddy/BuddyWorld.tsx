@@ -290,10 +290,10 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
   );
   const [nextIdleShowcaseAtMs, setNextIdleShowcaseAtMs] = useState(0);
   const [nextRuntimeShowcaseAtMs, setNextRuntimeShowcaseAtMs] = useState(0);
-  const [directorIntent, setDirectorIntent] =
-    useState<BuddyWorldIntent | null>(null);
-  const [directorIntentStartedAtMs, setDirectorIntentStartedAtMs] =
-    useState(0);
+  const [directorIntent, setDirectorIntent] = useState<BuddyWorldIntent | null>(
+    null,
+  );
+  const [directorIntentStartedAtMs, setDirectorIntentStartedAtMs] = useState(0);
   const [nextDirectorSpeechAtMs, setNextDirectorSpeechAtMs] = useState(0);
   const [recentDirectorIntents, setRecentDirectorIntents] = useState<
     RecentDirectorIntent[]
@@ -386,11 +386,13 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     [world],
   );
   const activeWaypoint = waypoints[activeWaypointIndex % waypoints.length];
+  const effectiveDirectorIntent =
+    activeSpeech || showcaseRun ? null : directorIntent;
   const characterSceneX = clampBuddySceneX(
     showcaseRun
       ? showcaseRun.target.x
-      : directorIntent
-        ? directorIntent.targetX
+      : effectiveDirectorIntent
+        ? effectiveDirectorIntent.targetX
         : activeWaypoint.x,
   );
 
@@ -595,7 +597,14 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
 
       if (directorIntent) {
         const ageMs = nowMs - directorIntentStartedAtMs;
-        if (ageMs < DIRECTOR_MIN_INTENT_HOLD_MS) {
+        const intentDurationMs = Number.isFinite(directorIntent.durationMs)
+          ? directorIntent.durationMs
+          : DIRECTOR_MIN_INTENT_HOLD_MS;
+        const intentHoldMs = Math.max(
+          DIRECTOR_MIN_INTENT_HOLD_MS,
+          intentDurationMs,
+        );
+        if (ageMs < intentHoldMs) {
           return;
         }
       }
@@ -782,11 +791,10 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     showcaseRun !== null && showcaseRun.phase !== "travel"
       ? showcaseRun.pose
       : null;
-  const directorPose = showcaseRun === null ? directorIntent?.pose : null;
+  const directorPose = effectiveDirectorIntent?.pose ?? null;
   const characterPose: BuddyScenePose =
     showcasePose ?? directorPose ?? randomPose;
-  const directorSpeech =
-    showcaseRun === null ? directorIntent?.speech ?? null : null;
+  const directorSpeech = effectiveDirectorIntent?.speech ?? null;
   const speechOverride = resolveBuddyWorldSpeechOverride({
     activeSpeechText: activeSpeech?.text ?? null,
     showcaseActive: showcaseRun !== null,
@@ -813,7 +821,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
       data-vitality={world.vitality}
       data-showcase={showcaseRun?.kind ?? "none"}
       data-showcase-phase={showcaseRun?.phase ?? "idle"}
-      data-buddy-intent={directorIntent?.kind ?? "none"}
+      data-buddy-intent={effectiveDirectorIntent?.kind ?? "none"}
       data-speech-priority="backend-showcase-director-local"
       data-speech-source={speechSource}
       data-speech-text={speechOverride ?? undefined}
@@ -900,9 +908,9 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         displaySize={compact ? 230 : 282}
         sceneXPercent={characterSceneX}
         sceneYPercent={
-          showcaseRun ? showcaseRun.target.y : directorIntent?.targetY
+          showcaseRun ? showcaseRun.target.y : effectiveDirectorIntent?.targetY
         }
-        sceneDepthScale={showcaseRun ? undefined : directorIntent?.depthScale}
+        sceneDepthScale={effectiveDirectorIntent?.depthScale}
         scenePose={characterPose}
         speechText={speechOverride}
         speechControls={activeSpeech ? activeSpeech.controls : undefined}
