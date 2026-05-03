@@ -26,7 +26,6 @@ import type {
 import {
   buildBuddyWorldState,
   type BuddyWorldState,
-  type BuddyWorldTone,
 } from "./buddyWorldModel";
 import {
   advanceBuddyShowcasePhase,
@@ -72,13 +71,6 @@ interface BuddyWorldProps {
   onSpeechControl: (control: BuddyControl) => void;
   now?: Date;
 }
-
-const TONE_CLASS: Record<BuddyWorldTone, string> = {
-  good: styles.toneGood,
-  neutral: styles.toneNeutral,
-  warning: styles.toneWarning,
-  danger: styles.toneDanger,
-};
 
 const SETUP_MODE_ACTIONS = [
   { mode: "setup", label: "Warm up" },
@@ -880,7 +872,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         <button
           key={item.id}
           type="button"
-          className={classNames(styles.objectHotspot, TONE_CLASS[item.tone])}
+          className={styles.objectHotspot}
           style={{ left: `${item.x}%`, top: `${item.y}%` }}
           onClick={() => {
             if (!showcaseRun) {
