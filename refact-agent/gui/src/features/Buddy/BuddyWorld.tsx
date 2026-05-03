@@ -87,11 +87,11 @@ const DIRECTOR_ACTIONABLE_SPEECH_COOLDOWN_MS = 20_000;
 const DIRECTOR_REPEAT_KIND_COOLDOWN_MS = 30_000;
 const MAX_RECENT_DIRECTOR_INTENTS = 12;
 const RANDOM_IDLE_REACTIONS = [
-  "Buddy does a tiny spin.",
-  "Buddy watches the garden for a moment.",
-  "Buddy checks the breeze and grins.",
-  "Buddy makes a small happy bounce.",
-  "Buddy pauses to inspect a sparkle.",
+  (name: string) => `${name} does a tiny spin.`,
+  (name: string) => `${name} watches the garden for a moment.`,
+  (name: string) => `${name} checks the breeze and grins.`,
+  (name: string) => `${name} makes a small happy bounce.`,
+  (name: string) => `${name} pauses to inspect a sparkle.`,
 ] as const;
 
 const RANDOM_POSES = [
@@ -132,42 +132,45 @@ function buildBuddyShowcaseTargets(
   }));
 }
 
-function buildBuddyWaypoints(world: BuddyWorldState): BuddyWaypoint[] {
+function buildBuddyWaypoints(
+  world: BuddyWorldState,
+  name: string,
+): BuddyWaypoint[] {
   return [
     {
       id: "center",
       x: BUDDY_CENTER_X,
       y: 76,
       label: "clearing",
-      reaction: "Buddy wanders back to the clearing.",
+      reaction: `${name} wanders back to the clearing.`,
     },
     {
       id: "home",
       x: HOME_HOTSPOT.x,
       y: HOME_HOTSPOT.y,
       label: "home",
-      reaction: "Buddy checks the front door lights.",
+      reaction: `${name} checks the front door lights.`,
     },
     {
       id: "celestial",
       x: world.celestialX,
       y: world.celestialY,
       label: world.celestialLabel,
-      reaction: `Buddy tracks the ${world.celestialLabel.toLowerCase()}.`,
+      reaction: `${name} tracks the ${world.celestialLabel.toLowerCase()}.`,
     },
     ...world.objects.map((item) => ({
       id: item.id,
       x: item.x,
       y: item.y,
       label: item.label,
-      reaction: `Buddy inspects ${item.label.toLowerCase()}.`,
+      reaction: `${name} inspects ${item.label.toLowerCase()}.`,
     })),
     {
       id: "weather",
       x: world.weatherX,
       y: world.weatherY,
       label: world.weatherLabel,
-      reaction: `Buddy watches ${world.weatherLabel.toLowerCase()}.`,
+      reaction: `${name} watches ${world.weatherLabel.toLowerCase()}.`,
     },
   ];
 }
@@ -188,10 +191,10 @@ function pickNextWaypointIndex(
   return nextIndex;
 }
 
-function randomIdleReaction(): string {
+function randomIdleReaction(name: string): string {
   return RANDOM_IDLE_REACTIONS[
     Math.floor(Math.random() * RANDOM_IDLE_REACTIONS.length)
-  ];
+  ](name);
 }
 
 function directorSpeechCooldownMs(intent: BuddyWorldIntent): number {
@@ -369,7 +372,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
       }),
     [activeQuest, currentTime, nowPlaying, pet, pulse, state],
   );
-  const waypoints = useMemo(() => buildBuddyWaypoints(world), [world]);
+  const waypoints = useMemo(() => buildBuddyWaypoints(world, state.name), [world, state.name]);
   const showcaseTargets = useMemo(
     () => buildBuddyShowcaseTargets(world),
     [world],
@@ -445,6 +448,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
           weather: world.weather,
         },
         pulse,
+        identityName: state.name,
       });
       if (!run) return false;
       setShowcaseRun(run);
@@ -478,6 +482,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
       reaction,
       showcaseRun,
       showcaseTargets,
+      state.name,
       world.phase,
       world.weather,
     ],
@@ -494,7 +499,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         setRandomPose(
           RANDOM_POSES[Math.floor(Math.random() * RANDOM_POSES.length)],
         );
-        setReaction(randomIdleReaction());
+        setReaction(randomIdleReaction(state.name));
       } else if (roll < 0.46) {
         setLastWaypoint(null);
       } else {
@@ -744,13 +749,13 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     if (world.phase === "night") {
       onCare("sleep");
       if (!showcaseRun) {
-        setReaction("Buddy curls up under the moon and saves energy.");
+        setReaction(`${state.name} curls up under the moon and saves energy.`);
       }
       return;
     }
     onCare("play", "scroll");
     if (!showcaseRun) {
-      setReaction("Buddy catches a warm sunbeam and opens the focus scroll.");
+      setReaction(`${state.name} catches a warm sunbeam and opens the focus scroll.`);
     }
   };
 
@@ -766,20 +771,20 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     if (world.weather === "storm") {
       onOpenPage({ type: "stats" });
       if (!showcaseRun) {
-        setReaction("Buddy marked the storm front for investigation.");
+        setReaction(`${state.name} marked the storm front for investigation.`);
       }
       return;
     }
     if (world.weather === "rain") {
       onOpenPage({ type: "knowledge_graph" });
       if (!showcaseRun) {
-        setReaction("Buddy follows the rain into the memory garden.");
+        setReaction(`${state.name} follows the rain into the memory garden.`);
       }
       return;
     }
     onCare("pet");
     if (!showcaseRun) {
-      setReaction("Buddy chirps back at the sky.");
+      setReaction(`${state.name} chirps back at the sky.`);
     }
   };
 
@@ -794,13 +799,13 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
     }
     if (homeDoorDisabled) {
       if (!showcaseRun) {
-        setReaction("Buddy is already home.");
+        setReaction(`${state.name} is already home.`);
       }
       return;
     }
     onOpenPage({ type: "buddy" });
     if (!showcaseRun) {
-      setReaction("Buddy opens the front door.");
+      setReaction(`${state.name} opens the front door.`);
     }
   };
 
@@ -828,7 +833,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
       data-speech-source={speechSource}
       data-speech-text={speechOverride ?? undefined}
       data-testid="buddy-world"
-      aria-label={`Buddy virtual scene: ${world.phaseLabel}. ${world.vitalityLabel}.`}
+      aria-label={`${state.name} virtual scene: ${world.phaseLabel}. ${world.vitalityLabel}.`}
     >
       <canvas
         ref={canvasRef}
@@ -860,9 +865,9 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         style={{ left: `${HOME_HOTSPOT.x}%`, top: `${HOME_HOTSPOT.y}%` }}
         onClick={handleHomeClick}
         aria-label={
-          homeDoorDisabled ? "Buddy home entrance" : "Open Buddy home"
+          homeDoorDisabled ? `${state.name} home entrance` : `Open ${state.name} home`
         }
-        title={homeDoorDisabled ? "Buddy is home" : "Open Buddy home"}
+        title={homeDoorDisabled ? `${state.name} is home` : `Open ${state.name} home`}
       />
 
       {world.objects.map((item) => (
@@ -882,7 +887,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
             }
             onOpenPage(item.page);
             if (!showcaseRun) {
-              setReaction(`Buddy hops toward ${item.label.toLowerCase()}.`);
+              setReaction(`${state.name} hops toward ${item.label.toLowerCase()}.`);
             }
           }}
           aria-label={`Open ${item.label}`}
@@ -943,11 +948,11 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         </div>
       )}
 
-      <div className={styles.careDock} aria-label="Buddy scene care actions">
+      <div className={styles.careDock} aria-label={`${state.name} scene care actions`}>
         <button
           type="button"
           className={styles.sceneButton}
-          aria-label="Water Buddy garden"
+          aria-label={`Water ${state.name}'s garden`}
           onClick={() => onCare("feed")}
         >
           🍜
@@ -955,7 +960,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         <button
           type="button"
           className={styles.sceneButton}
-          aria-label="Hunt bugs with Buddy"
+          aria-label={`Hunt bugs with ${state.name}`}
           onClick={() => onCare("play", "bug")}
         >
           🐛
@@ -963,7 +968,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         <button
           type="button"
           className={styles.sceneButton}
-          aria-label="Clean Buddy"
+          aria-label={`Clean ${state.name}`}
           onClick={() => onCare("clean")}
         >
           🧼
@@ -971,7 +976,7 @@ export const BuddyWorld: React.FC<BuddyWorldProps> = ({
         <button
           type="button"
           className={styles.sceneButton}
-          aria-label="Let Buddy rest"
+          aria-label={`Let ${state.name} rest`}
           onClick={() => onCare("sleep")}
         >
           😴

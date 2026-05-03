@@ -228,7 +228,7 @@ function summarizeTurns(turns: InvestigationTurn[]): string {
 
 function formatDiagnosticBlock(diagnostic?: DiagnosticContext | null): string {
   if (!diagnostic) {
-    return "- No stored Buddy diagnostic metadata was available.";
+    return "- No stored companion diagnostic metadata was available.";
   }
 
   return [
@@ -285,7 +285,7 @@ export function buildBuddyInvestigationPrompt(
   );
 
   return [
-    "Start a Buddy investigation for a possible Refact product issue.",
+    "Start a companion investigation for a possible Refact product issue.",
     "",
     "Important:",
     "- This is an investigation request, not a promise to fix anything automatically.",

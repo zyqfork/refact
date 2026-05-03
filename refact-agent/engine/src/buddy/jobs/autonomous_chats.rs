@@ -405,24 +405,28 @@ fn build_spec(workflow_id: &str, evidence: AutonomousEvidence) -> AutonomousBudd
     AutonomousBuddyChatSpec::new(
         workflow_id,
         meta.map(|meta| meta.title)
-            .unwrap_or("Buddy Autonomous Report"),
+            .unwrap_or("Companion Autonomous Report"),
         evidence.prompt,
         evidence.evidence,
     )
     .with_display(
         meta.map(|meta| meta.icon).unwrap_or("🤖"),
-        meta.map(|meta| meta.badge).unwrap_or("Buddy"),
+        meta.map(|meta| meta.badge).unwrap_or("Companion"),
         meta.map(|meta| meta.priority).unwrap_or("normal"),
     )
 }
 
-fn autonomous_activity(spec: &AutonomousBuddyChatSpec, chat_id: &str) -> BuddyActivity {
+fn autonomous_activity(
+    spec: &AutonomousBuddyChatSpec,
+    chat_id: &str,
+    identity_name: &str,
+) -> BuddyActivity {
     BuddyActivity {
         icon: spec.icon.clone(),
         title: format!("{} report saved", spec.title),
         description: format!(
-            "Buddy saved an autonomous {} report in chat {}.",
-            spec.badge, chat_id
+            "{} saved an autonomous {} report in chat {}.",
+            identity_name, spec.badge, chat_id
         ),
         timestamp: Utc::now().to_rfc3339(),
         activity_type: spec.workflow_id.clone(),
@@ -430,7 +434,11 @@ fn autonomous_activity(spec: &AutonomousBuddyChatSpec, chat_id: &str) -> BuddyAc
     }
 }
 
-fn autonomous_runtime_event(spec: &AutonomousBuddyChatSpec, chat_id: &str) -> BuddyRuntimeEvent {
+fn autonomous_runtime_event(
+    spec: &AutonomousBuddyChatSpec,
+    chat_id: &str,
+    identity_name: &str,
+) -> BuddyRuntimeEvent {
     let mut event = make_runtime_event(
         &spec.workflow_id,
         &format!("{} report ready", spec.title),
@@ -440,8 +448,8 @@ fn autonomous_runtime_event(spec: &AutonomousBuddyChatSpec, chat_id: &str) -> Bu
         Some(&spec.priority),
     );
     event.description = Some(format!(
-        "Open the saved Buddy chat for {} details.",
-        spec.title
+        "Open {}'s saved chat for {} details.",
+        identity_name, spec.title
     ));
     event.chat_id = Some(chat_id.to_string());
     event
@@ -464,8 +472,12 @@ async fn execute_autonomous_spec(
     };
     let last = AutonomousLastResult::new(spec.signal_hash.clone(), chat_id.clone());
     BuddyJobResult {
-        activity: Some(autonomous_activity(&spec, &chat_id)),
-        runtime_event: Some(autonomous_runtime_event(&spec, &chat_id)),
+        activity: Some(autonomous_activity(&spec, &chat_id, &ctx.identity_name)),
+        runtime_event: Some(autonomous_runtime_event(
+            &spec,
+            &chat_id,
+            &ctx.identity_name,
+        )),
         last_result: Some(serialize_last_autonomous_result(&last)),
         ..Default::default()
     }
@@ -2026,10 +2038,10 @@ async fn execute_built_autonomous_job(
 
     let activity = BuddyActivity {
         icon: definition.meta.icon.to_string(),
-        title: format!("{} opened a Buddy check-in", definition.meta.title),
+        title: format!("{} opened {}'s check-in", definition.meta.title, ctx.identity_name),
         description: format!(
-            "Buddy created a {} system conversation.",
-            definition.meta.badge
+            "{} created a {} system conversation.",
+            ctx.identity_name, definition.meta.badge
         ),
         timestamp: Utc::now().to_rfc3339(),
         activity_type: definition.meta.id.to_string(),
@@ -2044,8 +2056,8 @@ async fn execute_built_autonomous_job(
         Some(definition.meta.priority),
     );
     runtime_event.description = Some(format!(
-        "Buddy created a {} system conversation from local signals.",
-        definition.meta.badge
+        "{} created a {} system conversation from local signals.",
+        ctx.identity_name, definition.meta.badge
     ));
     runtime_event.chat_id = Some(chat_id.clone());
     BuddyJobResult {

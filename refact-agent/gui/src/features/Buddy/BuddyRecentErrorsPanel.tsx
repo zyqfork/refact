@@ -82,7 +82,7 @@ export const BuddyRecentErrorsPanel: React.FC<BuddyRecentErrorsPanelProps> = ({
               {detail && <span className={styles.listSubtitle}>{detail}</span>}
             </div>
             <div className={styles.errorActions}>
-              <Tooltip content="Open a Buddy chat to investigate this error">
+              <Tooltip content="Open your companion's chat to investigate this error">
                 <button
                   type="button"
                   className={classNames(styles.chip, styles.chipPrimary)}

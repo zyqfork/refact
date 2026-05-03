@@ -56,8 +56,8 @@ const MODEL_TYPE_LABELS: Record<
     description: "Reasoning-focused model for complex analysis tasks",
   },
   chat_buddy: {
-    title: "Buddy Model",
-    description: "Model used by Buddy for background tasks and suggestions",
+    title: "Companion Model",
+    description: "Model used by your companion for background tasks and suggestions",
   },
 };
 

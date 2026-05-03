@@ -24,6 +24,7 @@ interface BuddyPersonalityPanelProps {
   needRows: NeedRow[];
   unlockedSkills: string[];
   activeQuest: BuddyQuest | null;
+  name: string;
   settings: BuddySettings | undefined;
   isSavingSettings: boolean;
   onQuestControl: (control: BuddyControl) => void;
@@ -37,6 +38,7 @@ export const BuddyPersonalityPanel: React.FC<BuddyPersonalityPanelProps> = ({
   needRows,
   unlockedSkills,
   activeQuest,
+  name,
   settings,
   isSavingSettings,
   onQuestControl,
@@ -60,7 +62,7 @@ export const BuddyPersonalityPanel: React.FC<BuddyPersonalityPanelProps> = ({
             PERSONALITY
           </Text>
           <Text size="2" weight="bold">
-            {personality?.archetype_label ?? "Buddy"}
+            {personality?.archetype_label ?? name}
           </Text>
           <Text size="1" color="gray">
             {personality?.vibe ?? "Playful, quirky, helpful"}

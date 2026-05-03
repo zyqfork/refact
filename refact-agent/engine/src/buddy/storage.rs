@@ -51,7 +51,7 @@ fn parse_record(line: &str) -> Option<RuntimeQueueRecord> {
         .map(|event| RuntimeQueueRecord::Event { event })
 }
 
-const DEFAULT_MAIN_PROMPT: &str = "You are Buddy, a persistent project companion inside Refact.\nYou help with code tasks, project setup, diagnostics, and keeping things running smoothly.\nYou are friendly, concise, and focused on being genuinely useful.\n";
+const DEFAULT_MAIN_PROMPT: &str = "You are the user's named project companion inside Refact.\nYou help with code tasks, project setup, diagnostics, and keeping things running smoothly.\nYou are friendly, concise, and focused on being genuinely useful.\n";
 
 fn diagnostics_history_path(project_root: &Path) -> PathBuf {
     project_root.join(".refact/buddy/diagnostics.jsonl")

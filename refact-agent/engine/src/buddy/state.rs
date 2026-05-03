@@ -207,14 +207,14 @@ fn default_quest_controls(kind: &str) -> Vec<BuddyControl> {
         },
         "run_workflow" => BuddyControl {
             id: "quest-workflow".to_string(),
-            label: "Open Buddy".to_string(),
+            label: "Open companion".to_string(),
             action: "open_buddy".to_string(),
             action_param: None,
             style: "primary".to_string(),
         },
         _ => BuddyControl {
             id: "quest-open-buddy".to_string(),
-            label: "Open Buddy".to_string(),
+            label: "Open companion".to_string(),
             action: "open_buddy".to_string(),
             action_param: None,
             style: "primary".to_string(),

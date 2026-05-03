@@ -180,8 +180,8 @@ const DEFAULT_MODEL_FIELDS: {
   },
   {
     key: "chat_buddy",
-    label: "Buddy",
-    description: "Background assistant model.",
+    label: "Companion",
+    description: "Background companion model.",
   },
 ];
 

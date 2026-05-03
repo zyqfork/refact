@@ -633,7 +633,7 @@ fn format_issue_body(ctx: &DiagnosticContext) -> String {
     if let Some(ref chat) = ctx.chat_id {
         body.push_str(&format!("\n**Chat ID**: `{}`", chat));
     }
-    body.push_str("\n\n_Auto-created by Buddy diagnostics pipeline._");
+    body.push_str("\n\n_Auto-created by companion diagnostics pipeline._");
     body
 }
 
@@ -641,7 +641,7 @@ pub(crate) fn issue_title_and_body(ctx: &DiagnosticContext) -> (String, String) 
     let mut redacted = ctx.clone();
     redacted.error_message = redact_diagnostic_text(&ctx.error_message);
     let raw_title = format!(
-        "[Buddy] {}: {}",
+        "[Companion] {}: {}",
         ctx.error_type,
         &redacted.error_message.chars().take(80).collect::<String>()
     );

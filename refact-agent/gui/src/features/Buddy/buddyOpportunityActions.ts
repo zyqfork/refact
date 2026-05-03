@@ -145,7 +145,7 @@ export function humanizeMarketKind(kind: MarketKind): string {
 function humanizePage(page: BuddyPage): string {
   switch (page.type) {
     case "buddy":
-      return "Buddy";
+      return "Companion";
     case "stats":
       return "Stats";
     case "customization":

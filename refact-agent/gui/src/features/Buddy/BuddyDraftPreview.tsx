@@ -1,6 +1,8 @@
 import React from "react";
 import { Callout, Text, Flex } from "@radix-ui/themes";
 import { InfoCircledIcon } from "@radix-ui/react-icons";
+import { useAppSelector } from "../../hooks";
+import { selectBuddySnapshot } from "./buddySlice";
 import type { BuddyDraft } from "./types";
 
 type Props = {
@@ -8,6 +10,9 @@ type Props = {
 };
 
 export const BuddyDraftPreview: React.FC<Props> = ({ draft }) => {
+  const name = useAppSelector(selectBuddySnapshot)?.state.identity.name ?? "";
+  const titlePrefix = name ? `${name} draft` : "Draft";
+
   return (
     <Callout.Root color="blue" mb="2">
       <Callout.Icon>
@@ -16,7 +21,7 @@ export const BuddyDraftPreview: React.FC<Props> = ({ draft }) => {
       <Callout.Text>
         <Flex direction="column" gap="1">
           <Text size="2" weight="bold">
-            Buddy Draft: {draft.title}
+            {titlePrefix}: {draft.title}
           </Text>
           {draft.explanation && <Text size="1">{draft.explanation}</Text>}
         </Flex>

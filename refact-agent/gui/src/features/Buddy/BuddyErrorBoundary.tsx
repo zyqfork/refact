@@ -44,8 +44,8 @@ export class BuddyErrorBoundary extends React.Component<Props, State> {
               The app hit a frontend error.
             </Text>
             <Text size="2" color="gray">
-              Buddy recorded it for investigation. Reload the view if it stays
-              blank.
+              Your companion recorded it for investigation. Reload the view if
+              it stays blank.
             </Text>
           </div>
         </Flex>

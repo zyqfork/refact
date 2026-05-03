@@ -54,6 +54,10 @@ export interface BuddyWorldAtmosphere {
 }
 
 export type BuddyWorldTone = "good" | "neutral" | "warning" | "danger";
+
+function identityName(semanticState: BuddySemanticState | undefined): string {
+  return semanticState?.name.trim() || "Your companion";
+}
 export type BuddyWorldSprite =
   | "task_grove"
   | "memory_fireflies"
@@ -483,6 +487,7 @@ function phaseFromHour(hour: number): BuddyWorldPhase {
 
 function phaseDetails(
   phase: BuddyWorldPhase,
+  name: string,
 ): Pick<
   BuddyWorldState,
   | "phaseLabel"
@@ -507,7 +512,7 @@ function phaseDetails(
     case "day":
       return {
         phaseLabel: "Daylight build mode",
-        phaseMessage: "Everything is bright enough for Buddy to inspect.",
+        phaseMessage: `Everything is bright enough for ${name} to inspect.`,
         celestialEmoji: "☀️",
         celestialLabel: "Sun",
         celestialAction: "Play in sun",
@@ -527,10 +532,10 @@ function phaseDetails(
     case "night":
       return {
         phaseLabel: "Night daemon watch",
-        phaseMessage: "The moon is up and Buddy is watching quiet queues.",
+        phaseMessage: `The moon is up and ${name} is watching quiet queues.`,
         celestialEmoji: "🌙",
         celestialLabel: "Moon",
-        celestialAction: "Let Buddy rest",
+        celestialAction: `Let ${name} rest`,
         celestialX: 74,
         celestialY: 16,
       };
@@ -574,6 +579,7 @@ function buildWorldObject(
 function buildObjects(
   pulse: BuddyPulse | null | undefined,
   visibleRuntime: BuddyRuntimeEvent | null,
+  name: string,
 ): BuddyWorldObject[] {
   const runtimeActive = isActiveRuntime(visibleRuntime);
   const memoryRuntimeActive = isMemoryRuntimeActive(visibleRuntime);
@@ -588,7 +594,7 @@ function buildObjects(
           sprite: "seed",
           label: "Project garden",
           value: "Warming up",
-          description: "Buddy is waiting for a pulse snapshot.",
+          description: `${name} is waiting for a pulse snapshot.`
           page: { type: "buddy" },
           tone: "neutral",
           x: 25,
@@ -657,7 +663,7 @@ function buildObjects(
         value: `${taskTotal} open`,
         description:
           taskStuck > 0
-            ? `${taskStuck} stuck branches need Buddy's nudge.`
+            ? `${taskStuck} stuck branches need ${name}'s nudge.`
             : "Branches are clear enough to grow.",
         page: { type: "tasks_list" },
         tone: toneFromCount(taskPressure, 1, 3),
@@ -845,6 +851,7 @@ function weatherFromState(
   pulse: BuddyPulse | null | undefined,
   pet: BuddyPetState | undefined,
   visibleRuntime: BuddyRuntimeEvent | null,
+  name: string,
 ): Pick<
   BuddyWorldState,
   "weather" | "weatherLabel" | "weatherDescription" | "weatherX" | "weatherY"
@@ -855,7 +862,7 @@ function weatherFromState(
       weatherLabel: "Bug storm",
       weatherDescription:
         visibleRuntime?.title ??
-        "Errors are crackling; Buddy can chase them down.",
+        `Errors are crackling; ${name} can chase them down.`,
       weatherX: 57,
       weatherY: 27,
     };
@@ -869,7 +876,7 @@ function weatherFromState(
     return {
       weather: "storm",
       weatherLabel: "Bug storm",
-      weatherDescription: "Errors are crackling; Buddy can chase them down.",
+      weatherDescription: `Errors are crackling; ${name} can chase them down.`,
       weatherX: 57,
       weatherY: 27,
     };
@@ -879,7 +886,7 @@ function weatherFromState(
     return {
       weather: "dream",
       weatherLabel: "Dream mist",
-      weatherDescription: "Buddy is asleep; the world lowers its volume.",
+      weatherDescription: `${name} is asleep; the world lowers its volume.`,
       weatherX: 61,
       weatherY: 30,
     };
@@ -899,7 +906,7 @@ function weatherFromState(
     return {
       weather: "storm",
       weatherLabel: "Bug storm",
-      weatherDescription: "Errors are crackling; Buddy can chase them down.",
+      weatherDescription: `Errors are crackling; ${name} can chase them down.`,
       weatherX: 57,
       weatherY: 27,
     };
@@ -943,7 +950,7 @@ function weatherFromState(
   return {
     weather: "clear",
     weatherLabel: "Clear sky",
-    weatherDescription: "Buddy has room to explore and play.",
+    weatherDescription: `${name} has room to explore and play.`,
     weatherX: 42,
     weatherY: 24,
   };
@@ -1119,12 +1126,19 @@ export function buildBuddyWorldState(args: {
 }): BuddyWorldState {
   const pulse = normalizeBuddyPulse(args.pulse);
   const phase = phaseFromHour(args.now.getHours());
-  const phaseInfo = phaseDetails(phase);
+  const name = identityName(args.semanticState);
+  const phaseInfo = phaseDetails(phase, name);
   const nowMs = args.now.getTime();
   const visibleRuntime = visibleRuntimeEvent(args.nowPlaying, nowMs);
-  const weatherInfo = weatherFromState(phase, pulse, args.pet, visibleRuntime);
+  const weatherInfo = weatherFromState(
+    phase,
+    pulse,
+    args.pet,
+    visibleRuntime,
+    name,
+  );
   const vitalityInfo = vitalityFromPulse(pulse);
-  const objects = buildObjects(pulse, visibleRuntime);
+  const objects = buildObjects(pulse, visibleRuntime, name);
   const atmosphere = buildAtmosphere({
     phase,
     primaryWeather: weatherInfo.weather,

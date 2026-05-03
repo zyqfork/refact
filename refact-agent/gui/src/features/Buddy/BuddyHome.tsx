@@ -478,7 +478,7 @@ export const BuddyHome: React.FC = () => {
   const handleQuestControl = useCallback(
     async (ctrl: BuddyControl) => {
       await executeBuddyAction(ctrl, dispatch, {
-        triggerText: activeQuest?.title ?? "Buddy quest",
+        triggerText: activeQuest?.title ?? `${name} quest`,
         triggerSource: "suggestion",
       });
     },
@@ -620,7 +620,7 @@ export const BuddyHome: React.FC = () => {
           style={{ flex: 1 }}
         >
           <Text size="2" color="gray">
-            Buddy is not available
+            {name} is not available
           </Text>
         </Flex>
       </div>
@@ -714,6 +714,7 @@ export const BuddyHome: React.FC = () => {
         needRows={needRows}
         unlockedSkills={unlockedSkills}
         activeQuest={activeQuest}
+        name={name}
         settings={settings}
         isSavingSettings={isSavingSettings}
         onQuestControl={(control) => void handleQuestControl(control)}

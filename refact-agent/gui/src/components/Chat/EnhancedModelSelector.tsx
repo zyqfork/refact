@@ -321,7 +321,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
             )}
             {model.isBuddy && (
               <Badge size="1" color="orange">
-                Buddy
+                Companion
               </Badge>
             )}
           </Flex>

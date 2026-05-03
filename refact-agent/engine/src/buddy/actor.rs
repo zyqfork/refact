@@ -706,7 +706,10 @@ impl BuddyService {
         self.add_activity(BuddyActivity {
             icon,
             title: format!("Quest complete: {title}"),
-            description: format!("Buddy wrapped up '{title}' and earned a growth boost."),
+            description: format!(
+                "{} wrapped up '{title}' and earned a growth boost.",
+                self.state.identity.name
+            ),
             timestamp: Utc::now().to_rfc3339(),
             activity_type: "quest_completed".to_string(),
             chat_id: None,

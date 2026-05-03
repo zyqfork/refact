@@ -244,9 +244,9 @@ function DefaultModelsCard() {
             caps.chat_buddy_model !== caps.chat_default_model &&
             caps.chat_buddy_model !== caps.chat_light_model && (
               <ModelRow
-                label="Buddy"
+                label="Companion"
                 model={caps.chat_buddy_model}
-                explanation="Model used by Buddy for background tasks."
+                explanation="Model used by your companion for background tasks."
               />
             )}
           {caps.completion_default_model && (

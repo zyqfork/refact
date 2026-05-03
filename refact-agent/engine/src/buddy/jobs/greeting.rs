@@ -30,7 +30,7 @@ impl BuddyJob for GreetingJob {
         ctx: BuddyJobContext,
     ) -> BuddyJobResult {
         let text = if !ctx.onboarding.greeted {
-            format!("Hi! I'm {}, your coding buddy! 🎉 I'll help you with errors, setup, and staying productive. Want a quick tour?", ctx.identity_name)
+            format!("Hi! I'm {}! 🎉 I'll help you with errors, setup, and staying productive. Want a quick tour?", ctx.identity_name)
         } else {
             format!(
                 "Welcome back! 👋 I'm {} — ready to help.",
