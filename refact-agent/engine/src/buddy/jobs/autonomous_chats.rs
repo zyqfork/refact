@@ -2234,11 +2234,7 @@ fn collect_local_git_evidence(
 }
 
 #[cfg(test)]
-#[derive(Default)]
-struct LocalGitEvidenceScanTracker {
-    root: Option<PathBuf>,
-    count: usize,
-}
+type LocalGitEvidenceScanTracker = HashMap<PathBuf, usize>;
 
 #[cfg(test)]
 static LOCAL_GIT_EVIDENCE_SCAN_TRACKER: OnceLock<std::sync::Mutex<LocalGitEvidenceScanTracker>> =
@@ -2250,31 +2246,40 @@ fn local_git_evidence_scan_tracker() -> &'static std::sync::Mutex<LocalGitEviden
 }
 
 #[cfg(test)]
+fn normalize_local_git_evidence_scan_root(project_root: &Path) -> PathBuf {
+    project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf())
+}
+
+#[cfg(test)]
 fn track_local_git_evidence_scan(project_root: &Path) {
+    let root = normalize_local_git_evidence_scan_root(project_root);
     let mut tracker = local_git_evidence_scan_tracker().lock().unwrap();
-    if tracker
-        .root
-        .as_deref()
-        .map(|root| root == project_root)
-        .unwrap_or(true)
-    {
-        tracker.count += 1;
-    }
+    *tracker.entry(root).or_default() += 1;
 }
 
 #[cfg(not(test))]
 fn track_local_git_evidence_scan(_project_root: &Path) {}
 
 #[cfg(test)]
-fn reset_local_git_evidence_scan_count(root: Option<&Path>) {
-    let mut tracker = local_git_evidence_scan_tracker().lock().unwrap();
-    tracker.root = root.map(Path::to_path_buf);
-    tracker.count = 0;
+fn reset_local_git_evidence_scan_count(root: &Path) {
+    let root = normalize_local_git_evidence_scan_root(root);
+    local_git_evidence_scan_tracker()
+        .lock()
+        .unwrap()
+        .insert(root, 0);
 }
 
 #[cfg(test)]
-fn local_git_evidence_scan_count() -> usize {
-    local_git_evidence_scan_tracker().lock().unwrap().count
+fn local_git_evidence_scan_count(root: &Path) -> usize {
+    let root = normalize_local_git_evidence_scan_root(root);
+    local_git_evidence_scan_tracker()
+        .lock()
+        .unwrap()
+        .get(&root)
+        .copied()
+        .unwrap_or_default()
 }
 
 fn git_status_label(status: git2::Status) -> &'static str {
@@ -4506,11 +4511,11 @@ mod tests {
         let mut ctx = context_with_last_result(None);
         ctx.pulse.git.uncommitted_files = 1;
         let gcx = crate::global_context::tests::make_test_gcx().await;
-        reset_local_git_evidence_scan_count(Some(&ctx.project_root));
+        reset_local_git_evidence_scan_count(&ctx.project_root);
 
         assert!(job.should_run(gcx, &ctx).await);
 
-        assert_eq!(local_git_evidence_scan_count(), 0);
+        assert_eq!(local_git_evidence_scan_count(&ctx.project_root), 0);
     }
 
     #[tokio::test]
@@ -4525,10 +4530,11 @@ mod tests {
         let gcx = crate::global_context::tests::make_test_gcx().await;
 
         assert!(job.should_run(gcx.clone(), &ctx).await);
-        reset_local_git_evidence_scan_count(Some(&ctx.project_root));
+        reset_local_git_evidence_scan_count(&ctx.project_root);
+        let root = ctx.project_root.clone();
         let result = job.execute(gcx, ctx).await;
 
-        assert_eq!(local_git_evidence_scan_count(), 1);
+        assert_eq!(local_git_evidence_scan_count(&root), 1);
         assert!(result.activity.is_none());
         assert!(result.runtime_event.is_none());
         assert!(result.last_result.is_none());
