@@ -23,10 +23,7 @@ import type {
   Palette,
   Stage,
 } from "./types";
-import {
-  buildBuddyWorldState,
-  type BuddyWorldState,
-} from "./buddyWorldModel";
+import { buildBuddyWorldState, type BuddyWorldState } from "./buddyWorldModel";
 import {
   advanceBuddyShowcasePhase,
   BUDDY_SHOWCASE_IDLE_COOLDOWN_MS,

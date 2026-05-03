@@ -1,9 +1,9 @@
 import React, { useMemo } from "react";
 
 import { Flex, Text } from "@radix-ui/themes";
-import { MagicWandIcon } from "@radix-ui/react-icons";
 
 import { useAppSelector } from "../../hooks";
+import { BuddyCanvas, useBuddyState } from "../../features/Buddy";
 import {
   selectActiveSpeech,
   selectBuddyActivities,
@@ -29,7 +29,7 @@ function firstItem<T>(items: readonly T[]): T | undefined {
   return items.length > 0 ? items[0] : undefined;
 }
 
-const BuddyInsight: React.FC = () => {
+function useBuddyPlaceholderSpeech(): string {
   const activeSpeech = useAppSelector(selectActiveSpeech);
   const nowPlaying = useAppSelector(selectNowPlaying);
   const unreadOpportunities = useAppSelector(selectUnreadOpportunities);
@@ -40,7 +40,7 @@ const BuddyInsight: React.FC = () => {
   const fallbackHello = useMemo(pickHello, []);
   const activeSpeechText = activeSpeech?.text;
 
-  const insight = useMemo(() => {
+  return useMemo(() => {
     const opportunity = firstItem(unreadOpportunities);
     const suggestion = suggestions.find((item) => !item.dismissed);
     const activity = firstItem(activities);
@@ -68,23 +68,22 @@ const BuddyInsight: React.FC = () => {
     suggestions,
     unreadOpportunities,
   ]);
-
-  return (
-    <Text as="div">
-      <Flex as="span" align="center" gap="1" display="inline-flex">
-        <MagicWandIcon />
-        <b>Buddy</b>:
-      </Flex>{" "}
-      {insight}
-    </Text>
-  );
-};
+}
 
 export const PlaceHolderText: React.FC = () => {
+  const buddy = useBuddyState();
+  const speech = useBuddyPlaceholderSpeech();
+
   return (
-    <Flex direction="column" gap="4">
+    <Flex direction="column" align="start" gap="4">
+      <BuddyCanvas
+        state={buddy.state}
+        onEvent={buddy.handleCanvasEvent}
+        displaySize={220}
+        speechOverride={speech}
+        bubblePosition="top"
+      />
       <Text>Welcome to Refact chat.</Text>
-      <BuddyInsight />
     </Flex>
   );
 };

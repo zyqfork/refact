@@ -585,7 +585,9 @@ export const ChatForm: React.FC<ChatFormProps> = ({
                 <BrowserToggleButton chatId={chatId} />
               </span>
               <span className={styles.hideActionSecond}>
-                <AutoEnrichmentToggleButton disabled={isStreaming || isWaiting} />
+                <AutoEnrichmentToggleButton
+                  disabled={isStreaming || isWaiting}
+                />
               </span>
               <span className={styles.hideActionThird}>
                 <WandButton
