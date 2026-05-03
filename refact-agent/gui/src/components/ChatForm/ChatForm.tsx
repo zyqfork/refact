@@ -563,18 +563,19 @@ export const ChatForm: React.FC<ChatFormProps> = ({
             <span className={styles.bottomModelControl}>
               <ChatSettingsDropdown disabled={isBuddyChat} />
             </span>
-            <ModeSelect
-              selectedMode={threadMode ?? DEFAULT_MODE}
-              onModeChange={onSetMode}
-              disabled={isBuddyChat || isModeDisabled}
-            />
+            <span className={styles.bottomModeControl}>
+              <ModeSelect
+                selectedMode={threadMode ?? DEFAULT_MODE}
+                onModeChange={onSetMode}
+                disabled={isBuddyChat || isModeDisabled}
+              />
+            </span>
             <span className={styles.bottomWorkspaceControl}>
               <WorktreeControl disabled={isBuddyChat} />
             </span>
 
             <Flex
               justify="end"
-              flexGrow="1"
               wrap="nowrap"
               gap="2"
               align="center"

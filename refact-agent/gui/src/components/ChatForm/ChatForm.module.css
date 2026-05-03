@@ -141,11 +141,23 @@
   min-width: 0;
 }
 
+.bottomActionControls {
+  flex: 0 0 auto;
+  margin-left: auto;
+  max-width: max-content;
+}
+
 .topStatusControls > span,
 .bottomActionControls > span,
 .bottomModelControl,
+.bottomModeControl,
 .bottomWorkspaceControl {
   display: inline-flex;
+  min-width: 0;
+}
+
+.topStatusControls > span,
+.bottomActionControls > span {
   flex-shrink: 0;
 }
 
@@ -154,8 +166,9 @@
 }
 
 .bottomModelControl,
+.bottomModeControl,
 .bottomWorkspaceControl {
-  min-width: 0;
+  flex: 1 1 auto;
 }
 
 @container (max-width: 520px) {
