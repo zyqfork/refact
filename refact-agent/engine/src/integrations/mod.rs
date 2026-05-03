@@ -14,14 +14,8 @@ pub mod browser_models;
 pub mod browser_runtime;
 pub mod browser_types;
 pub mod integr_abstract;
-pub mod integr_bitbucket;
 pub mod integr_cmdline;
 pub mod integr_cmdline_service;
-pub mod integr_github;
-pub mod integr_gitlab;
-pub mod integr_mysql;
-pub mod integr_pdb;
-pub mod integr_postgres;
 pub mod mcp;
 
 pub mod config_chat;
@@ -37,24 +31,6 @@ use integr_abstract::IntegrationTrait;
 
 pub fn integration_from_name(n: &str) -> Result<Box<dyn IntegrationTrait + Send + Sync>, String> {
     match n {
-        "github" => Ok(Box::new(integr_github::ToolGithub {
-            ..Default::default()
-        }) as Box<dyn IntegrationTrait + Send + Sync>),
-        "gitlab" => Ok(Box::new(integr_gitlab::ToolGitlab {
-            ..Default::default()
-        }) as Box<dyn IntegrationTrait + Send + Sync>),
-        "bitbucket" => Ok(Box::new(integr_bitbucket::ToolBitbucket {
-            ..Default::default()
-        }) as Box<dyn IntegrationTrait + Send + Sync>),
-        "pdb" => Ok(Box::new(integr_pdb::ToolPdb {
-            ..Default::default()
-        }) as Box<dyn IntegrationTrait + Send + Sync>),
-        "postgres" => Ok(Box::new(integr_postgres::ToolPostgres {
-            ..Default::default()
-        }) as Box<dyn IntegrationTrait + Send + Sync>),
-        "mysql" => Ok(Box::new(integr_mysql::ToolMysql {
-            ..Default::default()
-        }) as Box<dyn IntegrationTrait + Send + Sync>),
         cmdline if cmdline.starts_with("cmdline_") => {
             // let tool_name = cmdline.strip_prefix("cmdline_").unwrap();
             Ok(Box::new(integr_cmdline::ToolCmdline {
@@ -91,17 +67,7 @@ pub fn integration_from_name(n: &str) -> Result<Box<dyn IntegrationTrait + Send 
 }
 
 pub fn integrations_list(_allow_experimental: bool) -> Vec<&'static str> {
-    let integrations = vec![
-        "github",
-        "gitlab",
-        "bitbucket",
-        "pdb",
-        "postgres",
-        "mysql",
-        "cmdline_TEMPLATE",
-        "service_TEMPLATE",
-        "mcp_TEMPLATE",
-    ];
+    let integrations = vec!["cmdline_TEMPLATE", "service_TEMPLATE", "mcp_TEMPLATE"];
     integrations
 }
 

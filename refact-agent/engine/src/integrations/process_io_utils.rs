@@ -1,7 +1,7 @@
 use futures::future::try_join3;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpStream;
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::{Child, Command};
 use tokio::sync::Mutex as AMutex;
 use tokio::time::Duration;
 use std::path::Path;
@@ -10,27 +10,6 @@ use std::process::Output;
 use std::sync::Arc;
 use std::time::Instant;
 use std::process::Stdio;
-use tracing::error;
-
-pub async fn write_to_stdin_and_flush(
-    stdin: &mut ChildStdin,
-    text_to_write: &str,
-) -> Result<(), String> {
-    stdin
-        .write_all(format!("{}\n", text_to_write).as_bytes())
-        .await
-        .map_err(|e| {
-            error!("Failed to write to pdb stdin: {}", e);
-            e.to_string()
-        })?;
-    stdin.flush().await.map_err(|e| {
-        error!("Failed to flush pdb stdin: {}", e);
-        e.to_string()
-    })?;
-
-    Ok(())
-}
-
 pub async fn blocking_read_until_token_or_timeout<
     StdoutReader: AsyncRead + Unpin,
     StderrReader: AsyncRead + Unpin,
@@ -131,40 +110,6 @@ pub async fn is_someone_listening_on_that_tcp_port(
             false // still no one is listening, as far as we can tell
         }
     }
-}
-
-pub fn first_n_chars(msg: &str, n: usize) -> String {
-    let mut last_n_chars: String = msg.chars().take(n).collect();
-    if last_n_chars.len() == n {
-        last_n_chars.push_str("...");
-    }
-    return last_n_chars;
-}
-
-pub fn last_n_chars(msg: &str, n: usize) -> String {
-    let mut last_n_chars: String = msg
-        .chars()
-        .rev()
-        .take(n)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    if last_n_chars.len() == n {
-        last_n_chars.insert_str(0, "...");
-    }
-    return last_n_chars;
-}
-
-pub fn last_n_lines(msg: &str, n: usize) -> String {
-    let lines: Vec<&str> = msg.lines().filter(|line| !line.trim().is_empty()).collect();
-    let start = if lines.len() > n { lines.len() - n } else { 0 };
-
-    let mut output = if start > 0 { "...\n" } else { "" }.to_string();
-    output.push_str(&lines[start..].join("\n"));
-    output.push('\n');
-
-    output
 }
 
 /// Reimplemented .wait_with_output() from tokio::process::Child to accept &mut self instead of self
