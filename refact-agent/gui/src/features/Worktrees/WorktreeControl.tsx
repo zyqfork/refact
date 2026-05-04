@@ -233,7 +233,11 @@ export const WorktreeControl: React.FC<WorktreeControlProps> = ({
     if (currentRecord?.meta.id === pendingCreatedWorktreeId) {
       setPendingCreatedWorktreeId(null);
     }
-  }, [currentRecord?.meta.id, pendingCreatedWorktreeId]);
+  }, [
+    currentRecord?.meta.id,
+    pendingCreatedWorktreeId,
+    setPendingCreatedWorktreeId,
+  ]);
 
   const handleSelect = useCallback(
     (record: WorktreeRecordView) => {
