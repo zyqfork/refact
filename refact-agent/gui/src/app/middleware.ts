@@ -69,6 +69,7 @@ import {
 import { setCurrentProjectInfo } from "../features/Chat/currentProject";
 import { reportBuddyFrontendError } from "../features/Buddy/reportBuddyFrontendError";
 import { setThemeMode, updateConfig } from "../features/Config/configSlice";
+import { resetProjectServerSnapshot } from "../features/Chat/currentProject";
 import { nextTip } from "../features/TipOfTheDay";
 import { tasksApi } from "../services/refact/tasks";
 import {
@@ -479,6 +480,7 @@ startListening({
     if (action.payload.lspPort !== undefined) {
       listenerApi.dispatch(providersApi.util.resetApiState());
       listenerApi.dispatch(modelsApi.util.resetApiState());
+      listenerApi.dispatch(resetProjectServerSnapshot());
     }
   },
 });

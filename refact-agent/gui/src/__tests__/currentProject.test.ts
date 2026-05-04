@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   currentProjectInfoReducer,
+  resetProjectServerSnapshot,
   selectHasActiveProject,
   selectHasProjectSnapshot,
   setCurrentProjectInfo,
@@ -22,7 +23,7 @@ function rootStateWithCurrentProject(
 }
 
 describe("current project state", () => {
-  it("preserves server snapshot readiness when a local project update omits it", () => {
+  it("preserves server snapshot readiness when a local project update keeps the same workspace", () => {
     const serverSnapshotState = currentProjectInfoReducer(
       undefined,
       setCurrentProjectInfo({
@@ -35,15 +36,58 @@ describe("current project state", () => {
     const localUpdateState = currentProjectInfoReducer(
       serverSnapshotState,
       setCurrentProjectInfo({
-        name: "refact-renamed",
+        name: "refact",
       }),
     );
 
     expect(localUpdateState).toEqual({
-      name: "refact-renamed",
+      name: "refact",
       workspaceRoots: ["/workspace/refact"],
       serverSnapshotReceived: true,
     });
+  });
+
+  it("resets server snapshot readiness when local workspace identity changes", () => {
+    const serverSnapshotState = currentProjectInfoReducer(
+      undefined,
+      setCurrentProjectInfo({
+        name: "refact",
+        workspaceRoots: ["/workspace/refact"],
+        serverSnapshotReceived: true,
+      }),
+    );
+
+    const localUpdateState = currentProjectInfoReducer(
+      serverSnapshotState,
+      setCurrentProjectInfo({
+        name: "other-project",
+        workspaceRoots: ["/workspace/other-project"],
+      }),
+    );
+
+    expect(localUpdateState).toEqual({
+      name: "other-project",
+      workspaceRoots: ["/workspace/other-project"],
+      serverSnapshotReceived: false,
+    });
+  });
+
+  it("resets server snapshot readiness explicitly", () => {
+    const serverSnapshotState = currentProjectInfoReducer(
+      undefined,
+      setCurrentProjectInfo({
+        name: "refact",
+        workspaceRoots: ["/workspace/refact"],
+        serverSnapshotReceived: true,
+      }),
+    );
+
+    const resetState = currentProjectInfoReducer(
+      serverSnapshotState,
+      resetProjectServerSnapshot(),
+    );
+
+    expect(resetState.serverSnapshotReceived).toBe(false);
   });
 
   it("treats an explicit empty server workspace as a received snapshot", () => {

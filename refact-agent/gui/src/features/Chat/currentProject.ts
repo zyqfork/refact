@@ -9,6 +9,8 @@ export type CurrentProjectInfo = {
 
 export type CurrentProjectInfoUpdate = Partial<CurrentProjectInfo>;
 
+type WorkspaceIdentity = Pick<CurrentProjectInfo, "name" | "workspaceRoots">;
+
 const initialState: CurrentProjectInfo = {
   name: "",
   serverSnapshotReceived: false,
@@ -18,17 +20,50 @@ export const setCurrentProjectInfo = createAction<CurrentProjectInfoUpdate>(
   "currentProjectInfo/setCurrentProjectInfo",
 );
 
+export const resetProjectServerSnapshot = createAction(
+  "currentProjectInfo/resetProjectServerSnapshot",
+);
+
+function workspaceRootsEqual(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((root, index) => root === b[index]);
+}
+
+function hasWorkspaceIdentityChanged(
+  state: WorkspaceIdentity,
+  update: CurrentProjectInfoUpdate,
+): boolean {
+  const nameChanged = update.name !== undefined && update.name !== state.name;
+  const rootsChanged =
+    update.workspaceRoots !== undefined &&
+    !workspaceRootsEqual(update.workspaceRoots, state.workspaceRoots);
+  return nameChanged || rootsChanged;
+}
+
 export const currentProjectInfoReducer = createReducer(
   initialState,
   (builder) => {
-    builder.addCase(setCurrentProjectInfo, (state, action) => {
-      return {
-        ...state,
-        ...action.payload,
-        serverSnapshotReceived:
-          action.payload.serverSnapshotReceived ?? state.serverSnapshotReceived,
-      };
-    });
+    builder
+      .addCase(setCurrentProjectInfo, (state, action) => {
+        const identityChanged = hasWorkspaceIdentityChanged(
+          state,
+          action.payload,
+        );
+        const nextServerSnapshotReceived =
+          action.payload.serverSnapshotReceived ??
+          (identityChanged ? false : state.serverSnapshotReceived);
+
+        return {
+          ...state,
+          ...action.payload,
+          serverSnapshotReceived: nextServerSnapshotReceived,
+        };
+      })
+      .addCase(resetProjectServerSnapshot, (state) => {
+        state.serverSnapshotReceived = false;
+      });
   },
 );
 
@@ -57,4 +92,4 @@ export const selectHasActiveProject = (state: RootState): boolean => {
 };
 
 export const selectHasProjectSnapshot = (state: RootState): boolean =>
-  state.current_project.serverSnapshotReceived === true;
+  state.current_project.serverSnapshotReceived;

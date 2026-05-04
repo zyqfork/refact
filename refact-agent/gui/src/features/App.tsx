@@ -66,6 +66,7 @@ import { BuddyErrorBoundary } from "./Buddy/BuddyErrorBoundary";
 import { ChatLoading } from "../components/ChatContent/ChatLoading";
 import { SplashScreen } from "./Splash";
 import { selectBackendLastOkAt, selectBackendStatus } from "./Connection";
+import { resetProjectServerSnapshot } from "./Chat/currentProject";
 import {
   beginBuddyCrashSession,
   buildBuddyCrashRecoveryError,
@@ -275,13 +276,19 @@ export const InnerApp: React.FC<AppProps> = ({ style }: AppProps) => {
   useEffect(() => {
     if (backendStatus !== "online") {
       setStartupResolved(false);
+      dispatch(resetProjectServerSnapshot());
       return;
     }
 
     if (providersQuery.isSuccess || providersQuery.isError) {
       setStartupResolved(true);
     }
-  }, [backendStatus, providersQuery.isError, providersQuery.isSuccess]);
+  }, [
+    backendStatus,
+    dispatch,
+    providersQuery.isError,
+    providersQuery.isSuccess,
+  ]);
 
   const showStartupSplash =
     !startupResolved &&

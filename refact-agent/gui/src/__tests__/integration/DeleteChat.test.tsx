@@ -53,6 +53,21 @@ describe("Delete a Chat form history", () => {
       chatSessionSubscribe,
       chatSessionCommand,
       chatSessionAbort,
+      http.get("http://127.0.0.1:8001/v1/chat-modes", () => {
+        return HttpResponse.json({ modes: [], errors: [] });
+      }),
+      http.get("http://127.0.0.1:8001/v1/setup/status", () => {
+        return HttpResponse.json({
+          configured: true,
+          reasons: [],
+          detail: {
+            project_root: "/tmp/refact-test",
+            has_agents_md: true,
+            has_knowledge: false,
+            has_trajectories: true,
+          },
+        });
+      }),
       http.get("http://127.0.0.1:8001/v1/sidebar/subscribe", () => {
         const encoder = new TextEncoder();
         const stream = new ReadableStream({
@@ -60,6 +75,7 @@ describe("Delete a Chat form history", () => {
             controller.enqueue(
               encoder.encode(
                 `data: ${JSON.stringify({
+                  seq: 0,
                   category: "snapshot",
                   trajectories: [trajectory],
                   tasks: [],
