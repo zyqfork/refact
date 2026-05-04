@@ -263,6 +263,59 @@ describe("useSidebarSubscription", () => {
     });
   });
 
+  it("keeps existing chats during a transient chat error and replaces them on retry success", async () => {
+    const existing = {
+      id: "existing-chat",
+      title: "Existing chat",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      model: "gpt-4",
+      mode: "agent",
+      message_count: 1,
+      total_lines_added: 0,
+      total_lines_removed: 0,
+      tasks_total: 0,
+      tasks_done: 0,
+      tasks_failed: 0,
+    };
+    const recovered = {
+      ...existing,
+      id: "recovered-chat",
+      title: "Recovered chat",
+      updated_at: "2024-01-02T00:00:00Z",
+    };
+    server.use(
+      http.get(
+        "http://127.0.0.1:8001/v1/sidebar/subscribe",
+        () =>
+          new HttpResponse(
+            sseStream([
+              sectionSnapshot(0, "chats", { trajectories: [existing] }),
+              sectionSnapshot(
+                1,
+                "chats",
+                { trajectories: [] },
+                "error",
+                "temporary timeout",
+              ),
+              sectionSnapshot(2, "chats", { trajectories: [recovered] }),
+            ]),
+            { headers: { "Content-Type": "text/event-stream" } },
+          ),
+      ),
+    );
+
+    const { store } = render(<TestHarness />, { preloadedState: CONFIG_STATE });
+
+    await waitFor(() => {
+      expect(store.getState().history.loadError).toBeNull();
+      expect(Object.keys(store.getState().history.chats)).toEqual([
+        "recovered-chat",
+      ]);
+      expect(store.getState().sidebar.sections.chats.status).toBe("ready");
+    });
+  });
+
   it("turns a chat error snapshot into an error state instead of forever loading", async () => {
     server.use(
       http.get(

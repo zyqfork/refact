@@ -447,7 +447,9 @@ export function useSidebarSubscription() {
 
   const processTrajectoriesSnapshot = useCallback(
     (trajectories: TrajectoryMeta[], error?: string) => {
-      dispatch(replaceSnapshotHistory(trajectoryItemsFromMeta(trajectories)));
+      if (trajectories.length > 0 || !error) {
+        dispatch(replaceSnapshotHistory(trajectoryItemsFromMeta(trajectories)));
+      }
       dispatch(setHistoryLoadError(error ?? null));
       dispatch(setHistoryLoading(false));
     },

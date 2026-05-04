@@ -21,7 +21,8 @@ use crate::tasks::events::TaskEvent;
 use crate::tasks::types::TaskMeta;
 
 const SIDEBAR_PROTOCOL_VERSION: u8 = 2;
-const SIDEBAR_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(15);
+const SIDEBAR_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
+const SIDEBAR_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -211,6 +212,15 @@ impl InitialSidebarPart {
         }
     }
 
+    fn status(&self) -> SidebarSectionStatus {
+        match self {
+            InitialSidebarPart::Workspace { status, .. }
+            | InitialSidebarPart::Chats { status, .. }
+            | InitialSidebarPart::Tasks { status, .. }
+            | InitialSidebarPart::Buddy { status, .. } => *status,
+        }
+    }
+
     fn into_event(self, elapsed_ms: u128) -> SidebarEvent {
         match self {
             InitialSidebarPart::Workspace {
@@ -334,6 +344,23 @@ async fn load_buddy_part(gcx: Arc<ARwLock<GlobalContext>>) -> InitialSidebarPart
             error: Some("Timed out loading buddy".to_string()),
         },
     }
+}
+
+fn spawn_sidebar_section_retry(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    section: SidebarSection,
+    tx: mpsc::UnboundedSender<InitialSidebarPart>,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(SIDEBAR_RETRY_DELAY).await;
+        let part = match section {
+            SidebarSection::Workspace => load_workspace_part(gcx).await,
+            SidebarSection::Chats => load_chats_part(gcx).await,
+            SidebarSection::Tasks => load_tasks_part(gcx).await,
+            SidebarSection::Buddy => load_buddy_part(gcx).await,
+        };
+        let _ = tx.send(part);
+    });
 }
 
 fn spawn_initial_sidebar_loads(
@@ -475,20 +502,29 @@ pub async fn handle_sidebar_subscribe(
     let gcx_for_stream = gcx.clone();
     let subscription_id = Uuid::new_v4().to_string();
     let stream = async_stream::stream! {
-        let mut trajectory_rx = trajectory_rx;
-        let mut workspace_changed_rx = workspace_changed_rx;
-        let mut task_rx = task_rx;
-        let mut notification_rx = notification_rx;
-        let mut buddy_rx = buddy_rx;
-        let mut initial_rx = Some(spawn_initial_sidebar_loads(gcx_for_stream.clone()));
-        let mut workspace_ready = false;
-        let mut chats_ready = false;
-        let mut tasks_ready = false;
-        let mut buddy_ready = false;
-        let mut bootstrap_complete = false;
-        let mut buffered_live_events = VecDeque::new();
-        let initial_started_at = Instant::now();
-        let shutdown_flag = gcx_for_stream.read().await.shutdown_flag.clone();
+                        Some(part) => {
+                            let section = part.section();
+                            let status = part.status();
+                            let elapsed_ms = initial_started_at.elapsed().as_millis();
+                            let event = part.into_event(elapsed_ms);
+                            match section {
+                                SidebarSection::Workspace => workspace_ready = status == SidebarSectionStatus::Ready,
+                                SidebarSection::Chats => chats_ready = status == SidebarSectionStatus::Ready,
+                                SidebarSection::Tasks => tasks_ready = status == SidebarSectionStatus::Ready,
+                                SidebarSection::Buddy => buddy_ready = status == SidebarSectionStatus::Ready,
+                            }
+                            tracing::info!("sidebar initial {:?} finished with {:?} in {}ms", section, status, elapsed_ms);
+                            if let Some(event) = make_event(&seq_counter, &subscription_id, event) {
+                                yield Ok::<_, std::convert::Infallible>(event);
+                            }
+                            if status == SidebarSectionStatus::Error {
+                                spawn_sidebar_section_retry(
+                                    gcx_for_stream.clone(),
+                                    section,
+                                    retry_tx.clone(),
+                                );
+                            }
+                        }
 
         let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -519,6 +555,42 @@ pub async fn handle_sidebar_subscribe(
                         }
                         None => {
                             initial_rx = None;
+                        }
+                    }
+
+                    if workspace_ready && chats_ready && tasks_ready && buddy_ready && !bootstrap_complete {
+                        bootstrap_complete = true;
+                        initial_rx = None;
+                        while let Some(event) = buffered_live_events.pop_front() {
+                            if let Some(event) = make_event(&seq_counter, &subscription_id, event) {
+                                yield Ok::<_, std::convert::Infallible>(event);
+                            }
+                        }
+                    }
+                }
+
+                retry_part = retry_rx.recv() => {
+                    if let Some(part) = retry_part {
+                        let section = part.section();
+                        let status = part.status();
+                        let event = part.into_event(0);
+                        if status == SidebarSectionStatus::Ready {
+                            match section {
+                                SidebarSection::Workspace => workspace_ready = true,
+                                SidebarSection::Chats => chats_ready = true,
+                                SidebarSection::Tasks => tasks_ready = true,
+                                SidebarSection::Buddy => buddy_ready = true,
+                            }
+                        }
+                        if let Some(event) = make_event(&seq_counter, &subscription_id, event) {
+                            yield Ok::<_, std::convert::Infallible>(event);
+                        }
+                        if status == SidebarSectionStatus::Error {
+                            spawn_sidebar_section_retry(
+                                gcx_for_stream.clone(),
+                                section,
+                                retry_tx.clone(),
+                            );
                         }
                     }
 
