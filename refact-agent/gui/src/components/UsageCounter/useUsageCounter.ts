@@ -6,6 +6,8 @@ import {
 import { useAppSelector } from "../../hooks";
 import {
   calculateUsageInputTokens,
+  getCacheCreationTokens,
+  getCacheReadTokens,
   mergeUsages,
 } from "../../utils/calculateUsageInputTokens";
 import { isAssistantMessage } from "../../services/refact";
@@ -63,8 +65,8 @@ export function useUsageCounter() {
       const usage = assistantMessages[i]?.usage;
       if (!usage) continue;
       const promptTokens = usage.prompt_tokens;
-      const cacheCreation = usage.cache_creation_input_tokens ?? 0;
-      const cacheRead = usage.cache_read_input_tokens ?? 0;
+      const cacheCreation = getCacheCreationTokens(usage);
+      const cacheRead = getCacheReadTokens(usage);
       const total = promptTokens + cacheCreation + cacheRead;
       if (total > 0) return total;
     }
@@ -77,8 +79,8 @@ export function useUsageCounter() {
     const usage = lastMsg.usage;
     const lastTotal =
       (usage?.prompt_tokens ?? 0) +
-      (usage?.cache_creation_input_tokens ?? 0) +
-      (usage?.cache_read_input_tokens ?? 0);
+      getCacheCreationTokens(usage) +
+      getCacheReadTokens(usage);
     return lastTotal === 0 && currentSessionTokens > 0;
   }, [assistantMessages, currentSessionTokens]);
 

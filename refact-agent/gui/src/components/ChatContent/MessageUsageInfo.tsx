@@ -2,7 +2,11 @@ import React, { useMemo } from "react";
 import { Box, Card, Flex, Text, HoverCard } from "@radix-ui/themes";
 import { Usage } from "../../services/refact";
 import { formatNumberToFixed } from "../../utils/formatNumberToFixed";
-import { calculateUsageInputTokens } from "../../utils/calculateUsageInputTokens";
+import {
+  calculateUsageInputTokens,
+  getCacheCreationTokens,
+  getCacheReadTokens,
+} from "../../utils/calculateUsageInputTokens";
 import { formatUsd } from "../../utils/getMetering";
 
 type MessageUsageInfoProps = {
@@ -55,8 +59,8 @@ export const MessageUsageInfo: React.FC<MessageUsageInfoProps> = ({
     });
   }, [usage]);
 
-  const cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
-  const cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;
+  const cacheReadTokens = getCacheReadTokens(usage);
+  const cacheCreationTokens = getCacheCreationTokens(usage);
 
   const meteringUsd = usage?.metering_usd;
   const hasUsd = meteringUsd !== undefined && meteringUsd.total_usd > 0;

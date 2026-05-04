@@ -295,6 +295,33 @@ describe("mergeUsages", () => {
     expect(result?.cache_read_input_tokens).toBe(30);
   });
 
+  it("should merge legacy Anthropic cache token aliases", () => {
+    const usage1: Usage = {
+      completion_tokens: 30,
+      prompt_tokens: 100,
+      total_tokens: 130,
+      completion_tokens_details: null,
+      prompt_tokens_details: null,
+      cache_creation_tokens: 50,
+      cache_read_tokens: 20,
+    };
+
+    const usage2: Usage = {
+      completion_tokens: 20,
+      prompt_tokens: 80,
+      total_tokens: 100,
+      completion_tokens_details: null,
+      prompt_tokens_details: null,
+      cache_creation_input_tokens: 30,
+      cache_read_input_tokens: 10,
+    };
+
+    const result = mergeUsages([usage1, usage2]);
+
+    expect(result?.cache_creation_input_tokens).toBe(80);
+    expect(result?.cache_read_input_tokens).toBe(30);
+  });
+
   it("should handle complex merge scenario with multiple usage records", () => {
     const usage1: Usage = {
       completion_tokens: 30,

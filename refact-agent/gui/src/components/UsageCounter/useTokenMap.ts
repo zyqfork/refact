@@ -19,13 +19,17 @@ import type {
   TokenMapItem,
   Usage,
 } from "../../services/refact/chat";
+import {
+  getCacheCreationTokens,
+  getCacheReadTokens,
+} from "../../utils/calculateUsageInputTokens";
 
 function getTotalInputTokens(usage: Usage | null | undefined): number {
   if (!usage) return 0;
   return (
     usage.prompt_tokens +
-    (usage.cache_creation_input_tokens ?? 0) +
-    (usage.cache_read_input_tokens ?? 0)
+    getCacheCreationTokens(usage) +
+    getCacheReadTokens(usage)
   );
 }
 

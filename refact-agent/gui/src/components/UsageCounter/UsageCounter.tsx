@@ -10,7 +10,11 @@ import {
 import classNames from "classnames";
 import React, { useMemo, useState } from "react";
 
-import { calculateUsageInputTokens } from "../../utils/calculateUsageInputTokens";
+import {
+  calculateUsageInputTokens,
+  getCacheCreationTokens,
+  getCacheReadTokens,
+} from "../../utils/calculateUsageInputTokens";
 import { ScrollArea } from "../ScrollArea";
 import { useUsageCounter } from "./useUsageCounter";
 
@@ -402,7 +406,7 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
     if (typeof meteringValue === "number") {
       return meteringValue;
     }
-    return currentThreadUsage?.cache_read_input_tokens ?? 0;
+    return getCacheReadTokens(currentThreadUsage);
   }, [meteringTokens, currentThreadUsage]);
 
   const cacheCreationTokens = useMemo(() => {
@@ -410,7 +414,7 @@ export const UsageCounter: React.FC<UsageCounterProps> = ({
     if (typeof meteringValue === "number") {
       return meteringValue;
     }
-    return currentThreadUsage?.cache_creation_input_tokens ?? 0;
+    return getCacheCreationTokens(currentThreadUsage);
   }, [meteringTokens, currentThreadUsage]);
 
   const maxContextTokens = useAppSelector(selectEffectiveMaxContextTokens) ?? 0;

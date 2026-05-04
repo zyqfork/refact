@@ -28,11 +28,27 @@ export const calculateUsageInputTokens = ({
   usage?: Usage | null;
 }): number => {
   return keys.reduce((acc, key) => {
-    if (!(usage && key in usage)) return acc;
+    if (!usage) return acc;
+    if (key === "cache_creation_input_tokens") {
+      return acc + getCacheCreationTokens(usage);
+    }
+    if (key === "cache_read_input_tokens") {
+      return acc + getCacheReadTokens(usage);
+    }
     const value = usage[key];
     return acc + (typeof value === "number" ? value : 0);
   }, 0);
 };
+
+export function getCacheCreationTokens(usage?: Usage | null): number {
+  return (
+    usage?.cache_creation_input_tokens ?? usage?.cache_creation_tokens ?? 0
+  );
+}
+
+export function getCacheReadTokens(usage?: Usage | null): number {
+  return usage?.cache_read_input_tokens ?? usage?.cache_read_tokens ?? 0;
+}
 
 /**
  * Safely sums two numeric values, treating null or undefined values as zero
@@ -176,12 +192,12 @@ export function mergeUsages(
     // Merge cache-related metrics
     result.cache_creation_input_tokens = sumValues(
       result.cache_creation_input_tokens,
-      usage.cache_creation_input_tokens,
+      getCacheCreationTokens(usage),
     );
 
     result.cache_read_input_tokens = sumValues(
       result.cache_read_input_tokens,
-      usage.cache_read_input_tokens,
+      getCacheReadTokens(usage),
     );
   }
 

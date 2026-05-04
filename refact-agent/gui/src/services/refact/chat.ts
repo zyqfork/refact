@@ -93,6 +93,8 @@ export type Usage = {
   prompt_tokens_details?: PromptTokenDetails | null;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
   metering_usd?: MeteringUsd;
 };
 

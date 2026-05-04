@@ -9,7 +9,11 @@ import {
 import { Usage } from "../../services/refact";
 import { Checkpoint } from "../../features/Checkpoints/types";
 import { formatNumberToFixed } from "../../utils/formatNumberToFixed";
-import { calculateUsageInputTokens } from "../../utils/calculateUsageInputTokens";
+import {
+  calculateUsageInputTokens,
+  getCacheCreationTokens,
+  getCacheReadTokens,
+} from "../../utils/calculateUsageInputTokens";
 import { formatUsd } from "../../utils/getMetering";
 import { CheckpointButton } from "../../features/Checkpoints";
 import styles from "./MessageFooter.module.css";
@@ -86,8 +90,8 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       "cache_read_input_tokens",
     ],
   });
-  const cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
-  const cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;
+  const cacheReadTokens = getCacheReadTokens(usage);
+  const cacheCreationTokens = getCacheCreationTokens(usage);
   const hasUsageInfo = Boolean(usage && contextTokens > 0) || hasUsd;
 
   return (

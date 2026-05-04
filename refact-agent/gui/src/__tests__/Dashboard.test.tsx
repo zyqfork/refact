@@ -22,6 +22,7 @@ const CONFIG_STATE = {
   current_project: {
     name: "refact-test",
     workspaceRoots: ["/tmp/refact-test"],
+    workspaceSnapshotReceived: true,
   },
 };
 
@@ -57,6 +58,30 @@ describe("Dashboard progressive sidebar readiness", () => {
     expect(screen.queryByText(/No tasks yet/i)).not.toBeInTheDocument();
   });
 
+  it("opens an empty workspace after all sidebar snapshots arrive", async () => {
+    render(<Dashboard />, {
+      preloadedState: {
+        ...CONFIG_STATE,
+        history: {
+          chats: {},
+          isLoading: false,
+          loadError: null,
+          pagination: { cursor: null, hasMore: false },
+        },
+        current_project: {
+          name: "",
+          workspaceRoots: [],
+          workspaceSnapshotReceived: true,
+          trajectoriesSnapshotReceived: true,
+          tasksSnapshotReceived: true,
+        },
+      },
+    });
+
+    expect(screen.getByText(/No chats yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No tasks yet/i)).toBeInTheDocument();
+  });
+
   it("lets tasks become ready while chats are still loading", async () => {
     server.use(
       http.get("http://127.0.0.1:8001/v1/tasks", () =>
@@ -70,6 +95,7 @@ describe("Dashboard progressive sidebar readiness", () => {
         current_project: {
           name: "refact-test",
           workspaceRoots: ["/tmp/refact-test"],
+          workspaceSnapshotReceived: true,
           tasksSnapshotReceived: true,
           trajectoriesSnapshotReceived: false,
         },
