@@ -31,13 +31,46 @@ export type NotificationEvent =
       }[];
     };
 
+export type SidebarLoadingSection =
+  | "workspace"
+  | "trajectories"
+  | "tasks"
+  | "buddy";
+
+export type SidebarLoadingStatus = "started" | "ready" | "error";
+
+export type BuddySnapshotPayload = BuddySnapshot | { enabled: false } | null;
+
 export type SidebarEvent =
   | {
       category: "snapshot";
       trajectories: TrajectoryMeta[];
       tasks: TaskMeta[];
       workspace_roots?: string[];
-      buddy?: BuddySnapshot | { enabled: false } | null;
+      buddy?: BuddySnapshotPayload;
+    }
+  | {
+      category: "loading_phase";
+      section: SidebarLoadingSection;
+      status: SidebarLoadingStatus;
+      elapsed_ms?: number;
+      error?: string;
+    }
+  | {
+      category: "workspace_snapshot";
+      workspace_roots: string[];
+    }
+  | {
+      category: "trajectories_snapshot";
+      trajectories: TrajectoryMeta[];
+    }
+  | {
+      category: "tasks_snapshot";
+      tasks: TaskMeta[];
+    }
+  | {
+      category: "buddy_snapshot";
+      buddy: BuddySnapshotPayload;
     }
   | ({ category: "trajectory" } & TrajectoryEvent)
   | ({ category: "task" } & TaskEvent)
@@ -92,6 +125,16 @@ function isValidNotificationEvent(obj: Record<string, unknown>): boolean {
   return false;
 }
 
+function isValidLoadingPhase(obj: Record<string, unknown>): boolean {
+  if (typeof obj.section !== "string") return false;
+  if (typeof obj.status !== "string") return false;
+  if (obj.elapsed_ms !== undefined && typeof obj.elapsed_ms !== "number") {
+    return false;
+  }
+  if (obj.error !== undefined && typeof obj.error !== "string") return false;
+  return true;
+}
+
 function isValidSidebarEventEnvelope(
   data: unknown,
 ): data is SidebarEventEnvelope {
@@ -103,6 +146,16 @@ function isValidSidebarEventEnvelope(
   switch (obj.category) {
     case "snapshot":
       return isValidSnapshot(obj);
+    case "loading_phase":
+      return isValidLoadingPhase(obj);
+    case "workspace_snapshot":
+      return Array.isArray(obj.workspace_roots);
+    case "trajectories_snapshot":
+      return Array.isArray(obj.trajectories);
+    case "tasks_snapshot":
+      return Array.isArray(obj.tasks);
+    case "buddy_snapshot":
+      return "buddy" in obj;
     case "trajectory":
       return isValidTrajectoryEvent(obj);
     case "task":

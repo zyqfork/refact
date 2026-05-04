@@ -60,10 +60,12 @@ describe("Delete a Chat form history", () => {
             controller.enqueue(
               encoder.encode(
                 `data: ${JSON.stringify({
+                  seq: 0,
                   category: "snapshot",
                   trajectories: [trajectory],
                   tasks: [],
                   workspace_roots: ["/tmp/refact-test"],
+                  buddy: { enabled: false },
                 })}\n\n`,
               ),
             );

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useAppDispatch } from "./useAppDispatch";
 import { useConfig } from "./useConfig";
+import { usePostMessage } from "./usePostMessage";
 import {
   subscribeToSidebarEvents,
   SidebarEventEnvelope,
+  type BuddySnapshotPayload,
 } from "../services/refact/sidebarSubscription";
 import type { TrajectoryMeta } from "../services/refact/trajectories";
 import {
@@ -13,7 +15,6 @@ import {
   updateChatMetaById,
   setHistoryLoading,
   setHistoryLoadError,
-  setPagination,
 } from "../features/History/historySlice";
 import type { ChatHistoryItem } from "../features/History/historySlice";
 import {
@@ -21,8 +22,15 @@ import {
   closeThread,
   updateChatRuntimeFromSessionState,
 } from "../features/Chat/Thread";
-import { setCurrentProjectInfo } from "../features/Chat/currentProject";
-import { tasksApi } from "../services/refact/tasks";
+import {
+  markBuddySnapshotReceived,
+  markTasksSnapshotReceived,
+  markTrajectoriesSnapshotReceived,
+  markWorkspaceSnapshotReceived,
+  resetSidebarReadiness,
+  setCurrentProjectInfo,
+} from "../features/Chat/currentProject";
+import { tasksApi, type TaskMeta } from "../services/refact/tasks";
 import {
   setBuddySnapshot,
   setBuddyUnavailable,
@@ -48,6 +56,7 @@ import {
   chatThreadToTrajectoryData,
 } from "../services/refact/trajectories";
 import { useAppSelector } from "./useAppSelector";
+import { ideAskQuestions, ideTaskDone } from "./useEventBusForIDE";
 
 const RECONNECT_DELAY_MS = 500;
 const MIGRATION_KEY = "refact-trajectories-migrated";
@@ -108,9 +117,38 @@ function markMigrationDone() {
   localStorage.setItem(MIGRATION_KEY, "true");
 }
 
+function trajectoryItemsFromMeta(
+  trajectories: TrajectoryMeta[],
+): TrajectoryMeta[] {
+  return trajectories.map((t) => ({
+    id: t.id,
+    title: t.title,
+    created_at: t.created_at,
+    updated_at: t.updated_at,
+    model: t.model,
+    mode: t.mode,
+    message_count: t.message_count,
+    session_state: t.session_state,
+    parent_id: t.parent_id,
+    link_type: t.link_type,
+    root_chat_id: t.root_chat_id,
+    worktree: t.worktree,
+    total_lines_added: t.total_lines_added,
+    total_lines_removed: t.total_lines_removed,
+    tasks_total: t.tasks_total,
+    tasks_done: t.tasks_done,
+    tasks_failed: t.tasks_failed,
+    task_id: t.task_id,
+    task_role: t.task_role,
+    agent_id: t.agent_id,
+    card_id: t.card_id,
+  }));
+}
+
 export function useSidebarSubscription() {
   const dispatch = useAppDispatch();
   const config = useConfig();
+  const postMessage = usePostMessage();
   const historyChats = useAppSelector((state) => state.history.chats);
   const historyRef = useRef(historyChats);
   historyRef.current = historyChats;
@@ -118,7 +156,7 @@ export function useSidebarSubscription() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const initialLoadDoneRef = useRef(false);
+  const trajectoriesSnapshotDoneRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   const connectRef = useRef<() => void>(() => {});
 
@@ -274,13 +312,10 @@ export function useSidebarSubscription() {
     (event: SidebarEventEnvelope & { category: "task" }) => {
       switch (event.type) {
         case "snapshot":
-          dispatch(
-            tasksApi.util.updateQueryData(
-              "listTasks",
-              undefined,
-              () => event.tasks,
-            ),
+          void dispatch(
+            tasksApi.util.upsertQueryData("listTasks", undefined, event.tasks),
           );
+          dispatch(markTasksSnapshotReceived());
           break;
 
         case "task_created":
@@ -349,60 +384,93 @@ export function useSidebarSubscription() {
     [dispatch],
   );
 
+  const processWorkspaceSnapshot = useCallback(
+    (workspaceRoots: string[]) => {
+      dispatch(
+        setCurrentProjectInfo({
+          name: getWorkspaceDisplayName(workspaceRoots[0] ?? ""),
+          workspaceRoots,
+          workspaceSnapshotReceived: true,
+        }),
+      );
+      dispatch(markWorkspaceSnapshotReceived());
+    },
+    [dispatch],
+  );
+
+  const processTrajectoriesSnapshot = useCallback(
+    (trajectories: TrajectoryMeta[]) => {
+      dispatch(replaceSnapshotHistory(trajectoryItemsFromMeta(trajectories)));
+      dispatch(setHistoryLoadError(null));
+      dispatch(setHistoryLoading(false));
+      dispatch(markTrajectoriesSnapshotReceived());
+      trajectoriesSnapshotDoneRef.current = true;
+    },
+    [dispatch],
+  );
+
+  const processTasksSnapshot = useCallback(
+    (tasks: TaskMeta[]) => {
+      void dispatch(
+        tasksApi.util.upsertQueryData("listTasks", undefined, tasks),
+      );
+      dispatch(markTasksSnapshotReceived());
+    },
+    [dispatch],
+  );
+
+  const processBuddySnapshot = useCallback(
+    (buddy: BuddySnapshotPayload | undefined) => {
+      if (!buddy || !("state" in buddy)) {
+        dispatch(setBuddyUnavailable());
+      } else {
+        dispatch(setBuddySnapshot(buddy));
+      }
+      dispatch(markBuddySnapshotReceived());
+    },
+    [dispatch],
+  );
+
   const processSnapshot = useCallback(
     (event: SidebarEventEnvelope & { category: "snapshot" }) => {
       if (event.workspace_roots !== undefined) {
-        const workspaceRoots = event.workspace_roots;
-        dispatch(
-          setCurrentProjectInfo({
-            name: getWorkspaceDisplayName(workspaceRoots[0] ?? ""),
-            workspaceRoots,
+        processWorkspaceSnapshot(event.workspace_roots);
+      }
+      processTrajectoriesSnapshot(event.trajectories);
+      processTasksSnapshot(event.tasks);
+      processBuddySnapshot(event.buddy);
+    },
+    [
+      processBuddySnapshot,
+      processTasksSnapshot,
+      processTrajectoriesSnapshot,
+      processWorkspaceSnapshot,
+    ],
+  );
+
+  const processNotification = useCallback(
+    (event: SidebarEventEnvelope & { category: "notification" }) => {
+      if (event.type === "task_done") {
+        postMessage(
+          ideTaskDone({
+            chatId: event.chat_id,
+            toolCallId: event.tool_call_id,
+            summary: event.summary,
+            knowledgePath: event.knowledge_path,
           }),
         );
+        return;
       }
 
-      const trajectoryItems = event.trajectories.map((t: TrajectoryMeta) => ({
-        id: t.id,
-        title: t.title,
-        created_at: t.created_at,
-        updated_at: t.updated_at,
-        model: t.model,
-        mode: t.mode,
-        message_count: t.message_count,
-        session_state: t.session_state,
-        parent_id: t.parent_id,
-        link_type: t.link_type,
-        root_chat_id: t.root_chat_id,
-        worktree: t.worktree,
-        total_lines_added: t.total_lines_added,
-        total_lines_removed: t.total_lines_removed,
-        tasks_total: t.tasks_total,
-        tasks_done: t.tasks_done,
-        tasks_failed: t.tasks_failed,
-      }));
-
-      dispatch(replaceSnapshotHistory(trajectoryItems));
-      dispatch(setHistoryLoadError(null));
-      dispatch(setHistoryLoading(false));
-
-      dispatch(
-        tasksApi.util.updateQueryData(
-          "listTasks",
-          undefined,
-          () => event.tasks,
-        ),
+      postMessage(
+        ideAskQuestions({
+          chatId: event.chat_id,
+          toolCallId: event.tool_call_id,
+          questions: event.questions,
+        }),
       );
-
-      if (event.buddy) {
-        if ("state" in event.buddy) {
-          dispatch(setBuddySnapshot(event.buddy));
-        } else {
-          // Backend reports buddy as disabled or not yet initialised
-          dispatch(setBuddyUnavailable());
-        }
-      }
     },
-    [dispatch],
+    [postMessage],
   );
 
   const processBuddyEvent = useCallback(
@@ -504,30 +572,13 @@ export function useSidebarSubscription() {
     markMigrationDone();
   }, [dispatch]);
 
-  const loadInitialHistory = useCallback(async () => {
+  const prepareInitialHistory = useCallback(async () => {
     dispatch(setHistoryLoading(true));
     try {
       await migrateFromLocalStorage();
-
-      const result = await dispatch(
-        trajectoriesApi.endpoints.listTrajectoriesPaginated.initiate(
-          { limit: 50 },
-          { forceRefetch: true },
-        ),
-      ).unwrap();
-
-      dispatch(hydrateHistoryFromMeta(result.items));
-      dispatch(
-        setPagination({
-          cursor: result.next_cursor,
-          hasMore: result.has_more,
-        }),
-      );
-      dispatch(setHistoryLoading(false));
-      initialLoadDoneRef.current = true;
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Failed to load history";
+        err instanceof Error ? err.message : "Failed to migrate local history";
       dispatch(setHistoryLoadError(message));
     }
   }, [dispatch, migrateFromLocalStorage]);
@@ -563,23 +614,35 @@ export function useSidebarSubscription() {
         processSnapshot(
           envelope as SidebarEventEnvelope & { category: "snapshot" },
         );
+      } else if (envelope.category === "workspace_snapshot") {
+        processWorkspaceSnapshot(envelope.workspace_roots);
+      } else if (envelope.category === "trajectories_snapshot") {
+        processTrajectoriesSnapshot(envelope.trajectories);
+      } else if (envelope.category === "tasks_snapshot") {
+        processTasksSnapshot(envelope.tasks);
+      } else if (envelope.category === "buddy_snapshot") {
+        processBuddySnapshot(envelope.buddy);
       } else if (envelope.category === "trajectory") {
         processTrajectoryEvent(
           envelope as SidebarEventEnvelope & { category: "trajectory" },
+        );
+      } else if (envelope.category === "task") {
+        processTaskEvent(
+          envelope as SidebarEventEnvelope & { category: "task" },
+        );
+      } else if (envelope.category === "notification") {
+        processNotification(
+          envelope as SidebarEventEnvelope & { category: "notification" },
         );
       } else if (envelope.category === "buddy") {
         processBuddyEvent(
           envelope as SidebarEventEnvelope & { category: "buddy" },
         );
-      } else {
-        processTaskEvent(
-          envelope as SidebarEventEnvelope & { category: "task" },
-        );
       }
     };
 
     const onError = (error: Error) => {
-      if (!initialLoadDoneRef.current) {
+      if (!trajectoriesSnapshotDoneRef.current) {
         dispatch(setHistoryLoadError(error.message));
       }
       scheduleReconnect();
@@ -599,8 +662,13 @@ export function useSidebarSubscription() {
     config.lspPort,
     config.apiKey,
     processSnapshot,
+    processWorkspaceSnapshot,
+    processTrajectoriesSnapshot,
+    processTasksSnapshot,
+    processBuddySnapshot,
     processTrajectoryEvent,
     processTaskEvent,
+    processNotification,
     processBuddyEvent,
     scheduleReconnect,
   ]);
@@ -608,7 +676,10 @@ export function useSidebarSubscription() {
   connectRef.current = connect;
 
   useEffect(() => {
-    void loadInitialHistory();
+    trajectoriesSnapshotDoneRef.current = false;
+    dispatch(resetSidebarReadiness());
+    dispatch(setHistoryLoading(true));
+    void prepareInitialHistory();
     connect();
     return () => {
       if (disconnectRef.current) {
@@ -618,5 +689,5 @@ export function useSidebarSubscription() {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [connect, loadInitialHistory]);
+  }, [connect, dispatch, prepareInitialHistory]);
 }

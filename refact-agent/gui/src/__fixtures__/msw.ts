@@ -203,9 +203,12 @@ export const sidebarSubscribe: HttpHandler = http.get(
       start(controller) {
         // Send initial snapshot with empty data
         const snapshot = JSON.stringify({
+          seq: 0,
           category: "snapshot",
           trajectories: [],
           tasks: [],
+          workspace_roots: ["/tmp/refact-test"],
+          buddy: { enabled: false },
         });
         controller.enqueue(encoder.encode(`data: ${snapshot}\n\n`));
       },
