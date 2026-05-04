@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen, waitFor } from "../utils/test-utils";
 import { emptyTasks, server } from "../utils/mockServer";
 import { Dashboard } from "../features/Dashboard/Dashboard";
+import { updateConfig } from "../features/Config/configSlice";
 import type { TaskMeta } from "../services/refact/tasks";
 
 const CONFIG_STATE = {
@@ -80,6 +81,43 @@ describe("Dashboard progressive sidebar readiness", () => {
 
     expect(screen.getByText(/No chats yet/i)).toBeInTheDocument();
     expect(await screen.findByText(/No tasks yet/i)).toBeInTheDocument();
+  });
+
+  it("keeps sidebar readiness after duplicate config with unchanged lsp port", async () => {
+    const { store } = render(<Dashboard />, {
+      preloadedState: {
+        ...CONFIG_STATE,
+        history: {
+          chats: {},
+          isLoading: false,
+          loadError: null,
+          pagination: { cursor: null, hasMore: false },
+        },
+        current_project: {
+          name: "refact-test",
+          workspaceRoots: ["/tmp/refact-test"],
+          workspaceSnapshotReceived: true,
+          trajectoriesSnapshotReceived: true,
+          tasksSnapshotReceived: true,
+          buddySnapshotReceived: true,
+        },
+      },
+    });
+
+    expect(screen.getByText(/No chats yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No tasks yet/i)).toBeInTheDocument();
+
+    store.dispatch(updateConfig({ lspPort: 8001 }));
+
+    expect(store.getState().current_project).toMatchObject({
+      workspaceSnapshotReceived: true,
+      trajectoriesSnapshotReceived: true,
+      tasksSnapshotReceived: true,
+      buddySnapshotReceived: true,
+    });
+    expect(screen.queryByText("Loading")).not.toBeInTheDocument();
+    expect(screen.getByText(/No chats yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No tasks yet/i)).toBeInTheDocument();
   });
 
   it("lets tasks become ready while chats are still loading", async () => {

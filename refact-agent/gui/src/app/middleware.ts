@@ -428,12 +428,20 @@ startListening({
   actionCreator: updateConfig,
   effect: (action, listenerApi) => {
     listenerApi.dispatch(pingApi.util.resetApiState());
-    if (action.payload.lspPort !== undefined) {
+    const previousConfig = listenerApi.getOriginalState().config;
+    const nextPort = action.payload.lspPort;
+    const nextWorkspaceName = action.payload.currentWorkspaceName;
+    const portChanged =
+      nextPort !== undefined && nextPort !== previousConfig.lspPort;
+    const workspaceChanged =
+      nextWorkspaceName !== undefined &&
+      nextWorkspaceName !== previousConfig.currentWorkspaceName;
+
+    if (portChanged) {
       listenerApi.dispatch(providersApi.util.resetApiState());
       listenerApi.dispatch(modelsApi.util.resetApiState());
-      listenerApi.dispatch(resetSidebarReadiness());
     }
-    if (action.payload.currentWorkspaceName !== undefined) {
+    if (portChanged || workspaceChanged) {
       listenerApi.dispatch(resetSidebarReadiness());
     }
   },
