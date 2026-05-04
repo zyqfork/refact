@@ -182,12 +182,6 @@ pub fn remove_anthropic_unsupported_fields(body: &mut Value, settings: &AdapterS
         return;
     }
 
-    if !settings.supports_cache_control {
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("cache_control");
-        }
-        remove_key_recursively(body, "cache_control");
-    }
     if !settings.supports_tools {
         if let Some(obj) = body.as_object_mut() {
             obj.remove("tools");

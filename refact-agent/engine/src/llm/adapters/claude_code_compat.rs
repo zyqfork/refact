@@ -1,29 +1,15 @@
-//! Claude Code OAuth compatibility layer.
-//! When users authenticate via Claude Code OAuth, the API requires specific
-//! headers, user-agent, system prompt prefix, tool name prefixing, billing
-//! fingerprint injection, and Stainless SDK identity headers.
-
 use lazy_static::lazy_static;
 use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-// ─── Version / Identity ──────────────────────────────────────────────────────
 
 pub const CC_VERSION: &str = "2.1.126";
 pub const USER_AGENT: &str = "claude-cli/2.1.126 (external, cli)";
 pub const SYSTEM_PREFIX: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
-/// Prefix applied to Refact tool names in CC OAuth mode.
-/// NOTE: "mcp_" is explicitly blacklisted by Anthropic's billing detection —
-/// even a single tool named "mcp_*" triggers "extra usage" regardless of
-/// all other spoofing layers. Use a neutral prefix instead.
 pub const MCP_TOOL_PREFIX: &str = "t_";
 
-// ─── Beta Flags ──────────────────────────────────────────────────────────────
-
-/// All beta flags required for a Claude Code OAuth session.
-/// Injected into `anthropic-beta` on every CC request.
 pub const CC_OAUTH_BETAS: &[&str] = &[
     "oauth-2025-04-20",
     "claude-code-20250219",
@@ -34,14 +20,11 @@ pub const CC_OAUTH_BETAS: &[&str] = &[
     "fast-mode-2026-02-01",
 ];
 
-// ─── Billing Fingerprint ─────────────────────────────────────────────────────
-
 /// Matches real CC's computeFingerprint() in utils/fingerprint.ts:
 ///   SHA256(SALT + msg[4] + msg[7] + msg[20] + CC_VERSION)[:3 hex chars]
 const BILLING_HASH_SALT: &str = "59cf53e54c78";
 const BILLING_HASH_INDICES: [usize; 3] = [4, 7, 20];
 
-// ─── Per-process Stable Identifiers ─────────────────────────────────────────
 
 lazy_static! {
     /// Stable per-process device identifier (hex-encoded 32 random bytes).
@@ -59,13 +42,9 @@ lazy_static! {
 }
 
 
-// ─── Auth Detection ──────────────────────────────────────────────────────────
-
 pub fn is_claude_code_oauth(auth_token: &str) -> bool {
     !auth_token.is_empty()
 }
-
-// ─── Header Builders ─────────────────────────────────────────────────────────
 
 /// Apply `Authorization: Bearer` + `user-agent` for CC OAuth requests.
 pub fn apply_oauth_headers(headers: &mut HeaderMap, auth_token: &str) -> Result<(), String> {
@@ -173,8 +152,6 @@ pub const CC_TOOL_RENAMES: &[(&str, &str)] = &[
     ("deactivate_skill", "unload_skill"),
 ];
 
-/// Rename a Refact base tool name to its CC-mode equivalent.
-/// Returns the renamed value if found in CC_TOOL_RENAMES, otherwise returns the input.
 pub fn cc_rename_base_tool(base_name: &str) -> &str {
     for (original, renamed) in CC_TOOL_RENAMES {
         if *original == base_name {
@@ -184,21 +161,6 @@ pub fn cc_rename_base_tool(base_name: &str) -> &str {
     base_name
 }
 
-/// Reverse-map a CC-mode tool name back to the original Refact tool name for dispatch.
-///
-/// Two input shapes:
-///   - `t_`-prefixed (Refact builtin renamed for CC): strip prefix + reverse CC_TOOL_RENAMES
-///   - Bare name (real MCP tool whose `mcp_` was stripped): re-add `mcp_` prefix
-///
-/// Examples:
-///   "t_plan"                → "strategic_planning"
-///   "t_patch_re"            → "update_textdoc_regex"
-///   "t_cat"                 → "cat"   (no rename entry, just strip t_ prefix)
-///   "tool_search"           → "mcp_tool_search"  (real MCP proxy, re-add mcp_)
-///   "github_create_issue"   → "mcp_github_create_issue"  (re-add mcp_)
-///
-/// The caller in `execute_single_tool` / `instantiate_tool_for_call` tries the resolved
-/// name first, then also tries `mcp_` + name as a fallback for real MCP tools.
 pub fn cc_resolve_tool_name(name: &str) -> String {
     if name.starts_with(MCP_TOOL_PREFIX) {
         let base = &name[MCP_TOOL_PREFIX.len()..];
@@ -216,12 +178,6 @@ pub fn cc_resolve_tool_name(name: &str) -> String {
     format!("mcp_{}", name)
 }
 
-/// String replacements applied to system prompt text in CC mode.
-/// Starts with brand/mode-tag sanitization, then applies CC_TOOL_RENAMES so that
-/// every Refact-specific function name in the prompt text is replaced with its
-/// CC-mode equivalent (keeping phrasing intact but removing the fingerprint).
-///
-/// ORDER matters: more specific patterns must precede any prefix they share.
 const CC_SYSTEM_REPLACEMENTS: &[(&str, &str)] = &[
     // Strip mode-tag prefixes injected by Refact ("[mode3] ", "[mode1] ", etc.)
     ("[mode1] ", ""),
@@ -300,10 +256,6 @@ const CC_SYSTEM_REPLACEMENTS: &[(&str, &str)] = &[
     ("mcp_", ""),
 ];
 
-/// Sanitize a single text block for CC mode.
-/// Exposed as `pub` so the Anthropic adapter can apply the same replacements
-/// to context-file message content (AGENTS.md, workspace info, etc.) which
-/// otherwise bypasses system-prompt sanitization.
 pub fn sanitize_system_text(text: &str) -> String {
     let mut out = text.to_string();
     for (find, replace) in CC_SYSTEM_REPLACEMENTS {
@@ -312,8 +264,6 @@ pub fn sanitize_system_text(text: &str) -> String {
     out
 }
 
-/// Sanitize all text blocks inside a system Value (string or array of content blocks)
-/// to remove Refact-specific identifiers before the CC prefix is prepended.
 pub fn sanitize_system_for_cc(system: Value) -> Value {
     match system {
         Value::String(text) => json!(sanitize_system_text(&text)),
@@ -575,37 +525,6 @@ pub fn inject_metadata(body: &mut Value) {
     body["metadata"] = json!({"user_id": meta_value});
 }
 
-// ─── CC Tool Stub Injection ───────────────────────────────────────────────────
-
-/// Strip all `description` fields from tools and their nested schemas.
-/// Mirrors proxy Layer 5 — removing descriptions eliminates the strongest per-tool
-/// fingerprint signal while keeping names and input schemas intact.
-pub fn strip_tool_descriptions(tools: &mut Value) {
-    fn strip_recursive(val: &mut Value) {
-        match val {
-            Value::Object(map) => {
-                map.remove("description");
-                for v in map.values_mut() {
-                    strip_recursive(v);
-                }
-            }
-            Value::Array(arr) => {
-                for v in arr {
-                    strip_recursive(v);
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(arr) = tools.as_array_mut() {
-        for tool in arr {
-            strip_recursive(tool);
-        }
-    }
-}
-
-
-// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -897,45 +816,6 @@ mod tests {
         let out = sanitize_system_for_cc(sys);
         // Non-text blocks should pass through unchanged
         assert_eq!(out[0]["type"], "image");
-    }
-
-    #[test]
-    fn test_strip_tool_descriptions_removes_all_levels() {
-        let mut tools = json!([
-            {
-                "name": "t_cat",
-                "description": "Like cat in console, but better",
-                "input_schema": {
-                    "type": "object",
-                    "description": "schema-level desc",
-                    "properties": {
-                        "paths": {
-                            "type": "string",
-                            "description": "Comma separated file names"
-                        }
-                    }
-                }
-            }
-        ]);
-        strip_tool_descriptions(&mut tools);
-        let tool = &tools[0];
-        assert!(tool.get("description").is_none());
-        assert!(tool["input_schema"].get("description").is_none());
-        assert!(tool["input_schema"]["properties"]["paths"]
-            .get("description")
-            .is_none());
-        // name and schema structure preserved
-        assert_eq!(tool["name"], "t_cat");
-        assert_eq!(
-            tool["input_schema"]["properties"]["paths"]["type"],
-            "string"
-        );
-    }
-
-    fn test_cc_oauth_betas_contains_required() {
-        assert!(CC_OAUTH_BETAS.contains(&"oauth-2025-04-20"));
-        assert!(CC_OAUTH_BETAS.contains(&"claude-code-20250219"));
-        assert!(CC_OAUTH_BETAS.contains(&"interleaved-thinking-2025-05-14"));
     }
 
     #[test]

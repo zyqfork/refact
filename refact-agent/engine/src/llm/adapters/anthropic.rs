@@ -7,7 +7,6 @@ use crate::llm::adapter::{
     insert_extra_headers,
 };
 use crate::llm::canonical::{CanonicalToolChoice, LlmRequest, LlmStreamDelta};
-use crate::llm::params::CacheControl;
 use super::claude_code_compat;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -110,9 +109,7 @@ impl LlmWireAdapter for AnthropicAdapter {
                     let mut converted_tools = convert_tools_to_anthropic(tools);
                     if is_cc {
                         claude_code_compat::apply_cc_tool_names(&mut converted_tools);
-                        claude_code_compat::strip_tool_descriptions(&mut converted_tools);
                     }
-                    // Add Anthropic's server-side web_search tool if enabled
                     if settings.supports_web_search {
                         if let Some(arr) = converted_tools.as_array_mut() {
                             arr.push(json!({
@@ -155,9 +152,8 @@ impl LlmWireAdapter for AnthropicAdapter {
             }
         }
 
-        if matches!(req.cache_control, CacheControl::Ephemeral) && settings.supports_cache_control {
-            body["cache_control"] = json!({"type": "ephemeral", "ttl": "1h"});
-        }
+        // anthropic always supports caching
+        body["cache_control"] = json!({"type": "ephemeral", "ttl": "1h"});
 
         if settings.supports_reasoning {
             if is_effort_mode {
