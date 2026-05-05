@@ -127,15 +127,54 @@ pub const CC_TOOL_RENAMES: &[(&str, &str)] = &[
     ("update_textdoc", "patch"),
     ("create_textdoc", "write"),
     ("undo_textdoc", "undo"),
+    ("apply_patch", "apply"),
+    // Codebase search / navigation
+    ("add_workspace_folder", "add_workspace"),
+    ("search_symbol_definition", "symbol_def"),
+    ("search_semantic", "semantic_search"),
+    ("search_pattern", "regex_search"),
     // Orchestration
     ("strategic_planning", "plan"),
     ("deep_research", "research"),
     ("code_review", "review"),
     ("subagent", "delegate"),
-    // Task management
+    // General task management
     ("tasks_set", "set_tasks"),
     ("task_done", "finish"),
     ("ask_questions", "ask"),
+    // Planner / task-agent workflow
+    ("task_agent_finish", "agent_finish"),
+    ("task_memory_save", "task_mem_save"),
+    ("task_memories_get", "task_mem_get"),
+    ("task_wait_for_agents", "wait_agents"),
+    ("task_spawn_agent", "spawn_agent"),
+    ("task_check_agents", "check_agents"),
+    ("task_merge_agent", "merge_agent"),
+    ("task_ready_cards", "ready_cards"),
+    ("task_board_create_card", "board_create"),
+    ("task_board_update_card", "board_update"),
+    ("task_board_delete_card", "board_delete"),
+    ("task_board_move_card", "board_move"),
+    ("task_board_get", "board_get"),
+    ("task_mark_card_done", "mark_done"),
+    ("task_mark_card_failed", "mark_failed"),
+    ("task_assign_agent", "assign_agent"),
+    ("task_agent_update", "agent_update"),
+    ("task_agent_complete", "agent_complete"),
+    ("task_agent_fail", "agent_fail"),
+    ("task_init", "task_start"),
+    // Buddy tools
+    ("buddy_render_controls", "render_controls"),
+    ("buddy_get_internal_context", "get_context"),
+    ("buddy_open_setup_flow", "open_setup_flow"),
+    ("buddy_launch_investigation", "launch_investigation"),
+    ("buddy_create_issue", "create_issue"),
+    ("buddy_create_draft", "create_draft"),
+    ("buddy_get_logs", "get_logs"),
+    ("buddy_open_view", "open_view"),
+    ("buddy_say", "say"),
+    // Worktree / project operations
+    ("worktree_merge", "merge_worktree"),
     // Context / compression
     ("compress_chat_probe", "ctx_probe"),
     ("compress_chat_apply", "ctx_apply"),
@@ -175,6 +214,14 @@ pub fn cc_resolve_tool_name(name: &str) -> String {
     format!("mcp_{}", name)
 }
 
+pub fn cc_normalize_internal_tool_name(name: &str) -> String {
+    if name.starts_with(MCP_TOOL_PREFIX) {
+        cc_resolve_tool_name(name)
+    } else {
+        name.to_string()
+    }
+}
+
 const CC_SYSTEM_REPLACEMENTS: &[(&str, &str)] = &[
     // Strip mode-tag prefixes injected by Refact ("[mode3] ", "[mode1] ", etc.)
     ("[mode1] ", ""),
@@ -183,6 +230,9 @@ const CC_SYSTEM_REPLACEMENTS: &[(&str, &str)] = &[
     ("[mode4] ", ""),
     ("[mode5] ", ""),
     ("[mode6] ", ""),
+    ("[mode3planner] ", ""),
+    ("[mode3config] ", ""),
+    ("[setup] ", ""),
     // Replace platform identity with Claude Code identity
     ("You are Refact Agent, an orchestrating software engineer", "You are Claude Code, an AI coding assistant"),
     ("You are Refact Quick Agent", "You are Claude Code"),
@@ -256,6 +306,9 @@ const CC_SYSTEM_REPLACEMENTS: &[(&str, &str)] = &[
 pub fn sanitize_system_text(text: &str) -> String {
     let mut out = text.to_string();
     for (find, replace) in CC_SYSTEM_REPLACEMENTS {
+        out = out.replace(find, replace);
+    }
+    for (find, replace) in CC_TOOL_RENAMES {
         out = out.replace(find, replace);
     }
     out
@@ -759,6 +812,20 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_system_strips_extended_mode_tags_and_renames_task_tools() {
+        let sys = json!("[mode3planner] Use task_agent_finish(), task_wait_for_agents(), and buddy_say().");
+        let out = sanitize_system_for_cc(sys);
+        let text = out.as_str().unwrap();
+        assert!(!text.contains("[mode3planner]"));
+        assert!(!text.contains("task_agent_finish"));
+        assert!(!text.contains("task_wait_for_agents"));
+        assert!(!text.contains("buddy_say"));
+        assert!(text.contains("agent_finish"));
+        assert!(text.contains("wait_agents"));
+        assert!(text.contains("say"));
+    }
+
+    #[test]
     fn test_sanitize_system_handles_array_blocks() {
         let sys = json!([
             {"type": "text", "text": "[mode3] You are Refact Quick Agent. Execute tasks."},
@@ -818,9 +885,26 @@ mod tests {
             "update_textdoc_anchored"
         );
         assert_eq!(cc_resolve_tool_name("t_undo"), "undo_textdoc");
+        assert_eq!(cc_resolve_tool_name("t_apply"), "apply_patch");
         assert_eq!(cc_resolve_tool_name("t_finish"), "task_done");
         assert_eq!(cc_resolve_tool_name("t_ask"), "ask_questions");
         assert_eq!(cc_resolve_tool_name("t_set_tasks"), "tasks_set");
+        assert_eq!(cc_resolve_tool_name("t_agent_finish"), "task_agent_finish");
+        assert_eq!(cc_resolve_tool_name("t_task_mem_save"), "task_memory_save");
+        assert_eq!(cc_resolve_tool_name("t_task_mem_get"), "task_memories_get");
+        assert_eq!(cc_resolve_tool_name("t_wait_agents"), "task_wait_for_agents");
+        assert_eq!(cc_resolve_tool_name("t_spawn_agent"), "task_spawn_agent");
+        assert_eq!(cc_resolve_tool_name("t_check_agents"), "task_check_agents");
+        assert_eq!(cc_resolve_tool_name("t_merge_agent"), "task_merge_agent");
+        assert_eq!(cc_resolve_tool_name("t_board_create"), "task_board_create_card");
+        assert_eq!(cc_resolve_tool_name("t_board_update"), "task_board_update_card");
+        assert_eq!(cc_resolve_tool_name("t_board_delete"), "task_board_delete_card");
+        assert_eq!(cc_resolve_tool_name("t_board_move"), "task_board_move_card");
+        assert_eq!(cc_resolve_tool_name("t_board_get"), "task_board_get");
+        assert_eq!(cc_resolve_tool_name("t_mark_done"), "task_mark_card_done");
+        assert_eq!(cc_resolve_tool_name("t_mark_failed"), "task_mark_card_failed");
+        assert_eq!(cc_resolve_tool_name("t_say"), "buddy_say");
+        assert_eq!(cc_resolve_tool_name("t_merge_worktree"), "worktree_merge");
         assert_eq!(cc_resolve_tool_name("t_review"), "code_review");
         assert_eq!(cc_resolve_tool_name("t_research"), "deep_research");
         assert_eq!(cc_resolve_tool_name("t_save_knowledge"), "create_knowledge");

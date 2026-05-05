@@ -1659,7 +1659,10 @@ async fn handle_tool_decisions(
         // normal operation to stop further LLM generation.
         let mut final_state = SessionState::Idle;
         for tool_call in &tool_calls_to_execute {
-            match tool_call.function.name.as_str() {
+            let tool_name = crate::llm::adapters::claude_code_compat::cc_normalize_internal_tool_name(
+                &tool_call.function.name,
+            );
+            match tool_name.as_str() {
                 "ask_questions" | "task_wait_for_agents" => {
                     final_state = SessionState::WaitingUserInput
                 }

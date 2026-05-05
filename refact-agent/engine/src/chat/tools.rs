@@ -1086,7 +1086,10 @@ pub async fn process_tool_calls_once(
             .iter()
             .any(|r| r.tool_call_id == tool_call.id && r.tool_failed == Some(true));
         if !failed {
-            match tool_call.function.name.as_str() {
+            let tool_name = crate::llm::adapters::claude_code_compat::cc_normalize_internal_tool_name(
+                &tool_call.function.name,
+            );
+            match tool_name.as_str() {
                 "ask_questions" | "task_wait_for_agents" => {
                     final_state = SessionState::WaitingUserInput
                 }
