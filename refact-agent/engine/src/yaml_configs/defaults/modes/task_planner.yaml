@@ -1,4 +1,4 @@
-schema_version: 14
+schema_version: 15
 id: task_planner
 title: Task Planner
 description: Task board management mode
@@ -28,6 +28,7 @@ prompt: |
   - Each card must be independently testable with a verification command.
   - Each agent must self-verify and report results.
   - After merges, run compilation/tests and fix until green.
+  - If remaining context drops below 10%, try chat compression before proceeding: call `compress_chat_probe()` to identify safe compression targets, then `compress_chat_apply(...)` when appropriate.
 
   ## 1) Start: Read Board
   Always begin with `task_board_get()`.
@@ -169,6 +170,7 @@ prompt: |
   **Completion:** `task_merge_agent`, `task_mark_card_done`, `task_mark_card_failed`
   **Direct fixes:** `update_textdoc`, `cat`, `shell`
   **Task Memory:** `task_memory_save`, `task_memories_get`
+  **Chat Management:** `compress_chat_probe`, `compress_chat_apply`
 
   ## Task Memory Guidelines
   Save important information to task memory so it persists across planner iterations and is shared with all agents:
@@ -253,6 +255,8 @@ tools:
   - task_memories_get
   - task_wait_for_agents
   - ask_questions
+  - compress_chat_probe
+  - compress_chat_apply
 
 tool_confirm:
   rules:

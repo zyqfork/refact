@@ -80,6 +80,9 @@ fn maybe_inject_token_budget_instruction(
     effective_n_ctx: usize,
     cadence: usize,
 ) -> bool {
+    let used_tokens = approx_token_count(&session.messages);
+    let remaining = effective_n_ctx.saturating_sub(used_tokens);
+    let below_ten_percent_left = remaining.saturating_mul(10) < effective_n_ctx;
     let last_has_tool_calls = session
         .messages
         .last()
@@ -92,7 +95,7 @@ fn maybe_inject_token_budget_instruction(
                     .unwrap_or(false)
         })
         .unwrap_or(false);
-    if last_has_tool_calls {
+    if last_has_tool_calls && !below_ten_percent_left {
         return false;
     }
 
@@ -131,8 +134,6 @@ fn maybe_inject_token_budget_instruction(
         return false;
     }
 
-    let used_tokens = approx_token_count(&session.messages);
-    let remaining = effective_n_ctx.saturating_sub(used_tokens);
     let pct_used = if effective_n_ctx > 0 {
         used_tokens.saturating_mul(100) / effective_n_ctx
     } else {
@@ -1823,12 +1824,63 @@ mod tests {
         }
     }
 
+    fn make_long_user_msg(token_estimate: usize) -> ChatMessage {
+        ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::SimpleText("x".repeat(token_estimate.saturating_mul(4))),
+            ..Default::default()
+        }
+    }
+
     fn make_context_file_msg() -> ChatMessage {
         ChatMessage {
             role: "context_file".to_string(),
             content: ChatContent::SimpleText("file content".to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_token_budget_skips_after_tool_call_when_not_low() {
+        let mut session = ChatSession::new("test".to_string());
+        for idx in 0..TOKEN_BUDGET_CADENCE {
+            session.messages.push(make_user_msg(&format!("user {idx}")));
+        }
+        session
+            .messages
+            .push(make_assistant_with_tool_call("call_123", "cat"));
+
+        assert!(!maybe_inject_token_budget_instruction(
+            &mut session,
+            10_000,
+            TOKEN_BUDGET_CADENCE,
+        ));
+        assert!(!session
+            .messages
+            .iter()
+            .any(|msg| msg.role == "cd_instruction" && msg.tool_call_id == TOKEN_BUDGET_MARKER));
+    }
+
+    #[test]
+    fn test_token_budget_injects_after_tool_call_when_below_ten_percent_left() {
+        let mut session = ChatSession::new("test".to_string());
+        session.messages.push(make_long_user_msg(920));
+        for idx in 0..TOKEN_BUDGET_CADENCE {
+            session.messages.push(make_user_msg(&format!("user {idx}")));
+        }
+        session
+            .messages
+            .push(make_assistant_with_tool_call("call_123", "cat"));
+
+        assert!(maybe_inject_token_budget_instruction(
+            &mut session,
+            1_000,
+            TOKEN_BUDGET_CADENCE,
+        ));
+        assert!(session
+            .messages
+            .iter()
+            .any(|msg| msg.role == "cd_instruction" && msg.tool_call_id == TOKEN_BUDGET_MARKER));
     }
 
     #[test]

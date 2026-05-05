@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 id: subagent
 title: Subagent
 description: General-purpose focused subagent for delegated tasks
@@ -47,6 +47,7 @@ messages:
     - Be thorough but efficient - you have a limited step budget
     - Report progress and findings clearly
     - When you achieve the expected result, summarize what you found/did
+    - If remaining context drops below 10%, try chat compression before proceeding: call `compress_chat_probe()` to identify safe compression targets, then `compress_chat_apply(...)` when appropriate.
     - If you cannot complete the task, explain why and what you tried
 
     Do NOT:
@@ -63,3 +64,5 @@ tools:
   - knowledge
   - web
   - web_search
+  - compress_chat_probe
+  - compress_chat_apply
