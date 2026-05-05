@@ -15,6 +15,7 @@ use crate::llm::{LlmRequest, LlmStreamDelta, WireFormat, get_adapter, safe_trunc
 use crate::llm::adapter::{AdapterSettings, HttpParts, StreamParseError};
 
 use super::types::{DeltaOp, stream_heartbeat, stream_idle_timeout, stream_total_timeout};
+use super::retry_policy::{classify_llm_error_for_retry, RetryDecision};
 use super::openai_merge::ToolCallAccumulator;
 
 fn merge_usage(existing: Option<ChatUsage>, incoming: ChatUsage) -> ChatUsage {
@@ -93,6 +94,7 @@ async fn send_llm_http_request(
         WireFormat::OllamaNative => "application/x-ndjson",
         _ => "text/event-stream",
     };
+
     client
         .post(&http_parts.url)
         .headers(http_parts.headers.clone())
@@ -101,6 +103,16 @@ async fn send_llm_http_request(
         .send()
         .await
         .map_err(|e| format!("LLM request failed: {}", e))
+}
+
+fn should_commit_cache_guard_after_http_success(status: reqwest::StatusCode, text: &str) -> bool {
+    if status.is_success() {
+        return true;
+    }
+    !matches!(
+        classify_llm_error_for_retry(&format_llm_error_body(&format!("{}", status), text)),
+        RetryDecision::Retry { .. }
+    )
 }
 
 fn openai_codex_instance_id(model_rec: &BaseModelRecord) -> Option<&str> {
@@ -1132,6 +1144,14 @@ pub async fn run_llm_stream<C: StreamCollector>(
 
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
+        if should_commit_cache_guard_after_http_success(status, &text) {
+            commit_cache_guard_snapshot_if_needed(
+                gcx.clone(),
+                params.chat_id.as_ref(),
+                sanitized_for_commit,
+            )
+            .await;
+        }
         return Err(format_llm_error_body(&format!("{}", status), &text));
     }
 
@@ -1403,6 +1423,30 @@ mod tests {
         assert_eq!(message["type"], json!("response.create"));
         assert_eq!(message["model"], json!("gpt-5.6-codex"));
         assert_eq!(message["stream"], json!(true));
+    }
+
+    #[test]
+    fn cache_guard_is_not_committed_for_retryable_http_errors() {
+        assert!(!should_commit_cache_guard_after_http_success(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"message":"rate limit"}}"#,
+        ));
+        assert!(!should_commit_cache_guard_after_http_success(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":{"message":"overloaded"}}"#,
+        ));
+    }
+
+    #[test]
+    fn cache_guard_is_committed_for_non_retryable_http_errors() {
+        assert!(should_commit_cache_guard_after_http_success(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":{"message":"context length exceeded"}}"#,
+        ));
+        assert!(should_commit_cache_guard_after_http_success(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"error":{"message":"invalid api key"}}"#,
+        ));
     }
 
     #[test]

@@ -39,41 +39,6 @@ use crate::chat::trajectory_ops::approx_token_count;
 const TOKEN_BUDGET_CADENCE: usize = 6;
 const TOKEN_BUDGET_MARKER: &str = "token_budget_info";
 const MCP_LAZY_INDEX_MARKER: &str = "mcp_lazy_index";
-const NETWORK_RETRY_DELAYS_SECS: [u64; 5] = [5, 15, 45, 120, 300];
-
-fn is_retryable_network_error(error: &str) -> bool {
-    let lower = error.to_lowercase();
-    let looks_internal = lower.contains("context")
-        || lower.contains("token")
-        || lower.contains("history")
-        || lower.contains("invalid request")
-        || lower.contains("bad request")
-        || lower.contains("400")
-        || lower.contains("401")
-        || lower.contains("403")
-        || lower.contains("404")
-        || lower.contains("internal engine")
-        || lower.contains("panic")
-        || lower.contains("serialize")
-        || lower.contains("deserialize");
-    if looks_internal {
-        return false;
-    }
-
-    lower.contains("network")
-        || lower.contains("timeout")
-        || lower.contains("timed out")
-        || lower.contains("connection")
-        || lower.contains("connect")
-        || lower.contains("dns")
-        || lower.contains("eof")
-        || lower.contains("temporarily unavailable")
-        || lower.contains("rate limit")
-        || lower.contains("429")
-        || lower.contains("502")
-        || lower.contains("503")
-        || lower.contains("504")
-}
 
 fn maybe_inject_token_budget_instruction(
     session: &mut ChatSession,
@@ -665,9 +630,12 @@ pub fn start_generation(
             .await;
 
             if let Err(e) = generation_result {
-                let should_retry_network = is_retryable_network_error(&e)
-                    && network_retry_attempt < NETWORK_RETRY_DELAYS_SECS.len()
-                    && !abort_flag.load(Ordering::SeqCst);
+                let retry_decision = super::retry_policy::classify_llm_error_for_retry(&e);
+                let should_retry_network = super::retry_policy::should_retry_llm_error(
+                    &e,
+                    network_retry_attempt,
+                    &abort_flag,
+                );
                 let task_meta_opt = {
                     let mut session = session_arc.lock().await;
                     if !session.abort_flag.load(Ordering::SeqCst) {
@@ -729,15 +697,22 @@ pub fn start_generation(
                     }
                 }
                 if should_retry_network {
-                    let delay_secs = NETWORK_RETRY_DELAYS_SECS[network_retry_attempt];
+                    let delay = super::retry_policy::retry_delay_for_attempt(network_retry_attempt);
                     network_retry_attempt += 1;
+                    let retry_reason = match retry_decision {
+                        super::retry_policy::RetryDecision::Retry { reason } => reason,
+                        super::retry_policy::RetryDecision::DoNotRetry { reason } => reason,
+                    };
                     warn!(
-                        "Retrying chat generation after retryable network error in {}s (attempt {}/{})",
-                        delay_secs,
+                        "Retrying chat generation after retryable LLM error in {}s (attempt {}/{}, reason={})",
+                        delay.as_secs(),
                         network_retry_attempt,
-                        NETWORK_RETRY_DELAYS_SECS.len()
+                        super::retry_policy::MAX_LLM_RETRY_ATTEMPTS,
+                        retry_reason,
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                    if super::retry_policy::sleep_or_abort(delay, abort_flag.clone()).await {
+                        break;
+                    }
                     continue;
                 }
                 break;
