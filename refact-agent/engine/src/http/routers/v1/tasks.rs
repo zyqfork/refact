@@ -13,6 +13,7 @@ use chrono::Utc;
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
 use crate::tasks::types::{TaskMeta, TaskBoard, BoardCard, StatusUpdate, TaskStatus, TrajectoryInfo};
+use crate::chat::trajectories::TrajectoryEvent;
 use crate::tasks::events::{TaskEvent, TaskEventEnvelope};
 use crate::tasks::storage;
 
@@ -535,19 +536,140 @@ pub async fn handle_create_planner_chat(
     Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let _ = storage::load_task_meta(gcx.clone(), &task_id)
+    let mut meta = storage::load_task_meta(gcx.clone(), &task_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
 
-    let chat_id = storage::next_planner_chat_id(gcx.clone(), &task_id)
+    let existing_active = match meta.active_planner_chat_id.clone() {
+        Some(chat_id)
+            if crate::chat::trajectories::find_trajectory_path(gcx.clone(), &chat_id)
+                .await
+                .is_some() =>
+        {
+            Some(chat_id)
+        }
+        _ => None,
+    };
+    let chat_id = if let Some(chat_id) = existing_active {
+        chat_id
+    } else if let Some(chat_id) = storage::latest_existing_planner_chat_id(gcx.clone(), &task_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    crate::chat::trajectories::save_initial_planner_trajectory(gcx, &task_id, &chat_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+    {
+        meta.active_planner_chat_id = Some(chat_id.clone());
+        meta.updated_at = Utc::now().to_rfc3339();
+        storage::save_task_meta(gcx.clone(), &task_id, &meta)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        crate::tasks::events::emit_task_event(
+            gcx.clone(),
+            TaskEvent::TaskUpdated {
+                task_id: task_id.clone(),
+                meta: meta.clone(),
+            },
+        )
+        .await;
+        chat_id
+    } else {
+        let chat_id = storage::next_planner_chat_id(gcx.clone(), &task_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        crate::chat::trajectories::save_initial_planner_trajectory(gcx.clone(), &task_id, &chat_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        meta.active_planner_chat_id = Some(chat_id.clone());
+        meta.updated_at = Utc::now().to_rfc3339();
+        storage::save_task_meta(gcx.clone(), &task_id, &meta)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        crate::tasks::events::emit_task_event(
+            gcx.clone(),
+            TaskEvent::TaskUpdated {
+                task_id: task_id.clone(),
+                meta: meta.clone(),
+            },
+        )
+        .await;
+        chat_id
+    };
 
     Ok(Json(json!({"chat_id": chat_id})))
+}
+
+pub async fn handle_delete_planner_chat(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    Path((task_id, chat_id)): Path<(String, String)>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut meta = storage::load_task_meta(gcx.clone(), &task_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    let file_path = crate::chat::trajectories::find_trajectory_path(gcx.clone(), &chat_id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Planner chat not found".to_string()))?;
+
+    if !file_path
+        .components()
+        .any(|component| component.as_os_str() == std::ffi::OsStr::new(&task_id))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Planner chat does not belong to this task".to_string(),
+        ));
+    }
+
+    tokio::fs::remove_file(&file_path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if meta.active_planner_chat_id.as_deref() == Some(&chat_id) {
+        meta.active_planner_chat_id = storage::latest_existing_planner_chat_id(gcx.clone(), &task_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        meta.updated_at = Utc::now().to_rfc3339();
+        storage::save_task_meta(gcx.clone(), &task_id, &meta)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        crate::tasks::events::emit_task_event(
+            gcx.clone(),
+            TaskEvent::TaskUpdated {
+                task_id: task_id.clone(),
+                meta,
+            },
+        )
+        .await;
+    }
+
+    if let Some(tx) = &gcx.read().await.trajectory_events_tx {
+        let _ = tx.send(TrajectoryEvent {
+            event_type: "deleted".to_string(),
+            id: chat_id,
+            updated_at: None,
+            title: None,
+            is_title_generated: None,
+            session_state: None,
+            error: None,
+            message_count: None,
+            parent_id: None,
+            link_type: None,
+            root_chat_id: None,
+            model: None,
+            mode: None,
+            worktree: None,
+            total_lines_added: None,
+            total_lines_removed: None,
+            tasks_total: None,
+            tasks_done: None,
+            tasks_failed: None,
+            total_prompt_tokens: None,
+            total_completion_tokens: None,
+            total_tokens: None,
+            total_cache_read_tokens: None,
+            total_cache_creation_tokens: None,
+            total_cost_usd: None,
+        });
+    }
+
+    Ok(Json(json!({"deleted": true})))
 }
 
 pub async fn handle_tasks_subscribe(

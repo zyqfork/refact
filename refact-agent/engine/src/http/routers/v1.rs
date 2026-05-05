@@ -80,7 +80,8 @@ use crate::http::routers::v1::tasks::{
     handle_list_tasks, handle_create_task, handle_get_task, handle_delete_task, handle_get_board,
     handle_patch_board, handle_get_planner_instructions, handle_set_planner_instructions,
     handle_get_ready_cards, handle_update_task_status, handle_update_task_meta,
-    handle_list_task_trajectories, handle_create_planner_chat, handle_tasks_subscribe,
+    handle_list_task_trajectories, handle_create_planner_chat, handle_delete_planner_chat,
+    handle_tasks_subscribe,
 };
 use crate::http::routers::v1::trajectory_ops::{
     handle_transform_preview, handle_transform_apply, handle_handoff_preview, handle_handoff_apply,
@@ -475,6 +476,10 @@ pub fn make_v1_router() -> Router {
         .route(
             "/tasks/:task_id/planner-chats",
             post(handle_create_planner_chat),
+        )
+        .route(
+            "/tasks/:task_id/planner-chats/:chat_id",
+            delete(handle_delete_planner_chat),
         )
         .route(
             "/tasks/:task_id/planner-chats/from-transition",

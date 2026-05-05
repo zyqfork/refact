@@ -129,6 +129,7 @@ export type ChatThread = {
     role: string;
     agent_id?: string;
     card_id?: string;
+    planner_chat_id?: string;
   };
 
   /** OpenAI Responses API multi-turn state: link next request to the previous response */

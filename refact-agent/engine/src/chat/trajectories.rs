@@ -837,6 +837,7 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
         role: "planner".to_string(),
         agent_id: None,
         card_id: None,
+        planner_chat_id: Some(chat_id.to_string()),
     };
 
     let snapshot = TrajectorySnapshot {
@@ -3853,6 +3854,7 @@ mod tests {
             is_name_generated: true,
             last_agents_summary_at: None,
             planner_session_state: None,
+            active_planner_chat_id: None,
         };
         tokio::fs::write(
             task_dir.join("meta.yaml"),
@@ -3984,6 +3986,7 @@ mod tests {
             is_name_generated: true,
             last_agents_summary_at: None,
             planner_session_state: None,
+            active_planner_chat_id: None,
         };
         tokio::fs::write(
             task_dir.join("meta.yaml"),

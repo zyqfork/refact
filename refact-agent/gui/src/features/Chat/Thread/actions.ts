@@ -124,6 +124,7 @@ export interface TaskMeta {
   role: string;
   agent_id?: string;
   card_id?: string;
+  planner_chat_id?: string;
 }
 
 export const sendIdeMessagesToCurrentChat = createAsyncThunk(

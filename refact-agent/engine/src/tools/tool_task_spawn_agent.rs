@@ -242,6 +242,7 @@ fn build_agent_thread_params(
     task_id: &str,
     agent_id: &str,
     card_id: &str,
+    planner_chat_id: &str,
     worktree: WorktreeMeta,
 ) -> ThreadParams {
     ThreadParams {
@@ -262,11 +263,12 @@ fn build_agent_thread_params(
             role: "agents".to_string(),
             agent_id: Some(agent_id.to_string()),
             card_id: Some(card_id.to_string()),
+            planner_chat_id: Some(planner_chat_id.to_string()),
         }),
         worktree: Some(worktree),
-        parent_id: None,
-        link_type: None,
-        root_chat_id: None,
+        parent_id: Some(planner_chat_id.to_string()),
+        link_type: Some("task_agent".to_string()),
+        root_chat_id: Some(planner_chat_id.to_string()),
         reasoning_effort: None,
         thinking_budget: None,
         temperature: None,
@@ -340,7 +342,30 @@ impl Tool for ToolTaskSpawnAgent {
 
         drop(ccx_lock);
 
-        let task_id = get_task_id(&ccx, args).await?;
+        let (task_id, planner_chat_id) = {
+            let ccx_lock = ccx.lock().await;
+            let task_id = ccx_lock
+                .task_meta
+                .as_ref()
+                .map(|m| m.task_id.clone())
+                .unwrap_or_else(|| {
+                    args.get("task_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
+                });
+            let planner_chat_id = ccx_lock
+                .task_meta
+                .as_ref()
+                .and_then(|m| m.planner_chat_id.clone())
+                .unwrap_or_else(|| ccx_lock.chat_id.clone());
+            (task_id, planner_chat_id)
+        };
+        let task_id = if task_id.is_empty() {
+            get_task_id(&ccx, args).await?
+        } else {
+            task_id
+        };
         let card_id = args
             .get("card_id")
             .and_then(|v| v.as_str())
@@ -612,6 +637,7 @@ impl Tool for ToolTaskSpawnAgent {
                 &task_id,
                 &agent_id,
                 card_id,
+                &planner_chat_id,
                 prepared_worktree.meta.clone(),
             );
 
@@ -939,10 +965,17 @@ mod tests {
             "task-1",
             "agent-1",
             "T-1",
+            "planner-task-1-1",
             worktree.clone(),
         );
         assert_eq!(thread.mode, "task_agent");
         assert_eq!(thread.task_meta.as_ref().unwrap().role, "agents");
+        assert_eq!(
+            thread.task_meta.as_ref().unwrap().planner_chat_id.as_deref(),
+            Some("planner-task-1-1")
+        );
+        assert_eq!(thread.parent_id.as_deref(), Some("planner-task-1-1"));
+        assert_eq!(thread.root_chat_id.as_deref(), Some("planner-task-1-1"));
         assert_eq!(thread.worktree.as_ref(), Some(&worktree));
         assert!(thread.worktree.as_ref().unwrap().enforce);
     }

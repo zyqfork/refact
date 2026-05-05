@@ -29,6 +29,8 @@ pub struct TaskMeta {
     pub last_agents_summary_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner_session_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_planner_chat_id: Option<String>,
 }
 
 fn default_schema_version() -> u32 {

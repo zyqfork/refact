@@ -124,6 +124,8 @@ pub struct TaskMeta {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_chat_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

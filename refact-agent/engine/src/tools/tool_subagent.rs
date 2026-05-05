@@ -454,6 +454,7 @@ mod tests {
             role: role.to_string(),
             agent_id: Some("agent-1".to_string()),
             card_id: Some("card-1".to_string()),
+            planner_chat_id: Some("planner-task-1-1".to_string()),
         })
     }
 

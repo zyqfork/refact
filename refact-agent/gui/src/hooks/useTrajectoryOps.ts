@@ -155,7 +155,11 @@ export function useTrajectoryOps() {
             title: "",
             isTaskChat: true,
             mode: "TASK_PLANNER",
-            taskMeta: { task_id: taskId, role: "planner" },
+            taskMeta: {
+              task_id: taskId,
+              role: "planner",
+              planner_chat_id: result.new_chat_id,
+            },
             parentId: oldChatId,
             linkType: "handoff",
             worktree: thread.worktree,

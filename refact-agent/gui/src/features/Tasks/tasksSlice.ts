@@ -17,6 +17,7 @@ export interface PlannerInfo {
   createdAt: string;
   updatedAt: string;
   sessionState?: string;
+  removed?: boolean;
 }
 
 export interface OpenTask {
@@ -89,7 +90,12 @@ export const tasksSlice = createSlice({
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (!task) return;
 
-      if (!task.plannerChats.some((p) => p.id === action.payload.planner.id)) {
+      const existing = task.plannerChats.find(
+        (p) => p.id === action.payload.planner.id,
+      );
+      if (existing) {
+        Object.assign(existing, action.payload.planner, { removed: false });
+      } else {
         task.plannerChats.push(action.payload.planner);
       }
       if (!task.activeChat) {
@@ -127,6 +133,10 @@ export const tasksSlice = createSlice({
     ) => {
       const task = state.openTasks.find((t) => t.id === action.payload.taskId);
       if (task) {
+        const planner = task.plannerChats.find(
+          (p) => p.id === action.payload.chatId,
+        );
+        if (planner) planner.removed = true;
         task.plannerChats = task.plannerChats.filter(
           (p) => p.id !== action.payload.chatId,
         );

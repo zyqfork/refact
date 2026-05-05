@@ -18,6 +18,7 @@ use crate::chat::get_or_create_session_with_trajectory;
 use crate::chat::trajectories::TrajectorySnapshot;
 use crate::custom_error::ScratchError;
 use crate::global_context::GlobalContext;
+use crate::tasks::events::TaskEvent;
 
 #[derive(Deserialize)]
 pub struct TransformRequest {
@@ -538,6 +539,7 @@ pub async fn handle_planner_from_transition(
         role: "planner".to_string(),
         agent_id: None,
         card_id: None,
+        planner_chat_id: Some(new_chat_id.clone()),
     };
 
     let snapshot = TrajectorySnapshot {
@@ -585,6 +587,22 @@ pub async fn handle_planner_from_transition(
     )
     .await
     .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    if let Ok(mut meta) = crate::tasks::storage::load_task_meta(gcx.clone(), &task_id).await {
+        meta.active_planner_chat_id = Some(new_chat_id.clone());
+        meta.updated_at = chrono::Utc::now().to_rfc3339();
+        crate::tasks::storage::save_task_meta(gcx.clone(), &task_id, &meta)
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        crate::tasks::events::emit_task_event(
+            gcx.clone(),
+            TaskEvent::TaskUpdated {
+                task_id: task_id.clone(),
+                meta,
+            },
+        )
+        .await;
+    }
 
     let response = ModeTransitionApplyResponse {
         new_chat_id,

@@ -21,6 +21,7 @@ export interface TaskMeta {
     | "paused"
     | "waiting_ide"
     | "error";
+  active_planner_chat_id?: string;
 }
 
 export interface BoardColumn {
@@ -287,6 +288,27 @@ export const tasksApi = createApi({
       ],
     }),
 
+    deletePlannerChat: builder.mutation<
+      { deleted: boolean },
+      { taskId: string; chatId: string }
+    >({
+      queryFn: async ({ taskId, chatId }, api, _opts, baseQuery) => {
+        const state = api.getState() as RootState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/tasks/${taskId}/planner-chats/${chatId}`,
+          method: "DELETE",
+        });
+        if (result.error) return { error: result.error };
+        return { data: result.data as { deleted: boolean } };
+      },
+      invalidatesTags: (_result, _error, { taskId }) => [
+        { type: "TaskTrajectories", id: `${taskId}/planner` },
+        { type: "Tasks", id: taskId },
+        "Tasks",
+      ],
+    }),
+
     createPlannerChatFromTransition: builder.mutation<
       { new_chat_id: string; messages_count: number },
       {
@@ -374,5 +396,6 @@ export const {
   useSetOrchestratorInstructionsMutation,
   useListTaskTrajectoriesQuery,
   useCreatePlannerChatMutation,
+  useDeletePlannerChatMutation,
   useCreatePlannerChatFromTransitionMutation,
 } = tasksApi;

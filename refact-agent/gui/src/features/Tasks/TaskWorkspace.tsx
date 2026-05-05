@@ -28,6 +28,7 @@ import {
   useListTaskTrajectoriesQuery,
   useUpdateTaskMetaMutation,
   useCreatePlannerChatMutation,
+  useDeletePlannerChatMutation,
   BoardCard,
   tasksApi,
 } from "../../services/refact/tasks";
@@ -643,17 +644,18 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const [updateTaskMeta] = useUpdateTaskMetaMutation();
   const [createPlannerChat, { isLoading: isCreatingPlanner }] =
     useCreatePlannerChatMutation();
+  const [deletePlannerChat] = useDeletePlannerChatMutation();
   const openTasks = useAppSelector(selectOpenTasksFromRoot);
   const currentTaskUI = openTasks.find((t) => t.id === taskId);
-  const plannerChats = useMemo(
-    () => currentTaskUI?.plannerChats ?? [],
-    [currentTaskUI?.plannerChats],
-  );
+  const plannerChats = useMemo(() => {
+    const visible = (currentTaskUI?.plannerChats ?? []).filter(
+      (planner) => !planner.removed,
+    );
+    return [...visible].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [currentTaskUI?.plannerChats]);
   const activePlannerId = useMemo(() => {
     if (plannerChats.length === 0) return null;
-    return plannerChats.reduce((latest, p) =>
-      p.updatedAt > latest.updatedAt ? p : latest,
-    ).id;
+    return plannerChats[0].id;
   }, [plannerChats]);
   const activeChat = useAppSelector((state) =>
     selectTaskActiveChat(state, taskId),
@@ -727,11 +729,18 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
           title: traj.title,
           isTaskChat: true,
           mode: "TASK_PLANNER",
-          taskMeta: { task_id: taskId, role: "planner" },
+          taskMeta: {
+            task_id: taskId,
+            role: "planner",
+            planner_chat_id: traj.id,
+          },
         }),
       );
 
-      if (currentTaskUI.plannerChats.some((p) => p.id === traj.id)) continue;
+      if (
+        currentTaskUI.plannerChats.some((p) => p.id === traj.id && !p.removed)
+      )
+        continue;
 
       dispatch(
         addPlannerChat({
@@ -748,7 +757,14 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     }
 
     if (savedPlanners.length > 0 && !activeChat) {
-      const mostRecent = savedPlanners.reduce((latest, p) =>
+      const visibleSavedPlanners = savedPlanners.filter(
+        (traj) =>
+          !currentTaskUI.plannerChats.some(
+            (p) => p.id === traj.id && p.removed,
+          ),
+      );
+      if (visibleSavedPlanners.length === 0) return;
+      const mostRecent = visibleSavedPlanners.reduce((latest, p) =>
         p.updated_at > latest.updated_at ? p : latest,
       );
       dispatch(
@@ -847,7 +863,11 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
             title: "",
             isTaskChat: true,
             mode: "TASK_PLANNER",
-            taskMeta: { task_id: taskId, role: "planner" },
+            taskMeta: {
+              task_id: taskId,
+              role: "planner",
+              planner_chat_id: newChatId,
+            },
           }),
         );
         dispatch(
@@ -874,6 +894,9 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const handleRemovePlanner = useCallback(
     (chatId: string) => {
       dispatch(removePlannerChat({ taskId, chatId }));
+      void deletePlannerChat({ taskId, chatId })
+        .unwrap()
+        .catch(() => undefined);
       if (activeChat?.type === "planner" && activeChat.chatId === chatId) {
         const remaining = plannerChats.filter((p) => p.id !== chatId);
         if (remaining.length > 0) {
@@ -891,7 +914,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         }
       }
     },
-    [dispatch, taskId, activeChat, plannerChats],
+    [dispatch, taskId, activeChat, plannerChats, deletePlannerChat],
   );
 
   const handleSelectPlanner = useCallback(
@@ -914,7 +937,12 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
           title: formatAgentChatTitle(cardId, cardTitle),
           isTaskChat: true,
           mode: "TASK_AGENT",
-          taskMeta: { task_id: taskId, role: "agents", card_id: cardId },
+          taskMeta: {
+            task_id: taskId,
+            role: "agents",
+            card_id: cardId,
+            planner_chat_id: activePlannerId ?? undefined,
+          },
           model: task?.default_agent_model,
         }),
       );
@@ -926,7 +954,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         }),
       );
     },
-    [board, taskId, dispatch, task?.default_agent_model],
+    [board, taskId, dispatch, task?.default_agent_model, activePlannerId],
   );
 
   const handleCardAgentClick = useCallback(
@@ -966,7 +994,12 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
             title: formatAgentChatTitle(cardId, cardTitle),
             isTaskChat: true,
             mode: "TASK_AGENT",
-            taskMeta: { task_id: taskId, role: "agents", card_id: cardId },
+            taskMeta: {
+              task_id: taskId,
+              role: "agents",
+              card_id: cardId,
+              planner_chat_id: activePlannerId ?? undefined,
+            },
             model: task?.default_agent_model,
           }),
         );
@@ -982,7 +1015,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
 
       return false;
     },
-    [board, taskId, dispatch, task?.default_agent_model],
+    [board, taskId, dispatch, task?.default_agent_model, activePlannerId],
   );
 
   const handleToggleChatExpanded = useCallback(() => {
@@ -1183,6 +1216,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
               task_id: taskId,
               role: "agents",
               card_id: mergeTarget.card.id,
+              planner_chat_id: activePlannerId ?? undefined,
             },
             model: task?.default_agent_model,
             worktree: mergeTarget.worktree.meta ?? null,

@@ -320,19 +320,12 @@ pub async fn create_task(gcx: Arc<ARwLock<GlobalContext>>, name: &str) -> Result
         is_name_generated: has_user_provided_name,
         last_agents_summary_at: None,
         planner_session_state: None,
+        active_planner_chat_id: None,
     };
 
     save_task_meta(gcx.clone(), &task_id, &meta).await?;
     save_board(gcx.clone(), &task_id, &TaskBoard::default()).await?;
     save_planner_instructions(gcx.clone(), &task_id, "").await?;
-
-    let planner_chat_id = format!("planner-{}-1", task_id);
-    crate::chat::trajectories::save_initial_planner_trajectory(
-        gcx.clone(),
-        &task_id,
-        &planner_chat_id,
-    )
-    .await?;
 
     emit_task_event(
         gcx.clone(),
@@ -562,6 +555,17 @@ pub async fn get_planner_chat_id(
         .map(|t| t.id.clone())
         .ok_or_else(|| format!("plan-{}", task_id))
         .or_else(|default| Ok(default))
+}
+
+pub async fn latest_existing_planner_chat_id(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    task_id: &str,
+) -> Result<Option<String>, String> {
+    let trajectories = list_task_trajectories(gcx, task_id, "planner", None).await?;
+    Ok(trajectories
+        .iter()
+        .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+        .map(|t| t.id.clone()))
 }
 
 #[cfg(test)]

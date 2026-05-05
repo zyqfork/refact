@@ -103,7 +103,13 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
     (mode: ChatModeInfo) => {
       setIsOpen(false);
       if (mode.id === "task_planner") {
-        setTaskPlannerDialogOpen(true);
+        if (taskId) {
+          setTaskPlannerDialogOpen(true);
+        } else if (hasMessages) {
+          setTaskPlannerDialogOpen(true);
+        } else {
+          onModeChange(mode.id, mode.thread_defaults);
+        }
         return;
       }
       if (hasMessages) {
@@ -113,7 +119,7 @@ export const ModeSelect: React.FC<ModeSelectProps> = ({
         onModeChange(mode.id, mode.thread_defaults);
       }
     },
-    [hasMessages, onModeChange],
+    [taskId, hasMessages, onModeChange],
   );
 
   const handleTransitionDialogClose = useCallback((open: boolean) => {

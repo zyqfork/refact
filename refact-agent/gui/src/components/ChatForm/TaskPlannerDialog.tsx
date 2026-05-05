@@ -132,7 +132,11 @@ export const TaskPlannerDialog: React.FC<TaskPlannerDialogProps> = ({
           title: "",
           isTaskChat: true,
           mode: "TASK_PLANNER",
-          taskMeta: { task_id: resolved.id, role: "planner" },
+          taskMeta: {
+            task_id: resolved.id,
+            role: "planner",
+            planner_chat_id: newChatId,
+          },
           worktree: sourceWorktree,
         }),
       );

@@ -262,7 +262,32 @@ pub(crate) async fn notify_planner_agents_finished(
         gcx_locked.chat_sessions.clone()
     };
 
-    let planner_chat_id = storage::get_planner_chat_id(gcx.clone(), task_id).await?;
+    let agent_session_arcs = {
+        let sessions_guard = sessions.read().await;
+        board
+            .cards
+            .iter()
+            .filter(|card| card.column == "done" || card.column == "failed")
+            .filter_map(|card| card.agent_chat_id.as_deref())
+            .filter_map(|agent_chat_id| sessions_guard.get(agent_chat_id).cloned())
+            .collect::<Vec<_>>()
+    };
+    let mut planner_chat_id = None;
+    for session_arc in agent_session_arcs {
+        let session = session_arc.lock().await;
+        planner_chat_id = session
+            .thread
+            .task_meta
+            .as_ref()
+            .and_then(|meta| meta.planner_chat_id.clone());
+        if planner_chat_id.is_some() {
+            break;
+        }
+    }
+    let planner_chat_id = match planner_chat_id {
+        Some(id) => id,
+        None => storage::get_planner_chat_id(gcx.clone(), task_id).await?,
+    };
     let planner_session =
         get_or_create_session_with_trajectory(gcx.clone(), &sessions, &planner_chat_id).await;
 

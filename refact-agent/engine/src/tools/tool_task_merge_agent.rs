@@ -797,6 +797,7 @@ mod worktree_merge_tool_tests {
             is_name_generated: false,
             last_agents_summary_at: None,
             planner_session_state: None,
+            active_planner_chat_id: None,
         };
         let mut board = TaskBoard::default();
         board.cards.push(card);

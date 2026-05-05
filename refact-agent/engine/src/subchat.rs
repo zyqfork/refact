@@ -1845,6 +1845,7 @@ mod subchat_tests {
             role: "agents".to_string(),
             agent_id: Some("agent-1".to_string()),
             card_id: Some("card-1".to_string()),
+            planner_chat_id: Some("planner-task-1-1".to_string()),
         };
         let config = SubchatConfig {
             tool_name: "subagent".to_string(),
@@ -1890,6 +1891,7 @@ mod subchat_tests {
             role: "planner".to_string(),
             agent_id: None,
             card_id: None,
+            planner_chat_id: Some("planner-task-1-1".to_string()),
         };
         let config = SubchatConfig {
             tool_name: "strategic_planning_gather_files".to_string(),
@@ -1941,6 +1943,7 @@ mod subchat_tests {
             role: "agents".to_string(),
             agent_id: Some("agent-1".to_string()),
             card_id: Some("card-1".to_string()),
+            planner_chat_id: Some("planner-task-1-1".to_string()),
         };
         let config = SubchatConfig {
             tool_name: "subagent".to_string(),
