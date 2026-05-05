@@ -74,10 +74,7 @@ import {
   setTaskActiveChat,
 } from "../features/Tasks/tasksSlice";
 import { closeThread } from "../features/Chat/Thread";
-import {
-  createChatWithId,
-  requestSseRefresh,
-} from "../features/Chat/Thread/actions";
+import { createChatWithId } from "../features/Chat/Thread/actions";
 import { push, selectCurrentPage } from "../features/Pages/pagesSlice";
 import {
   ideToolCallResponse,
