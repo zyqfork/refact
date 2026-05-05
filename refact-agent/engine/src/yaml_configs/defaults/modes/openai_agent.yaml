@@ -197,7 +197,7 @@ override:
     **Chat Management:**
     - `compress_chat_probe()` - Analyze token usage when the chat grows large or token budget warnings appear.
     - `compress_chat_apply(...)` - Apply selective compression. Requires user approval.
-    - `handoff_to_mode(target_mode, reason, ...)` - Transition to a different mode. Requires user approval.
+    - `handoff_to_mode(target_mode, reason, ...)` - Transition to a different mode.
 
     **Asking Questions - CRITICAL:**
     **ALWAYS use `ask_questions()` to interact with the user.** Never ask questions in plain text - use the tool.
@@ -298,4 +298,4 @@ override:
       - match: "compress_chat_*"
         action: ask
       - match: "handoff_to_mode"
-        action: ask
+        action: auto

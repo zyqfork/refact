@@ -76,8 +76,8 @@ pub const COMPRESS_HANDOFF_INSTRUCTIONS: &str = r#"## Chat Management Tools
 
 **compress_chat_apply(...)** — Apply selective compression using explicit lists from the probe. Requires user approval.
 
-**handoff_to_mode(target_mode, reason, ...)** — Transition to a different mode when the workflow changes (e.g., explore-only or quick Q&A). Requires user approval."#;
+**handoff_to_mode(target_mode, reason, ...)** — Transition to a different mode when the workflow changes (e.g., explore-only or quick Q&A)."#;
 
 pub const HANDOFF_ONLY_INSTRUCTIONS: &str = r#"## Chat Management Tools
 
-**handoff_to_mode(target_mode, reason, ...)** — Transition to a different mode when the workflow changes (e.g., explore-only or quick Q&A). Requires user approval."#;
+**handoff_to_mode(target_mode, reason, ...)** — Transition to a different mode when the workflow changes (e.g., explore-only or quick Q&A)."#;

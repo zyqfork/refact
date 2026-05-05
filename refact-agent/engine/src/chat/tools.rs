@@ -841,7 +841,7 @@ source:
         );
         assert_eq!(
             compute_final_action(&MatchConfirmDenyResult::PASS, None, true, "handoff_to_mode"),
-            "ask"
+            "auto"
         );
     }
 }
@@ -1091,6 +1091,7 @@ pub async fn process_tool_calls_once(
                 }
                 "task_done" => final_state = SessionState::Completed,
                 "task_agent_finish" => final_state = SessionState::Completed,
+                "handoff_to_mode" => final_state = SessionState::Completed,
                 _ => {}
             }
         }
@@ -1119,7 +1120,7 @@ pub async fn process_tool_calls_once(
             }
         }
         if tool_initiated_stop {
-            // ask_questions/task_done: always apply their intended state
+            // Tools that intentionally stop the current turn always apply their intended state.
             session.set_runtime_state(final_state, None);
         } else if was_aborted {
             // User abort during regular tools: transition to Idle so UI stops animating
@@ -1177,7 +1178,6 @@ fn compute_final_action(
     const ALWAYS_ASK_TOOLS: &[&str] = &[
         "compress_chat_probe",
         "compress_chat_apply",
-        "handoff_to_mode",
     ];
     if *tool_result == MatchConfirmDenyResult::DENY {
         return "deny";

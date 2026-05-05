@@ -90,6 +90,6 @@ tools:
 tool_confirm:
   rules:
     - match: "handoff_to_mode"
-      action: ask
+      action: auto
     - match: "*"
       action: auto

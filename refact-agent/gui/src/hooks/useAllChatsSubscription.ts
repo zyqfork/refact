@@ -608,9 +608,11 @@ export function useAllChatsSubscription() {
     if (!sseRefreshRequested) return;
     if (!portRef.current) return;
 
-    dispatch(clearSseRefreshRequest());
     unsubscribe(sseRefreshRequested);
-    setTimeout(() => subscribe(sseRefreshRequested), 50);
+    setTimeout(() => {
+      subscribe(sseRefreshRequested);
+      dispatch(clearSseRefreshRequest());
+    }, 50);
   }, [sseRefreshRequested, dispatch, subscribe, unsubscribe]);
 
   useEffect(() => {

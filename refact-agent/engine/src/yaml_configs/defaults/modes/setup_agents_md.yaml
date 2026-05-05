@@ -232,5 +232,3 @@ tool_confirm:
       action: ask
     - match: "compress_chat_*"
       action: ask
-    - match: "handoff_to_mode"
-      action: ask

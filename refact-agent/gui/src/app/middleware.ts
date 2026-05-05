@@ -22,7 +22,6 @@ import {
   setThreadPauseReasons,
   resetThreadImages,
   switchToThread,
-  selectCurrentThreadId,
   ideToolRequired,
   setIsWaitingForResponse,
   saveTitle,
@@ -47,6 +46,7 @@ import {
   newBuddyChatAction,
   buildThreadParamsPatch,
   buildThreadScopePatch,
+  selectCurrentThreadId,
 } from "../features/Chat/Thread";
 import { saveLastThreadParams } from "../utils/threadStorage";
 import { savePersistedChatTabs } from "../utils/chatUiPersistence";
@@ -714,11 +714,6 @@ startListening({
     const { new_chat_id } = content;
     const state = listenerApi.getState();
 
-    // Only auto-switch when the source chat is the one currently visible.
-    // Background tasks should not steal focus unexpectedly.
-    const currentId = selectCurrentThreadId(state);
-    if (event.chat_id !== currentId) return;
-
     const port = state.config.lspPort;
     const apiKey = state.config.apiKey;
 
@@ -745,7 +740,6 @@ startListening({
     );
     // Ensure the tab is open and switched to (handles both new and cached threads)
     listenerApi.dispatch(switchToThread({ id: new_chat_id }));
-    listenerApi.dispatch(requestSseRefresh({ chatId: new_chat_id }));
     // Optimistically mark as waiting so the UI shows a generating state
     // immediately before the first SSE event arrives
     listenerApi.dispatch(

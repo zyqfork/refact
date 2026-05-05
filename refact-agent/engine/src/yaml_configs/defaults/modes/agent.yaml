@@ -250,4 +250,4 @@ tool_confirm:
     - match: "compress_chat_*"
       action: ask
     - match: "handoff_to_mode"
-      action: ask
+      action: auto

@@ -474,8 +474,8 @@ export function useChatSubscription(
     if (sseRefreshRequested === chatId && enabled) {
       // eslint-disable-next-line no-console
       if (DEBUG) console.log("[SSE] Refresh requested for chat:", chatId);
-      dispatch(clearSseRefreshRequest());
       reconnect();
+      dispatch(clearSseRefreshRequest());
     }
   }, [sseRefreshRequested, chatId, enabled, dispatch, reconnect]);
 

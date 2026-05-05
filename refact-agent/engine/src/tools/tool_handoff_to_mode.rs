@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -14,7 +13,6 @@ use crate::chat::get_or_create_session_with_trajectory;
 use crate::chat::trajectory_ops::sanitize_messages_for_new_thread;
 use crate::chat::trajectories::save_trajectory_snapshot;
 use crate::chat::types::SessionState;
-use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tools::tools_description::{
     MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType,
@@ -159,7 +157,7 @@ impl Tool for ToolHandoffToMode {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Create a new chat in another mode using the current conversation context. Approval required.".to_string(),
+            description: "Create a new chat in another mode using the current conversation context.".to_string(),
             input_schema,
             output_schema: None,
             annotations: None,
@@ -178,13 +176,9 @@ impl Tool for ToolHandoffToMode {
         };
         let reason = parse_optional_string(args, "reason").unwrap_or_default();
 
-        let (gcx, chat_id, abort_flag) = {
+        let (gcx, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            (
-                ccx_lock.global_context.clone(),
-                ccx_lock.chat_id.clone(),
-                ccx_lock.abort_flag.clone(),
-            )
+            (ccx_lock.global_context.clone(), ccx_lock.chat_id.clone())
         };
 
         let sessions = gcx.read().await.chat_sessions.clone();
@@ -282,8 +276,6 @@ impl Tool for ToolHandoffToMode {
             .await
             .map_err(|e| format!("Failed to save handoff trajectory: {}", e))?;
 
-        abort_flag.store(true, Ordering::SeqCst);
-
         let result = json!({
             "type": "handoff_to_mode",
             "new_chat_id": new_chat_id,
@@ -316,13 +308,6 @@ impl Tool for ToolHandoffToMode {
         Ok(format!("handoff_to_mode {}", target))
     }
 
-    fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
-        Some(IntegrationConfirmation {
-            ask_user: vec!["*".to_string()],
-            deny: vec![],
-        })
-    }
-
     async fn match_against_confirm_deny(
         &self,
         ccx: Arc<AMutex<AtCommandsContext>>,
@@ -333,7 +318,7 @@ impl Tool for ToolHandoffToMode {
             .await
             .map_err(|e| format!("Error getting tool command to match: {}", e))?;
         Ok(MatchConfirmDeny {
-            result: MatchConfirmDenyResult::CONFIRMATION,
+            result: MatchConfirmDenyResult::PASS,
             command: command_to_match,
             rule: "default".to_string(),
         })
