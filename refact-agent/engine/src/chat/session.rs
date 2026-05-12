@@ -37,10 +37,16 @@ pub(super) fn has_displayable_assistant_content(message: &ChatMessage) -> bool {
             .map_or(false, |tb| !tb.is_empty())
         || !message.citations.is_empty()
         || !message.server_content_blocks.is_empty()
-        || message.usage.is_some()
-        || !message.extra.is_empty();
+        || (!message.extra.is_empty() && has_non_metadata_extra(message));
 
     has_text_content || has_structured_data
+}
+
+fn has_non_metadata_extra(message: &ChatMessage) -> bool {
+    message
+        .extra
+        .keys()
+        .any(|key| !key.starts_with('_') && key != "openai_response_id")
 }
 
 pub type SessionsMap = Arc<ARwLock<HashMap<String, Arc<AMutex<ChatSession>>>>>;
@@ -200,7 +206,9 @@ impl ChatSession {
         let mut messages = self.messages.clone();
         if self.runtime.state == SessionState::Generating {
             if let Some(ref draft) = self.draft_message {
-                messages.push(draft.clone());
+                if has_displayable_assistant_content(draft) {
+                    messages.push(draft.clone());
+                }
             }
         }
         let mut runtime = self.runtime.clone();
@@ -1142,6 +1150,60 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_omits_empty_draft_when_generating() {
+        let mut session = make_session();
+        session.messages.push(ChatMessage {
+            role: "user".into(),
+            content: ChatContent::SimpleText("hi".into()),
+            ..Default::default()
+        });
+        session.start_stream();
+
+        let snap = session.snapshot();
+
+        match snap {
+            ChatEvent::Snapshot {
+                messages, runtime, ..
+            } => {
+                assert_eq!(runtime.state, SessionState::Generating);
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].role, "user");
+            }
+            _ => panic!("Expected Snapshot"),
+        }
+    }
+
+    #[test]
+    fn test_snapshot_omits_metadata_only_draft_when_generating() {
+        let mut session = make_session();
+        session.start_stream();
+        session.emit_stream_delta(vec![
+            DeltaOp::SetUsage {
+                usage: json!({
+                    "prompt_tokens": 10,
+                    "completion_tokens": 0,
+                    "total_tokens": 10,
+                }),
+            },
+            DeltaOp::MergeExtra {
+                extra: serde_json::Map::from_iter([(
+                    "openai_response_id".to_string(),
+                    json!("resp_123"),
+                )]),
+            },
+        ]);
+
+        let snap = session.snapshot();
+
+        match snap {
+            ChatEvent::Snapshot { messages, .. } => {
+                assert!(messages.is_empty());
+            }
+            _ => panic!("Expected Snapshot"),
+        }
+    }
+
+    #[test]
     fn test_is_duplicate_request_detects_duplicates() {
         let mut session = make_session();
         assert!(!session.is_duplicate_request("req-1"));
@@ -1781,6 +1843,66 @@ mod tests {
             0,
             "Truly empty assistant message should be discarded"
         );
+    }
+
+    #[test]
+    fn test_finish_stream_discards_usage_only_message() {
+        let mut session = make_session();
+        session.start_stream();
+        session.emit_stream_delta(vec![DeltaOp::SetUsage {
+            usage: json!({
+                "prompt_tokens": 10,
+                "completion_tokens": 0,
+                "total_tokens": 10,
+            }),
+        }]);
+
+        session.finish_stream(Some("stop".to_string()));
+
+        assert!(session.messages.is_empty());
+    }
+
+    #[test]
+    fn test_finish_stream_discards_extra_only_message() {
+        let mut session = make_session();
+        session.start_stream();
+        session.emit_stream_delta(vec![DeltaOp::MergeExtra {
+            extra: serde_json::Map::from_iter([(
+                "openai_response_id".to_string(),
+                json!("resp_123"),
+            )]),
+        }]);
+
+        session.finish_stream(Some("stop".to_string()));
+
+        assert!(session.messages.is_empty());
+    }
+
+    #[test]
+    fn test_finish_stream_emits_removal_for_metadata_only_message() {
+        let mut session = make_session();
+        let mut rx = session.subscribe();
+        let (message_id, _) = session.start_stream().unwrap();
+        session.emit_stream_delta(vec![DeltaOp::MergeExtra {
+            extra: serde_json::Map::from_iter([(
+                "openai_response_id".to_string(),
+                json!("resp_123"),
+            )]),
+        }]);
+
+        session.finish_stream(Some("stop".to_string()));
+
+        assert!(session.messages.is_empty());
+        let mut found_removed = false;
+        while let Ok(json) = rx.try_recv() {
+            if let Ok(env) = serde_json::from_str::<EventEnvelope>(&json) {
+                if matches!(env.event, ChatEvent::MessageRemoved { message_id: id } if id == message_id)
+                {
+                    found_removed = true;
+                }
+            }
+        }
+        assert!(found_removed);
     }
 
     /// Regression test: after a broadcast::Receiver lags, the handler must

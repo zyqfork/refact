@@ -289,32 +289,6 @@ function parseEventSeq(seq: string): bigint | null {
   }
 }
 
-function isEmptyAssistantPlaceholder(message: ChatMessages[number]): boolean {
-  if (!isAssistantMessage(message)) return false;
-  if (typeof message.content !== "string" || message.content.trim() !== "") {
-    return false;
-  }
-  return (
-    !message.reasoning_content?.trim() &&
-    !message.tool_calls?.length &&
-    !message.thinking_blocks?.length &&
-    !message.citations?.length &&
-    !message.server_content_blocks?.length &&
-    !message.usage &&
-    Object.keys(message.extra ?? {}).length === 0
-  );
-}
-
-function removeEmptyAssistantPlaceholders(rt: Draft<ChatThreadRuntime>) {
-  const initialLength = rt.thread.messages.length;
-  rt.thread.messages = rt.thread.messages.filter(
-    (message) => !isEmptyAssistantPlaceholder(message),
-  );
-  if (rt.thread.messages.length !== initialLength) {
-    rt.message_index_by_id = rebuildMessageIndexById(rt.thread.messages);
-  }
-}
-
 function isWorktreeMeta(value: unknown): value is WorktreeMeta {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -1686,9 +1660,6 @@ export const chatReducer = createReducer(initialState, (builder) => {
         }
         const newState = event.state;
         rt.session_state = newState;
-        if (newState === "error") {
-          removeEmptyAssistantPlaceholders(rt);
-        }
 
         // Update streaming/waiting flags based on state
         switch (newState) {

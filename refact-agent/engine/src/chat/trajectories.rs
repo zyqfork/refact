@@ -3536,6 +3536,46 @@ mod tests {
     }
 
     #[test]
+    fn trajectory_snapshot_from_session_filters_metadata_only_assistant_messages() {
+        use crate::call_validation::ChatUsage;
+
+        let mut session = ChatSession::new("metadata-only-assistant-snapshot".to_string());
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::SimpleText("hello".to_string()),
+            ..Default::default()
+        });
+        session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            usage: Some(ChatUsage {
+                prompt_tokens: 10,
+                completion_tokens: 0,
+                total_tokens: 10,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
+                metering_usd: None,
+            }),
+            extra: serde_json::Map::from_iter([(
+                "openai_response_id".to_string(),
+                json!("resp_123"),
+            )]),
+            ..Default::default()
+        });
+        session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText("visible".to_string()),
+            ..Default::default()
+        });
+
+        let snapshot = TrajectorySnapshot::from_session(&session);
+
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[0].role, "user");
+        assert_eq!(snapshot.messages[1].role, "assistant");
+        assert_eq!(snapshot.messages[1].content.content_text_only(), "visible");
+    }
+
+    #[test]
     fn trajectory_worktree_meta_creation_omits_unvalidated_worktree() {
         let worktree = trajectory_worktree_sample();
         let mut extra = serde_json::Map::new();

@@ -487,7 +487,7 @@ describe("Chat Thread Reducer - Edge Cases", () => {
       expect(runtime.thread.messages[0].role).toBe("user");
     });
 
-    test("should remove empty assistant placeholder when runtime enters error", () => {
+    test("should keep placeholder until backend sends explicit removal on error", () => {
       let state = chatReducer(
         initialState,
         applyChatEvent(createSnapshot([{ role: "user", content: "Hello" }])),
@@ -515,10 +515,66 @@ describe("Chat Thread Reducer - Edge Cases", () => {
       );
 
       const runtime = state.threads[chatId]!;
-      expect(runtime.thread.messages).toHaveLength(1);
-      expect(runtime.thread.messages[0].role).toBe("user");
+      expect(runtime.thread.messages).toHaveLength(2);
+      expect(runtime.thread.messages[1].role).toBe("assistant");
+      expect(runtime.thread.messages[1].content).toBe("");
       expect(runtime.session_state).toBe("error");
       expect(runtime.streaming).toBe(false);
+    });
+
+    test("should remove metadata-only assistant placeholder when backend discards draft", () => {
+      let state = chatReducer(
+        initialState,
+        applyChatEvent(createSnapshot([{ role: "user", content: "Hello" }])),
+      );
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "2",
+          type: "stream_started",
+          message_id: "msg-metadata-only",
+        }),
+      );
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "3",
+          type: "stream_delta",
+          message_id: "msg-metadata-only",
+          ops: [
+            {
+              op: "set_usage",
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 0,
+                total_tokens: 10,
+              },
+            },
+            {
+              op: "merge_extra",
+              extra: { openai_response_id: "resp_123" },
+            },
+          ],
+        }),
+      );
+
+      state = chatReducer(
+        state,
+        applyChatEvent({
+          chat_id: chatId,
+          seq: "4",
+          type: "message_removed",
+          message_id: "msg-metadata-only",
+        }),
+      );
+
+      const runtime = state.threads[chatId]!;
+      expect(runtime.thread.messages).toHaveLength(1);
+      expect(runtime.thread.messages[0].role).toBe("user");
     });
   });
 });
