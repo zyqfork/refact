@@ -105,6 +105,7 @@ jobs:
             refact-agent/engine -> target
           key: ${{ matrix.os }}-${{ matrix.target }}-cargo
           shared-key: ${{ matrix.os }}-${{ matrix.target }}-cargo
+          cache-bin: false
 
       - name: Install cross-rs
         if: matrix.cross
