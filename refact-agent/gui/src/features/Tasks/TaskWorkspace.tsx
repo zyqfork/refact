@@ -1172,7 +1172,9 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
     async (files: string[], response: MergeWorktreeResponse) => {
       if (!mergeTarget) throw new Error("No task worktree is selected.");
       const fallbackPlannerId =
-        activeChat?.type === "planner" ? activeChat.chatId : plannerChats[0]?.id;
+        activeChat?.type === "planner"
+          ? activeChat.chatId
+          : plannerChats[0]?.id;
       const chatId = mergeTarget.card.agent_chat_id ?? fallbackPlannerId;
       if (!chatId) throw new Error("No agent or planner chat is available.");
       if (!config.lspPort) throw new Error("LSP port is unavailable.");
