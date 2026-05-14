@@ -113,7 +113,18 @@ jobs:
 
       - name: Run plugin verification tasks
         working-directory: plugins/intellij
-        run: ./gradlew verifyPlugin -Dplugin.verifier.home.dir=${{ steps.properties.outputs.pluginVerifierHomeDir }}
+        run: |
+          for attempt in 1 2; do
+            if ./gradlew verifyPlugin -Dplugin.verifier.home.dir=${{ steps.properties.outputs.pluginVerifierHomeDir }}; then
+              exit 0
+            fi
+            if [[ "$attempt" == "2" ]]; then
+              exit 1
+            fi
+            echo "Plugin verifier failed, retrying once after cleaning verifier reports"
+            rm -rf build/reports/pluginVerifier
+            sleep 10
+          done
 
       - name: Collect plugin verifier result
         if: ${{ always() }}
