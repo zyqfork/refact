@@ -93,12 +93,18 @@ pub struct BuddySettings {
     pub autonomy_level: AutonomyLevel,
     #[serde(default)]
     pub quiet_mode: bool,
+    #[serde(default = "default_daily_digest_hour")]
+    pub daily_digest_hour: Option<u8>,
     #[serde(default)]
     pub observers: ObserverToggles,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_daily_digest_hour() -> Option<u8> {
+    Some(18)
 }
 
 impl Default for BuddySettings {
@@ -116,6 +122,7 @@ impl Default for BuddySettings {
             humor_level: HumorLevel::default(),
             autonomy_level: AutonomyLevel::default(),
             quiet_mode: false,
+            daily_digest_hour: Some(18),
             observers: ObserverToggles::default(),
         }
     }

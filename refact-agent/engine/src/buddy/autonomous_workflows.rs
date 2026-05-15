@@ -11,6 +11,10 @@ pub struct AutonomousWorkflowMeta {
 pub const ERROR_DETECTIVE_WORKFLOW_ID: &str = "refact_error_detective";
 pub const REFACT_SELF_CRITIC_WORKFLOW_ID: &str = "refact_self_critic";
 pub const REFACT_COMPILE_SNIFFER_WORKFLOW_ID: &str = "refact_compile_sniffer";
+pub const BUDDY_DAILY_DIGEST_WORKFLOW_ID: &str = "buddy_daily_digest";
+pub const BUDDY_FRIDAY_RETRO_WORKFLOW_ID: &str = "buddy_friday_retro";
+pub const BUDDY_IDLE_SUGGESTER_WORKFLOW_ID: &str = "buddy_idle_suggester";
+pub const BUDDY_PR_ISSUE_MATCHMAKER_WORKFLOW_ID: &str = "buddy_pr_issue_matchmaker";
 pub const SECURITY_WHISPERER_WORKFLOW_ID: &str = "buddy_security_whisperer";
 pub const SETUP_COACH_WORKFLOW_ID: &str = "buddy_setup_coach";
 pub const DEPENDENCY_RADAR_WORKFLOW_ID: &str = "buddy_dependency_radar";
@@ -45,6 +49,38 @@ pub const AUTONOMOUS_BUDDY_WORKFLOWS: &[AutonomousWorkflowMeta] = &[
         icon: "🧯",
         badge: "Compile Sniffer",
         priority: "high",
+        kind: "system",
+    },
+    AutonomousWorkflowMeta {
+        id: BUDDY_DAILY_DIGEST_WORKFLOW_ID,
+        title: "Daily Digest",
+        icon: "🌇",
+        badge: "Daily Digest",
+        priority: "normal",
+        kind: "system",
+    },
+    AutonomousWorkflowMeta {
+        id: BUDDY_FRIDAY_RETRO_WORKFLOW_ID,
+        title: "Friday Retro",
+        icon: "🗓️",
+        badge: "Friday Retro",
+        priority: "normal",
+        kind: "system",
+    },
+    AutonomousWorkflowMeta {
+        id: BUDDY_IDLE_SUGGESTER_WORKFLOW_ID,
+        title: "Idle Suggester",
+        icon: "💡",
+        badge: "Idle Suggester",
+        priority: "normal",
+        kind: "system",
+    },
+    AutonomousWorkflowMeta {
+        id: BUDDY_PR_ISSUE_MATCHMAKER_WORKFLOW_ID,
+        title: "PR/Issue Matchmaker",
+        icon: "🔗",
+        badge: "PR Matchmaker",
+        priority: "normal",
         kind: "system",
     },
     AutonomousWorkflowMeta {

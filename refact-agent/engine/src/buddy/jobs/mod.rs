@@ -1,4 +1,8 @@
 pub mod autonomous_chats;
+pub mod buddy_daily_digest;
+pub mod buddy_friday_retro;
+pub mod buddy_idle_suggester;
+pub mod buddy_pr_issue_matchmaker;
 pub mod config_watcher;
 pub mod error_triage;
 pub mod greeting;

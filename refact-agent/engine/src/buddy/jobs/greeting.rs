@@ -120,10 +120,12 @@ mod tests {
     fn test_context() -> BuddyJobContext {
         BuddyJobContext {
             identity_name: "Pixel".to_string(),
+            personality: Default::default(),
             onboarding: BuddyOnboarding::default(),
             recent_diagnostics: vec![],
             project_root: std::path::PathBuf::from("/tmp/project"),
             job_state: BuddyJobState::default(),
+            workflow_summaries: vec![],
             total_workflow_runs: 0,
             suggestion_state: Vec::<BuddySuggestion>::new(),
             pet: BuddyPetState::default(),

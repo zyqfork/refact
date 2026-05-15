@@ -1,0 +1,117 @@
+use std::sync::Arc;
+
+use chrono::{Datelike, Timelike, Utc, Weekday};
+use tokio::sync::RwLock as ARwLock;
+
+use crate::buddy::autonomous_workflows::{autonomous_workflow_meta, BUDDY_FRIDAY_RETRO_WORKFLOW_ID};
+use crate::buddy::jobs::autonomous_chats::{execute_autonomous_spec, AutonomousBuddyChatSpec};
+use crate::buddy::scheduler::{BuddyJob, BuddyJobContext, BuddyJobResult};
+use crate::global_context::GlobalContext;
+
+pub struct BuddyFridayRetroJob;
+
+const COOLDOWN_SECONDS: u64 = 6 * 24 * 60 * 60;
+const PRIORITY: u32 = 31;
+
+fn digest_hour(ctx: &BuddyJobContext) -> u32 {
+    ctx.settings.daily_digest_hour.unwrap_or(18).min(23) as u32
+}
+
+fn should_run_now(ctx: &BuddyJobContext) -> bool {
+    let now = Utc::now();
+    now.weekday() == Weekday::Fri && now.hour() == digest_hour(ctx)
+}
+
+fn build_friday_retro_spec(ctx: &BuddyJobContext) -> AutonomousBuddyChatSpec {
+    let meta = autonomous_workflow_meta(BUDDY_FRIDAY_RETRO_WORKFLOW_ID).unwrap();
+    let now = Utc::now();
+    let project_root = ctx.project_root.to_string_lossy().to_string();
+    let evidence = format!(
+        "week_ending={}\nproject_root={}\ndigest_hour={}",
+        now.date_naive(),
+        project_root,
+        digest_hour(ctx)
+    );
+    AutonomousBuddyChatSpec::new(
+        meta.id,
+        meta.title,
+        "Summarize the week's wins, rough edges, and one tiny next-week improvement.",
+        evidence,
+    )
+    .with_display(meta.icon, meta.badge, meta.priority)
+    .with_project_root(project_root)
+}
+
+#[async_trait::async_trait]
+impl BuddyJob for BuddyFridayRetroJob {
+    fn id(&self) -> &str {
+        BUDDY_FRIDAY_RETRO_WORKFLOW_ID
+    }
+
+    fn cooldown_seconds(&self) -> u64 {
+        COOLDOWN_SECONDS
+    }
+
+    fn priority(&self) -> u32 {
+        PRIORITY
+    }
+
+    async fn should_run(&self, _gcx: Arc<ARwLock<GlobalContext>>, ctx: &BuddyJobContext) -> bool {
+        should_run_now(ctx)
+    }
+
+    async fn execute(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: BuddyJobContext,
+    ) -> BuddyJobResult {
+        execute_autonomous_spec(gcx, &ctx, build_friday_retro_spec(&ctx)).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    use crate::buddy::settings::BuddySettings;
+    use crate::buddy::types::{BuddyJobState, BuddyOnboarding, BuddyPetState, BuddyPulse};
+
+    fn test_context(project_root: &Path) -> BuddyJobContext {
+        BuddyJobContext {
+            identity_name: "Pixel".to_string(),
+            personality: Default::default(),
+            onboarding: BuddyOnboarding::default(),
+            recent_diagnostics: vec![],
+            project_root: project_root.to_path_buf(),
+            job_state: BuddyJobState::default(),
+            workflow_summaries: vec![],
+            total_workflow_runs: 0,
+            suggestion_state: vec![],
+            pet: BuddyPetState::default(),
+            active_quest: None,
+            settings: BuddySettings::default(),
+            pulse: BuddyPulse::default(),
+            facts: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn buddy_friday_retro_should_run_only_on_friday() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let now = Utc::now();
+        let mut ctx = test_context(dir.path());
+        ctx.settings.daily_digest_hour = Some(now.hour() as u8);
+        let expected = now.weekday() == Weekday::Fri;
+
+        assert_eq!(
+            BuddyFridayRetroJob.should_run(gcx.clone(), &ctx).await,
+            expected
+        );
+
+        ctx.settings.daily_digest_hour = Some(((now.hour() + 1) % 24) as u8);
+        assert!(!BuddyFridayRetroJob.should_run(gcx, &ctx).await);
+        assert_eq!(BuddyFridayRetroJob.cooldown_seconds(), COOLDOWN_SECONDS);
+    }
+}

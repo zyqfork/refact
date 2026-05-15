@@ -167,6 +167,18 @@ impl BuddyScheduler {
             super::jobs::refact_self_critic::RefactSelfCriticJob,
         ));
         s.jobs.push(Box::new(
+            super::jobs::buddy_daily_digest::BuddyDailyDigestJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::buddy_friday_retro::BuddyFridayRetroJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::buddy_idle_suggester::BuddyIdleSuggesterJob,
+        ));
+        s.jobs.push(Box::new(
+            super::jobs::buddy_pr_issue_matchmaker::BuddyPrIssueMatchmakerJob,
+        ));
+        s.jobs.push(Box::new(
             super::jobs::autonomous_chats::SecurityWhispererJob,
         ));
         s.jobs
