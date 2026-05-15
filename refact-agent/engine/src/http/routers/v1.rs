@@ -741,6 +741,15 @@ pub fn make_v1_router() -> Router {
             "/buddy/user_action",
             post(buddy::handle_v1_buddy_user_action),
         )
+        .route("/buddy/artifacts", get(buddy::handle_v1_buddy_artifacts))
+        .route(
+            "/buddy/artifact_approve",
+            post(buddy::handle_v1_buddy_artifact_approve),
+        )
+        .route(
+            "/buddy/artifact_reject",
+            post(buddy::handle_v1_buddy_artifact_reject),
+        )
         .route(
             "/buddy/user_activity",
             get(buddy::handle_v1_buddy_user_activity),

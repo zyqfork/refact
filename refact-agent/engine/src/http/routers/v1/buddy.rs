@@ -9,8 +9,10 @@ use tokio::sync::RwLock as ARwLock;
 
 use crate::buddy::diagnostics::DiagnosticContext;
 use crate::buddy::events::BuddyEvent;
+use crate::buddy::memory_lifecycle::{apply_memory_lifecycle_op_status, MemoryOpStatus};
 use crate::buddy::pulse_inject::build_buddy_pulse_payload;
 use crate::buddy::settings::MAX_PALETTE_INDEX;
+use crate::buddy::storage::{enqueue_memory_op, load_memory_ops};
 use crate::buddy::types::{BuddyActivity, BuddyCareAction, BuddyConversationEntry, BuddySuggestion};
 use crate::buddy::user_activity::{time_of_day_pattern, UserAction};
 use crate::buddy::voice_service::SpeechIntent;
@@ -34,6 +36,11 @@ pub struct BuddyConversationCreateRequest {
 #[derive(Debug, Deserialize)]
 pub struct UserActivityQuery {
     pub hours: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuddyArtifactRequest {
+    pub op_id: String,
 }
 
 pub async fn handle_v1_buddy_user_action(
@@ -69,6 +76,87 @@ pub async fn handle_v1_buddy_pulse_preview(
     Ok(axum::Json(serde_json::json!({
         "payload": build_buddy_pulse_payload(gcx).await
     })))
+}
+
+pub async fn handle_v1_buddy_artifacts(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+) -> Result<axum::Json<crate::buddy::memory_lifecycle::MemoryOpsState>, ScratchError> {
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    let state = lock
+        .as_ref()
+        .map(|service| service.memory_ops.clone())
+        .unwrap_or_default();
+    Ok(axum::Json(state))
+}
+
+pub async fn handle_v1_buddy_artifact_approve(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    axum::Json(req): axum::Json<BuddyArtifactRequest>,
+) -> Result<StatusCode, ScratchError> {
+    update_buddy_artifact_status(gcx, req.op_id, MemoryOpStatus::Approved).await
+}
+
+pub async fn handle_v1_buddy_artifact_reject(
+    Extension(gcx): Extension<Arc<ARwLock<GlobalContext>>>,
+    axum::Json(req): axum::Json<BuddyArtifactRequest>,
+) -> Result<StatusCode, ScratchError> {
+    update_buddy_artifact_status(gcx, req.op_id, MemoryOpStatus::Rejected).await
+}
+
+async fn update_buddy_artifact_status(
+    gcx: Arc<ARwLock<GlobalContext>>,
+    op_id: String,
+    status: MemoryOpStatus,
+) -> Result<StatusCode, ScratchError> {
+    let op_id = op_id.trim().to_string();
+    if op_id.is_empty() {
+        return Err(ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            "op_id is required".to_string(),
+        ));
+    }
+
+    let project_root = crate::files_correction::get_project_dirs(gcx.clone())
+        .await
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no project root".to_string(),
+            )
+        })?;
+
+    let state = load_memory_ops(&project_root).await;
+    let mut op = state
+        .ops
+        .into_iter()
+        .find(|op| op.op_id == op_id)
+        .ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::NOT_FOUND,
+                format!("artifact not found: {op_id}"),
+            )
+        })?;
+
+    op.status = status;
+    op.error = None;
+    let updated = if status == MemoryOpStatus::Approved {
+        apply_memory_lifecycle_op_status(gcx.clone(), &op).await
+    } else {
+        op
+    };
+
+    let state = enqueue_memory_op(&project_root, updated)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let buddy_arc = gcx.read().await.buddy.clone();
+    let mut lock = buddy_arc.lock().await;
+    if let Some(service) = lock.as_mut() {
+        service.memory_ops = state;
+    }
+    Ok(StatusCode::OK)
 }
 
 pub async fn handle_v1_buddy_snapshot(

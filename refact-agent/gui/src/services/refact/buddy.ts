@@ -67,6 +67,33 @@ export type UserActivityResponse = {
   time_of_day_pattern: string;
 };
 
+export type ArtifactStatus =
+  | "Pending"
+  | "Approved"
+  | "Applied"
+  | "Rejected"
+  | "Failed"
+  | "Skipped"
+  | "pending"
+  | "approved"
+  | "applied"
+  | "rejected"
+  | "failed"
+  | "skipped";
+
+export type Artifact = {
+  op_id: string;
+  status: ArtifactStatus;
+  op_type: string;
+  title?: string;
+  payload?: { title?: string | null };
+  created_at: string;
+  applied_at?: string | null;
+  rejected_at?: string | null;
+};
+
+export type MemoryOpsState = { ops: Artifact[] };
+
 export type UserActionPayload =
   | { type: "file_opened"; path: string; ts: string }
   | {
@@ -215,6 +242,7 @@ export const buddyApi = createApi({
     "BuddyOpportunities",
     "BuddyPulse",
     "BuddyDrafts",
+    "BuddyArtifacts",
   ],
   baseQuery: fetchBaseQuery({
     prepareHeaders: (headers, { getState }) => {
@@ -735,6 +763,46 @@ export const buddyApi = createApi({
         }
       },
     }),
+    getBuddyArtifacts: builder.query<MemoryOpsState, undefined>({
+      queryFn: async (_args, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery(
+          `http://127.0.0.1:${port}/v1/buddy/artifacts`,
+        );
+        if (result.error) return { error: result.error };
+        return { data: result.data as MemoryOpsState };
+      },
+      providesTags: ["BuddyArtifacts"],
+    }),
+    approveBuddyArtifact: builder.mutation<undefined, { op_id: string }>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/artifact_approve`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: undefined };
+      },
+      invalidatesTags: ["BuddyArtifacts"],
+    }),
+    rejectBuddyArtifact: builder.mutation<undefined, { op_id: string }>({
+      queryFn: async (body, api, _opts, baseQuery) => {
+        const state = api.getState() as BuddyApiState;
+        const port = state.config.lspPort;
+        const result = await baseQuery({
+          url: `http://127.0.0.1:${port}/v1/buddy/artifact_reject`,
+          method: "POST",
+          body,
+        });
+        if (result.error) return { error: result.error };
+        return { data: undefined };
+      },
+      invalidatesTags: ["BuddyArtifacts"],
+    }),
   }),
 });
 
@@ -769,4 +837,7 @@ export const {
   usePostUserActionMutation,
   useGetUserActivityQuery,
   useReportFrontendErrorMutation,
+  useGetBuddyArtifactsQuery,
+  useApproveBuddyArtifactMutation,
+  useRejectBuddyArtifactMutation,
 } = buddyApi;
