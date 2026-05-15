@@ -11,6 +11,7 @@ use super::types::{
     BuddyWorkflowSummary,
 };
 use super::voice_service::SpeechIntent;
+use crate::buddy::autonomous_workflows::is_autonomous_workflow_id;
 use crate::global_context::GlobalContext;
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -99,6 +100,9 @@ pub trait BuddyJob: Send + Sync {
     fn records_empty_result(&self) -> bool {
         true
     }
+    fn is_autonomous(&self) -> bool {
+        is_autonomous_workflow_id(self.id())
+    }
     async fn should_run(
         &self,
         gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
@@ -112,6 +116,7 @@ pub trait BuddyJob: Send + Sync {
 }
 
 pub(crate) const MAX_UNREAD_SUGGESTIONS: usize = 3;
+pub(crate) const MAX_AUTONOMOUS_JOBS_PER_TICK: usize = 2;
 
 pub(crate) fn suggestions_allowed(
     settings: &BuddySettings,
@@ -243,7 +248,12 @@ impl BuddyScheduler {
             None => return,
         };
         let mut ready_results: Vec<(&str, BuddyJobResult, bool)> = vec![];
+        let mut autonomous_jobs_run = 0usize;
         for job in &self.jobs {
+            let is_autonomous = job.is_autonomous();
+            if is_autonomous && autonomous_jobs_run >= MAX_AUTONOMOUS_JOBS_PER_TICK {
+                continue;
+            }
             if job.produces_suggestion()
                 && !job.runs_when_suggestions_blocked()
                 && !suggestions_allowed(&settings, &state.suggestion_state)
@@ -291,6 +301,9 @@ impl BuddyScheduler {
             };
             if !job.should_run(gcx.clone(), &ctx).await {
                 continue;
+            }
+            if is_autonomous {
+                autonomous_jobs_run += 1;
             }
             let result = job.execute(gcx.clone(), ctx).await;
             let result = if job.produces_suggestion() {
@@ -388,6 +401,10 @@ mod tests {
 
     struct NoOutputUnrecordedJob;
 
+    struct ReadyAutonomousJob {
+        id: String,
+    }
+
     #[async_trait::async_trait]
     impl BuddyJob for NoOutputUnrecordedJob {
         fn id(&self) -> &str {
@@ -420,6 +437,51 @@ mod tests {
             _ctx: BuddyJobContext,
         ) -> BuddyJobResult {
             BuddyJobResult::default()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BuddyJob for ReadyAutonomousJob {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn cooldown_seconds(&self) -> u64 {
+            0
+        }
+
+        fn priority(&self) -> u32 {
+            0
+        }
+
+        fn is_autonomous(&self) -> bool {
+            true
+        }
+
+        async fn should_run(
+            &self,
+            _gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
+            _ctx: &BuddyJobContext,
+        ) -> bool {
+            true
+        }
+
+        async fn execute(
+            &self,
+            _gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
+            _ctx: BuddyJobContext,
+        ) -> BuddyJobResult {
+            BuddyJobResult {
+                activity: Some(BuddyActivity {
+                    icon: "•".to_string(),
+                    title: self.id.clone(),
+                    description: self.id.clone(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    activity_type: "test".to_string(),
+                    chat_id: None,
+                }),
+                ..Default::default()
+            }
         }
     }
 
@@ -590,7 +652,10 @@ mod tests {
 
         let buddy = buddy_arc.lock().await;
         let service = buddy.as_ref().unwrap();
-        assert_eq!(service.active_speech.as_ref().unwrap().text, "speech speech_two");
+        assert_eq!(
+            service.active_speech.as_ref().unwrap().text,
+            "speech speech_two"
+        );
     }
 
     #[tokio::test]
@@ -738,6 +803,32 @@ mod tests {
         assert!(job_state.last_run.is_none());
         assert_eq!(job_state.run_count, 7);
         assert_eq!(job_state.last_result.as_deref(), Some("existing-json"));
+    }
+
+    #[tokio::test]
+    async fn tick_caps_autonomous_jobs_at_two() {
+        let dir = tempfile::tempdir().unwrap();
+        let scheduler = BuddyScheduler {
+            jobs: (0..4)
+                .map(|idx| {
+                    Box::new(ReadyAutonomousJob {
+                        id: format!("autonomous_{idx}"),
+                    }) as Box<dyn BuddyJob>
+                })
+                .collect(),
+        };
+        let buddy_arc = test_service(&dir, crate::buddy::state::default_buddy_state()).await;
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+
+        scheduler.tick(gcx, buddy_arc.clone(), dir.path()).await;
+
+        let buddy = buddy_arc.lock().await;
+        let job_cooldowns = &buddy.as_ref().unwrap().state.job_cooldowns;
+        assert_eq!(job_cooldowns.len(), MAX_AUTONOMOUS_JOBS_PER_TICK);
+        assert!(job_cooldowns.contains_key("autonomous_0"));
+        assert!(job_cooldowns.contains_key("autonomous_1"));
+        assert!(!job_cooldowns.contains_key("autonomous_2"));
+        assert!(!job_cooldowns.contains_key("autonomous_3"));
     }
 
     fn active_suggestion(idx: usize) -> BuddySuggestion {

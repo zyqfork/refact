@@ -38,6 +38,9 @@ const MEMORY_KINDS: &[&str] = &[
     "artifact",
 ];
 const WRITABLE_KINDS: &[&str] = &["domain", "lesson", "convention", "insight", "humor"];
+const MAX_KNOWLEDGE_SCAN_FILES: usize = 1000;
+const MAX_KNOWLEDGE_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_FILE_SIZE_TO_SCAN: u64 = 512 * 1024;
 
 pub struct ToolBuddyMemorySearch {
     pub config_path: String,
@@ -260,9 +263,20 @@ fn parse_memory_text(text: &str) -> (KnowledgeFrontmatter, String) {
 }
 
 async fn scan_cards(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<KnowledgeCard> {
+    scan_cards_in_dirs(knowledge_dirs(gcx).await).await
+}
+
+async fn scan_cards_in_dirs(dirs: Vec<PathBuf>) -> Vec<KnowledgeCard> {
     let mut cards = Vec::new();
-    for dir in knowledge_dirs(gcx).await {
+    let mut scanned_files = 0usize;
+    let mut scanned_bytes = 0u64;
+    for dir in dirs {
         for entry in WalkDir::new(&dir).into_iter().filter_map(Result::ok) {
+            if scanned_files >= MAX_KNOWLEDGE_SCAN_FILES
+                || scanned_bytes >= MAX_KNOWLEDGE_SCAN_BYTES
+            {
+                return dedup_cards(cards);
+            }
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -277,9 +291,17 @@ async fn scan_cards(gcx: Arc<ARwLock<GlobalContext>>) -> Vec<KnowledgeCard> {
             if metadata.file_type().is_symlink() {
                 continue;
             }
+            if metadata.len() > MAX_FILE_SIZE_TO_SCAN {
+                continue;
+            }
+            if scanned_bytes.saturating_add(metadata.len()) > MAX_KNOWLEDGE_SCAN_BYTES {
+                return dedup_cards(cards);
+            }
             let Ok(text) = tokio::fs::read_to_string(path).await else {
                 continue;
             };
+            scanned_files += 1;
+            scanned_bytes = scanned_bytes.saturating_add(metadata.len());
             let (frontmatter, body) = parse_memory_text(&text);
             if frontmatter.is_archived() || frontmatter.is_deprecated() {
                 continue;
@@ -1079,6 +1101,24 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&result).contains("Lesson Hit"));
+    }
+
+    #[tokio::test]
+    async fn scan_cards_caps_at_max_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for idx in 0..1500 {
+            let path = dir.path().join(format!("memory-{idx:04}.md"));
+            tokio::fs::write(
+                path,
+                format!("---\ntitle: Memory {idx}\n---\n\nbody {idx}\n"),
+            )
+            .await
+            .unwrap();
+        }
+
+        let cards = scan_cards_in_dirs(vec![dir.path().to_path_buf()]).await;
+
+        assert_eq!(cards.len(), MAX_KNOWLEDGE_SCAN_FILES);
     }
 
     #[tokio::test]

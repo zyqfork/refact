@@ -25,6 +25,7 @@ use crate::global_context::GlobalContext;
 
 const VOICE_TTL: Duration = Duration::from_secs(5 * 60);
 const VOICE_TIMEOUT: Duration = Duration::from_secs(8);
+pub const VOICE_RUNTIME_EVENT_TIMEOUT_MS: u64 = 1500;
 const VOICE_MAX_CHARS: usize = 80;
 const VOICE_CACHE_MAX_ITEMS: usize = 128;
 
@@ -322,6 +323,28 @@ impl VoiceService {
         (title, description)
     }
 
+    pub async fn render_runtime_event_fast(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: VoiceCtx<'_>,
+        status: &str,
+    ) -> (String, Option<String>) {
+        let intent_kind = format!("runtime:{}", status);
+        let title = self
+            .render_line_with_timeout(
+                gcx,
+                &ctx,
+                &intent_kind,
+                Duration::from_millis(VOICE_RUNTIME_EVENT_TIMEOUT_MS),
+            )
+            .await;
+        let description = ctx
+            .workflow_summary
+            .map(normalize_voice_line)
+            .filter(|text| !text.is_empty());
+        (title, description)
+    }
+
     pub async fn render_chat_title(
         &self,
         gcx: Arc<ARwLock<GlobalContext>>,
@@ -344,6 +367,17 @@ impl VoiceService {
         ctx: &VoiceCtx<'_>,
         intent_kind: &str,
     ) -> String {
+        self.render_line_with_timeout(gcx, ctx, intent_kind, VOICE_TIMEOUT)
+            .await
+    }
+
+    async fn render_line_with_timeout(
+        &self,
+        gcx: Arc<ARwLock<GlobalContext>>,
+        ctx: &VoiceCtx<'_>,
+        intent_kind: &str,
+        timeout: Duration,
+    ) -> String {
         let key = self.cache_key(intent_kind, ctx);
         if let Some(cached) = self.cache_get(key).await {
             return cached;
@@ -351,14 +385,13 @@ impl VoiceService {
 
         let fallback = self.fallback_for(intent_kind, ctx);
         let request = VoiceRenderRequest::from_ctx(intent_kind, ctx);
-        let rendered =
-            tokio::time::timeout(VOICE_TIMEOUT, self.renderer.render_voice(gcx, request))
-                .await
-                .ok()
-                .flatten()
-                .map(|text| normalize_voice_line(&text))
-                .filter(|text| !text.is_empty())
-                .unwrap_or(fallback);
+        let rendered = tokio::time::timeout(timeout, self.renderer.render_voice(gcx, request))
+            .await
+            .ok()
+            .flatten()
+            .map(|text| normalize_voice_line(&text))
+            .filter(|text| !text.is_empty())
+            .unwrap_or(fallback);
 
         self.cache_insert(key, rendered.clone()).await;
         rendered

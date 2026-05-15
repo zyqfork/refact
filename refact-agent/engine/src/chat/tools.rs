@@ -977,6 +977,14 @@ source:
         );
         assert!(!title.trim().is_empty());
     }
+
+    #[test]
+    fn tool_runtime_event_uses_short_timeout() {
+        assert_eq!(
+            crate::buddy::voice_service::VOICE_RUNTIME_EVENT_TIMEOUT_MS,
+            1500
+        );
+    }
 }
 
 pub async fn process_tool_calls_once(
@@ -2105,7 +2113,7 @@ async fn tool_runtime_event_lines(
     };
     let (title, speech) = voice_service()
         .await
-        .render_runtime_event(gcx, voice_ctx, "started")
+        .render_runtime_event_fast(gcx, voice_ctx, "started")
         .await;
     runtime_event_lines_with_fallback(title, speech, fallback_title, fallback_speech)
 }

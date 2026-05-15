@@ -22,6 +22,16 @@ const MIRROR_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_CAT_BYTES: u64 = 200 * 1024;
 const MAX_SEARCH_MATCHES: usize = 50;
 
+async fn blocking_result<T, F>(f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|err| format!("blocking task panicked: {err}"))?
+}
+
 pub struct ToolRefactEngineClone {
     pub config_path: String,
 }
@@ -379,13 +389,18 @@ impl Tool for ToolRefactEngineClone {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let branch = optional_string_arg(args, "branch").unwrap_or_else(|| "main".to_string());
-        let message = clone_refact_engine_from_url(
-            &cache_root()?,
-            &branch,
-            bool_arg(args, "force_refresh", false)?,
-            REFACT_ENGINE_URL,
-            true,
-        )?;
+        let cache_root = cache_root()?;
+        let force_refresh = bool_arg(args, "force_refresh", false)?;
+        let message = blocking_result(move || {
+            clone_refact_engine_from_url(
+                &cache_root,
+                &branch,
+                force_refresh,
+                REFACT_ENGINE_URL,
+                true,
+            )
+        })
+        .await?;
         Ok(result(tool_call_id, message))
     }
 
@@ -420,11 +435,12 @@ impl Tool for ToolRefactEngineSearch {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let output = search_refact_engine_at(
-            &mirror_root("main")?,
-            string_arg(args, "pattern")?,
-            optional_string_arg(args, "scope").as_deref(),
-        )?;
+        let root = mirror_root("main")?;
+        let pattern = string_arg(args, "pattern")?.to_string();
+        let scope = optional_string_arg(args, "scope");
+        let output =
+            blocking_result(move || search_refact_engine_at(&root, &pattern, scope.as_deref()))
+                .await?;
         Ok(result(tool_call_id, output))
     }
 
@@ -460,12 +476,12 @@ impl Tool for ToolRefactEngineCat {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let output = cat_refact_engine_file_at(
-            &mirror_root("main")?,
-            string_arg(args, "path")?,
-            line_arg(args, "line1")?,
-            line_arg(args, "line2")?,
-        )?;
+        let root = mirror_root("main")?;
+        let path = string_arg(args, "path")?.to_string();
+        let line1 = line_arg(args, "line1")?;
+        let line2 = line_arg(args, "line2")?;
+        let output =
+            blocking_result(move || cat_refact_engine_file_at(&root, &path, line1, line2)).await?;
         Ok(result(tool_call_id, output))
     }
 
