@@ -6,8 +6,15 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
+use crate::buddy::actor::redact_sensitive;
 use crate::call_validation::ContextEnum;
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
+
+const TITLE_MAX_CHARS: usize = 120;
+const BODY_MAX_CHARS: usize = 4000;
+const LABEL_MAX_CHARS: usize = 50;
+const MAX_LABELS: usize = 5;
+const TRUNCATED_SUFFIX: &str = "...[truncated]";
 
 pub struct ToolBuddyOpenIssue {
     pub config_path: String,
@@ -19,6 +26,60 @@ impl ToolBuddyOpenIssue {
             config_path: self.config_path.clone(),
         }
     }
+}
+
+fn truncate_with_suffix(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let suffix_chars = TRUNCATED_SUFFIX.chars().count();
+    let keep_chars = max_chars.saturating_sub(suffix_chars);
+    let mut truncated = value.chars().take(keep_chars).collect::<String>();
+    truncated.push_str(TRUNCATED_SUFFIX);
+    truncated
+}
+
+fn capped_redacted(value: &str, max_chars: usize) -> String {
+    truncate_with_suffix(&redact_sensitive(value), max_chars)
+}
+
+fn valid_provider(provider: &Value) -> bool {
+    matches!(provider.as_str(), Some("github") | Some("gitlab"))
+}
+
+fn prepare_forwarded_args(args: &HashMap<String, Value>) -> Result<HashMap<String, Value>, String> {
+    if let Some(provider) = args.get("provider") {
+        if !valid_provider(provider) {
+            return Err("buddy_open_issue: provider must be 'github' or 'gitlab'".to_string());
+        }
+    }
+
+    let mut forwarded = args.clone();
+    if let Some(title) = args.get("title").and_then(Value::as_str) {
+        forwarded.insert(
+            "title".to_string(),
+            json!(capped_redacted(title, TITLE_MAX_CHARS)),
+        );
+    }
+    if let Some(body) = args.get("body").and_then(Value::as_str) {
+        forwarded.insert(
+            "body".to_string(),
+            json!(capped_redacted(body, BODY_MAX_CHARS)),
+        );
+    }
+    if let Some(labels) = args.get("labels").and_then(Value::as_array) {
+        let labels = labels
+            .iter()
+            .filter_map(Value::as_str)
+            .map(redact_sensitive)
+            .filter(|label| label.chars().count() <= LABEL_MAX_CHARS)
+            .take(MAX_LABELS)
+            .collect::<Vec<_>>();
+        forwarded.insert("labels".to_string(), json!(labels));
+    }
+    // The autonomous subchat owns the issue-filing decision; reaching this wrapper means confirmed.
+    forwarded.insert("confidence".to_string(), json!("confirmed"));
+    Ok(forwarded)
 }
 
 #[async_trait]
@@ -56,10 +117,7 @@ impl Tool for ToolBuddyOpenIssue {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let mut forwarded = args.clone();
-        forwarded
-            .entry("confidence".to_string())
-            .or_insert_with(|| json!("confirmed"));
+        let forwarded = prepare_forwarded_args(args)?;
         let mut runner = self.runner();
         runner.tool_execute(ccx, tool_call_id, &forwarded).await
     }
@@ -72,19 +130,92 @@ impl Tool for ToolBuddyOpenIssue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::tools_description::Tool;
+
+    fn args(entries: Vec<(&str, Value)>) -> HashMap<String, Value> {
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect()
+    }
+
+    fn forwarded(entries: Vec<(&str, Value)>) -> HashMap<String, Value> {
+        prepare_forwarded_args(&args(entries)).expect("args should be valid")
+    }
 
     #[test]
-    fn buddy_open_issue_calls_same_runner_as_buddy_create_issue() {
-        let tool = ToolBuddyOpenIssue {
-            config_path: "config.yaml".to_string(),
-        };
-        let runner = tool.runner();
-        assert_eq!(runner.tool_description().name, "buddy_create_issue");
-        assert_eq!(tool.tool_description().name, "buddy_open_issue");
+    fn buddy_open_issue_redacts_secrets_in_body() {
+        let out = forwarded(vec![
+            ("title", json!("Leak sk-1234567890abcdef")),
+            ("body", json!("token=abc123 and Bearer topsecret")),
+            ("labels", json!(["sk-1234567890abcdef"])),
+        ]);
+
+        assert_eq!(out["title"], json!("Leak [REDACTED_SK_TOKEN]"));
+        assert_eq!(out["body"], json!("token=[REDACTED] and Bearer [REDACTED]"));
+        assert_eq!(out["labels"], json!(["[REDACTED_SK_TOKEN]"]));
+    }
+
+    #[test]
+    fn buddy_open_issue_caps_title_at_120_chars() {
+        let title = "a".repeat(140);
+        let out = forwarded(vec![("title", json!(title)), ("body", json!("body"))]);
+        let title = out["title"].as_str().expect("title should be string");
+
+        assert_eq!(title.chars().count(), TITLE_MAX_CHARS);
+        assert!(title.ends_with(TRUNCATED_SUFFIX));
+    }
+
+    #[test]
+    fn buddy_open_issue_rejects_invalid_provider() {
+        let err = prepare_forwarded_args(&args(vec![
+            ("title", json!("Bug")),
+            ("body", json!("Details")),
+            ("provider", json!("jira")),
+        ]))
+        .expect_err("invalid provider should fail");
+
         assert_eq!(
-            runner.tool_description().source.config_path,
-            tool.tool_description().source.config_path
+            err,
+            "buddy_open_issue: provider must be 'github' or 'gitlab'"
         );
+    }
+
+    #[test]
+    fn buddy_open_issue_caps_labels_count_and_length() {
+        let out = forwarded(vec![
+            ("title", json!("Bug")),
+            ("body", json!("Details")),
+            (
+                "labels",
+                json!([
+                    "one",
+                    "two",
+                    "three",
+                    "four",
+                    "five",
+                    "six",
+                    "this-label-is-way-too-long-to-forward-because-it-crosses-fifty-characters"
+                ]),
+            ),
+        ]);
+
+        assert_eq!(
+            out["labels"],
+            json!(["one", "two", "three", "four", "five"])
+        );
+    }
+
+    #[test]
+    fn buddy_open_issue_passes_valid_args_to_runner() {
+        let out = forwarded(vec![
+            ("title", json!("Bug")),
+            ("body", json!("Details")),
+            ("provider", json!("github")),
+        ]);
+
+        assert_eq!(out["title"], json!("Bug"));
+        assert_eq!(out["body"], json!("Details"));
+        assert_eq!(out["provider"], json!("github"));
+        assert_eq!(out["confidence"], json!("confirmed"));
     }
 }
