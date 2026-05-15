@@ -960,6 +960,23 @@ source:
         );
         assert_eq!(renderer.intent_kinds(), vec!["runtime:started".to_string()]);
     }
+
+    #[test]
+    fn tool_runtime_event_lines_falls_back_on_empty_voice() {
+        let (title, speech_text) = runtime_event_lines_with_fallback(
+            "   ".to_string(),
+            Some("\t".to_string()),
+            "Running cat in 'Thread'".to_string(),
+            Some("Using cat to help with 'Thread'...".to_string()),
+        );
+
+        assert_eq!(title, "Running cat in 'Thread'");
+        assert_eq!(
+            speech_text.as_deref(),
+            Some("Using cat to help with 'Thread'...")
+        );
+        assert!(!title.trim().is_empty());
+    }
 }
 
 pub async fn process_tool_calls_once(
@@ -2090,7 +2107,25 @@ async fn tool_runtime_event_lines(
         .await
         .render_runtime_event(gcx, voice_ctx, "started")
         .await;
-    (title, speech.or(fallback_speech))
+    runtime_event_lines_with_fallback(title, speech, fallback_title, fallback_speech)
+}
+
+fn runtime_event_lines_with_fallback(
+    title: String,
+    speech: Option<String>,
+    fallback_title: String,
+    fallback_speech: Option<String>,
+) -> (String, Option<String>) {
+    let title = if title.trim().is_empty() {
+        fallback_title
+    } else {
+        title
+    };
+    let speech = match speech {
+        Some(s) if !s.trim().is_empty() => Some(s),
+        _ => fallback_speech,
+    };
+    (title, speech)
 }
 
 pub async fn execute_tools(

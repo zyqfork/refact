@@ -45,10 +45,14 @@ impl BuddyJob for TourJob {
                     workflow_id: None,
                     workflow_summary: Some(&fallback_text),
                 };
-                voice_service()
+                let mut speech = voice_service()
                     .await
                     .render_speech(gcx, voice_ctx, SpeechIntent::Tour)
-                    .await
+                    .await;
+                if speech.text.trim().is_empty() {
+                    speech.text = fallback_text.clone();
+                }
+                speech
             }
             None => BuddySpeechItem {
                 id: format!("tour-{}", chrono::Utc::now().timestamp()),
