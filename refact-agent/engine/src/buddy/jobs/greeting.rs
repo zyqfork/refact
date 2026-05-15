@@ -103,6 +103,7 @@ impl BuddyJob for GreetingJob {
         speech.controls = controls;
         BuddyJobResult {
             speech: Some(speech),
+            speech_intent: Some(SpeechIntent::Greeting),
             ..Default::default()
         }
     }

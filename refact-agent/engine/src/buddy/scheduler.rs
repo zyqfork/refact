@@ -336,7 +336,7 @@ impl BuddyScheduler {
         for (idx, (job_id, mut result, records_empty_result)) in
             ready_results.into_iter().enumerate()
         {
-            if result.speech.is_some() && Some(idx) != winner {
+            if result.speech.is_some() && result.speech_intent.is_some() && Some(idx) != winner {
                 result.speech = None;
                 result.speech_intent = None;
             }
@@ -361,13 +361,15 @@ impl BuddyScheduler {
                     if let Some(activity) = result.activity {
                         svc.add_activity(activity);
                     }
-                    if let (Some(intent), Some(speech)) = (result.speech_intent, result.speech) {
+                    if let Some(speech) = result.speech {
                         svc.update_speech(speech);
-                        super::speech_policy::record_emission(
-                            &mut svc.state.speech_rotation,
-                            intent,
-                            now,
-                        );
+                        if let Some(intent) = result.speech_intent {
+                            super::speech_policy::record_emission(
+                                &mut svc.state.speech_rotation,
+                                intent,
+                                now,
+                            );
+                        }
                         svc.dirty = true;
                     }
                     if let Some(event) = result.runtime_event {
@@ -418,6 +420,54 @@ mod tests {
             _ctx: BuddyJobContext,
         ) -> BuddyJobResult {
             BuddyJobResult::default()
+        }
+    }
+
+    struct NoIntentSpeechJob;
+
+    #[async_trait::async_trait]
+    impl BuddyJob for NoIntentSpeechJob {
+        fn id(&self) -> &str {
+            "no_intent_speech"
+        }
+
+        fn cooldown_seconds(&self) -> u64 {
+            0
+        }
+
+        fn priority(&self) -> u32 {
+            0
+        }
+
+        async fn should_run(
+            &self,
+            _gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
+            _ctx: &BuddyJobContext,
+        ) -> bool {
+            true
+        }
+
+        async fn execute(
+            &self,
+            _gcx: Arc<tokio::sync::RwLock<GlobalContext>>,
+            _ctx: BuddyJobContext,
+        ) -> BuddyJobResult {
+            BuddyJobResult {
+                speech: Some(BuddySpeechItem {
+                    id: "no-intent-speech".to_string(),
+                    text: "no intent speech".to_string(),
+                    mood: "happy".to_string(),
+                    scope: "global".to_string(),
+                    persistent: false,
+                    ttl_seconds: 10,
+                    dedupe_key: Some("no-intent-speech".to_string()),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    controls: vec![],
+                    chat_id: None,
+                }),
+                speech_intent: None,
+                ..Default::default()
+            }
         }
     }
 
@@ -496,6 +546,51 @@ mod tests {
             tx,
             None,
         ))))
+    }
+
+    #[tokio::test]
+    async fn speech_without_intent_is_not_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let scheduler = BuddyScheduler {
+            jobs: vec![Box::new(NoIntentSpeechJob)],
+        };
+        let buddy_arc = test_service(&dir, crate::buddy::state::default_buddy_state()).await;
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+
+        scheduler.tick(gcx, buddy_arc.clone(), dir.path()).await;
+
+        let buddy = buddy_arc.lock().await;
+        let service = buddy.as_ref().unwrap();
+        assert!(service.active_speech.is_some());
+    }
+
+    #[tokio::test]
+    async fn competing_speech_intents_pick_one_winner() {
+        let dir = tempfile::tempdir().unwrap();
+        let scheduler = BuddyScheduler {
+            jobs: vec![
+                Box::new(SpeechJob {
+                    id: "speech_one".to_string(),
+                    priority: 0,
+                    intent: SpeechIntent::Humor,
+                    activity_title: "one activity".to_string(),
+                }),
+                Box::new(SpeechJob {
+                    id: "speech_two".to_string(),
+                    priority: 1,
+                    intent: SpeechIntent::ErrorAlert,
+                    activity_title: "two activity".to_string(),
+                }),
+            ],
+        };
+        let buddy_arc = test_service(&dir, crate::buddy::state::default_buddy_state()).await;
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+
+        scheduler.tick(gcx, buddy_arc.clone(), dir.path()).await;
+
+        let buddy = buddy_arc.lock().await;
+        let service = buddy.as_ref().unwrap();
+        assert_eq!(service.active_speech.as_ref().unwrap().text, "speech speech_two");
     }
 
     #[tokio::test]

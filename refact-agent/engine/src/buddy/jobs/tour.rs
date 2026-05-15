@@ -67,6 +67,7 @@ impl BuddyJob for TourJob {
         speech.dedupe_key = Some("tour".to_string());
         BuddyJobResult {
             speech: Some(speech),
+            speech_intent: Some(SpeechIntent::Tour),
             ..Default::default()
         }
     }
