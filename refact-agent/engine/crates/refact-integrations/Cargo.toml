@@ -17,3 +17,6 @@ libc = "0.2"
 process-wrap = { version = "8.0.2", features = ["tokio1"] }
 strip-ansi-escapes = "0.2.1"
 which = "7.0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -4830,7 +4830,7 @@ async fn tool_buddy_launch_investigation_creates_chat() {
 
 #[test]
 fn buddy_yaml_parses() {
-    let yaml_src = include_str!("../yaml_configs/defaults/modes/buddy.yaml");
+    let yaml_src = include_str!("../../crates/refact-yaml-configs/src/defaults/modes/buddy.yaml");
     let parsed: serde_yaml::Value = serde_yaml::from_str(yaml_src).expect("buddy.yaml must parse");
     let tools = parsed
         .get("tools")

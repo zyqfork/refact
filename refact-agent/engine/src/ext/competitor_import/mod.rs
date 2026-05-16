@@ -229,7 +229,7 @@ mod tests {
 
     use crate::ext::competitor_import::manifest::{manifest_path_for_scope_root, ImportManifest};
     use crate::ext::competitor_import::types::{
-        Competitor, ImportCandidateSummary, ImportKind, ImportOutcome,
+        Competitor, ImportCandidateSummary, ImportKind, ImportOutcome, ImportScope,
     };
     use crate::privacy::{FilePrivacySettings, PrivacySettings};
     use crate::yaml_configs::customization_types::SubagentConfig;
