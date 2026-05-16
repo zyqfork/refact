@@ -17,6 +17,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock as ARwLock;
 use tracing::warn;
 
+pub use refact_file_edit_core::text_edit::{
+    edit_result_summary, find_match_lines, insert_at_anchor, normalize_line_endings,
+    parse_bool_arg, parse_line_ranges, parse_string_arg, replace_between_anchors,
+    restore_line_endings, strip_line_number_prefixes, AnchorMode, LineRange,
+};
 pub use refact_scope_utils::{
     append_scope_warnings, scope_warnings_to_tool_message, scoped_path_warnings,
 };
@@ -202,50 +207,6 @@ pub async fn parse_path_for_create(
     })
 }
 
-pub fn parse_string_arg(
-    args: &HashMap<String, Value>,
-    name: &str,
-    hint: &str,
-) -> Result<String, String> {
-    match args.get(name) {
-        Some(Value::String(s)) => Ok(s.clone()),
-        Some(v) => Err(format!("⚠️ '{}' must be a string, got: {:?}", name, v)),
-        None => Err(format!("⚠️ Missing '{}'. 💡 {}", name, hint)),
-    }
-}
-
-pub fn parse_bool_arg(
-    args: &HashMap<String, Value>,
-    name: &str,
-    default: bool,
-) -> Result<bool, String> {
-    match args.get(name) {
-        Some(Value::Bool(b)) => Ok(*b),
-        Some(Value::String(s)) => match s.to_lowercase().as_str() {
-            "true" => Ok(true),
-            "false" => Ok(false),
-            _ => Err(format!("⚠️ '{}' must be true/false, got: {}", name, s)),
-        },
-        Some(v) => Err(format!("⚠️ '{}' must be a boolean, got: {:?}", name, v)),
-        None => Ok(default),
-    }
-}
-
-pub fn edit_result_summary(before: &str, after: &str, path: &PathBuf) -> String {
-    let before_lines = before.lines().count();
-    let after_lines = after.lines().count();
-    let diff = after_lines as i64 - before_lines as i64;
-    let sign = if diff >= 0 { "+" } else { "" };
-    format!(
-        "✅ Updated {:?}: {} → {} lines ({}{})",
-        path.file_name().unwrap_or_default(),
-        before_lines,
-        after_lines,
-        sign,
-        diff
-    )
-}
-
 pub fn convert_edit_to_diffchunks(
     path: PathBuf,
     before: &String,
@@ -333,18 +294,6 @@ pub fn convert_edit_to_diffchunks(
     }
 
     Ok(diff_chunks)
-}
-
-pub fn normalize_line_endings(content: &str) -> String {
-    content.replace("\r\n", "\n")
-}
-
-pub fn restore_line_endings(content: &str, original_had_crlf: bool) -> String {
-    if original_had_crlf {
-        content.replace("\n", "\r\n")
-    } else {
-        content.to_string()
-    }
 }
 
 pub async fn await_ast_indexing(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), String> {
@@ -484,40 +433,6 @@ pub async fn str_replace(
     Ok((file_content, new_file_content))
 }
 
-fn strip_line_number_prefixes(s: &str) -> String {
-    let re = regex::Regex::new(r"(?m)^\d+[\t|:]\s?").unwrap();
-    // Only strip when every non-empty line starts with a numeric prefix — i.e. the string looks
-    // like numbered tool output ("123: code"), not real source content that happens to start with
-    // digits (ports, YAML keys, bit-patterns, etc.)
-    let non_empty_lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
-    if non_empty_lines.is_empty() || !non_empty_lines.iter().all(|l| re.is_match(l)) {
-        return s.to_string();
-    }
-    re.replace_all(s, "").to_string()
-}
-
-fn find_match_lines(content: &str, pattern: &str) -> Vec<usize> {
-    if pattern.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = Vec::new();
-    let mut pos = 0;
-    while let Some(idx) = content[pos..].find(pattern) {
-        let abs_idx = pos + idx;
-        let line_num = content[..abs_idx].lines().count() + 1;
-        lines.push(line_num);
-        pos = abs_idx + pattern.len();
-    }
-    lines
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum AnchorMode {
-    ReplaceBetween,
-    InsertAfter,
-    InsertBefore,
-}
-
 pub async fn str_replace_anchored(
     gcx: Arc<ARwLock<GlobalContext>>,
     path: &PathBuf,
@@ -567,196 +482,6 @@ pub async fn str_replace_anchored(
     )
     .await?;
     Ok((file_content, new_file_content))
-}
-
-fn replace_between_anchors(
-    content: &str,
-    before: &str,
-    after: &str,
-    replacement: &str,
-    multiple: bool,
-) -> Result<String, String> {
-    let before_positions: Vec<usize> = content.match_indices(before).map(|(i, _)| i).collect();
-    if before_positions.is_empty() {
-        return Err("⚠️ anchor_before not found. 💡 Use cat() to verify text exists".to_string());
-    }
-
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
-    for &b_start in &before_positions {
-        let b_end = b_start + before.len();
-        if let Some(rel_a) = content[b_end..].find(after) {
-            pairs.push((b_start, b_end + rel_a));
-        }
-    }
-
-    if pairs.is_empty() {
-        return Err(
-            "⚠️ anchor_after not found after anchor_before. 💡 Check anchor order".to_string(),
-        );
-    }
-    if !multiple && pairs.len() > 1 {
-        let lines: Vec<usize> = pairs
-            .iter()
-            .map(|(i, _)| content[..*i].lines().count() + 1)
-            .collect();
-        return Err(format!(
-            "⚠️ {} anchor pairs at lines {:?}. 💡 Use more specific anchors, or set multiple:true",
-            pairs.len(),
-            lines
-        ));
-    }
-
-    pairs.sort_by_key(|(start, _)| *start);
-    for i in 1..pairs.len() {
-        let prev_end = pairs[i - 1].1 + after.len();
-        let curr_start = pairs[i].0;
-        if curr_start < prev_end {
-            let line1 = content[..pairs[i - 1].0].lines().count() + 1;
-            let line2 = content[..curr_start].lines().count() + 1;
-            return Err(format!(
-                "⚠️ Overlapping anchor regions at lines {} and {}. 💡 Use more specific anchors",
-                line1, line2
-            ));
-        }
-    }
-
-    let mut result = content.to_string();
-    for (b_start, a_start) in pairs.into_iter().rev() {
-        let b_end = b_start + before.len();
-        let a_end = a_start + after.len();
-        result = format!(
-            "{}{}{}{}",
-            &result[..b_end],
-            replacement,
-            after,
-            &result[a_end..]
-        );
-    }
-    Ok(result)
-}
-
-fn insert_at_anchor(
-    content: &str,
-    anchor: &str,
-    insert: &str,
-    multiple: bool,
-    after: bool,
-) -> Result<String, String> {
-    let positions: Vec<usize> = content.match_indices(anchor).map(|(i, _)| i).collect();
-    if positions.is_empty() {
-        return Err("⚠️ Anchor not found. 💡 Use cat() to verify text exists".to_string());
-    }
-    if !multiple && positions.len() > 1 {
-        let lines: Vec<usize> = positions
-            .iter()
-            .map(|i| content[..*i].lines().count() + 1)
-            .collect();
-        return Err(format!("⚠️ {} anchor occurrences at lines {:?}. 💡 Use more specific anchor, or set multiple:true", positions.len(), lines));
-    }
-
-    let mut result = content.to_string();
-    for pos in positions.into_iter().rev() {
-        let insert_pos = if after { pos + anchor.len() } else { pos };
-        result.insert_str(insert_pos, insert);
-    }
-    Ok(result)
-}
-
-#[derive(Debug, Clone)]
-pub struct LineRange {
-    pub start: usize,
-    pub end: usize,
-}
-
-pub fn parse_line_ranges(ranges_str: &str, total_lines: usize) -> Result<Vec<LineRange>, String> {
-    let mut ranges = Vec::new();
-
-    for part in ranges_str.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-
-        let range = if part.contains(':') {
-            let parts: Vec<&str> = part.splitn(2, ':').collect();
-            let start_str = parts[0].trim();
-            let end_str = parts[1].trim();
-
-            let start = if start_str.is_empty() {
-                1
-            } else {
-                start_str.parse::<usize>().map_err(|_| {
-                    format!(
-                        "⚠️ Invalid start '{}' in '{}'. 💡 Use numbers like '10:20'",
-                        start_str, part
-                    )
-                })?
-            };
-
-            let end = if end_str.is_empty() {
-                total_lines
-            } else {
-                end_str.parse::<usize>().map_err(|_| {
-                    format!(
-                        "⚠️ Invalid end '{}' in '{}'. 💡 Use numbers like '10:20'",
-                        end_str, part
-                    )
-                })?
-            };
-
-            LineRange { start, end }
-        } else {
-            let line = part.parse::<usize>().map_err(|_| {
-                format!(
-                    "⚠️ Invalid line '{}'. 💡 Use number like '10' or range '10:20'",
-                    part
-                )
-            })?;
-            LineRange {
-                start: line,
-                end: line,
-            }
-        };
-
-        if range.start == 0 {
-            return Err("⚠️ Line numbers are 1-based, got 0. 💡 Use 1 for first line".to_string());
-        }
-        if range.end < range.start {
-            return Err(format!(
-                "⚠️ Invalid range '{}': end ({}) < start ({}). 💡 Use start:end format",
-                part, range.end, range.start
-            ));
-        }
-        // Allow start==1 for empty files so callers can populate them via update_textdoc_by_lines
-        if range.start > total_lines && !(total_lines == 0 && range.start == 1) {
-            return Err(format!(
-                "⚠️ Line {} beyond EOF ({} lines). 💡 Use cat() to check file length",
-                range.start, total_lines
-            ));
-        }
-
-        ranges.push(range);
-    }
-
-    if ranges.is_empty() {
-        return Err("⚠️ No ranges provided. 💡 Use format '10:20' or '5' or ':10,20:'".to_string());
-    }
-
-    let mut sorted: Vec<&LineRange> = ranges.iter().collect();
-    sorted.sort_by_key(|r| r.start);
-
-    for i in 1..sorted.len() {
-        let prev = sorted[i - 1];
-        let curr = sorted[i];
-        if curr.start <= prev.end {
-            return Err(format!(
-                "⚠️ Overlapping ranges {}:{} and {}:{}. 💡 Ranges must not overlap",
-                prev.start, prev.end, curr.start, curr.end
-            ));
-        }
-    }
-
-    Ok(ranges)
 }
 
 pub async fn str_replace_lines(
@@ -919,121 +644,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_line_ranges_single() {
-        assert!(parse_line_ranges("5", 10).is_ok());
-        assert!(parse_line_ranges("1:10", 10).is_ok());
-        assert!(parse_line_ranges(":5", 10).is_ok());
-        assert!(parse_line_ranges("5:", 10).is_ok());
-    }
-
-    #[test]
-    fn test_parse_line_ranges_multiple() {
-        let ranges = parse_line_ranges("1:3,7:9", 10).unwrap();
-        assert_eq!(ranges.len(), 2);
-    }
-
-    #[test]
-    fn test_parse_line_ranges_errors() {
-        assert!(parse_line_ranges("0", 10).is_err());
-        assert!(parse_line_ranges("5:3", 10).is_err());
-        assert!(parse_line_ranges("15", 10).is_err());
-        assert!(parse_line_ranges("abc", 10).is_err());
-        assert!(parse_line_ranges("", 10).is_err());
-    }
-
-    #[test]
-    fn test_parse_line_ranges_overlap() {
-        assert!(parse_line_ranges("1:5,3:7", 10).is_err());
-        assert!(parse_line_ranges("1:5,5:7", 10).is_err());
-    }
-
-    #[test]
-    fn test_parse_line_ranges_preserves_order() {
-        let ranges = parse_line_ranges("4:4,2:2", 10).unwrap();
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0].start, 4);
-        assert_eq!(ranges[1].start, 2);
-    }
-
-    #[test]
-    fn test_normalize_line_endings() {
-        assert_eq!(normalize_line_endings("a\r\nb\r\n"), "a\nb\n");
-        assert_eq!(normalize_line_endings("a\nb\n"), "a\nb\n");
-    }
-
-    #[test]
-    fn test_restore_line_endings() {
-        assert_eq!(restore_line_endings("a\nb\n", true), "a\r\nb\r\n");
-        assert_eq!(restore_line_endings("a\nb\n", false), "a\nb\n");
-    }
-
-    #[test]
-    fn test_strip_line_number_prefixes() {
-        assert_eq!(strip_line_number_prefixes("1\tfoo\n2\tbar"), "foo\nbar");
-        assert_eq!(strip_line_number_prefixes("10|foo\n20|bar"), "foo\nbar");
-        assert_eq!(strip_line_number_prefixes("1: foo\n2: bar"), "foo\nbar");
-        assert_eq!(strip_line_number_prefixes("no prefix"), "no prefix");
-    }
-
-    #[test]
-    fn test_find_match_lines() {
-        let content = "line1\nfoo\nline3\nfoo\nline5";
-        let lines = find_match_lines(content, "foo");
-        assert_eq!(lines, vec![2, 4]);
-    }
-
-    #[test]
-    fn test_replace_between_anchors_single() {
-        let content = "start\nBEGIN\nold\nEND\nfinish";
-        let result = replace_between_anchors(content, "BEGIN\n", "END", "new\n", false).unwrap();
-        assert_eq!(result, "start\nBEGIN\nnew\nEND\nfinish");
-    }
-
-    #[test]
-    fn test_replace_between_anchors_multiple() {
-        let content = "A\nBEGIN\nx\nEND\nB\nBEGIN\ny\nEND\nC";
-        let result = replace_between_anchors(content, "BEGIN\n", "END", "z\n", true).unwrap();
-        assert!(result.contains("z\n"));
-    }
-
-    #[test]
-    fn test_replace_between_anchors_not_found() {
-        let content = "no anchors here";
-        assert!(replace_between_anchors(content, "BEGIN", "END", "x", false).is_err());
-    }
-
-    #[test]
-    fn test_replace_between_anchors_overlap_error() {
-        let content = "A{B{C}D}E";
-        assert!(replace_between_anchors(content, "{", "}", "x", true).is_err());
-    }
-
-    #[test]
-    fn test_insert_at_anchor_after() {
-        let content = "line1\nANCHOR\nline3";
-        let result = insert_at_anchor(content, "ANCHOR", "\ninserted", false, true).unwrap();
-        assert_eq!(result, "line1\nANCHOR\ninserted\nline3");
-    }
-
-    #[test]
-    fn test_insert_at_anchor_before() {
-        let content = "line1\nANCHOR\nline3";
-        let result = insert_at_anchor(content, "ANCHOR", "inserted\n", false, false).unwrap();
-        assert_eq!(result, "line1\ninserted\nANCHOR\nline3");
-    }
-
-    #[test]
-    fn test_insert_at_anchor_not_found() {
-        assert!(insert_at_anchor("content", "MISSING", "x", false, true).is_err());
-    }
-
-    #[test]
-    fn test_insert_at_anchor_multiple_error() {
-        let content = "A\nA\nA";
-        assert!(insert_at_anchor(content, "A", "x", false, true).is_err());
-    }
-
-    #[test]
     fn test_convert_edit_to_diffchunks_add() {
         let before = "";
         let after = "line1\nline2\n";
@@ -1059,78 +669,6 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].lines_remove.contains("old"));
         assert!(chunks[0].lines_add.contains("new"));
-    }
-
-    #[test]
-    fn test_edit_result_summary() {
-        let path = PathBuf::from("/path/to/file.rs");
-        let summary = edit_result_summary("a\nb\nc", "a\nb\nc\nd\ne", &path);
-        assert!(summary.contains("file.rs"));
-        assert!(summary.contains("3"));
-        assert!(summary.contains("5"));
-        assert!(summary.contains("+2"));
-    }
-
-    // --- strip_line_number_prefixes: conservative mode ---
-
-    #[test]
-    fn test_strip_prefixes_all_numbered_strips() {
-        assert_eq!(strip_line_number_prefixes("1: foo\n2: bar"), "foo\nbar");
-        assert_eq!(strip_line_number_prefixes("1\tfoo\n2\tbar"), "foo\nbar");
-        assert_eq!(strip_line_number_prefixes("10|foo\n20|bar"), "foo\nbar");
-    }
-
-    #[test]
-    fn test_strip_prefixes_mixed_does_not_strip() {
-        // Not all lines numbered → preserve as-is to avoid corrupting real content
-        let s = "8080: service-a\nsome-other-line";
-        assert_eq!(strip_line_number_prefixes(s), s);
-    }
-
-    #[test]
-    fn test_strip_prefixes_real_code_preserved() {
-        // Leading whitespace prevents match of ^\d+ so line is preserved
-        let s = "    8080: \"http\"\n    9090: \"grpc\"";
-        assert_eq!(strip_line_number_prefixes(s), s);
-    }
-
-    #[test]
-    fn test_strip_prefixes_empty_string() {
-        assert_eq!(strip_line_number_prefixes(""), "");
-    }
-
-    // --- find_match_lines: empty pattern guard + advance-by-len ---
-
-    #[test]
-    fn test_find_match_lines_empty_pattern_returns_empty() {
-        let lines = find_match_lines("some content", "");
-        assert_eq!(lines, Vec::<usize>::new());
-    }
-
-    #[test]
-    fn test_find_match_lines_advances_by_pattern_len() {
-        // Advancing by pattern.len() (not 1) prevents double-counting
-        let content = "abcabc";
-        let lines = find_match_lines(content, "abc");
-        assert_eq!(lines.len(), 2);
-        // Single-char repeated pattern on multiple lines
-        let content2 = "a\na\na";
-        let lines2 = find_match_lines(content2, "a");
-        assert_eq!(lines2, vec![1, 2, 3]);
-    }
-
-    // --- parse_line_ranges: empty-file support ---
-
-    #[test]
-    fn test_parse_line_ranges_empty_file_start1() {
-        let ranges = parse_line_ranges("1:1", 0).unwrap();
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0].start, 1);
-    }
-
-    #[test]
-    fn test_parse_line_ranges_empty_file_start2_fails() {
-        assert!(parse_line_ranges("2:2", 0).is_err());
     }
 
     mod worktree_scope_tools {
