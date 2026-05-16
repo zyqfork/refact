@@ -23,8 +23,9 @@ use crate::file_filter::{is_valid_file, SOURCE_FILE_EXTENSIONS};
 use crate::ast::ast_indexer_thread::ast_indexer_enqueue_files;
 use crate::privacy::{check_file_privacy, load_privacy_if_needed, PrivacySettings, FilePrivacyLevel};
 use crate::files_blocklist::{IndexingEverywhere, is_blocklisted, reload_indexing_everywhere_if_needed};
-use crate::files_correction_cache::PathTrie;
 use crate::files_in_jsonl::enqueue_all_docs_from_jsonl_but_read_first;
+
+pub use refact_files::correction_cache::CacheCorrection;
 
 // How this works
 // --------------
@@ -130,47 +131,6 @@ pub async fn get_document_text_or_read_from_disk(
     read_file_from_disk(load_privacy_if_needed(gcx.clone()).await, &doc.doc_path)
         .await
         .map(|x| x.to_string())
-}
-
-pub struct CacheCorrection {
-    pub filenames: PathTrie,
-    pub directories: PathTrie,
-}
-
-impl CacheCorrection {
-    pub fn new() -> Self {
-        CacheCorrection {
-            filenames: PathTrie::new(),
-            directories: PathTrie::new(),
-        }
-    }
-
-    pub fn build(paths: &Vec<PathBuf>, workspace_folders: &Vec<PathBuf>) -> CacheCorrection {
-        let mut sorted_paths = paths.clone();
-        sorted_paths.sort();
-
-        let filenames = PathTrie::build(&sorted_paths, &workspace_folders);
-
-        let mut directories: Vec<PathBuf> = {
-            let mut unique_directories = HashSet::new();
-            for p in sorted_paths.iter() {
-                if let Some(parent) = p.parent() {
-                    unique_directories.insert(parent);
-                }
-            }
-            unique_directories
-                .iter()
-                .map(|p| PathBuf::from(p))
-                .collect()
-        };
-        directories.sort();
-
-        let directories = PathTrie::build(&directories, &workspace_folders);
-        CacheCorrection {
-            filenames,
-            directories,
-        }
-    }
 }
 
 pub struct DocumentsState {

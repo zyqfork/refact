@@ -836,7 +836,7 @@ pub fn preflight_merge_conflicts(
     }
     match merge_result {
         Ok(_) => Ok(Vec::new()),
-        Err(e) if !conflicts.is_empty() => Ok(conflicts),
+        Err(_e) if !conflicts.is_empty() => Ok(conflicts),
         Err(e) => {
             if remove_warnings.is_empty() {
                 Err(format!("Merge preflight failed: {}", e))
