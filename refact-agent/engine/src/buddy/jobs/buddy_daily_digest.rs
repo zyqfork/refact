@@ -80,6 +80,14 @@ mod tests {
     use crate::buddy::conversation_ledger::workflow_id_to_mapping;
     use crate::buddy::types::{BuddyJobState, BuddyOnboarding, BuddyPetState, BuddyPulse};
 
+    fn defaults_dir() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates")
+            .join("refact-yaml-configs")
+            .join("src")
+            .join("defaults")
+    }
+
     fn test_context(project_root: &Path) -> BuddyJobContext {
         BuddyJobContext {
             identity_name: "Pixel".to_string(),
@@ -118,10 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn all_4_workflow_yamls_loadable() {
-        let defaults_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("yaml_configs")
-            .join("defaults");
+        let defaults_dir = defaults_dir();
         let registry =
             crate::yaml_configs::customization_registry::load_registry_from_dir(&defaults_dir)
                 .await;

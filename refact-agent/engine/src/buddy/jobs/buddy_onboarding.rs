@@ -204,6 +204,16 @@ mod tests {
     use crate::yaml_configs::customization_types::SubagentConfig;
     use std::path::Path;
 
+    fn subagent_yaml_path(id: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates")
+            .join("refact-yaml-configs")
+            .join("src")
+            .join("defaults")
+            .join("subagents")
+            .join(format!("{id}.yaml"))
+    }
+
     fn test_context(project_root: &Path, last_result: Option<String>) -> BuddyJobContext {
         BuddyJobContext {
             identity_name: "Pixel".to_string(),
@@ -285,11 +295,11 @@ mod tests {
             ),
         ];
         for (id, tools) in expected {
-            let path = format!("src/yaml_configs/defaults/subagents/{id}.yaml");
+            let path = subagent_yaml_path(id);
             let yaml = std::fs::read_to_string(&path)
-                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
             let config = serde_yaml::from_str::<SubagentConfig>(&yaml)
-                .unwrap_or_else(|err| panic!("failed to parse {path}: {err}"));
+                .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
             assert_eq!(config.id, id);
             assert!(config.subchat.autonomous_no_confirm.unwrap_or(false));
             for tool in tools {

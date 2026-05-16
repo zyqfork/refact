@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use crate::buddy::autonomous_workflows::{AUTONOMOUS_BUDDY_WORKFLOWS, ERROR_DETECTIVE_WORKFLOW_ID};
 use crate::yaml_configs::customization_types::SubagentConfig;
 
@@ -8,11 +10,22 @@ fn workflow_ids() -> Vec<&'static str> {
         .collect()
 }
 
+fn subagent_yaml_path(id: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates")
+        .join("refact-yaml-configs")
+        .join("src")
+        .join("defaults")
+        .join("subagents")
+        .join(format!("{id}.yaml"))
+}
+
 fn load_workflow_yaml(id: &str) -> SubagentConfig {
-    let path = format!("src/yaml_configs/defaults/subagents/{id}.yaml");
-    let yaml =
-        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
-    serde_yaml::from_str(&yaml).unwrap_or_else(|err| panic!("failed to parse {path}: {err}"))
+    let path = subagent_yaml_path(id);
+    let yaml = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    serde_yaml::from_str(&yaml)
+        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()))
 }
 
 #[tokio::test]
