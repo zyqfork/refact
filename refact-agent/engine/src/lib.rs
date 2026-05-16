@@ -22,6 +22,7 @@ use rusqlite::ffi::sqlite3_auto_extension;
 
 pub use refact_core::custom_error;
 pub use refact_scratchpads;
+pub use refact_tool_api;
 pub mod fuzzy_search;
 
 pub mod background_tasks;

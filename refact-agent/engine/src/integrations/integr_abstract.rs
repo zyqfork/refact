@@ -6,6 +6,8 @@ use tokio::sync::RwLock as ARwLock;
 
 use crate::global_context::GlobalContext;
 
+pub use refact_tool_api::IntegrationConfirmation;
+
 #[async_trait]
 pub trait IntegrationTrait: Send + Sync {
     fn integr_schema(&self) -> &str;
@@ -33,14 +35,6 @@ pub struct IntegrationAvailable {
 
 fn default_true() -> bool {
     true
-}
-
-#[derive(Deserialize, Serialize, Clone, Default, Debug)]
-pub struct IntegrationConfirmation {
-    #[serde(default)]
-    pub ask_user: Vec<String>,
-    #[serde(default)]
-    pub deny: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]
