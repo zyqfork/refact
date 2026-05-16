@@ -1,27 +1,13 @@
-use std::{any::Any, sync::Arc};
-use std::time::Duration;
+pub use refact_integrations::sessions::{IntegrationSession, get_session_hashmap_key};
+
+use std::sync::Arc;
 use tokio::sync::RwLock as ARwLock;
 use tokio::sync::Mutex as AMutex;
-use std::future::Future;
+use std::time::Duration;
 
 use crate::global_context::GlobalContext;
 
 const STOP_SESSION_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub trait IntegrationSession: Any + Send + Sync {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    fn is_expired(&self) -> bool;
-
-    fn try_stop(
-        &mut self,
-        self_arc: Arc<AMutex<Box<dyn IntegrationSession>>>,
-    ) -> Box<dyn Future<Output = String> + Send>;
-}
-
-pub fn get_session_hashmap_key(integration_name: &str, base_key: &str) -> String {
-    format!("{} ⚡ {}", integration_name, base_key)
-}
 
 async fn remove_expired_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
     let sessions = {
@@ -68,7 +54,6 @@ async fn remove_expired_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
         futures.push(future);
     }
     futures::future::join_all(futures).await;
-    // sessions still keeps a reference on all sessions, just in case a destructor is called in the block above
 }
 
 pub async fn remove_expired_sessions_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
