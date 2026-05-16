@@ -1,9 +1,8 @@
-use crate::ast::ast_indexer_thread::AstIndexService;
-use crate::ast::ast_structs::{AstDB, AstDefinition};
-use crate::call_validation::{ContextFile, CursorPosition, PostprocessSettings};
-use crate::custom_error::trace_and_default;
-use crate::global_context::GlobalContext;
-use crate::postprocessing::pp_context_files::postprocess_context_files;
+use refact_ast::ast::ast_structs::{AstDB, AstDefinition};
+use refact_core::chat_types::{ContextFile, CursorPosition, PostprocessSettings};
+use refact_core::custom_error::trace_and_default;
+use refact_postprocessing::pp_context_files::postprocess_context_files;
+use refact_postprocessing::pp_context_provider::PPContextTrait;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -11,8 +10,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use std::vec;
-use tokio::sync::Mutex as AMutex;
-use tokio::sync::RwLock as ARwLock;
 use tracing::info;
 
 const DEBUG: bool = false;
@@ -20,7 +17,7 @@ const DEBUG: bool = false;
 const TAKE_USAGES_AROUND_CURSOR: usize = 20;
 
 async fn _render_context_files(
-    gcx: Arc<ARwLock<GlobalContext>>,
+    project_dirs: &[PathBuf],
     context_format: &String,
     postprocessed_messages: &Vec<ContextFile>,
     cursor_filepath: &PathBuf,
@@ -29,7 +26,7 @@ async fn _render_context_files(
         return "".to_string();
     }
     let (repo_name, cursor_filepath_stripped) =
-        if let Some(project_dir) = crate::files_correction::get_project_dirs(gcx).await.get(0) {
+        if let Some(project_dir) = project_dirs.get(0) {
             let repo_name = project_dir
                 .file_name()
                 .map(|x| x.to_string_lossy().to_string())
@@ -89,10 +86,9 @@ async fn _cursor_position_to_context_file(
         tracing::error!("cursor line {} out of range", cursor_line);
         return vec![];
     }
-    let cursor_line = (cursor_line + 1) as usize; // count from 1
+    let cursor_line = (cursor_line + 1) as usize;
     let usages: Vec<(usize, String)> =
-        crate::ast::ast_db::doc_usages(ast_index.clone(), &cpath).await;
-    // uline in usage counts from 1
+        refact_ast::ast::ast_db::doc_usages(ast_index.clone(), &cpath).await;
 
     let mut distances: Vec<(i32, String, usize)> = usages
         .into_iter()
@@ -123,7 +119,7 @@ async fn _cursor_position_to_context_file(
             info!("adding {} to context", double_colon_path);
         }
         let defs: Vec<Arc<AstDefinition>> =
-            crate::ast::ast_db::definitions(ast_index.clone(), double_colon_path.as_str())
+            refact_ast::ast::ast_db::definitions(ast_index.clone(), double_colon_path.as_str())
                 .unwrap_or_else(trace_and_default);
         if defs.len() != 1 {
             tracing::warn!(
@@ -160,8 +156,9 @@ async fn _cursor_position_to_context_file(
 }
 
 pub async fn retrieve_ast_based_extra_context(
-    gcx: Arc<ARwLock<GlobalContext>>,
-    ast_service: Option<Arc<AMutex<AstIndexService>>>,
+    pp_context: Arc<dyn PPContextTrait>,
+    project_dirs: Vec<PathBuf>,
+    ast_index: Option<Arc<AstDB>>,
     t: &HasTokenizerAndEot,
     cpath: &PathBuf,
     pos: &CursorPosition,
@@ -177,10 +174,9 @@ pub async fn retrieve_ast_based_extra_context(
     }
 
     let rag_t0 = Instant::now();
-    let mut ast_context_file_vec: Vec<ContextFile> = if let Some(ast) = &ast_service {
-        let ast_index = ast.lock().await.ast_index.clone();
+    let mut ast_context_file_vec: Vec<ContextFile> = if let Some(ast_idx) = ast_index {
         _cursor_position_to_context_file(
-            ast_index.clone(),
+            ast_idx.clone(),
             cpath.to_string_lossy().to_string(),
             pos.line,
             context_used,
@@ -192,7 +188,6 @@ pub async fn retrieve_ast_based_extra_context(
 
     let to_buckets_ms = rag_t0.elapsed().as_millis() as i32;
     if subblock_to_ignore_range.0 != i32::MAX && subblock_to_ignore_range.1 != i32::MIN {
-        // disable (usefulness==-1) the FIM region around the cursor from getting into the results
         let fim_ban = ContextFile {
             file_name: cpath.to_string_lossy().to_string(),
             file_content: "".to_string(),
@@ -210,7 +205,7 @@ pub async fn retrieve_ast_based_extra_context(
     info!(" -- post processing starts --");
     let post_t0 = Instant::now();
     let (postprocessed_messages, _notes) = postprocess_context_files(
-        gcx.clone(),
+        pp_context.clone(),
         &mut ast_context_file_vec,
         t.tokenizer.clone(),
         rag_tokens_n,
@@ -225,8 +220,6 @@ pub async fn retrieve_ast_based_extra_context(
         to_buckets_ms, post_ms
     );
 
-    // Done, only reporting is left
-    // context_to_fim_debug_page(&postprocessed_messages);
     context_used["attached_files"] = Value::Array(
         postprocessed_messages
             .iter()
@@ -242,16 +235,10 @@ pub async fn retrieve_ast_based_extra_context(
     );
     context_used["rag_ms"] = Value::from(rag_ms);
     _render_context_files(
-        gcx.clone(),
+        &project_dirs,
         &t.context_format,
         &postprocessed_messages,
         &cpath,
     )
     .await
 }
-
-//     // context["cursor_symbols"] = Value::Array(search_traces.cursor_symbols.iter()
-//     // context["bucket_declarations"] = Value::Array(search_traces.bucket_declarations.iter()
-//     // context["bucket_usage_of_same_stuff"] = Value::Array(search_traces.bucket_usage_of_same_stuff.iter()
-//     // context["bucket_high_overlap"] = Value::Array(search_traces.bucket_high_overlap.iter()
-//     // context["bucket_imports"] = Value::Array(search_traces.bucket_imports.iter()

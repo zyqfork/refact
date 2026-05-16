@@ -18,7 +18,7 @@ use crate::call_validation::SamplingParameters;
 use crate::caps::BaseModelRecord;
 use crate::custom_error::ScratchError;
 use crate::nicer_logs;
-use crate::scratchpad_abstract::{FinishReason, ScratchpadAbstract};
+use crate::scratchpad_abstract::{FinishReason, ScratchpadAbstract, ScratchpadPromptInput};
 use crate::at_commands::at_commands::AtCommandsContext;
 
 pub async fn scratchpad_interaction_not_stream_json(
@@ -199,8 +199,15 @@ pub async fn scratchpad_interaction_not_stream(
     only_deterministic_messages: bool,
 ) -> Result<Response<Body>, ScratchError> {
     let t1 = std::time::Instant::now();
+    let prompt_input = {
+        let ccx_locked = ccx.lock().await;
+        ScratchpadPromptInput {
+            n_ctx: ccx_locked.n_ctx,
+            postprocess_parameters: ccx_locked.postprocess_parameters.clone(),
+        }
+    };
     let prompt = scratchpad
-        .prompt(ccx.clone(), parameters)
+        .prompt(prompt_input, parameters)
         .await
         .map_err(|e| {
             ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Prompt: {}", e))
@@ -266,8 +273,15 @@ pub async fn scratchpad_interaction_stream(
         {
             let subchat_tx: Arc<AMutex<mpsc::UnboundedSender<serde_json::Value>>> = my_ccx.lock().await.subchat_tx.clone();
             let subchat_rx: Arc<AMutex<mpsc::UnboundedReceiver<serde_json::Value>>> = my_ccx.lock().await.subchat_rx.clone();
+            let prompt_input = {
+                let ccx_locked = my_ccx.lock().await;
+                ScratchpadPromptInput {
+                    n_ctx: ccx_locked.n_ctx,
+                    postprocess_parameters: ccx_locked.postprocess_parameters.clone(),
+                }
+            };
             let mut prompt_future = Some(Box::pin(my_scratchpad.prompt(
-                my_ccx.clone(),
+                prompt_input,
                 &mut my_parameters,
             )));
             // horrible loop that waits for prompt() future, and at the same time retranslates any streaming via my_ccx.subchat_rx/tx to the user

@@ -1,4 +1,4 @@
-mod gcx_pp_context;
+pub(crate) mod gcx_pp_context;
 
 pub use refact_postprocessing::pp_capture_buffer;
 pub use refact_postprocessing::pp_command_output;

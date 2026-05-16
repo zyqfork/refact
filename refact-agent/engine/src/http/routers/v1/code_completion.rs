@@ -15,6 +15,7 @@ use crate::privacy::{check_file_privacy, load_privacy_if_needed};
 use crate::files_correction::canonical_path;
 use crate::scratchpads;
 use crate::at_commands::at_commands::AtCommandsContext;
+use crate::scratchpad_abstract::ScratchpadPromptInput;
 
 const CODE_COMPLETION_TOP_N: usize = 5;
 
@@ -173,8 +174,15 @@ pub async fn handle_v1_code_completion_prompt(
         )
         .await,
     ));
+    let prompt_input = {
+        let ccx_locked = ccx.lock().await;
+        ScratchpadPromptInput {
+            n_ctx: ccx_locked.n_ctx,
+            postprocess_parameters: ccx_locked.postprocess_parameters.clone(),
+        }
+    };
     let prompt = scratchpad
-        .prompt(ccx.clone(), &mut post.parameters)
+        .prompt(prompt_input, &mut post.parameters)
         .await
         .map_err(|e| {
             ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Prompt: {}", e))

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::hash::Hash;
 use axum::http::StatusCode;
 use ropey::Rope;
@@ -8,104 +7,12 @@ use crate::custom_error::ScratchError;
 use crate::worktrees::types::WorktreeMeta;
 
 pub use refact_core::chat_types::{
-    Checkpoint, ContextEnum, ContextFile, ChatContent, ChatMessage, ChatToolCall, ChatToolFunction,
-    ChatUsage, MeteringUsd, MultimodalElement, OutputFilter, PostprocessSettings, SearchResult,
-    deserialize_path, format_search_results, serialize_path,
+    Checkpoint, CodeCompletionInputs, CodeCompletionPost, ContextEnum, ContextFile,
+    ChatContent, ChatMessage, ChatToolCall, ChatToolFunction, ChatUsage, CursorPosition,
+    MeteringUsd, MultimodalElement, OutputFilter, PostprocessSettings, ReasoningEffort,
+    SamplingParameters, SearchResult, deserialize_path, format_search_results, serialize_path,
     normalize_mode_id, canonical_mode_id,
 };
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct CursorPosition {
-    pub file: String,
-    pub line: i32,
-    pub character: i32,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct CodeCompletionInputs {
-    pub sources: HashMap<String, String>,
-    pub cursor: CursorPosition,
-    pub multiline: bool,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum ReasoningEffort {
-    #[serde(alias = "none")]
-    NoReasoning,
-    Minimal,
-    Low,
-    #[default]
-    Medium,
-    High,
-    XHigh,
-    Max,
-}
-
-impl ReasoningEffort {
-    pub fn to_string(&self) -> String {
-        match self {
-            Self::NoReasoning => "none".to_string(),
-            other => format!("{:?}", other).to_lowercase(),
-        }
-    }
-
-    pub fn from_str_opt(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "none" => Some(Self::NoReasoning),
-            "minimal" => Some(Self::Minimal),
-            "low" => Some(Self::Low),
-            "medium" => Some(Self::Medium),
-            "high" => Some(Self::High),
-            "xhigh" => Some(Self::XHigh),
-            "max" => Some(Self::Max),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct SamplingParameters {
-    #[serde(default)]
-    pub max_new_tokens: usize,
-    pub temperature: Option<f32>,
-    pub frequency_penalty: Option<f32>,
-    pub top_p: Option<f32>,
-    #[serde(default)]
-    pub stop: Vec<String>,
-    pub n: Option<usize>,
-    #[serde(default)]
-    pub boost_reasoning: bool,
-    #[serde(default)]
-    pub reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default)]
-    pub thinking_budget: Option<usize>,
-    #[serde(default)]
-    pub thinking: Option<serde_json::Value>,
-    #[serde(default)]
-    pub enable_thinking: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct CodeCompletionPost {
-    pub inputs: CodeCompletionInputs,
-    #[serde(default)]
-    pub parameters: SamplingParameters,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub stream: bool,
-    #[serde(default)]
-    pub no_cache: bool,
-    #[serde(default)]
-    pub use_ast: bool,
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub use_vecdb: bool,
-    #[serde(default)]
-    pub rag_tokens_n: usize,
-}
 
 pub fn code_completion_post_validate(
     code_completion_post: &CodeCompletionPost,
@@ -259,7 +166,6 @@ pub struct DiffChunk {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use crate::call_validation::{CodeCompletionInputs, CursorPosition, SamplingParameters};
     use super::*;
 
     #[test]

@@ -1,21 +1,22 @@
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
+use std::path::PathBuf;
 use std::time::Instant;
 use std::vec;
-use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 use ropey::Rope;
 use serde_json::{Value, json};
 use tokenizers::Tokenizer;
-use tokio::sync::RwLock as ARwLock;
 use tracing::info;
-use crate::ast::ast_indexer_thread::AstIndexService;
-use crate::at_commands::at_commands::AtCommandsContext;
-use crate::call_validation::{CodeCompletionPost, SamplingParameters};
-use crate::global_context::GlobalContext;
+
+use refact_ast::ast::ast_structs::AstDB;
+use refact_core::chat_types::{CodeCompletionPost, SamplingParameters};
+use refact_core::custom_error::last_n_chars;
+use refact_postprocessing::pp_context_provider::PPContextTrait;
+
 use crate::completion_cache;
-use crate::scratchpad_abstract::{FinishReason, HasTokenizerAndEot, ScratchpadAbstract};
-use crate::scratchpads::completon_rag::retrieve_ast_based_extra_context;
+use crate::completon_rag::retrieve_ast_based_extra_context;
+use crate::scratchpad_abstract::{FinishReason, HasTokenizerAndEot, ScratchpadAbstract, ScratchpadPromptInput};
 
 const DEBUG: bool = false;
 
@@ -29,8 +30,9 @@ pub struct FillInTheMiddleScratchpad {
     pub extra_stop_tokens: Vec<String>,
     pub context_used: Value,
     pub data4cache: completion_cache::CompletionSaveToCache,
-    pub ast_service: Option<Arc<AMutex<AstIndexService>>>,
-    pub global_context: Arc<ARwLock<GlobalContext>>,
+    pub ast_index: Option<Arc<AstDB>>,
+    pub pp_context: Arc<dyn PPContextTrait>,
+    pub project_dirs: Vec<PathBuf>,
 }
 
 impl FillInTheMiddleScratchpad {
@@ -39,8 +41,9 @@ impl FillInTheMiddleScratchpad {
         post: &CodeCompletionPost,
         order: String,
         cache_arc: Arc<StdRwLock<completion_cache::CompletionCache>>,
-        ast_service: Option<Arc<AMutex<AstIndexService>>>,
-        global_context: Arc<ARwLock<GlobalContext>>,
+        ast_index: Option<Arc<AstDB>>,
+        pp_context: Arc<dyn PPContextTrait>,
+        project_dirs: Vec<PathBuf>,
     ) -> Self {
         let data4cache = completion_cache::CompletionSaveToCache::new(cache_arc, &post);
         FillInTheMiddleScratchpad {
@@ -53,8 +56,9 @@ impl FillInTheMiddleScratchpad {
             extra_stop_tokens: vec![],
             context_used: json!({}),
             data4cache,
-            ast_service,
-            global_context,
+            ast_index,
+            pp_context,
+            project_dirs,
         }
     }
 
@@ -70,7 +74,6 @@ impl FillInTheMiddleScratchpad {
 #[async_trait]
 impl ScratchpadAbstract for FillInTheMiddleScratchpad {
     async fn apply_model_adaptation_patch(&mut self, patch: &Value) -> Result<(), String> {
-        // That will work for some models (starcoder) without patching
         self.fim_prefix = patch
             .get("fim_prefix")
             .and_then(|x| x.as_str())
@@ -128,15 +131,15 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
 
     async fn prompt(
         &mut self,
-        ccx: Arc<AMutex<AtCommandsContext>>,
+        input: ScratchpadPromptInput,
         sampling_parameters_to_patch: &mut SamplingParameters,
     ) -> Result<String, String> {
-        let n_ctx = ccx.lock().await.n_ctx;
+        let n_ctx = input.n_ctx;
         let fim_t0 = Instant::now();
         let use_rag = !self.t.context_format.is_empty()
             && self.t.rag_ratio > 0.0
             && self.post.use_ast
-            && self.ast_service.is_some();
+            && self.ast_index.is_some();
         let mut rag_tokens_n = if self.post.rag_tokens_n > 0 {
             self.post.rag_tokens_n.min(4096).max(50)
         } else {
@@ -153,7 +156,7 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
                 self.t.context_format.is_empty() as i32,
                 self.post.use_ast as i32,
                 (rag_tokens_n > 0) as i32,
-                self.ast_service.is_some() as i32
+                self.ast_index.is_some() as i32
             );
         }
 
@@ -166,13 +169,13 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
             return Err(msg);
         }
 
-        let cpath = crate::files_correction::canonical_path(&self.post.inputs.cursor.file);
+        let cpath = self.pp_context.canonical_path(&self.post.inputs.cursor.file);
 
-        let supports_stop = true; // some hf models do not support stop, but it's a thing of the past?
+        let supports_stop = true;
         if supports_stop {
             let mut stop_list = vec![self.t.eot.clone(), "\n\n".to_string()];
             if !self.post.inputs.multiline {
-                stop_list.push("\n".to_string()); // This doesn't stop hf inference, only whole tokens do
+                stop_list.push("\n".to_string());
             }
             stop_list.extend(self.extra_stop_tokens.clone());
             sampling_parameters_to_patch.stop = stop_list;
@@ -197,15 +200,12 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
 
         let cursor_line1: String;
         let col = pos.character as usize;
-        // TODO: use get_slice and handle error
         cursor_line1 = text.line(pos.line as usize).slice(0..col).to_string();
-        // UNFINISHED LI|
 
         let mut after_line = after_iter.next();
 
         let cursor_line2: String;
         if self.post.inputs.multiline {
-            // TODO: use get_slice and handle error
             cursor_line2 = text.line(pos.line as usize).slice(col..).to_string();
         } else {
             cursor_line2 = "".to_string();
@@ -248,7 +248,7 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
         let before = before.into_iter().rev().collect::<Vec<_>>().join("");
         info!(
             "{} FIM prompt {} tokens used < limit {}",
-            crate::nicer_logs::last_n_chars(&cpath.display().to_string(), 30),
+            last_n_chars(&cpath.display().to_string(), 30),
             tokens_used,
             limit
         );
@@ -287,22 +287,15 @@ impl ScratchpadAbstract for FillInTheMiddleScratchpad {
         info!(" -- /post fim {}ms-- ", fim_ms);
 
         if use_rag && rag_tokens_n > 0 {
-            let mut pp_settings = {
-                let ccx_locked = ccx.lock().await;
-                ccx_locked.postprocess_parameters.clone()
-            };
-            pp_settings.max_files_n = pp_settings.max_files_n.max(1);
+            let pp_settings = input.postprocess_parameters.clone();
 
-            // NOTE: why do we need this loop?
-            // postprocess_context_files doesn't care about additional tokens after lines skip
-            // in real world retrieve_ast_based_extra_context can produce context that doesn't fit in the budget
-            // if so we need to reduce budget and retrieve context again
             let mut extra_content_collect_counter = 0;
             let mut content_tokens_budget = rag_tokens_n as i32;
             loop {
                 let extra_context = retrieve_ast_based_extra_context(
-                    self.global_context.clone(),
-                    self.ast_service.clone(),
+                    self.pp_context.clone(),
+                    self.project_dirs.clone(),
+                    self.ast_index.clone(),
                     &self.t,
                     &cpath,
                     &pos,

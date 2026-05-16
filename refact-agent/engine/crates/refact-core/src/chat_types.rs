@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -840,3 +841,94 @@ pub fn canonical_mode_id(mode: &str) -> Result<String, String> {
     Ok(canonical)
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    #[serde(alias = "none")]
+    NoReasoning,
+    Minimal,
+    Low,
+    #[default]
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl ReasoningEffort {
+    pub fn to_string(&self) -> String {
+        match self {
+            Self::NoReasoning => "none".to_string(),
+            other => format!("{:?}", other).to_lowercase(),
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "none" => Some(Self::NoReasoning),
+            "minimal" => Some(Self::Minimal),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "xhigh" => Some(Self::XHigh),
+            "max" => Some(Self::Max),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SamplingParameters {
+    #[serde(default)]
+    pub max_new_tokens: usize,
+    pub temperature: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub top_p: Option<f32>,
+    #[serde(default)]
+    pub stop: Vec<String>,
+    pub n: Option<usize>,
+    #[serde(default)]
+    pub boost_reasoning: bool,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub thinking_budget: Option<usize>,
+    #[serde(default)]
+    pub thinking: Option<Value>,
+    #[serde(default)]
+    pub enable_thinking: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CursorPosition {
+    pub file: String,
+    pub line: i32,
+    pub character: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CodeCompletionInputs {
+    pub sources: HashMap<String, String>,
+    pub cursor: CursorPosition,
+    pub multiline: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CodeCompletionPost {
+    pub inputs: CodeCompletionInputs,
+    #[serde(default)]
+    pub parameters: SamplingParameters,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default)]
+    pub no_cache: bool,
+    #[serde(default)]
+    pub use_ast: bool,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub use_vecdb: bool,
+    #[serde(default)]
+    pub rag_tokens_n: usize,
+}
