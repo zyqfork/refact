@@ -398,3 +398,171 @@ pub fn resolve_model_caps(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider_types::{ModelPricing, ModelPricingTier};
+    use serde_json::json;
+
+    fn caps_with(entries: &[(&str, usize)]) -> HashMap<String, ModelCapabilities> {
+        entries
+            .iter()
+            .map(|(name, n_ctx)| ((*name).to_string(), model_cap(*n_ctx)))
+            .collect()
+    }
+
+    fn model_cap(n_ctx: usize) -> ModelCapabilities {
+        ModelCapabilities {
+            n_ctx,
+            max_output_tokens: n_ctx / 2,
+            tokenizer: "fake".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolves_exact_model_match() {
+        let caps = caps_with(&[("openai/gpt-4.1", 128_000)]);
+
+        let resolved = resolve_model_caps(&caps, "openai/gpt-4.1").unwrap();
+
+        assert_eq!(resolved.matched_key, "openai/gpt-4.1");
+        assert_eq!(resolved.source, ModelCapsSource::Registry);
+        assert_eq!(resolved.caps.n_ctx, 128_000);
+        assert!(is_model_supported(&caps, "openai/gpt-4.1"));
+        assert!(!is_model_supported(&caps, "openai/missing"));
+    }
+
+    #[test]
+    fn resolves_provider_stripped_model_match() {
+        let caps = caps_with(&[("gpt-4.1", 128_000)]);
+
+        let resolved = resolve_model_caps(&caps, "openai/gpt-4.1").unwrap();
+
+        assert_eq!(resolved.matched_key, "gpt-4.1");
+        assert_eq!(resolved.source, ModelCapsSource::Registry);
+        assert_eq!(resolved.caps.n_ctx, 128_000);
+    }
+
+    #[test]
+    fn resolves_finetune_to_base_model_match() {
+        let caps = caps_with(&[("gpt-4o", 128_000)]);
+        let canonical = canonicalize_model_name("openai/gpt-4o:ft-project-123");
+
+        let resolved = resolve_model_caps(&caps, "openai/gpt-4o:ft-project-123").unwrap();
+
+        assert_eq!(canonical.original, "openai/gpt-4o:ft-project-123");
+        assert_eq!(canonical.provider_stripped, "gpt-4o:ft-project-123");
+        assert_eq!(canonical.base_model, "gpt-4o");
+        assert!(canonical.is_finetune);
+        assert_eq!(canonical.last_segment_base, "gpt-4o");
+        assert_eq!(resolved.matched_key, "gpt-4o");
+        assert_eq!(resolved.source, ModelCapsSource::Finetune);
+        assert_eq!(resolved.caps.n_ctx, 128_000);
+    }
+
+    #[test]
+    fn resolves_wildcard_model_match() {
+        let caps = caps_with(&[("anthropic/claude-3-*", 200_000)]);
+
+        let resolved = resolve_model_caps(&caps, "anthropic/claude-3-sonnet").unwrap();
+
+        assert_eq!(resolved.matched_key, "anthropic/claude-3-*");
+        assert_eq!(resolved.source, ModelCapsSource::Registry);
+        assert_eq!(resolved.caps.n_ctx, 200_000);
+    }
+
+    #[test]
+    fn resolves_normalized_suffix_model_match() {
+        let caps = caps_with(&[("openai/gpt-4.1", 128_000)]);
+
+        let resolved = resolve_model_caps(&caps, "openai/gpt-4.1-preview").unwrap();
+
+        assert_eq!(resolved.matched_key, "openai/gpt-4.1");
+        assert_eq!(resolved.source, ModelCapsSource::Registry);
+        assert_eq!(resolved.caps.n_ctx, 128_000);
+    }
+
+    #[test]
+    fn resolves_more_specific_wildcard_before_generic() {
+        let caps = caps_with(&[
+            ("provider/model-*", 4_096),
+            ("provider/model-pro-*", 32_768),
+        ]);
+
+        let resolved = resolve_model_caps(&caps, "provider/model-pro-2026").unwrap();
+
+        assert_eq!(resolved.matched_key, "provider/model-pro-*");
+        assert_eq!(resolved.caps.n_ctx, 32_768);
+    }
+
+    #[test]
+    fn resolves_equal_specificity_wildcard_by_lexical_key() {
+        let caps = caps_with(&[("foo-b*ar", 4_096), ("foo-*bar", 8_192)]);
+
+        let resolved = resolve_model_caps(&caps, "foo-bbar").unwrap();
+
+        assert_eq!(resolved.matched_key, "foo-*bar");
+        assert_eq!(resolved.caps.n_ctx, 8_192);
+    }
+
+    #[test]
+    fn validate_model_caps_clamps_large_limits_and_normalizes_tokenizer() {
+        let mut caps = HashMap::from([(
+            "huge".to_string(),
+            ModelCapabilities {
+                n_ctx: usize::MAX,
+                max_output_tokens: usize::MAX,
+                tokenizer: "Qwen/Qwen3".to_string(),
+                ..Default::default()
+            },
+        )]);
+
+        validate_model_caps(&mut caps);
+
+        let huge = caps.get("huge").unwrap();
+        assert_eq!(huge.n_ctx, MAX_REASONABLE_N_CTX);
+        assert_eq!(huge.max_output_tokens, MAX_REASONABLE_OUTPUT_TOKENS);
+        assert_eq!(huge.tokenizer, "hf://Qwen/Qwen3");
+    }
+
+    #[test]
+    fn model_caps_pricing_metadata_converts_pricing_and_raw_cost() {
+        let mut caps = HashMap::new();
+        caps.insert(
+            "priced-model".to_string(),
+            ModelCapabilities {
+                pricing: Some(ModelPricing {
+                    prompt: 1.25,
+                    generated: 2.5,
+                    cache_read: Some(0.25),
+                    cache_creation: Some(0.75),
+                    context_over_200k: Some(ModelPricingTier {
+                        prompt: Some(3.0),
+                        generated: Some(4.0),
+                        cache_read: None,
+                        cache_creation: Some(1.0),
+                    }),
+                }),
+                raw_cost: Some(json!({ "input": 1.25, "output": 2.5 })),
+                ..Default::default()
+            },
+        );
+        caps.insert("unpriced-model".to_string(), ModelCapabilities::default());
+
+        let metadata = model_caps_pricing_metadata(&caps);
+
+        assert_eq!(metadata["priced-model"]["prompt"], json!(1.25));
+        assert_eq!(metadata["priced-model"]["generated"], json!(2.5));
+        assert_eq!(metadata["priced-model"]["cache_read"], json!(0.25));
+        assert_eq!(metadata["priced-model"]["cache_creation"], json!(0.75));
+        assert_eq!(metadata["priced-model"]["context_over_200k"]["prompt"], json!(3.0));
+        assert_eq!(metadata["priced-model"]["context_over_200k"]["generated"], json!(4.0));
+        assert_eq!(metadata["priced-model"]["context_over_200k"]["cache_creation"], json!(1.0));
+        assert_eq!(metadata["priced-model"]["source"], json!("models.dev"));
+        assert_eq!(metadata["priced-model"]["tier"], json!("base_text_tokens"));
+        assert_eq!(metadata["priced-model"]["raw_cost"], json!({ "input": 1.25, "output": 2.5 }));
+        assert!(metadata.get("unpriced-model").is_none());
+    }
+}
