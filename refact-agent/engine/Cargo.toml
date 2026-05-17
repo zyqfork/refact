@@ -29,6 +29,7 @@ members = [
     "crates/refact-pricing-core",
     "crates/refact-scope-utils",
     "crates/refact-caps-core",
+    "crates/refact-voice",
 ]
 resolver = "2"
 
@@ -96,7 +97,7 @@ bench = false
 
 [features]
 default = ["voice"]
-voice = ["dep:whisper-rs", "dep:symphonia", "dep:symphonia-bundle-mp3", "dep:rubato"]
+voice = ["refact-voice/voice"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
@@ -135,6 +136,7 @@ refact-at-web = { path = "crates/refact-at-web" }
 refact-pricing-core = { path = "crates/refact-pricing-core" }
 refact-scope-utils = { path = "crates/refact-scope-utils" }
 refact-caps-core = { path = "crates/refact-caps-core" }
+refact-voice = { path = "crates/refact-voice" }
 
 astral-tokio-tar = "0.5.2"
 axum = { version = "0.6.20", features = ["default", "http2"] }
@@ -229,10 +231,6 @@ rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "mai
 oauth2 = { version = "5.0", default-features = false }
 thiserror = "2.0.12"
 dirs = "5.0"
-whisper-rs = { version = "0.12", optional = true }
-symphonia = { version = "0.5", default-features = false, features = ["wav", "ogg", "pcm", "vorbis"], optional = true }
-symphonia-bundle-mp3 = { version = "0.5", optional = true }
-rubato = { version = "0.15", optional = true }
 
 [dev-dependencies]
 tempfile = "3.8"

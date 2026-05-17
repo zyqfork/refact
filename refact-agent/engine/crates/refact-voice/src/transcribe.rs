@@ -1,10 +1,10 @@
-use std::path::Path;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use base64::Engine;
+use std::path::Path;
 use tracing::info;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::voice::types::{TranscribeRequest, TranscribeResult};
-use crate::voice::audio_decode::decode_audio;
+use crate::audio_decode::decode_audio;
+use crate::types::{TranscribeRequest, TranscribeResult};
 
 pub fn load_context(model_path: &Path) -> Result<WhisperContext, String> {
     info!("Loading Whisper model from {:?}", model_path);

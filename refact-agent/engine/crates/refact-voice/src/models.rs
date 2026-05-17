@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::io::Write;
-use tracing::info;
 use futures::StreamExt;
+use std::io::Write;
+use std::path::PathBuf;
+use tracing::info;
 
 #[derive(Debug, Clone, Copy)]
 pub enum WhisperModel {
@@ -144,4 +144,16 @@ pub async fn download_model(
 
     info!("Downloaded {} successfully", model.filename());
     Ok(dest_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_name_roundtrip() {
+        let model = WhisperModel::from_name("base.en").unwrap();
+        assert_eq!(model.filename(), "ggml-base.en.bin");
+        assert!(model.download_url().ends_with("ggml-base.en.bin"));
+    }
 }
