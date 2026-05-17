@@ -144,6 +144,7 @@ fn health_watcher_has_visible_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use crate::buddy::scheduler::result_after_suggestion_policy;
     use crate::buddy::settings::BuddySettings;
     use crate::buddy::types::{

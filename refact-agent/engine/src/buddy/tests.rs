@@ -7336,7 +7336,7 @@ async fn task_agent_monitor_writes_heartbeat_on_message() {
         .push(make_board_card("c1", "doing", Some("agent-1"), None));
     save_board(gcx.clone(), &task.id, &board).await.unwrap();
 
-    update_card_heartbeat(gcx.clone(), &task.id, "c1")
+    update_card_heartbeat(crate::app_state::AppState::from_gcx(gcx.clone()).await, &task.id, "c1")
         .await
         .unwrap();
     let board = load_board(gcx, &task.id).await.unwrap();

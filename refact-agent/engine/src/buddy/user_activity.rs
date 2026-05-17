@@ -346,7 +346,8 @@ fn format_window(start: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-        use chrono::TimeZone;
+    use crate::app_state::AppState;
+    use chrono::TimeZone;
     use hyper::{Body, Request, StatusCode};
     use tower::ServiceExt;
 
