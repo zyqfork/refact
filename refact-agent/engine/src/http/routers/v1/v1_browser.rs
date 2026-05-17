@@ -148,7 +148,12 @@ pub async fn handle_browser_start(
             rt.reattach(&post.chat_id);
             let runtime_id = register_browser_runtime(gcx.clone(), rt).await;
 
-            if let Some(runtime_arc) = gcx.read().await.browser_runtimes.get(&runtime_id).cloned() {
+            let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+            let runtime_arc = {
+                let browser_runtimes = browser_runtimes.lock().await;
+                browser_runtimes.get(&runtime_id).cloned()
+            };
+            if let Some(runtime_arc) = runtime_arc {
                 let mut rt = runtime_arc.lock().await;
                 if let Err(e) = setup_recording_for_runtime(&mut rt) {
                     tracing::warn!("Browser recording setup failed after headless→headful relaunch (non-fatal): {}", e);
@@ -219,7 +224,12 @@ pub async fn handle_browser_start(
     rt.reattach(&post.chat_id);
     let runtime_id = register_browser_runtime(gcx.clone(), rt).await;
 
-    if let Some(runtime_arc) = gcx.read().await.browser_runtimes.get(&runtime_id).cloned() {
+    let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+    let runtime_arc = {
+        let browser_runtimes = browser_runtimes.lock().await;
+        browser_runtimes.get(&runtime_id).cloned()
+    };
+    if let Some(runtime_arc) = runtime_arc {
         let mut rt = runtime_arc.lock().await;
         if let Err(e) = setup_recording_for_runtime(&mut rt) {
             tracing::warn!("Browser recording setup failed (non-fatal): {}", e);
@@ -1859,8 +1869,9 @@ async fn browser_frame_emission_task(
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         let runtime_arc = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked.browser_runtimes.get(&runtime_id).cloned()
+            let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+            let browser_runtimes = browser_runtimes.lock().await;
+            browser_runtimes.get(&runtime_id).cloned()
         };
         let runtime_arc = match runtime_arc {
             Some(arc) => arc,

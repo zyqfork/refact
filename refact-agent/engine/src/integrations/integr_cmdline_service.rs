@@ -151,12 +151,11 @@ async fn execute_background_command(
     env_variables: &HashMap<String, String>,
 ) -> Result<String, String> {
     let session_key = format!("custom_service_{service_name}");
-    let mut session_mb = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned();
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    let mut session_mb = {
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    };
     let command_str = command_str.to_string();
     let mut actions_log = String::new();
 
@@ -199,7 +198,7 @@ async fn execute_background_command(
             let stop_msg = _stop_locked(&mut session).await;
             actions_log.push_str(&stop_msg);
         }
-        gcx.write().await.integration_sessions.remove(&session_key);
+        integration_sessions.lock().await.remove(&session_key);
         session_mb = None;
     }
 
@@ -330,9 +329,9 @@ async fn execute_background_command(
                 cmdline_stderr: stderr_reader,
                 service_name: service_name.to_string(),
             });
-            gcx.write()
+            integration_sessions
+                .lock()
                 .await
-                .integration_sessions
                 .insert(session_key.to_string(), Arc::new(AMutex::new(session)));
         }
 

@@ -13,6 +13,10 @@ use tokio::sync::{Mutex as AMutex, RwLock as ARwLock, Semaphore};
 use tracing::{error, info};
 
 use crate::ast::ast_indexer_thread::AstIndexService;
+use crate::app_state::{
+    AppState, BuddyServices, CapsState, ChatServices, IntegrationServices, ModelServices,
+    PathServices, RuntimeServices, TokenizerState, WorkspaceServices,
+};
 use crate::caps::CodeAssistantCaps;
 use crate::caps::providers::get_latest_provider_mtime;
 use crate::providers::{ProviderRegistry, load_providers_from_config};
@@ -227,15 +231,15 @@ pub struct GlobalContext {
     pub tokenizer_download_lock: Arc<AMutex<bool>>,
     pub completions_cache: Arc<StdRwLock<CompletionCache>>,
     pub vec_db: Arc<AMutex<Option<Arc<dyn refact_core::vecdb_types::VecdbSearch>>>>,
-    pub vec_db_error: String,
+    pub vec_db_error: Arc<StdMutex<String>>,
     pub ast_service: Option<Arc<AMutex<AstIndexService>>>,
     pub ask_shutdown_sender: Arc<StdMutex<std::sync::mpsc::Sender<String>>>,
     pub documents_state: DocumentsState,
     pub at_commands_preview_cache: Arc<AMutex<AtCommandsPreviewCache>>,
     pub privacy_settings: Arc<PrivacySettings>,
     pub indexing_everywhere: Arc<crate::files_blocklist::IndexingEverywhere>,
-    pub integration_sessions: HashMap<String, Arc<AMutex<Box<dyn IntegrationSession>>>>,
-    pub browser_runtimes: HashMap<String, Arc<AMutex<BrowserRuntime>>>,
+    pub integration_sessions: Arc<AMutex<HashMap<String, Arc<AMutex<Box<dyn IntegrationSession>>>>>>,
+    pub browser_runtimes: Arc<AMutex<HashMap<String, Arc<AMutex<BrowserRuntime>>>>>,
     pub codelens_cache: Arc<AMutex<crate::http::routers::v1::code_lens::CodeLensCache>>,
     pub init_shadow_repos_background_task_holder: BackgroundTasksHolder,
     pub init_shadow_repos_lock: Arc<AMutex<bool>>,
@@ -262,6 +266,93 @@ pub struct GlobalContext {
 }
 
 pub type SharedGlobalContext = Arc<ARwLock<GlobalContext>>; // TODO: remove this type alias, confusing
+
+impl GlobalContext {
+    pub fn app_state(&self) -> AppState {
+        AppState {
+            runtime: RuntimeServices {
+                shutdown_flag: self.shutdown_flag.clone(),
+                cmdline: Arc::new(self.cmdline.clone()),
+                http_client: self.http_client.clone(),
+                http_client_slowdown: self.http_client_slowdown.clone(),
+                ask_shutdown_sender: self.ask_shutdown_sender.clone(),
+            },
+            paths: PathServices {
+                cache_dir: self.cache_dir.clone(),
+                config_dir: self.config_dir.clone(),
+                app_searchable_id: self.app_searchable_id.clone(),
+            },
+            model: ModelServices {
+                caps: Arc::new(ARwLock::new(CapsState {
+                    caps: self.caps.clone(),
+                    reading_lock: self.caps_reading_lock.clone(),
+                    last_error: self.caps_last_error.clone(),
+                    last_attempted_ts: self.caps_last_attempted_ts,
+                    models_dev_startup_refresh_attempted: self
+                        .models_dev_startup_refresh_attempted,
+                })),
+                tokenizers: Arc::new(StdRwLock::new(TokenizerState {
+                    map: self.tokenizer_map.clone(),
+                    download_lock: self.tokenizer_download_lock.clone(),
+                })),
+                providers: self.providers.clone(),
+                llm_stats_sender: self.llm_stats_sender.clone(),
+            },
+            workspace: WorkspaceServices {
+                documents_state: self.documents_state.clone(),
+                privacy_settings: self.privacy_settings.clone(),
+                indexing_everywhere: self.indexing_everywhere.clone(),
+                completions_cache: self.completions_cache.clone(),
+                vec_db: self.vec_db.clone(),
+                vec_db_error: self.vec_db_error.clone(),
+                ast_service: self.ast_service.clone(),
+                knowledge_index: self.knowledge_index.clone(),
+                at_commands_preview_cache: self.at_commands_preview_cache.clone(),
+            },
+            chat: ChatServices {
+                sessions: self.chat_sessions.clone(),
+                trajectory_events_tx: self
+                    .trajectory_events_tx
+                    .clone()
+                    .expect("trajectory event sender is not initialized"),
+                workspace_changed_tx: self
+                    .workspace_changed_tx
+                    .clone()
+                    .expect("workspace changed sender is not initialized"),
+                task_events_tx: self
+                    .task_events_tx
+                    .clone()
+                    .expect("task event sender is not initialized"),
+                task_events_seq: self
+                    .task_events_seq
+                    .clone()
+                    .expect("task event sequence is not initialized"),
+                notification_events_tx: self
+                    .notification_events_tx
+                    .clone()
+                    .expect("notification event sender is not initialized"),
+                voice_service: self.voice_service.clone(),
+            },
+            buddy: BuddyServices {
+                buddy: self.buddy.clone(),
+                buddy_events_tx: self
+                    .buddy_events_tx
+                    .clone()
+                    .expect("buddy event sender is not initialized"),
+                user_activity: self.user_activity.clone(),
+            },
+            integrations: IntegrationServices {
+                integration_sessions: self.integration_sessions.clone(),
+                browser_runtimes: self.browser_runtimes.clone(),
+                ext_cache_generation: self.ext_cache_generation.clone(),
+                project_registry_cache: self.project_registry_cache.clone(),
+                codelens_cache: self.codelens_cache.clone(),
+                init_shadow_repos_lock: self.init_shadow_repos_lock.clone(),
+                git_operations_abort_flag: self.git_operations_abort_flag.clone(),
+            },
+        }
+    }
+}
 
 impl ShutdownAccess for GlobalContext {
     fn shutdown_flag(&self) -> Arc<AtomicBool> {
@@ -563,15 +654,15 @@ pub async fn create_global_context(
         tokenizer_download_lock: Arc::new(AMutex::<bool>::new(false)),
         completions_cache: Arc::new(StdRwLock::new(CompletionCache::new())),
         vec_db: Arc::new(AMutex::new(None)),
-        vec_db_error: String::new(),
+        vec_db_error: Arc::new(StdMutex::new(String::new())),
         ast_service: None,
         ask_shutdown_sender: Arc::new(StdMutex::new(ask_shutdown_sender)),
         documents_state: DocumentsState::new(workspace_dirs.clone()).await,
         at_commands_preview_cache: Arc::new(AMutex::new(AtCommandsPreviewCache::new())),
         privacy_settings: Arc::new(PrivacySettings::default()),
         indexing_everywhere: Arc::new(crate::files_blocklist::IndexingEverywhere::default()),
-        integration_sessions: HashMap::new(),
-        browser_runtimes: HashMap::new(),
+        integration_sessions: Arc::new(AMutex::new(HashMap::new())),
+        browser_runtimes: Arc::new(AMutex::new(HashMap::new())),
         codelens_cache: Arc::new(AMutex::new(
             crate::http::routers::v1::code_lens::CodeLensCache::default(),
         )),
@@ -609,6 +700,19 @@ pub async fn create_global_context(
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn app_state_from_test_gcx_clones() {
+        let gcx = make_test_gcx().await;
+        let app_state = gcx.read().await.app_state();
+        let cloned = app_state.clone();
+
+        assert_eq!(cloned.paths.app_searchable_id, "test");
+        assert!(Arc::ptr_eq(
+            &app_state.runtime.shutdown_flag,
+            &cloned.runtime.shutdown_flag
+        ));
+    }
 
     pub async fn make_test_gcx() -> Arc<ARwLock<GlobalContext>> {
         let (ask_shutdown_sender, _) = std::sync::mpsc::channel::<String>();
@@ -670,15 +774,15 @@ pub mod tests {
             tokenizer_download_lock: Arc::new(AMutex::<bool>::new(false)),
             completions_cache: Arc::new(StdRwLock::new(CompletionCache::new())),
             vec_db: Arc::new(AMutex::new(None)),
-            vec_db_error: String::new(),
+            vec_db_error: Arc::new(StdMutex::new(String::new())),
             ast_service: None,
             ask_shutdown_sender: Arc::new(StdMutex::new(ask_shutdown_sender)),
             documents_state: DocumentsState::new(vec![]).await,
             at_commands_preview_cache: Arc::new(AMutex::new(AtCommandsPreviewCache::new())),
             privacy_settings: Arc::new(PrivacySettings::default()),
             indexing_everywhere: Arc::new(crate::files_blocklist::IndexingEverywhere::default()),
-            integration_sessions: HashMap::new(),
-            browser_runtimes: HashMap::new(),
+            integration_sessions: Arc::new(AMutex::new(HashMap::new())),
+            browser_runtimes: Arc::new(AMutex::new(HashMap::new())),
             codelens_cache: Arc::new(AMutex::new(
                 crate::http::routers::v1::code_lens::CodeLensCache::default(),
             )),

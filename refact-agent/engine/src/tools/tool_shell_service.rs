@@ -327,11 +327,8 @@ async fn execute_start_action(
 ) -> Result<String, String> {
     let session_key = format!("builtin_shell_service_{}", service_name);
 
-    let session_exists = gcx
-        .read()
-        .await
-        .integration_sessions
-        .contains_key(&session_key);
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    let session_exists = integration_sessions.lock().await.contains_key(&session_key);
     if session_exists {
         return Err(format!(
             "Service '{}' is already running. Use 'stop' or 'restart' action first.",
@@ -447,9 +444,9 @@ async fn execute_start_action(
         stderr_reader,
     });
 
-    gcx.write()
+    integration_sessions
+        .lock()
         .await
-        .integration_sessions
         .insert(session_key, Arc::new(AMutex::new(session)));
 
     Ok(actions_log)
@@ -461,12 +458,11 @@ async fn execute_stop_action(
 ) -> Result<String, String> {
     let session_key = format!("builtin_shell_service_{}", service_name);
 
-    let session_arc = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned();
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    let session_arc = {
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    };
 
     if let Some(session) = session_arc {
         let stop_msg = {
@@ -478,7 +474,7 @@ async fn execute_stop_action(
             stop_service_locked(sess).await
         };
 
-        gcx.write().await.integration_sessions.remove(&session_key);
+        integration_sessions.lock().await.remove(&session_key);
         Ok(format!("Service '{}' stopped.\n{}", service_name, stop_msg))
     } else {
         Err(format!("Service '{}' is not running", service_name))
@@ -492,12 +488,11 @@ async fn execute_status_action(
 ) -> Result<String, String> {
     let session_key = format!("builtin_shell_service_{}", service_name);
 
-    let session_arc = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned();
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    let session_arc = {
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    };
 
     if let Some(session) = session_arc {
         let mut session_locked = session.lock().await;
@@ -517,7 +512,7 @@ async fn execute_status_action(
             let filtered_stderr = output_mini_postprocessing(output_filter, &stderr_out);
 
             drop(session_locked);
-            gcx.write().await.integration_sessions.remove(&session_key);
+            integration_sessions.lock().await.remove(&session_key);
 
             let mut result = format!(
                 "Service '{}' has exited with code {}.\n\n",
@@ -567,11 +562,8 @@ async fn execute_restart_action(
     let mut result = String::new();
 
     let session_key = format!("builtin_shell_service_{}", service_name);
-    let session_exists = gcx
-        .read()
-        .await
-        .integration_sessions
-        .contains_key(&session_key);
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    let session_exists = integration_sessions.lock().await.contains_key(&session_key);
 
     if session_exists {
         match execute_stop_action(gcx.clone(), service_name).await {

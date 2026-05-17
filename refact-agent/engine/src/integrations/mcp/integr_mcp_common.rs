@@ -123,12 +123,11 @@ pub async fn mcp_integr_tools(
         }
     };
 
-    let session_maybe = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned();
+    let session_maybe = {
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    };
     let session = match session_maybe {
         Some(session) => session,
         None => {
@@ -425,8 +424,9 @@ pub async fn mcp_session_setup<T: MCPTransportInitializer + Clone + Send + Sync 
     let session_key = format!("{}", config_path);
 
     let session_arc = {
-        let mut gcx_write = gcx.write().await;
-        let session = gcx_write.integration_sessions.get(&session_key).cloned();
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let mut integration_sessions = integration_sessions.lock().await;
+        let session = integration_sessions.get(&session_key).cloned();
         if session.is_none() {
             let new_session: Arc<
                 AMutex<Box<dyn crate::integrations::sessions::IntegrationSession>>,
@@ -452,9 +452,7 @@ pub async fn mcp_session_setup<T: MCPTransportInitializer + Clone + Send + Sync 
                 oauth_refresh_task_handle: None,
             })));
             tracing::info!("MCP START SESSION {:?}", session_key);
-            gcx_write
-                .integration_sessions
-                .insert(session_key.clone(), new_session.clone());
+            integration_sessions.insert(session_key.clone(), new_session.clone());
             new_session
         } else {
             session.unwrap()

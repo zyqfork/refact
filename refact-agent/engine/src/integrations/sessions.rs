@@ -11,9 +11,9 @@ const STOP_SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn remove_expired_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
     let sessions = {
-        let gcx_locked = gcx.read().await;
-        gcx_locked
-            .integration_sessions
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions
             .iter()
             .map(|(key, session)| (key.to_string(), session.clone()))
             .collect::<Vec<_>>()
@@ -31,15 +31,15 @@ async fn remove_expired_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
     }
 
     if !expired_entries.is_empty() {
-        let mut gcx_locked = gcx.write().await;
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let mut integration_sessions = integration_sessions.lock().await;
         for (key, expired_session) in &expired_entries {
-            let should_remove = gcx_locked
-                .integration_sessions
+            let should_remove = integration_sessions
                 .get(key)
                 .map(|current| Arc::ptr_eq(current, expired_session))
                 .unwrap_or(false);
             if should_remove {
-                gcx_locked.integration_sessions.remove(key);
+                integration_sessions.remove(key);
             }
         }
     }
@@ -76,13 +76,13 @@ pub async fn remove_expired_sessions_background_task(gcx: Arc<ARwLock<GlobalCont
 
 pub async fn stop_sessions(gcx: Arc<ARwLock<GlobalContext>>) {
     let sessions = {
-        let mut gcx_locked = gcx.write().await;
-        let sessions = gcx_locked
-            .integration_sessions
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let mut integration_sessions = integration_sessions.lock().await;
+        let sessions = integration_sessions
             .iter()
             .map(|(_, session)| Arc::clone(session))
             .collect::<Vec<_>>();
-        gcx_locked.integration_sessions.clear();
+        integration_sessions.clear();
         sessions
     };
     let mut futures = Vec::new();

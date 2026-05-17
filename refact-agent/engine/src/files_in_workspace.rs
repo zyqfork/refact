@@ -133,6 +133,7 @@ pub async fn get_document_text_or_read_from_disk(
         .map(|x| x.to_string())
 }
 
+#[derive(Clone)]
 pub struct DocumentsState {
     pub workspace_folders: Arc<StdMutex<Vec<PathBuf>>>,
     pub workspace_files: Arc<StdMutex<Vec<PathBuf>>>,

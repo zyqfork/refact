@@ -6052,7 +6052,12 @@ async fn pulse_populates_all_subpulse_counts() {
     );
     assert_eq!(
         pulse.mcp.total,
-        gcx.read().await.integration_sessions.len() as u32,
+        gcx.read()
+            .await
+            .integration_sessions
+            .lock()
+            .await
+            .len() as u32,
         "mcp.total must match integration_sessions count"
     );
     assert!(pulse.customization.skills > 0, "skills must be populated");

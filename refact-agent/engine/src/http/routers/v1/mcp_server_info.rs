@@ -75,16 +75,15 @@ pub async fn handle_v1_mcp_server_info(
 ) -> axum::response::Result<Response<Body>, ScratchError> {
     let session_key = params.config_path.clone();
 
-    let session = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned()
-        .ok_or(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("no session for {}", session_key),
-        ))?;
+    let session = {
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    }
+    .ok_or(ScratchError::new(
+        StatusCode::NOT_FOUND,
+        format!("no session for {}", session_key),
+    ))?;
 
     let (
         config_path_clone,
@@ -253,16 +252,15 @@ pub async fn handle_v1_mcp_server_reconnect(
 
     let session_key = post.config_path.clone();
 
-    let session = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned()
-        .ok_or(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("no session for {}", session_key),
-        ))?;
+    let session = {
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    }
+    .ok_or(ScratchError::new(
+        StatusCode::NOT_FOUND,
+        format!("no session for {}", session_key),
+    ))?;
 
     let (client, logs) = {
         let mut session_locked = session.lock().await;

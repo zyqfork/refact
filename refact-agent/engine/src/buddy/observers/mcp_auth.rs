@@ -89,9 +89,9 @@ impl BuddyObserver for McpAuthObserver {
         _ctx: &ObserverContext,
     ) -> Vec<BuddyFact> {
         let session_entries = {
-            let gcx_read = gcx.read().await;
-            gcx_read
-                .integration_sessions
+            let integration_sessions = gcx.read().await.integration_sessions.clone();
+            let integration_sessions = integration_sessions.lock().await;
+            integration_sessions
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<Vec<_>>()

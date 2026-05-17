@@ -126,7 +126,8 @@ async fn build_providers_pulse(gcx: Arc<RwLock<GlobalContext>>) -> ProviderPulse
 
 async fn build_mcp_pulse(gcx: Arc<RwLock<GlobalContext>>, fact_store: &FactStore) -> McpPulse {
     let mut pulse = McpPulse::default();
-    pulse.total = gcx.read().await.integration_sessions.len() as u32;
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    pulse.total = integration_sessions.lock().await.len() as u32;
     let failing = fact_store.recent(
         BuddyFactKind::IntegrationFailing,
         chrono::Duration::hours(4),

@@ -94,11 +94,8 @@ async fn validate_mcp_config_path(
     config_path: &str,
 ) -> Result<String, ScratchError> {
     reject_path_traversal(config_path)?;
-    let exists = gcx
-        .read()
-        .await
-        .integration_sessions
-        .contains_key(config_path);
+    let integration_sessions = gcx.read().await.integration_sessions.clone();
+    let exists = integration_sessions.lock().await.contains_key(config_path);
     if !exists {
         return Err(ScratchError::new(
             StatusCode::NOT_FOUND,

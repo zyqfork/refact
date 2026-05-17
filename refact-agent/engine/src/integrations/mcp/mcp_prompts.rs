@@ -48,8 +48,9 @@ pub async fn mcp_prompts_as_slash_commands(gcx: Arc<ARwLock<GlobalContext>>) -> 
     let sessions: Vec<
         Arc<tokio::sync::Mutex<Box<dyn crate::integrations::sessions::IntegrationSession>>>,
     > = {
-        let gcx_locked = gcx.read().await;
-        gcx_locked.integration_sessions.values().cloned().collect()
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.values().cloned().collect()
     };
 
     let mut result = Vec::new();
@@ -118,9 +119,9 @@ pub async fn parse_mcp_prompt_command(
         String,
         Arc<tokio::sync::Mutex<Box<dyn crate::integrations::sessions::IntegrationSession>>>,
     )> = {
-        let gcx_locked = gcx.read().await;
-        gcx_locked
-            .integration_sessions
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
@@ -173,9 +174,9 @@ pub async fn execute_mcp_prompt(
     };
 
     let session_arc = {
-        let gcx_locked = gcx.read().await;
-        gcx_locked
-            .integration_sessions
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions
             .get(&parsed.server_config_path)
             .cloned()
     };

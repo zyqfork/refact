@@ -181,9 +181,9 @@ impl Tool for ToolChrome {
         };
 
         let command_session = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked
-                .integration_sessions
+            let integration_sessions = gcx.read().await.integration_sessions.clone();
+            let integration_sessions = integration_sessions.lock().await;
+            integration_sessions
                 .get(&session_hashmap_key)
                 .ok_or(format!(
                     "Error getting chrome session for chat: {}",
@@ -217,9 +217,9 @@ impl Tool for ToolChrome {
                 cs.runtime_id.clone()
             };
             let runtime_arc = {
-                let gcx_locked = gcx.read().await;
-                gcx_locked
-                    .browser_runtimes
+                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                let browser_runtimes = browser_runtimes.lock().await;
+                browser_runtimes
                     .get(&runtime_id)
                     .cloned()
                     .ok_or_else(|| {
@@ -486,9 +486,9 @@ async fn setup_chrome_session(
     let mut setup_log = vec![];
 
     let session_entry = {
-        let gcx_locked = gcx.read().await;
-        gcx_locked
-            .integration_sessions
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions
             .get(session_hashmap_key)
             .cloned()
     };
@@ -505,8 +505,9 @@ async fn setup_chrome_session(
 
         let runtime_healthy = {
             let runtime_arc = {
-                let gcx_locked = gcx.read().await;
-                gcx_locked.browser_runtimes.get(&runtime_id).cloned()
+                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                let browser_runtimes = browser_runtimes.lock().await;
+                browser_runtimes.get(&runtime_id).cloned()
             };
             if let Some(arc) = runtime_arc {
                 let mut rt = arc.lock().await;
@@ -520,14 +521,14 @@ async fn setup_chrome_session(
             return Ok(setup_log);
         } else {
             setup_log.push("Browser session is disconnected. Trying to reconnect.".to_string());
-            let mut gcx_locked = gcx.write().await;
-            let should_remove = gcx_locked
-                .integration_sessions
+            let integration_sessions = gcx.read().await.integration_sessions.clone();
+            let mut integration_sessions = integration_sessions.lock().await;
+            let should_remove = integration_sessions
                 .get(session_hashmap_key)
                 .map(|current| Arc::ptr_eq(current, &session))
                 .unwrap_or(false);
             if should_remove {
-                gcx_locked.integration_sessions.remove(session_hashmap_key);
+                integration_sessions.remove(session_hashmap_key);
             }
         }
     }
@@ -545,7 +546,7 @@ async fn setup_chrome_session(
             idle_timeout: idle_browser_timeout,
             last_activity: Instant::now(),
         });
-        gcx.write().await.integration_sessions.insert(
+        gcx.read().await.integration_sessions.lock().await.insert(
             session_hashmap_key.clone(),
             Arc::new(AMutex::new(command_session)),
         );
@@ -624,7 +625,7 @@ async fn setup_chrome_session(
         idle_timeout: idle_browser_timeout,
         last_activity: Instant::now(),
     });
-    gcx.write().await.integration_sessions.insert(
+    gcx.read().await.integration_sessions.lock().await.insert(
         session_hashmap_key.clone(),
         Arc::new(AMutex::new(command_session)),
     );
@@ -673,9 +674,9 @@ async fn session_open_tab(
         None => {
             let headless_tab = {
                 let runtime_arc = {
-                    let gcx_locked = gcx.read().await;
-                    gcx_locked
-                        .browser_runtimes
+                    let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                    let browser_runtimes = browser_runtimes.lock().await;
+                    browser_runtimes
                         .get(&chrome_session.runtime_id)
                         .ok_or_else(|| {
                             format!(
@@ -770,9 +771,9 @@ async fn session_open_tab(
             let runtime_tab = tab_lock.headless_tab.clone();
             drop(tab_lock);
             {
-                let gcx_locked = gcx.read().await;
-                if let Some(rt_arc) = gcx_locked
-                    .browser_runtimes
+                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                let browser_runtimes = browser_runtimes.lock().await;
+                if let Some(rt_arc) = browser_runtimes
                     .get(&chrome_session.runtime_id)
                     .cloned()
                 {
@@ -864,8 +865,9 @@ async fn execute_via_controller(
             cs.runtime_id.clone()
         };
         let runtime_arc = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked.browser_runtimes.get(&runtime_id).cloned()
+            let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+            let browser_runtimes = browser_runtimes.lock().await;
+            browser_runtimes.get(&runtime_id).cloned()
         };
         if let Some(arc) = runtime_arc {
             let mut rt = arc.lock().await;
@@ -886,8 +888,9 @@ async fn execute_via_controller(
             cs.runtime_id.clone()
         };
         let runtime_arc = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked.browser_runtimes.get(&runtime_id).cloned()
+            let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+            let browser_runtimes = browser_runtimes.lock().await;
+            browser_runtimes.get(&runtime_id).cloned()
         };
         if let Some(arc) = runtime_arc {
             let mut rt = arc.lock().await;
@@ -1231,8 +1234,9 @@ async fn chrome_command_exec(
                 (tabs, cs.runtime_id.clone())
             };
             let runtime_tabs = {
-                let gcx_locked = gcx.read().await;
-                if let Some(rt_arc) = gcx_locked.browser_runtimes.get(&runtime_id).cloned() {
+                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                let browser_runtimes = browser_runtimes.lock().await;
+                if let Some(rt_arc) = browser_runtimes.get(&runtime_id).cloned() {
                     let rt = rt_arc.lock().await;
                     rt.browser
                         .get_tabs()
@@ -1320,8 +1324,9 @@ async fn chrome_command_exec(
                                 }
                             }
                             let runtime_arc = {
-                                let gcx_locked = gcx.read().await;
-                                gcx_locked.browser_runtimes.get(&runtime_id).cloned()
+                                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                                let browser_runtimes = browser_runtimes.lock().await;
+                                browser_runtimes.get(&runtime_id).cloned()
                             };
                             if let Some(arc) = runtime_arc {
                                 let mut rt = arc.lock().await;

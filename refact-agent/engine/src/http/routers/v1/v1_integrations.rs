@@ -264,16 +264,15 @@ pub async fn handle_v1_integrations_mcp_logs(
     })?;
 
     let session_key = post.config_path;
-    let session = gcx
-        .read()
-        .await
-        .integration_sessions
-        .get(&session_key)
-        .cloned()
-        .ok_or(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            format!("session {} not found", session_key),
-        ))?;
+    let session = {
+        let integration_sessions = gcx.read().await.integration_sessions.clone();
+        let integration_sessions = integration_sessions.lock().await;
+        integration_sessions.get(&session_key).cloned()
+    }
+    .ok_or(ScratchError::new(
+        StatusCode::NOT_FOUND,
+        format!("session {} not found", session_key),
+    ))?;
 
     let (logs_arc, stderr_file_path, stderr_cursor) = {
         let mut session_locked = session.lock().await;

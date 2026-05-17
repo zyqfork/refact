@@ -855,9 +855,11 @@ pub async fn register_browser_runtime(
 ) -> String {
     let runtime_id = runtime.runtime_id.clone();
     let arc = Arc::new(AMutex::new(runtime));
-    gcx.write()
+    gcx.read()
         .await
         .browser_runtimes
+        .lock()
+        .await
         .insert(runtime_id.clone(), arc);
     runtime_id
 }
@@ -866,7 +868,12 @@ pub async fn remove_browser_runtime(
     gcx: Arc<ARwLock<GlobalContext>>,
     runtime_id: &str,
 ) -> Option<Arc<AMutex<BrowserRuntime>>> {
-    gcx.write().await.browser_runtimes.remove(runtime_id)
+    gcx.read()
+        .await
+        .browser_runtimes
+        .lock()
+        .await
+        .remove(runtime_id)
 }
 
 pub async fn find_runtime_by_chat_id(
@@ -874,9 +881,9 @@ pub async fn find_runtime_by_chat_id(
     chat_id: &str,
 ) -> Option<(String, Arc<AMutex<BrowserRuntime>>)> {
     let runtime_arcs: Vec<(String, Arc<AMutex<BrowserRuntime>>)> = {
-        let gcx_locked = gcx.read().await;
-        gcx_locked
-            .browser_runtimes
+        let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+        let browser_runtimes = browser_runtimes.lock().await;
+        browser_runtimes
             .iter()
             .map(|(rid, arc)| (rid.clone(), arc.clone()))
             .collect()
@@ -905,15 +912,17 @@ pub async fn browser_monitor_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         }
 
         let runtime_ids: Vec<String> = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked.browser_runtimes.keys().cloned().collect()
+            let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+            let browser_runtimes = browser_runtimes.lock().await;
+            browser_runtimes.keys().cloned().collect()
         };
 
         let mut to_remove = Vec::new();
         for rid in &runtime_ids {
             let runtime_arc = {
-                let gcx_locked = gcx.read().await;
-                match gcx_locked.browser_runtimes.get(rid) {
+                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                let browser_runtimes = browser_runtimes.lock().await;
+                match browser_runtimes.get(rid) {
                     Some(arc) => arc.clone(),
                     None => continue,
                 }

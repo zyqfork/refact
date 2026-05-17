@@ -99,7 +99,7 @@ pub async fn vecdb_background_reload(gcx: Arc<ARwLock<GlobalContext>>) {
             }
             match initialize_vecdb_with_context(gcx.clone(), consts.unwrap(), Some(init_config)).await {
                 Ok(_) => {
-                    gcx.write().await.vec_db_error = "".to_string();
+                    *gcx.read().await.vec_db_error.lock().unwrap() = "".to_string();
                     info!("vecdb: initialization successful");
                     let ev = crate::buddy::actor::make_runtime_event(
                         "vecdb_building",
@@ -114,7 +114,7 @@ pub async fn vecdb_background_reload(gcx: Arc<ARwLock<GlobalContext>>) {
                 Err(refact_vecdb::vdb_init::VecDbInitError::ShutdownRequested) => break,
                 Err(err) => {
                     let err_msg = err.to_string();
-                    gcx.write().await.vec_db_error = err_msg.clone();
+                    *gcx.read().await.vec_db_error.lock().unwrap() = err_msg.clone();
                     error!("vecdb init failed: {}", err_msg);
                 }
             }
@@ -183,9 +183,12 @@ async fn initialize_vecdb_with_context(
 
     let vec_db_arc: Arc<dyn VecdbSearch> = Arc::new(vec_db);
     {
-        let mut gcx_locked = gcx.write().await;
-        gcx_locked.vec_db = Arc::new(AMutex::new(Some(vec_db_arc)));
-        gcx_locked.vec_db_error = "".to_string();
+        let (vec_db, vec_db_error) = {
+            let gcx_locked = gcx.read().await;
+            (gcx_locked.vec_db.clone(), gcx_locked.vec_db_error.clone())
+        };
+        *vec_db.lock().await = Some(vec_db_arc);
+        *vec_db_error.lock().unwrap() = "".to_string();
     }
 
     crate::files_in_workspace::enqueue_all_files_from_workspace_folders(gcx.clone(), true, true).await;
