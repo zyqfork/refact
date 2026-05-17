@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 
-use refact_buddy_core::types::{BuddyOpportunity, DismissEntry, OpportunityStatus};
+use crate::types::{BuddyOpportunity, DismissEntry, OpportunityStatus};
 
 pub const MAX_OPPORTUNITIES: usize = 200;
 pub const MAX_UNREAD: usize = 3;
@@ -206,9 +206,7 @@ impl Default for OpportunityQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use refact_buddy_core::types::{
-        BuddyOpportunityKind, BuddyOpportunityLinks, BuddyPriority,
-    };
+    use crate::types::{BuddyOpportunityKind, BuddyOpportunityLinks, BuddyPriority};
 
     fn make_opportunity(id: &str, cooldown_key: &str) -> BuddyOpportunity {
         let now = Utc::now();

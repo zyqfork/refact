@@ -1,8 +1,10 @@
+pub mod autonomous_workflows;
 pub mod conversation_ledger;
 pub mod diagnostics;
 pub mod drafts;
 pub mod events;
 pub mod facts;
+pub mod queue;
 pub mod runtime_queue;
 pub mod settings;
 pub mod snapshot;
@@ -10,3 +12,5 @@ pub mod speech_policy;
 pub mod state;
 pub mod types;
 pub mod voice_service;
+
+pub use queue::*;

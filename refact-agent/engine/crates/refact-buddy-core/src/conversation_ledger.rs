@@ -2,7 +2,7 @@ use std::path::Path;
 use tokio::fs;
 use tracing::warn;
 
-use refact_buddy_api::autonomous_workflows::{
+use crate::autonomous_workflows::{
     autonomous_workflow_meta, BUDDY_ONBOARDING_WORKFLOW_ID, BUDDY_REFACTOR_HUNTER_WORKFLOW_ID,
     BUDDY_SKILL_AUTHOR_WORKFLOW_ID, BUDDY_TEST_COVERAGE_WATCHER_WORKFLOW_ID,
     ERROR_DETECTIVE_WORKFLOW_ID,
@@ -311,7 +311,7 @@ pub async fn list_all_buddy_conversations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use refact_buddy_api::autonomous_workflows::AUTONOMOUS_BUDDY_WORKFLOWS;
+    use crate::autonomous_workflows::AUTONOMOUS_BUDDY_WORKFLOWS;
 
     async fn write_valid_conversation(dir: &Path, id: &str, updated_at: &str) {
         tokio::fs::write(

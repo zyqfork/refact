@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-pub use refact_buddy_opportunity_core::{
+pub use refact_buddy_core::queue::{
     is_terminal_status, OpportunityQueue, DEFAULT_COOLDOWN, DISMISS_MEMORY, MAX_OPPORTUNITIES,
     MAX_UNREAD,
 };

@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 refact-core = { path = "../refact-core" }
-refact-buddy-api = { path = "../refact-buddy-api" }
 refact-ext = { path = "../refact-ext" }
 chrono = { version = "0.4.31", features = ["serde"] }
 rand = "0.8.5"
