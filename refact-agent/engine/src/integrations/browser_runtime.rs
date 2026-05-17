@@ -850,13 +850,12 @@ pub fn get_browser_profile_dir(gcx_cache_dir: &PathBuf, thread_id: &str) -> Path
 }
 
 pub async fn register_browser_runtime(
-    gcx: Arc<ARwLock<GlobalContext>>,
+    app: crate::app_state::AppState,
     runtime: BrowserRuntime,
 ) -> String {
     let runtime_id = runtime.runtime_id.clone();
     let arc = Arc::new(AMutex::new(runtime));
-    gcx.read()
-        .await
+    app.integrations
         .browser_runtimes
         .lock()
         .await
@@ -865,11 +864,10 @@ pub async fn register_browser_runtime(
 }
 
 pub async fn remove_browser_runtime(
-    gcx: Arc<ARwLock<GlobalContext>>,
+    app: crate::app_state::AppState,
     runtime_id: &str,
 ) -> Option<Arc<AMutex<BrowserRuntime>>> {
-    gcx.read()
-        .await
+    app.integrations
         .browser_runtimes
         .lock()
         .await
@@ -877,11 +875,11 @@ pub async fn remove_browser_runtime(
 }
 
 pub async fn find_runtime_by_chat_id(
-    gcx: Arc<ARwLock<GlobalContext>>,
+    app: crate::app_state::AppState,
     chat_id: &str,
 ) -> Option<(String, Arc<AMutex<BrowserRuntime>>)> {
     let runtime_arcs: Vec<(String, Arc<AMutex<BrowserRuntime>>)> = {
-        let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+        let browser_runtimes = app.integrations.browser_runtimes.clone();
         let browser_runtimes = browser_runtimes.lock().await;
         browser_runtimes
             .iter()
@@ -897,9 +895,9 @@ pub async fn find_runtime_by_chat_id(
     None
 }
 
-pub async fn browser_monitor_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
+pub async fn browser_monitor_background_task(app: crate::app_state::AppState) {
     loop {
-        let shutdown_flag = gcx.read().await.shutdown_flag.clone();
+        let shutdown_flag = app.runtime.shutdown_flag.clone();
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(10)) => {}
             _ = async {
@@ -912,7 +910,7 @@ pub async fn browser_monitor_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         }
 
         let runtime_ids: Vec<String> = {
-            let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+            let browser_runtimes = app.integrations.browser_runtimes.clone();
             let browser_runtimes = browser_runtimes.lock().await;
             browser_runtimes.keys().cloned().collect()
         };
@@ -920,7 +918,7 @@ pub async fn browser_monitor_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         let mut to_remove = Vec::new();
         for rid in &runtime_ids {
             let runtime_arc = {
-                let browser_runtimes = gcx.read().await.browser_runtimes.clone();
+                let browser_runtimes = app.integrations.browser_runtimes.clone();
                 let browser_runtimes = browser_runtimes.lock().await;
                 match browser_runtimes.get(rid) {
                     Some(arc) => arc.clone(),
@@ -954,7 +952,7 @@ pub async fn browser_monitor_background_task(gcx: Arc<ARwLock<GlobalContext>>) {
         }
 
         for rid in to_remove {
-            remove_browser_runtime(gcx.clone(), &rid).await;
+            remove_browser_runtime(app.clone(), &rid).await;
         }
     }
 }

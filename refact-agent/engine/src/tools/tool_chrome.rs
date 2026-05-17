@@ -533,7 +533,7 @@ async fn setup_chrome_session(
         }
     }
 
-    if let Some((runtime_id, _)) = find_runtime_by_chat_id(gcx.clone(), chat_id).await {
+    if let Some((runtime_id, _)) = find_runtime_by_chat_id(crate::app_state::AppState::from_gcx(gcx.clone()).await, chat_id).await {
         setup_log.push("Reusing existing browser session.".to_string());
         let idle_browser_timeout = args
             .idle_browser_timeout
@@ -614,7 +614,7 @@ async fn setup_chrome_session(
         if let Err(e) = setup_recording_for_runtime(&mut rt) {
             tracing::warn!("Browser recording setup failed (non-fatal): {}", e);
         }
-        register_browser_runtime(gcx.clone(), rt).await
+        register_browser_runtime(crate::app_state::AppState::from_gcx(gcx.clone()).await, rt).await
     };
 
     setup_log.push("No opened tabs at this moment.".to_string());

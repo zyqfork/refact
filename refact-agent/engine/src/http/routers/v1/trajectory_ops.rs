@@ -324,7 +324,7 @@ pub async fn handle_handoff_apply(
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let browser_runtime_id = if let Some((runtime_id, runtime_arc)) =
-        find_runtime_by_chat_id(gcx.clone(), &chat_id).await
+        find_runtime_by_chat_id(crate::app_state::AppState::from_gcx(gcx.clone()).await, &chat_id).await
     {
         let mut rt = runtime_arc.lock().await;
         rt.detach();

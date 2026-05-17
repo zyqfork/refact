@@ -113,7 +113,7 @@ pub async fn handle_browser_start(
         )
     })?;
 
-    if let Some((rid, runtime_arc)) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id).await {
+    if let Some((rid, runtime_arc)) = find_runtime_by_chat_id(app.clone(), &post.chat_id).await {
         let (is_headless, profile_dir, chrome_path, window_bounds, idle_timeout, mask_passwords) = {
             let rt = runtime_arc.lock().await;
             (
@@ -127,7 +127,7 @@ pub async fn handle_browser_start(
         };
         if is_headless {
             drop(runtime_arc);
-            let removed = remove_browser_runtime(gcx.clone(), &rid).await;
+            let removed = remove_browser_runtime(app.clone(), &rid).await;
             drop(removed);
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
@@ -148,7 +148,7 @@ pub async fn handle_browser_start(
 
             let mut rt = runtime;
             rt.reattach(&post.chat_id);
-            let runtime_id = register_browser_runtime(gcx.clone(), rt).await;
+            let runtime_id = register_browser_runtime(app.clone(), rt).await;
 
             let browser_runtimes = gcx.read().await.browser_runtimes.clone();
             let runtime_arc = {
@@ -224,7 +224,7 @@ pub async fn handle_browser_start(
 
     let mut rt = runtime;
     rt.reattach(&post.chat_id);
-    let runtime_id = register_browser_runtime(gcx.clone(), rt).await;
+    let runtime_id = register_browser_runtime(app.clone(), rt).await;
 
     let browser_runtimes = gcx.read().await.browser_runtimes.clone();
     let runtime_arc = {
@@ -266,7 +266,7 @@ pub async fn handle_browser_stop(
         )
     })?;
 
-    let (rid, _) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (rid, _) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -275,7 +275,7 @@ pub async fn handle_browser_stop(
             )
         })?;
 
-    remove_browser_runtime(gcx.clone(), &rid).await;
+    remove_browser_runtime(app.clone(), &rid).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
@@ -299,7 +299,7 @@ pub async fn handle_browser_screenshot(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -417,7 +417,7 @@ pub async fn handle_browser_context(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -555,7 +555,7 @@ pub async fn handle_browser_context_commit(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -587,7 +587,7 @@ pub async fn handle_browser_element_pick(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -670,7 +670,7 @@ pub async fn handle_browser_element_pick_result(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -732,7 +732,7 @@ pub async fn handle_browser_annotate_start(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -992,7 +992,7 @@ pub async fn handle_browser_annotate_result(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1042,7 +1042,7 @@ pub async fn handle_browser_annotate_clear(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1109,7 +1109,7 @@ pub async fn handle_browser_curl(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1164,7 +1164,7 @@ pub async fn handle_browser_eval(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1247,7 +1247,7 @@ pub async fn handle_browser_inject_css(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1311,7 +1311,7 @@ pub async fn handle_browser_remove_css(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1362,7 +1362,7 @@ pub async fn handle_browser_dom_snapshot(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1454,7 +1454,7 @@ pub async fn handle_browser_accessibility(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1528,7 +1528,7 @@ pub async fn handle_browser_record_animation(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1617,7 +1617,7 @@ pub async fn handle_browser_handoff(
         )
     })?;
 
-    let (rid, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.from_chat_id)
+    let (rid, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.from_chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
@@ -1680,7 +1680,7 @@ pub async fn handle_browser_status(
         )
     })?;
 
-    match find_runtime_by_chat_id(gcx.clone(), &post.chat_id).await {
+    match find_runtime_by_chat_id(app.clone(), &post.chat_id).await {
         Some((rid, runtime_arc)) => {
             let rt = runtime_arc.lock().await;
             let tab_infos = rt.list_tab_infos();
@@ -1738,7 +1738,7 @@ pub async fn handle_browser_action(
         )
     })?;
 
-    let (_, runtime_arc) = find_runtime_by_chat_id(gcx.clone(), &post.chat_id)
+    let (_, runtime_arc) = find_runtime_by_chat_id(app.clone(), &post.chat_id)
         .await
         .ok_or_else(|| {
             ScratchError::new(
