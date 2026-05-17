@@ -203,7 +203,6 @@ pub async fn run() {
     }
 
     let _ = crate::privacy::load_privacy_if_needed(gcx.clone()).await;
-    let app_state = crate::app_state::AppState::from_gcx(gcx.clone()).await;
 
     if cmdline.print_customization {
         if let Some(registry) = get_project_registry(gcx.clone()).await {
@@ -219,7 +218,7 @@ pub async fn run() {
 
     // Buddy starts in background tasks below, so startup import runtime events are best-effort.
     // The persisted last_report is picked up by Buddy pulse after initialization.
-    let _ = ext::competitor_import::run_global_import(app_state.clone()).await;
+    let _ = ext::competitor_import::run_global_import(gcx.clone()).await;
 
     if cmdline.ast {
         let tmp = Some(

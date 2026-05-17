@@ -833,8 +833,7 @@ pub async fn on_workspaces_init(gcx: Arc<ARwLock<GlobalContext>>) -> i32 {
         gcx.write().await.app_searchable_id = get_app_searchable_id(&folders);
     }
     // Project competitor import runs only here for normal startup and workspace add/remove changes.
-    let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
-    let _ = crate::ext::competitor_import::run_project_import(app).await;
+    let _ = crate::ext::competitor_import::run_project_import(gcx.clone()).await;
     watcher_init(gcx.clone()).await;
     let files_enqueued = enqueue_all_files_from_workspace_folders(gcx.clone(), false, false).await;
 

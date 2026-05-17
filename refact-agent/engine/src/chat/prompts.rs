@@ -291,7 +291,8 @@ pub async fn system_prompt_add_extra_instructions(
         let has_activate = tool_names.contains("activate_skill");
         let has_deactivate = tool_names.contains("deactivate_skill");
         if has_activate || has_deactivate {
-            let skills_text = build_skills_prompt_text(app.clone(), has_activate, has_deactivate).await;
+            let skills_text =
+                build_skills_prompt_text(app.gcx.clone(), has_activate, has_deactivate).await;
             system_prompt = system_prompt.replace("%SKILLS_INSTRUCTIONS%", &skills_text);
         } else {
             system_prompt = system_prompt.replace("%SKILLS_INSTRUCTIONS%", "");
@@ -914,7 +915,7 @@ async fn gather_and_inject_system_context(
             })
             .unwrap_or_default();
         let (skills_msgs, tracking) =
-            build_skills_context_messages_tracked(app.clone(), &last_user_text, None).await;
+            build_skills_context_messages_tracked(app.gcx.clone(), &last_user_text, None).await;
         for skills_msg in skills_msgs {
             let insert_pos = messages
                 .iter()

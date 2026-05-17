@@ -8,6 +8,7 @@ use std::sync::{Arc, OnceLock};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use serde_json::{json, Value};
+use tokio::sync::RwLock as ARwLock;
 use tokio::sync::Mutex as AMutex;
 use strsim::jaro_winkler;
 use itertools::Itertools;
@@ -29,7 +30,7 @@ use crate::call_validation::{ChatMeta, PostprocessSettings, SubchatParameters};
 use crate::caps::resolve_chat_model;
 use crate::app_state::AppState;
 use crate::custom_error::ScratchError;
-use crate::global_context::try_load_caps_quickly_if_not_present;
+use crate::global_context::{try_load_caps_quickly_if_not_present, GlobalContext};
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum, deserialize_messages_from_post};
 use crate::at_commands::at_commands::filter_only_context_file_from_context_tool;
 use crate::chat::get_or_create_session_with_trajectory;
@@ -100,10 +101,11 @@ pub async fn invalidate_slash_cache() {
 }
 
 async fn load_slash_commands_and_skills(
-    app: AppState,
+    gcx: Arc<ARwLock<GlobalContext>>,
 ) -> (Vec<SlashCommand>, Vec<SkillIndex>) {
-    let current_gen = app
-        .integrations
+    let current_gen = gcx
+        .read()
+        .await
         .ext_cache_generation
         .load(Ordering::Relaxed);
     let lock = SLASH_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
@@ -115,9 +117,9 @@ async fn load_slash_commands_and_skills(
             }
         }
     }
-    let ext_dirs = get_ext_dirs(app.clone()).await;
+    let ext_dirs = get_ext_dirs(gcx.clone()).await;
     let mut commands = load_slash_commands(&ext_dirs).await;
-    let mcp_commands = mcp_prompts_as_slash_commands(app.gcx.clone()).await;
+    let mcp_commands = mcp_prompts_as_slash_commands(gcx).await;
     commands.extend(mcp_commands);
     let skills = load_skill_indices(&ext_dirs).await;
     let mut write = lock.write().await;
@@ -287,7 +289,7 @@ pub async fn handle_v1_command_completion(
         info!("args: {:?}", args);
         let focused_slash = args.iter().find(|a| a.focused && a.value.starts_with('/'));
         if let Some(focused) = focused_slash {
-            let (slash_cmds, skills) = load_slash_commands_and_skills(app.clone()).await;
+            let (slash_cmds, skills) = load_slash_commands_and_skills(global_context.clone()).await;
             let (raw_completions, details) =
                 slash_completions_for_prefix(&slash_cmds, &skills, &focused.value);
             is_cmd_executable = raw_completions.iter().any(|c| c == &focused.value);
@@ -751,7 +753,8 @@ pub struct QueryLineArg {
 pub async fn handle_v1_slash_commands(
     State(app): State<AppState>,
 ) -> Result<Response<Body>, ScratchError> {
-    let (commands, skills) = load_slash_commands_and_skills(app).await;
+    let global_context = app.gcx.clone();
+    let (commands, skills) = load_slash_commands_and_skills(global_context).await;
     let response = SlashCommandsListResponse {
         commands: commands
             .iter()

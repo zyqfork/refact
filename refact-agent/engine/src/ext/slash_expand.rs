@@ -1,13 +1,14 @@
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock as ARwLock;
 
-use crate::app_state::AppState;
 use crate::ext::config_dirs::{get_ext_dirs, ExtDirs};
 use crate::ext::skills::{load_skill_full, load_skill_indices, SkillIndex};
 use crate::ext::slash_commands::{load_slash_commands, SlashCommand};
-use crate::integrations::mcp::mcp_prompts::{execute_mcp_prompt, MCP_PROMPT_PREFIX};
+use crate::global_context::GlobalContext;
+use crate::integrations::mcp::mcp_prompts::{MCP_PROMPT_PREFIX, execute_mcp_prompt};
 
 const SLASH_CACHE_TTL: Duration = Duration::from_secs(5);
 
@@ -197,14 +198,17 @@ async fn expand_with_dirs(
 }
 
 pub async fn expand_slash_command(
-    app: AppState,
+    gcx: Arc<ARwLock<GlobalContext>>,
     raw_input: &str,
 ) -> Result<Option<ExpandedCommand>, String> {
     if !raw_input.contains('/') {
         return Ok(None);
     }
-    let ext_dirs = get_ext_dirs(app.clone()).await;
-    let generation = app.integrations.ext_cache_generation.load(Ordering::Relaxed);
+    let ext_dirs = get_ext_dirs(gcx.clone()).await;
+    let generation = {
+        let gcx_locked = gcx.read().await;
+        gcx_locked.ext_cache_generation.load(Ordering::Relaxed)
+    };
     let lock = SLASH_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
     let (commands, skill_indices) = {
         let read = lock.read().await;
@@ -236,11 +240,11 @@ pub async fn expand_slash_command(
     {
         return Ok(Some(expanded));
     }
-    expand_mcp_prompt_command(app, raw_input).await
+    expand_mcp_prompt_command(gcx, raw_input).await
 }
 
 async fn expand_mcp_prompt_command(
-    app: AppState,
+    gcx: Arc<ARwLock<GlobalContext>>,
     raw_input: &str,
 ) -> Result<Option<ExpandedCommand>, String> {
     let char_bytes: Vec<(usize, char)> = raw_input.char_indices().collect();
@@ -263,7 +267,7 @@ async fn expand_mcp_prompt_command(
         }
         let args_str = raw_input[name_byte_end..].trim().to_string();
         let prefix = &raw_input[..byte_pos];
-        match execute_mcp_prompt(app.gcx.clone(), cmd_name, &args_str, 30).await {
+        match execute_mcp_prompt(gcx.clone(), cmd_name, &args_str, 30).await {
             Ok(expanded_body) => {
                 return Ok(Some(ExpandedCommand {
                     expanded_text: format!("{}{}", prefix, expanded_body),
