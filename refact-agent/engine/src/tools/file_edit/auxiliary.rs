@@ -715,7 +715,8 @@ mod tests {
         }
 
         async fn set_privacy(gcx: Arc<ARwLock<GlobalContext>>, blocked: Vec<String>) {
-            gcx.write().await.privacy_settings = Arc::new(PrivacySettings {
+            let gcx_locked = gcx.read().await;
+            *gcx_locked.privacy_settings.write().unwrap() = Arc::new(PrivacySettings {
                 privacy_rules: FilePrivacySettings {
                     only_send_to_servers_I_control: Vec::new(),
                     blocked,

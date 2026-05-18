@@ -228,7 +228,7 @@ pub async fn run() {
             )
             .await,
         );
-        let mut gcx_locked = gcx.write().await;
+        let gcx_locked = gcx.read().await;
         *gcx_locked.ast_service.lock().unwrap() = tmp;
     }
 

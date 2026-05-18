@@ -1314,16 +1314,12 @@ mod tests {
 
         on_did_open(gcx.clone(), &path, &text, &language_id).await;
 
-        let (has_doc, active_file_path) = {
+        let (memory_doc_map, active_fp) = {
             let gcx_locked = gcx.read().await;
-            (
-                gcx_locked
-                    .documents_state
-                    .memory_document_map.lock().await
-                    .contains_key(&path),
-                gcx_locked.documents_state.active_file_path.lock().await.clone(),
-            )
+            (gcx_locked.documents_state.memory_document_map.clone(), gcx_locked.documents_state.active_file_path.clone())
         };
+        let has_doc = memory_doc_map.lock().await.contains_key(&path);
+        let active_file_path = active_fp.lock().await.clone();
         assert!(!has_doc);
         assert!(active_file_path.is_none());
         assert_eq!(cache_dirty_value(&gcx).await, 0.0);
@@ -1343,23 +1339,13 @@ mod tests {
 
         on_did_change(gcx.clone(), &path, &text).await;
 
-        let (has_doc, active_file_path, workspace_files_len) = {
+        let (memory_doc_map2, active_fp2, workspace_files_len) = {
             let gcx_locked = gcx.read().await;
-            let workspace_files_len = gcx_locked
-                .documents_state
-                .workspace_files
-                .lock()
-                .unwrap()
-                .len();
-            (
-                gcx_locked
-                    .documents_state
-                    .memory_document_map.lock().await
-                    .contains_key(&path),
-                gcx_locked.documents_state.active_file_path.lock().await.clone(),
-                workspace_files_len,
-            )
+            let wf_len = gcx_locked.documents_state.workspace_files.lock().unwrap().len();
+            (gcx_locked.documents_state.memory_document_map.clone(), gcx_locked.documents_state.active_file_path.clone(), wf_len)
         };
+        let has_doc = memory_doc_map2.lock().await.contains_key(&path);
+        let active_file_path = active_fp2.lock().await.clone();
         assert!(!has_doc);
         assert!(active_file_path.is_none());
         assert_eq!(workspace_files_len, 0);
@@ -1387,13 +1373,8 @@ mod tests {
 
         on_did_delete(gcx.clone(), &path).await;
 
-        let has_doc = {
-            let gcx_locked = gcx.read().await;
-            gcx_locked
-                .documents_state
-                .memory_document_map.lock().await
-                .contains_key(&path)
-        };
+        let mdm = gcx.read().await.documents_state.memory_document_map.clone();
+        let has_doc = mdm.lock().await.contains_key(&path);
         assert!(has_doc);
         assert_eq!(cache_dirty_value(&gcx).await, 0.0);
     }
@@ -1413,16 +1394,12 @@ mod tests {
 
         on_did_open(gcx.clone(), &path, &text, &language_id).await;
 
-        let (has_doc, active_file_path) = {
-            let gcx_locked = gcx.read().await;
-            (
-                gcx_locked
-                    .documents_state
-                    .memory_document_map.lock().await
-                    .contains_key(&path),
-                gcx_locked.documents_state.active_file_path.lock().await.clone(),
-            )
+        let (mdm3, afp3) = {
+            let g = gcx.read().await;
+            (g.documents_state.memory_document_map.clone(), g.documents_state.active_file_path.clone())
         };
+        let has_doc = mdm3.lock().await.contains_key(&path);
+        let active_file_path = afp3.lock().await.clone();
         assert!(has_doc);
         assert_eq!(active_file_path, Some(path));
         assert!(cache_dirty_value(&gcx).await > 0.0);

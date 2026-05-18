@@ -554,17 +554,20 @@ mod worktree_scope_read_tools {
             fixture.source.join("src").join("source_only.rs"),
         ];
         {
-            let mut locked = gcx.write().await;
-            *locked.privacy_settings.write().unwrap() = Arc::new(PrivacySettings {
+            let locked = gcx.read().await;
+            let privacy_settings = locked.privacy_settings.clone();
+            let workspace_folders = locked.documents_state.workspace_folders.clone();
+            let workspace_files_lock = locked.documents_state.workspace_files.clone();
+            drop(locked);
+            *privacy_settings.write().unwrap() = Arc::new(PrivacySettings {
                 privacy_rules: FilePrivacySettings {
                     only_send_to_servers_I_control: vec![],
                     blocked,
                 },
                 loaded_ts: u64::MAX / 2,
             });
-            *locked.documents_state.workspace_folders.lock().unwrap() =
-                vec![fixture.source.clone()];
-            *locked.documents_state.workspace_files.lock().unwrap() = workspace_files;
+            *workspace_folders.lock().unwrap() = vec![fixture.source.clone()];
+            *workspace_files_lock.lock().unwrap() = workspace_files;
         }
         gcx
     }
