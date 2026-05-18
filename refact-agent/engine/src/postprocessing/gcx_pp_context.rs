@@ -28,7 +28,7 @@ impl PPContextTrait for GcxPPContext {
 
     async fn doc_defs_for_path(&self, path: &str) -> Vec<Arc<AstDefinition>> {
         let path_buf = PathBuf::from(path);
-        let ast_service = self.0.read().await.ast_service.clone();
+        let ast_service = self.0.read().await.ast_service.lock().unwrap().clone();
         match ast_service {
             Some(ast) if get_ast_parser_by_filename(&path_buf).is_ok() => {
                 let ast_index = ast.lock().await.ast_index.clone();

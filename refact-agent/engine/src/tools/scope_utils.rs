@@ -555,7 +555,7 @@ mod worktree_scope_read_tools {
         ];
         {
             let mut locked = gcx.write().await;
-            locked.privacy_settings = Arc::new(PrivacySettings {
+            *locked.privacy_settings.write().unwrap() = Arc::new(PrivacySettings {
                 privacy_rules: FilePrivacySettings {
                     only_send_to_servers_I_control: vec![],
                     blocked,

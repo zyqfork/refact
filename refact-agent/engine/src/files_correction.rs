@@ -24,7 +24,7 @@ pub async fn paths_from_anywhere(global_context: Arc<ARwLock<GlobalContext>>) ->
     let (file_paths_from_memory, paths_from_workspace, paths_from_jsonl) = {
         let documents_state = &global_context.read().await.documents_state; // somehow keeps lock until out of scope
         let file_paths_from_memory = documents_state
-            .memory_document_map
+            .memory_document_map.lock().await
             .keys()
             .cloned()
             .collect::<Vec<_>>();
@@ -226,7 +226,7 @@ pub async fn get_active_project_path(gcx: Arc<ARwLock<GlobalContext>>) -> Option
         return None;
     }
 
-    let active_file = gcx.read().await.documents_state.active_file_path.clone();
+    let active_file = gcx.read().await.documents_state.active_file_path.lock().await.clone();
     // tracing::info!("get_active_project_path(), active_file={:?} workspace_folders={:?}", active_file, workspace_folders);
 
     let active_file_path = if let Some(active_file) = active_file {
@@ -256,7 +256,7 @@ pub async fn get_active_project_path(gcx: Arc<ARwLock<GlobalContext>>) -> Option
 pub async fn get_active_workspace_folder(gcx: Arc<ARwLock<GlobalContext>>) -> Option<PathBuf> {
     let workspace_folders = get_project_dirs(gcx.clone()).await;
 
-    let active_file = gcx.read().await.documents_state.active_file_path.clone();
+    let active_file = gcx.read().await.documents_state.active_file_path.lock().await.clone();
     if let Some(active_file) = active_file {
         for f in &workspace_folders {
             if active_file.starts_with(f) {

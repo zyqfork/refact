@@ -272,13 +272,13 @@ impl Tool for ToolMv {
                     let mut gcx_write = gcx.write().await;
                     let paths_to_remove: Vec<_> = gcx_write
                         .documents_state
-                        .memory_document_map
+                        .memory_document_map.lock().await
                         .keys()
                         .filter(|p| p.starts_with(&dst_true_path))
                         .cloned()
                         .collect();
                     for p in paths_to_remove {
-                        gcx_write.documents_state.memory_document_map.remove(&p);
+                        gcx_write.documents_state.memory_document_map.lock().await.remove(&p);
                     }
                 }
             } else {
@@ -294,7 +294,7 @@ impl Tool for ToolMv {
                 gcx.write()
                     .await
                     .documents_state
-                    .memory_document_map
+                    .memory_document_map.lock().await
                     .remove(&dst_true_path);
             }
         }
@@ -329,11 +329,11 @@ impl Tool for ToolMv {
             let mut gcx_write = gcx.write().await;
             gcx_write
                 .documents_state
-                .memory_document_map
+                .memory_document_map.lock().await
                 .remove(&src_true_path);
             gcx_write
                 .documents_state
-                .memory_document_map
+                .memory_document_map.lock().await
                 .remove(&dst_true_path);
         }
 

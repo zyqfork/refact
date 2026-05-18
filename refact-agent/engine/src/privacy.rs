@@ -70,9 +70,9 @@ pub async fn load_privacy_if_needed(gcx: Arc<ARwLock<GlobalContext>>) -> Arc<Pri
     let (config_dir, privacy_yaml) = {
         let gcx_locked = gcx.read().await;
         let should_reload =
-            gcx_locked.privacy_settings.loaded_ts + PRIVACY_TOO_OLD.as_secs() <= current_time;
+            gcx_locked.privacy_settings.read().unwrap().loaded_ts + PRIVACY_TOO_OLD.as_secs() <= current_time;
         if !should_reload {
-            return gcx_locked.privacy_settings.clone();
+            return gcx_locked.privacy_settings.read().unwrap().clone();
         }
         (
             gcx_locked.config_dir.clone(),
@@ -89,11 +89,12 @@ pub async fn load_privacy_if_needed(gcx: Arc<ARwLock<GlobalContext>>) -> Arc<Pri
     let mut new_privacy_settings = read_privacy_yaml(&path).await;
     new_privacy_settings.loaded_ts = current_time;
 
+    let new_privacy_settings = Arc::new(new_privacy_settings);
     {
-        let mut gcx_locked = gcx.write().await;
-        gcx_locked.privacy_settings = Arc::new(new_privacy_settings);
-        gcx_locked.privacy_settings.clone()
+        let gcx_locked = gcx.write().await;
+        *gcx_locked.privacy_settings.write().unwrap() = new_privacy_settings.clone();
     }
+    new_privacy_settings
 }
 
 fn get_file_privacy_level(privacy_settings: Arc<PrivacySettings>, path: &Path) -> FilePrivacyLevel {

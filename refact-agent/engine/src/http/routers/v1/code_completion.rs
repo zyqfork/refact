@@ -63,7 +63,7 @@ pub async fn handle_v1_code_completion(
         }
     }
 
-    let ast_service_opt = gcx.read().await.ast_service.clone();
+    let ast_service_opt = gcx.read().await.ast_service.lock().unwrap().clone();
     let mut scratchpad = scratchpads::create_code_completion_scratchpad(
         gcx.clone(),
         &model_rec,
@@ -149,7 +149,7 @@ pub async fn handle_v1_code_completion_prompt(
         cx_locked.completions_cache.clone()
     };
 
-    let ast_service_opt = gcx.read().await.ast_service.clone();
+    let ast_service_opt = gcx.read().await.ast_service.lock().unwrap().clone();
     let mut scratchpad = scratchpads::create_code_completion_scratchpad(
         gcx.clone(),
         &model_rec,

@@ -123,13 +123,11 @@ pub async fn system_prompt_add_extra_instructions(
         app: &AppState,
     ) -> (Vec<String>, Option<PathBuf>) {
         let documents_state = &app.workspace.documents_state;
-        let dirs_locked = documents_state.workspace_folders.lock().unwrap();
-        let workspace_dirs = dirs_locked
-            .clone()
-            .into_iter()
-            .map(|x| x.to_string_lossy().to_string())
-            .collect();
-        let active_file_path = documents_state.active_file_path.clone();
+        let workspace_dirs: Vec<String> = {
+            let dirs_locked = documents_state.workspace_folders.lock().unwrap();
+            dirs_locked.iter().map(|x| x.to_string_lossy().to_string()).collect()
+        };
+        let active_file_path = documents_state.active_file_path.lock().await.clone();
         (workspace_dirs, active_file_path)
     }
 

@@ -158,7 +158,7 @@ async fn resolve_patch_path(
 
     check_if_its_inside_a_workspace_or_config(gcx.clone(), &canonical).await?;
 
-    let privacy_settings = gcx.read().await.privacy_settings.clone();
+    let privacy_settings = gcx.read().await.privacy_settings.read().unwrap().clone();
     if check_file_privacy(
         privacy_settings,
         &canonical,
@@ -262,7 +262,7 @@ pub async fn tool_apply_patch_exec(
                     gcx.write()
                         .await
                         .documents_state
-                        .memory_document_map
+                        .memory_document_map.lock().await
                         .remove(&full_path);
                 }
 
@@ -346,7 +346,7 @@ pub async fn tool_apply_patch_exec(
                         gcx.write()
                             .await
                             .documents_state
-                            .memory_document_map
+                            .memory_document_map.lock().await
                             .remove(&full_path);
                         sync_documents_ast(gcx.clone(), &dest_path).await?;
                     }

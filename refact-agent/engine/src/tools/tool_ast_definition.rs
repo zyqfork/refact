@@ -53,7 +53,7 @@ impl Tool for ToolAstDefinition {
                 ccx_locked.execution_scope.clone(),
             )
         };
-        let ast_service_opt = gcx.read().await.ast_service.clone();
+        let ast_service_opt = gcx.read().await.ast_service.lock().unwrap().clone();
         if let Some(ast_service) = ast_service_opt {
             let ast_index = ast_service.lock().await.ast_index.clone();
 

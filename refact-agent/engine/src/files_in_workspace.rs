@@ -64,7 +64,7 @@ pub async fn get_file_text_from_memory_or_disk(
         .read()
         .await
         .documents_state
-        .memory_document_map
+        .memory_document_map.lock().await
         .get(file_path)
     {
         let doc = doc.read().await;
@@ -138,11 +138,11 @@ pub struct DocumentsState {
     pub workspace_files: Arc<StdMutex<Vec<PathBuf>>>,
     pub workspace_vcs_roots: Arc<StdMutex<Vec<PathBuf>>>,
 
-    pub active_file_path: Option<PathBuf>,
+    pub active_file_path: Arc<AMutex<Option<PathBuf>>>,
     pub jsonl_files: Arc<StdMutex<Vec<PathBuf>>>,
     // document_map on windows: c%3A/Users/user\Documents/file.ext
     // query on windows: C:/Users/user/Documents/file.ext
-    pub memory_document_map: HashMap<PathBuf, Arc<ARwLock<Document>>>, // if a file is open in IDE, and it's outside workspace dirs, it will be in this map and not in workspace_files
+    pub memory_document_map: Arc<AMutex<HashMap<PathBuf, Arc<ARwLock<Document>>>>>, // if a file is open in IDE, and it's outside workspace dirs, it will be in this map and not in workspace_files
     pub cache_dirty: Arc<AMutex<f64>>,
     pub cache_correction: Arc<CacheCorrection>,
     pub fs_watcher: Option<Arc<ARwLock<RecommendedWatcher>>>,
@@ -152,8 +152,8 @@ async fn mem_overwrite_or_create_document(
     global_context: Arc<ARwLock<GlobalContext>>,
     document: Document,
 ) -> (Arc<ARwLock<Document>>, Arc<AMutex<f64>>, bool) {
-    let mut cx = global_context.write().await;
-    let doc_map = &mut cx.documents_state.memory_document_map;
+    let cx = global_context.read().await;
+    let mut doc_map = cx.documents_state.memory_document_map.lock().await;
     if let Some(existing_doc) = doc_map.get_mut(&document.doc_path) {
         *existing_doc.write().await = document;
         (
@@ -176,9 +176,9 @@ impl DocumentsState {
             workspace_files: Arc::new(StdMutex::new(Vec::new())),
             workspace_vcs_roots: Arc::new(StdMutex::new(Vec::new())),
 
-            active_file_path: None,
+            active_file_path: Arc::new(AMutex::new(None)),
             jsonl_files: Arc::new(StdMutex::new(Vec::new())),
-            memory_document_map: HashMap::new(),
+            memory_document_map: Arc::new(AMutex::new(HashMap::new())),
             cache_dirty: Arc::new(AMutex::<f64>::new(0.0)),
             cache_correction: Arc::new(CacheCorrection::new()),
             fs_watcher: None,
@@ -689,7 +689,8 @@ async fn enqueue_some_docs(gcx: Arc<ARwLock<GlobalContext>>, paths: &Vec<String>
     }
     let (vec_db_module, ast_service) = {
         let cx = gcx.read().await;
-        (cx.vec_db.clone(), cx.ast_service.clone())
+        let ast_service = cx.ast_service.lock().unwrap().clone();
+        (cx.vec_db.clone(), ast_service)
     };
     if let Some(ref mut db) = *vec_db_module.lock().await {
         db.vectorizer_enqueue_files(&paths, force).await;
@@ -784,7 +785,8 @@ pub async fn enqueue_all_files_from_workspace_folders(
 
     let (vec_db_module, ast_service) = {
         let cx_locked = gcx.read().await;
-        (cx_locked.vec_db.clone(), cx_locked.ast_service.clone())
+        let ast_service = cx_locked.ast_service.lock().unwrap().clone();
+        (cx_locked.vec_db.clone(), ast_service)
     };
 
     // Both vecdb and ast support paths to non-existant files (possibly previously existing files) as a way to remove them from index
@@ -826,10 +828,10 @@ pub async fn on_workspaces_init(gcx: Arc<ARwLock<GlobalContext>>) -> i32 {
         .lock()
         .unwrap()
         .clone();
-    let old_app_searchable_id = gcx.read().await.app_searchable_id.clone();
+    let old_app_searchable_id = gcx.read().await.app_searchable_id.lock().unwrap().clone();
     let new_app_searchable_id = get_app_searchable_id(&folders);
     if old_app_searchable_id != new_app_searchable_id {
-        gcx.write().await.app_searchable_id = get_app_searchable_id(&folders);
+        *gcx.read().await.app_searchable_id.lock().unwrap() = get_app_searchable_id(&folders);
     }
     // Project competitor import runs only here for normal startup and workspace add/remove changes.
     let _ = crate::ext::competitor_import::run_project_import(crate::app_state::AppState::from_gcx(gcx.clone()).await).await;
@@ -869,7 +871,7 @@ pub async fn on_did_open(
             .as_secs_f64();
         *dirty_arc.lock().await = now;
     }
-    gcx.write().await.documents_state.active_file_path = Some(cpath.clone());
+    *gcx.read().await.documents_state.active_file_path.lock().await = Some(cpath.clone());
 }
 
 pub async fn on_did_close(gcx: Arc<ARwLock<GlobalContext>>, cpath: &PathBuf) {
@@ -878,10 +880,10 @@ pub async fn on_did_close(gcx: Arc<ARwLock<GlobalContext>>, cpath: &PathBuf) {
         crate::nicer_logs::last_n_chars(&cpath.display().to_string(), 30)
     );
     {
-        let mut cx = gcx.write().await;
+        let cx = gcx.read().await;
         if cx
             .documents_state
-            .memory_document_map
+            .memory_document_map.lock().await
             .remove(cpath)
             .is_none()
         {
@@ -914,7 +916,7 @@ pub async fn on_did_change(gcx: Arc<ARwLock<GlobalContext>>, path: &PathBuf, tex
         *dirty_arc.lock().await = now;
     }
 
-    gcx.write().await.documents_state.active_file_path = Some(path.clone());
+    *gcx.read().await.documents_state.active_file_path.lock().await = Some(path.clone());
 
     let mut go_ahead = true;
     {
@@ -953,11 +955,12 @@ pub async fn on_did_delete(gcx: Arc<ARwLock<GlobalContext>>, path: &PathBuf) {
     );
 
     let (vec_db_module, ast_service, dirty_arc) = {
-        let mut cx = gcx.write().await;
-        cx.documents_state.memory_document_map.remove(path);
+        let cx = gcx.read().await;
+        cx.documents_state.memory_document_map.lock().await.remove(path);
+        let ast_service = cx.ast_service.lock().unwrap().clone();
         (
             cx.vec_db.clone(),
-            cx.ast_service.clone(),
+            ast_service,
             cx.documents_state.cache_dirty.clone(),
         )
     };
@@ -1316,9 +1319,9 @@ mod tests {
             (
                 gcx_locked
                     .documents_state
-                    .memory_document_map
+                    .memory_document_map.lock().await
                     .contains_key(&path),
-                gcx_locked.documents_state.active_file_path.clone(),
+                gcx_locked.documents_state.active_file_path.lock().await.clone(),
             )
         };
         assert!(!has_doc);
@@ -1351,9 +1354,9 @@ mod tests {
             (
                 gcx_locked
                     .documents_state
-                    .memory_document_map
+                    .memory_document_map.lock().await
                     .contains_key(&path),
-                gcx_locked.documents_state.active_file_path.clone(),
+                gcx_locked.documents_state.active_file_path.lock().await.clone(),
                 workspace_files_len,
             )
         };
@@ -1375,10 +1378,10 @@ mod tests {
         let mut doc = Document::new(&path);
         doc.update_text(&"{}".to_string());
         {
-            let mut gcx_locked = gcx.write().await;
+            let gcx_locked = gcx.read().await;
             gcx_locked
                 .documents_state
-                .memory_document_map
+                .memory_document_map.lock().await
                 .insert(path.clone(), Arc::new(ARwLock::new(doc)));
         }
 
@@ -1388,7 +1391,7 @@ mod tests {
             let gcx_locked = gcx.read().await;
             gcx_locked
                 .documents_state
-                .memory_document_map
+                .memory_document_map.lock().await
                 .contains_key(&path)
         };
         assert!(has_doc);
@@ -1415,9 +1418,9 @@ mod tests {
             (
                 gcx_locked
                     .documents_state
-                    .memory_document_map
+                    .memory_document_map.lock().await
                     .contains_key(&path),
-                gcx_locked.documents_state.active_file_path.clone(),
+                gcx_locked.documents_state.active_file_path.lock().await.clone(),
             )
         };
         assert!(has_doc);

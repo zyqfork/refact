@@ -112,7 +112,7 @@ pub async fn start_background_tasks(
             }
         }),
     ]);
-    let ast = gcx.clone().read().await.ast_service.clone();
+    let ast = gcx.clone().read().await.ast_service.lock().unwrap().clone();
     if let Some(ast_service) = ast {
         bg.extend(
             crate::ast::ast_indexer_thread::ast_indexer_start(ast_service, gcx.clone()).await,

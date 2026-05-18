@@ -23,7 +23,7 @@ pub async fn get_rag_status(gcx: SharedGlobalContext) -> RagStatus {
         let status = (
             gcx_locked.vec_db.clone(),
             gcx_locked.vec_db_error.lock().unwrap().clone(),
-            gcx_locked.ast_service.clone(),
+            gcx_locked.ast_service.lock().unwrap().clone(),
         );
         status
     };

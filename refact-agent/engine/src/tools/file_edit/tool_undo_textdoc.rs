@@ -107,7 +107,7 @@ pub async fn tool_undo_text_doc_exec(
     gcx.write()
         .await
         .documents_state
-        .memory_document_map
+        .memory_document_map.lock().await
         .remove(&a.path);
 
     let summary = if target_content.is_empty() {

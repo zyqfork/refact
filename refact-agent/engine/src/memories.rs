@@ -1510,7 +1510,7 @@ pub async fn rewrite_memory_document(
     gcx.write()
         .await
         .documents_state
-        .memory_document_map
+        .memory_document_map.lock().await
         .remove(&path_buf);
 
     Ok(())
@@ -1576,7 +1576,7 @@ pub async fn delete_document_from_disk(
     gcx.write()
         .await
         .documents_state
-        .memory_document_map
+        .memory_document_map.lock().await
         .remove(doc_path);
 
     Ok(())

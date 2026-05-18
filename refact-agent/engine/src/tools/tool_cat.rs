@@ -370,7 +370,7 @@ pub async fn paths_and_symbols_to_cat_with_path_ranges(
             ccx_locked.execution_scope.clone(),
         )
     };
-    let ast_service_opt = gcx.read().await.ast_service.clone();
+    let ast_service_opt = gcx.read().await.ast_service.lock().unwrap().clone();
 
     let mut not_found_messages = vec![];
     let mut scope_notices = vec![];

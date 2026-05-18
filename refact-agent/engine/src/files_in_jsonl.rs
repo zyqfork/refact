@@ -37,7 +37,8 @@ pub async fn enqueue_all_docs_from_jsonl(
         jsonl_files.clear();
         jsonl_files.extend(paths);
         let vec_db_module = gcx_locked.vec_db.clone();
-        (vec_db_module, gcx_locked.ast_service.clone())
+        let ast_service = gcx_locked.ast_service.lock().unwrap().clone();
+        (vec_db_module, ast_service)
     };
     if let Some(ast) = &ast_service {
         if !vecdb_only {

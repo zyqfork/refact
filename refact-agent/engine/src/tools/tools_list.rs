@@ -116,8 +116,9 @@ async fn tool_available_from_gcx(
     let (ast_on, vecdb_on, allow_experimental) = {
         let gcx_locked = gcx.read().await;
         let vecdb_on = gcx_locked.vec_db.lock().await.is_some();
+        let ast_on = gcx_locked.ast_service.lock().unwrap().is_some();
         (
-            gcx_locked.ast_service.is_some(),
+            ast_on,
             vecdb_on,
             gcx_locked.cmdline.experimental,
         )

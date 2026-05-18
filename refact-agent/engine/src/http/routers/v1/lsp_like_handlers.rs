@@ -130,11 +130,13 @@ pub async fn handle_v1_set_active_document(
         "ACTIVE_DOC {:?}",
         crate::nicer_logs::last_n_chars(&path.to_string_lossy().to_string(), 30)
     );
-    global_context
-        .write()
+    *global_context
+        .read()
         .await
         .documents_state
-        .active_file_path = Some(path);
+        .active_file_path
+        .lock()
+        .await = Some(path);
     Ok(Response::builder()
         .status(StatusCode::OK)
         .body(Body::from(json!({"success": true}).to_string()))

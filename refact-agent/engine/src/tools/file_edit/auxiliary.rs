@@ -297,7 +297,7 @@ pub fn convert_edit_to_diffchunks(
 }
 
 pub async fn await_ast_indexing(gcx: Arc<ARwLock<GlobalContext>>) -> Result<(), String> {
-    let ast_service_mb = gcx.read().await.ast_service.clone();
+    let ast_service_mb = gcx.read().await.ast_service.lock().unwrap().clone();
     if let Some(ast_service) = &ast_service_mb {
         ast_indexer_block_until_finished(ast_service.clone(), 20_000, true).await;
     }
@@ -308,7 +308,7 @@ pub async fn sync_documents_ast(
     gcx: Arc<ARwLock<GlobalContext>>,
     doc: &PathBuf,
 ) -> Result<(), String> {
-    let ast_service_mb = gcx.read().await.ast_service.clone();
+    let ast_service_mb = gcx.read().await.ast_service.lock().unwrap().clone();
     if let Some(ast_service) = &ast_service_mb {
         ast_indexer_enqueue_files(
             ast_service.clone(),
@@ -369,7 +369,7 @@ pub async fn write_file(
         gcx.write()
             .await
             .documents_state
-            .memory_document_map
+            .memory_document_map.lock().await
             .remove(path);
     }
 

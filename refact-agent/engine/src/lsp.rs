@@ -180,15 +180,16 @@ impl LspBackend {
             &params.text_document_position.text_document.uri,
             "text_document.uri",
         )?;
-        let doc = {
+        let memory_document_map = {
             let gcx_locked = self.gcx.read().await;
-            gcx_locked
-                .documents_state
-                .memory_document_map
-                .get(&path)
-                .cloned()
-        }
-        .ok_or_else(|| internal_error("document not found"))?;
+            gcx_locked.documents_state.memory_document_map.clone()
+        };
+        let doc = memory_document_map
+            .lock()
+            .await
+            .get(&path)
+            .cloned()
+            .ok_or_else(|| internal_error("document not found"))?;
         let mut doc_snapshot = doc.read().await.clone();
         let txt = crate::files_in_workspace::get_document_text_or_read_from_disk(&mut doc_snapshot, self.gcx.clone())
             .await
@@ -243,7 +244,7 @@ impl LspBackend {
             "ACTIVE_DOC {:?}",
             crate::nicer_logs::last_n_chars(&path.to_string_lossy().to_string(), 30)
         );
-        self.gcx.write().await.documents_state.active_file_path = Some(path);
+        *self.gcx.read().await.documents_state.active_file_path.lock().await = Some(path);
         Ok(SuccessRes { success: true })
     }
 
