@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::collections::HashSet;
-use tokenizers::Tokenizer;
 use tokio::sync::RwLock as ARwLock;
 
 pub use refact_postprocessing::pp_utils::{
@@ -8,7 +7,7 @@ pub use refact_postprocessing::pp_utils::{
     colorize_parentof, downgrade_lines_if_subsymbol,
 };
 pub use refact_postprocessing::pp_context_files::PPFile;
-use refact_core::chat_types::{ContextFile, PostprocessSettings};
+use refact_core::chat_types::ContextFile;
 
 use crate::global_context::GlobalContext;
 use super::gcx_pp_context::GcxPPContext;

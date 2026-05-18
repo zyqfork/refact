@@ -7,7 +7,6 @@ use tokio::sync::Mutex as AMutex;
 use tokio::time::Instant;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use serde::{Serialize, Deserialize};
 
 use crate::ast::chunk_utils::official_text_hashing_function;
 use crate::custom_error::MapErrToString;
@@ -279,7 +278,6 @@ pub async fn create_workspace_checkpoint_for_root(
     let t0 = Instant::now();
 
     let workspace_folder = resolve_checkpoint_workspace_folder(workspace_folder)?;
-    let workspace_folder_hash = workspace_folder_hash(&workspace_folder);
     if let Some(prev_checkpoint) = prev_checkpoint {
         if prev_checkpoint.workspace_folder != workspace_folder {
             return Err("Can not create checkpoint for different workspace folder".to_string());
@@ -439,7 +437,6 @@ pub async fn restore_workspace_checkpoint_for_root(
     chat_id: &str,
 ) -> Result<(), String> {
     let workspace_folder = resolve_checkpoint_workspace_folder(workspace_folder)?;
-    let workspace_folder_hash = workspace_folder_hash(&workspace_folder);
     if checkpoint_to_restore.workspace_folder != workspace_folder {
         return Err("Can not restore checkpoint for different workspace folder".to_string());
     }

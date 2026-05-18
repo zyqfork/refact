@@ -2,8 +2,6 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::string::ToString;
 use std::sync::Arc;
-#[allow(unused_imports)]
-use itertools::Itertools;
 use parking_lot::RwLock;
 
 use similar::DiffableStr;
@@ -699,9 +697,6 @@ impl TSParser {
         let mut symbols: Vec<AstSymbolInstanceArc> = vec![];
 
         let kind = info.node.kind();
-        #[cfg(test)]
-        #[allow(unused)]
-        let text = code.slice(info.node.byte_range());
         match kind {
             "class_declaration" | "class" | "interface_declaration" | "type_alias_declaration" => {
                 symbols.extend(self.parse_struct_declaration(info, code, candidates));

@@ -140,23 +140,6 @@ pub fn apply_openai_chat_body_quirks(
     }
 }
 
-fn remove_key_recursively(value: &mut Value, key: &str) {
-    match value {
-        Value::Object(obj) => {
-            obj.remove(key);
-            for value in obj.values_mut() {
-                remove_key_recursively(value, key);
-            }
-        }
-        Value::Array(items) => {
-            for value in items {
-                remove_key_recursively(value, key);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn remove_anthropic_reasoning_blocks(body: &mut Value) {
     let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
         return;

@@ -599,9 +599,6 @@ impl JavaParser {
     ) -> Vec<AstSymbolInstanceArc> {
         let mut symbols: Vec<AstSymbolInstanceArc> = vec![];
         let kind = info.node.kind();
-        #[cfg(test)]
-        #[allow(unused)]
-        let text = code.slice(info.node.byte_range());
         match kind {
             "class_declaration"
             | "interface_declaration"

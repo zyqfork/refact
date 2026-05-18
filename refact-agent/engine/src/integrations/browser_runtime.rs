@@ -13,7 +13,6 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::chat::types::WindowBounds;
-use crate::app_state::AppState;
 use crate::integrations::browser_types::{
     RecorderEvent, ConsoleEntry, NetworkEntry, MutationSummaryEntry, MAX_BUFFER_SIZE,
     SCROLL_DEBOUNCE_MS, apply_password_masking, enforce_buffer_limit, flush_buffer_since,

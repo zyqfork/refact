@@ -588,9 +588,6 @@ impl CppParser {
         let mut types: Vec<TypeDef> = Default::default();
         let mut name: String = String::new();
         let mut namespace: String = String::new();
-        #[cfg(test)]
-        #[allow(unused)]
-        let text = code.slice(parent.byte_range());
         let kind = parent.kind();
         match kind {
             "identifier" | "field_identifier" => {
@@ -611,9 +608,6 @@ impl CppParser {
                     self.find_error_usages(&arguments_node, code, path, &parent_guid);
                     for i in 0..arguments_node.child_count() {
                         let child = arguments_node.child(i).unwrap();
-                        #[cfg(test)]
-                        #[allow(unused)]
-                        let text = code.slice(child.byte_range());
                         symbols.extend(self.find_error_usages(&child, code, path, &parent_guid));
                         self.find_error_usages(&child, code, path, &parent_guid);
                         if let Some(dtype) = parse_type(&child, code) {
@@ -1068,9 +1062,6 @@ impl CppParser {
         let mut symbols: Vec<AstSymbolInstanceArc> = vec![];
 
         let kind = info.node.kind();
-        #[cfg(test)]
-        #[allow(unused)]
-        let text = code.slice(info.node.byte_range());
         match kind {
             "enum_specifier" | "class_specifier" | "struct_specifier" => {
                 symbols.extend(self.parse_struct_declaration(info, code, candidates));

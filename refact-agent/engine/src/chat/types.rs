@@ -6,7 +6,7 @@ use tokio::sync::{broadcast, Notify};
 
 use crate::call_validation::{ChatMessage, ChatUsage};
 use crate::git::checkpoints::Checkpoint;
-use super::config::{limits, timeouts, presentation};
+use super::config::{limits, timeouts};
 
 pub use refact_chat_api::{
     ActiveCommandContext,

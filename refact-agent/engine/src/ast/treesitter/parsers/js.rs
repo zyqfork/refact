@@ -588,9 +588,6 @@ impl JSParser {
         let mut symbols: Vec<AstSymbolInstanceArc> = vec![];
 
         let kind = info.node.kind();
-        #[cfg(test)]
-        #[allow(unused)]
-        let text = code.slice(info.node.byte_range());
         match kind {
             "object" | "class_declaration" => {
                 symbols.extend(self.parse_struct_declaration(info, code, candidates, None));

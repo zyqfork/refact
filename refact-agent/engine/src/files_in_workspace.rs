@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::Hash;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Weak, Mutex as StdMutex};
 use std::time::Instant;

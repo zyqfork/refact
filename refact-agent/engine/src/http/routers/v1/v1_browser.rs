@@ -258,7 +258,6 @@ pub async fn handle_browser_stop(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -291,7 +290,6 @@ pub async fn handle_browser_screenshot(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ScreenshotBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -409,7 +407,6 @@ pub async fn handle_browser_context(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ContextBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -547,7 +544,6 @@ pub async fn handle_browser_context_commit(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -579,7 +575,6 @@ pub async fn handle_browser_element_pick(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -662,7 +657,6 @@ pub async fn handle_browser_element_pick_result(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -724,7 +718,6 @@ pub async fn handle_browser_annotate_start(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -984,7 +977,6 @@ pub async fn handle_browser_annotate_result(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1034,7 +1026,6 @@ pub async fn handle_browser_annotate_clear(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1101,7 +1092,6 @@ pub async fn handle_browser_curl(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: CurlBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1156,7 +1146,6 @@ pub async fn handle_browser_eval(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: EvalBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1239,7 +1228,6 @@ pub async fn handle_browser_inject_css(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: InjectCssBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1303,7 +1291,6 @@ pub async fn handle_browser_remove_css(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: RemoveCssBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1354,7 +1341,6 @@ pub async fn handle_browser_dom_snapshot(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: DomSnapshotBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1446,7 +1432,6 @@ pub async fn handle_browser_accessibility(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1520,7 +1505,6 @@ pub async fn handle_browser_record_animation(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: RecordAnimationBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1609,7 +1593,6 @@ pub async fn handle_browser_handoff(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: HandoffBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1672,7 +1655,6 @@ pub async fn handle_browser_status(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     let post: ChatIdBody = serde_json::from_slice(&body_bytes).map_err(|e| {
         ScratchError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1723,7 +1705,6 @@ pub async fn handle_browser_action(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-    let gcx = app.gcx.clone();
     #[derive(Deserialize)]
     struct ActionBody {
         chat_id: String,
