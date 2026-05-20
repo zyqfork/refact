@@ -4,6 +4,7 @@ use serde_json::json;
 use tokio::sync::{Mutex as AMutex};
 use tracing::{info, warn};
 use uuid::Uuid;
+use refact_buddy_core::types::BuddyRuntimeEvent;
 
 use crate::app_state::AppState;
 use crate::subchat::{resolve_subchat_config_with_parent, run_subchat};
@@ -39,6 +40,36 @@ use crate::chat::trajectory_ops::approx_token_count;
 const TOKEN_BUDGET_CADENCE: usize = 6;
 const TOKEN_BUDGET_MARKER: &str = "token_budget_info";
 const MCP_LAZY_INDEX_MARKER: &str = "mcp_lazy_index";
+
+fn make_runtime_event(
+    signal_type: &str,
+    title: &str,
+    source: &str,
+    dedupe_key: &str,
+    status: &str,
+    priority: Option<&str>,
+) -> BuddyRuntimeEvent {
+    BuddyRuntimeEvent {
+        id: Uuid::new_v4().to_string(),
+        signal_type: signal_type.to_string(),
+        title: title.to_string(),
+        description: None,
+        source: source.to_string(),
+        status: status.to_string(),
+        progress: None,
+        dedupe_key: Some(dedupe_key.to_string()),
+        priority: priority.unwrap_or("normal").to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        ttl_ms: None,
+        speech_text: None,
+        scene: None,
+        duration_hint: None,
+        persistent: false,
+        controls: Vec::new(),
+        chat_id: None,
+        dismissed: false,
+    }
+}
 
 fn maybe_inject_token_budget_instruction(
     session: &mut ChatSession,
@@ -598,7 +629,7 @@ pub fn start_generation(
             };
 
             {
-                let mut ev = crate::buddy::actor::make_runtime_event(
+                let mut ev = make_runtime_event(
                     "chat_started",
                     &format!("Started: {}", chat_label),
                     "chat",
@@ -607,8 +638,8 @@ pub fn start_generation(
                     None,
                 );
                 ev.chat_id = Some(chat_id.to_string());
-                crate::buddy::actor::buddy_enqueue_event(app.clone(), ev).await;
-                let mut ev = crate::buddy::actor::make_runtime_event(
+                app.buddy_event_sink.enqueue_event(ev).await;
+                let mut ev = make_runtime_event(
                     "streaming",
                     &format!("Generating reply in '{}'", chat_label),
                     "chat",
@@ -620,7 +651,7 @@ pub fn start_generation(
                 ev.scene = Some("working".to_string());
                 ev.persistent = true;
                 ev.chat_id = Some(chat_id.to_string());
-                crate::buddy::actor::buddy_enqueue_event(app.clone(), ev).await;
+                app.buddy_event_sink.enqueue_event(ev).await;
             }
 
             let generation_result = run_llm_generation(
@@ -669,40 +700,29 @@ pub fn start_generation(
                     let mut session = session_arc.lock().await;
                     if !session.abort_flag.load(Ordering::SeqCst) {
                         let app2 = app.clone();
-                        let buddy_svc = app.buddy.buddy.clone();
                         let err_clone = e.clone();
                         let chat_id2 = chat_id.clone();
                         let chat_label2 = chat_label.clone();
                         tokio::spawn(async move {
-                            crate::buddy::actor::report_error_persisted(
-                                app2,
-                                "llm_error",
-                                &err_clone,
-                                Some("chat/generation.rs"),
-                                Some(&chat_id2),
-                            )
-                            .await;
-                            let mut lock = buddy_svc.lock().await;
-                            if let Some(svc) = lock.as_mut() {
-                                let short_err: String = err_clone.chars().take(60).collect();
-                                let mut ev = crate::buddy::actor::make_runtime_event(
-                                    "chat_error",
-                                    &format!("Error in '{}': {}", chat_label2, short_err),
-                                    "chat",
-                                    &format!("chat_{}", chat_id2),
-                                    "failed",
-                                    Some("high"),
-                                );
-                                ev.chat_id = Some(chat_id2.to_string());
-                                svc.enqueue_runtime_event(ev);
-                                svc.state.semantic.mood = "worried".to_string();
-                                svc.dirty = true;
-                                let _ = svc.events_tx.send(
-                                    crate::buddy::events::BuddyEvent::StateUpdated {
-                                        state: svc.state.clone(),
-                                    },
-                                );
-                            }
+                            app2.buddy_event_sink
+                                .report_error(
+                                    "llm_error",
+                                    &err_clone,
+                                    Some("chat/generation.rs"),
+                                    Some(&chat_id2),
+                                )
+                                .await;
+                            let short_err: String = err_clone.chars().take(60).collect();
+                            let mut ev = make_runtime_event(
+                                "chat_error",
+                                &format!("Error in '{}': {}", chat_label2, short_err),
+                                "chat",
+                                &format!("chat_{}", chat_id2),
+                                "failed",
+                                Some("high"),
+                            );
+                            ev.chat_id = Some(chat_id2.to_string());
+                            app2.buddy_event_sink.mark_chat_error(ev).await;
                         });
                         session.finish_stream_with_error(e);
                     }
@@ -813,7 +833,7 @@ pub fn start_generation(
                     });
                     session_arc.lock().await.stop_hook_handle = Some(handle);
                     {
-                        let mut ev = crate::buddy::actor::make_runtime_event(
+                        let mut ev = make_runtime_event(
                             "chat_completed",
                             &format!("Completed: {}", chat_label),
                             "chat",
@@ -822,21 +842,14 @@ pub fn start_generation(
                             None,
                         );
                         ev.chat_id = Some(chat_id.to_string());
-                        crate::buddy::actor::buddy_apply(
-                            app.clone(),
-                            crate::buddy::actor::BuddyMutation {
-                                runtime_event: Some(ev),
-                                xp: 4,
-                                mood: Some("happy".to_string()),
-                                ..Default::default()
-                            },
-                        )
-                        .await;
+                        app.buddy_event_sink
+                            .apply_chat_completion(ev, 4, "happy".to_string())
+                            .await;
                     }
                     break;
                 }
                 ToolStepOutcome::Paused => {
-                    let mut ev = crate::buddy::actor::make_runtime_event(
+                    let mut ev = make_runtime_event(
                         "tool_confirmation",
                         &format!("Waiting for approval: {}", chat_label),
                         "chat",
@@ -846,11 +859,11 @@ pub fn start_generation(
                     );
                     ev.chat_id = Some(chat_id.to_string());
                     ev.persistent = true;
-                    crate::buddy::actor::buddy_enqueue_event(app.clone(), ev).await;
+                    app.buddy_event_sink.enqueue_event(ev).await;
                     break;
                 }
                 ToolStepOutcome::Stop => {
-                    let mut ev = crate::buddy::actor::make_runtime_event(
+                    let mut ev = make_runtime_event(
                         "chat_completed",
                         &format!("Completed: {}", chat_label),
                         "chat",
@@ -859,16 +872,9 @@ pub fn start_generation(
                         None,
                     );
                     ev.chat_id = Some(chat_id.to_string());
-                    crate::buddy::actor::buddy_apply(
-                        app.clone(),
-                        crate::buddy::actor::BuddyMutation {
-                            runtime_event: Some(ev),
-                            xp: 4,
-                            mood: Some("happy".to_string()),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
+                    app.buddy_event_sink
+                        .apply_chat_completion(ev, 4, "happy".to_string())
+                        .await;
                     break;
                 }
                 ToolStepOutcome::Continue => {

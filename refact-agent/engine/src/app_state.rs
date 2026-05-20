@@ -3,7 +3,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
+use async_trait::async_trait;
 use axum::extract::FromRef;
+use refact_buddy_core::snapshot::BuddySnapshot;
+use refact_buddy_core::types::{BuddyRuntimeEvent, BuddySuggestion};
+use refact_buddy_core::user_action::UserAction;
+use refact_chat_api::ChatMessage;
+use refact_runtime_api::{ActivitySink, BuddyEventSink};
 use tokenizers::Tokenizer;
 use tokio::sync::{Mutex as AMutex, RwLock as ARwLock, Semaphore};
 
@@ -122,6 +128,144 @@ pub struct AppState {
     pub chat: ChatServices,
     pub buddy: BuddyServices,
     pub integrations: IntegrationServices,
+    pub activity_sink: Arc<dyn ActivitySink>,
+    pub buddy_event_sink: Arc<dyn BuddyEventSink>,
+}
+
+pub struct AppActivitySink {
+    user_activity: Arc<AMutex<UserActivityRing>>,
+}
+
+impl AppActivitySink {
+    pub fn new(user_activity: Arc<AMutex<UserActivityRing>>) -> Self {
+        Self { user_activity }
+    }
+}
+
+#[async_trait]
+impl ActivitySink for AppActivitySink {
+    async fn record_user_action(&self, action: UserAction) {
+        if let Ok(mut ring) = self.user_activity.try_lock() {
+            ring.push(action);
+        }
+    }
+}
+
+pub struct AppBuddyEventSink {
+    gcx: SharedGlobalContext,
+    buddy: Arc<AMutex<Option<BuddyService>>>,
+}
+
+impl AppBuddyEventSink {
+    pub fn new(gcx: SharedGlobalContext, buddy: Arc<AMutex<Option<BuddyService>>>) -> Self {
+        Self { gcx, buddy }
+    }
+}
+
+#[async_trait]
+impl BuddyEventSink for AppBuddyEventSink {
+    async fn enqueue_event(&self, event: BuddyRuntimeEvent) {
+        let buddy_arc = self.buddy.clone();
+        let mut lock = buddy_arc.lock().await;
+        if let Some(svc) = lock.as_mut() {
+            svc.enqueue_runtime_event(event);
+        }
+    }
+
+    async fn complete_event(&self, dedupe_key: &str, status: &str) {
+        let buddy_arc = self.buddy.clone();
+        let mut lock = buddy_arc.lock().await;
+        if let Some(svc) = lock.as_mut() {
+            svc.complete_runtime_event(dedupe_key, status);
+        }
+    }
+
+    async fn snapshot(&self) -> Option<BuddySnapshot> {
+        let buddy_arc = self.buddy.clone();
+        let lock = buddy_arc.lock().await;
+        lock.as_ref().map(|svc| svc.snapshot())
+    }
+
+    async fn apply_chat_completion(&self, event: BuddyRuntimeEvent, xp: u64, mood: String) {
+        let buddy_arc = self.buddy.clone();
+        let mut lock = buddy_arc.lock().await;
+        let Some(svc) = lock.as_mut() else { return };
+        svc.enqueue_runtime_event(event);
+        if xp > 0 {
+            svc.grant_xp(xp);
+        }
+        svc.state.semantic.mood = mood;
+        svc.dirty = true;
+        let _ = svc.events_tx.send(BuddyEvent::StateUpdated {
+            state: svc.state.clone(),
+        });
+    }
+
+    async fn report_error(
+        &self,
+        error_type: &str,
+        error_msg: &str,
+        source: Option<&str>,
+        chat_id: Option<&str>,
+    ) {
+        let buddy_arc = self.buddy.clone();
+        let mut lock = buddy_arc.lock().await;
+        if let Some(svc) = lock.as_mut() {
+            svc.report_error(error_type, error_msg, source, chat_id);
+        }
+    }
+
+    async fn mark_chat_error(&self, event: BuddyRuntimeEvent) {
+        let buddy_arc = self.buddy.clone();
+        let mut lock = buddy_arc.lock().await;
+        if let Some(svc) = lock.as_mut() {
+            svc.enqueue_runtime_event(event);
+            svc.state.semantic.mood = "worried".to_string();
+            svc.dirty = true;
+            let _ = svc.events_tx.send(BuddyEvent::StateUpdated {
+                state: svc.state.clone(),
+            });
+        }
+    }
+
+    async fn maybe_add_suggestion(&self, suggestion: BuddySuggestion) {
+        let buddy_arc = self.buddy.clone();
+        let mut lock = buddy_arc.lock().await;
+        if let Some(svc) = lock.as_mut() {
+            svc.maybe_add_suggestion(suggestion);
+        }
+    }
+
+    async fn render_runtime_event_fast(
+        &self,
+        workflow_id: &str,
+        workflow_summary: &str,
+        status: &str,
+    ) -> Option<(String, Option<String>)> {
+        let app = AppState::from_gcx(self.gcx.clone()).await;
+        let snapshot = self.snapshot().await?;
+        let pulse_one_liner = format!(
+            "{} pending ops, {} stuck tasks",
+            snapshot.pulse.memory.pending_ops, snapshot.pulse.tasks.stuck
+        );
+        let voice_ctx = crate::buddy::voice_service::VoiceCtx {
+            persona: &snapshot.state.personality,
+            identity_name: snapshot.state.identity.name.as_str(),
+            pulse_one_liner,
+            workflow_id: Some(workflow_id),
+            workflow_summary: Some(workflow_summary),
+        };
+        Some(
+            crate::buddy::voice_service::voice_service()
+                .await
+                .render_runtime_event_fast(app, voice_ctx, status)
+                .await,
+        )
+    }
+
+    async fn build_pulse_message(&self) -> Option<ChatMessage> {
+        crate::buddy::pulse_inject::build_buddy_pulse_message(AppState::from_gcx(self.gcx.clone()).await).await
+    }
 }
 
 impl AppState {

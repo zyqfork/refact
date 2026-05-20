@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use tokio::sync::Mutex as AMutex;
 
 use crate::app_state::AppState;
-use crate::buddy::pulse_inject::{build_buddy_pulse_message, BUDDY_PULSE_MARKER};
 use crate::call_validation;
 use crate::files_correction::get_project_dirs;
 use crate::scratchpads::scratchpad_utils::HasRagResults;
@@ -23,6 +22,7 @@ use crate::tools::tool_task_memory::load_task_memories;
 use crate::yaml_configs::customization_registry::{get_mode_config, map_legacy_mode_to_id};
 
 const BUDDY_PERSONALITY_MARKER: &str = "%BUDDY_PERSONALITY%";
+const BUDDY_PULSE_MARKER: &str = "buddy_project_memory_pulse";
 
 #[derive(Clone)]
 struct BuddyPersonaCacheEntry {
@@ -363,13 +363,13 @@ pub async fn system_prompt_add_extra_instructions(
 }
 
 async fn buddy_persona_block(app: AppState, mode_id: &str) -> String {
-    let Some(snapshot) = crate::buddy::actor::buddy_snapshot(app).await else {
+    let Some(snapshot) = app.buddy_event_sink.snapshot().await else {
         return String::new();
     };
     let mode_id = buddy_persona_cache_mode_id(mode_id);
     let archetype_id = snapshot.state.personality.archetype_id.clone();
     let identity_name = snapshot.state.identity.name.clone();
-    let version = crate::buddy::state::persona_cache_version();
+    let version = refact_buddy_core::state::persona_cache_version();
     let cache_key = (archetype_id, mode_id);
     let cache = buddy_persona_cache();
     let mut cache = cache.lock().await;
@@ -378,7 +378,7 @@ async fn buddy_persona_block(app: AppState, mode_id: &str) -> String {
             return entry.rendered.clone();
         }
     }
-    let rendered = crate::buddy::state::render_persona_block(&snapshot.state);
+    let rendered = refact_buddy_core::state::render_persona_block(&snapshot.state);
     cache.insert(
         cache_key,
         BuddyPersonaCacheEntry {
@@ -402,9 +402,8 @@ fn clear_buddy_persona_cache_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buddy::actor::BuddyService;
-    use crate::buddy::runtime_queue::RuntimeQueue;
-    use crate::buddy::settings::BuddySettings;
+    use refact_buddy_core::runtime_queue::RuntimeQueue;
+    use refact_buddy_core::settings::BuddySettings;
     use crate::call_validation::{ChatContent, ChatMeta};
     use tokio::sync::broadcast;
 
@@ -488,14 +487,14 @@ mod tests {
         let gcx = crate::global_context::tests::make_test_gcx().await;
         let app = AppState::from_gcx(gcx).await;
         let (tx, _) = broadcast::channel(16);
-        let mut state = crate::buddy::state::default_buddy_state();
+        let mut state = refact_buddy_core::state::default_buddy_state();
         state.identity.name = "Pixel".to_string();
         state.personality.archetype_id = "helper_sprite".to_string();
         state.personality.archetype_label = "Helper Sprite".to_string();
         state.personality.vibe = "Playful, quirky, helpful".to_string();
         state.personality.summary = "An energetic helper.".to_string();
         state.personality.prompt = "Use warm humor.".to_string();
-        let service = BuddyService::new(
+        let service = crate::buddy::actor::BuddyService::new(
             std::env::temp_dir().join(format!("buddy-persona-test-{}", uuid::Uuid::new_v4())),
             state,
             BuddySettings::default(),
@@ -643,7 +642,7 @@ mod tests {
         .await;
 
         set_buddy_name(&app, "Nova").await;
-        crate::buddy::state::mark_persona_cache_dirty();
+        refact_buddy_core::state::mark_persona_cache_dirty();
         let second = system_prompt_add_extra_instructions(
             app.clone(),
             prompt,
@@ -876,7 +875,7 @@ async fn gather_and_inject_system_context(
         .iter()
         .any(|m| m.role == "context_file" && m.tool_call_id == BUDDY_PULSE_MARKER);
     if !have_buddy_pulse {
-        if let Some(pulse_msg) = build_buddy_pulse_message(app.clone()).await {
+        if let Some(pulse_msg) = app.buddy_event_sink.build_pulse_message().await {
             let insert_pos = messages
                 .iter()
                 .position(|m| m.role == "user" || m.role == "assistant")

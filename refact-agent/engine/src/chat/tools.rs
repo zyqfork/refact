@@ -11,7 +11,6 @@ use indexmap::IndexMap;
 use crate::app_state::AppState;
 use crate::at_commands::at_commands::AtCommandsContext;
 use refact_buddy_core::user_action::UserAction;
-use crate::buddy::voice_service::{VoiceCtx, voice_service};
 use crate::call_validation::{
     ChatContent, ChatMessage, ChatToolCall, ContextFile, PostprocessSettings, SubchatParameters,
 };
@@ -23,6 +22,36 @@ use crate::yaml_configs::customization_registry::{
 use crate::ext::hooks::HookEvent;
 use crate::ext::hooks_runner::{HookPayload, first_block_reason, get_project_dir_string, run_hooks};
 use crate::tools::tool_name_alias::build_registry_from_names;
+
+fn make_runtime_event(
+    signal_type: &str,
+    title: &str,
+    source: &str,
+    dedupe_key: &str,
+    status: &str,
+    priority: Option<&str>,
+) -> refact_buddy_core::types::BuddyRuntimeEvent {
+    refact_buddy_core::types::BuddyRuntimeEvent {
+        id: Uuid::new_v4().to_string(),
+        signal_type: signal_type.to_string(),
+        title: title.to_string(),
+        description: None,
+        source: source.to_string(),
+        status: status.to_string(),
+        progress: None,
+        dedupe_key: Some(dedupe_key.to_string()),
+        priority: priority.unwrap_or("normal").to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        ttl_ms: None,
+        speech_text: None,
+        scene: None,
+        duration_hint: None,
+        persistent: false,
+        controls: Vec::new(),
+        chat_id: None,
+        dismissed: false,
+    }
+}
 
 #[derive(Default)]
 pub struct ExecuteToolsOptions {
@@ -257,24 +286,25 @@ async fn record_tool_activity(
     if approved_ids.is_empty() && denied_ids.is_empty() {
         return;
     }
-    let user_activity = app.buddy.user_activity.clone();
-    if let Ok(mut ring) = user_activity.try_lock() {
-        for tc in tool_calls {
-            if denied_ids.contains(&tc.id) {
-                ring.push(UserAction::ToolRejected {
+    for tc in tool_calls {
+        if denied_ids.contains(&tc.id) {
+            app.activity_sink
+                .record_user_action(UserAction::ToolRejected {
                     tool_name: tc.function.name.clone(),
                     chat_id: chat_id.to_string(),
                     ts: Utc::now(),
-                });
-            } else if approved_ids.contains(&tc.id) {
-                ring.push(UserAction::ToolApproved {
+                })
+                .await;
+        } else if approved_ids.contains(&tc.id) {
+            app.activity_sink
+                .record_user_action(UserAction::ToolApproved {
                     tool_name: tc.function.name.clone(),
                     chat_id: chat_id.to_string(),
                     ts: Utc::now(),
-                });
-            }
+                })
+                .await;
         }
-    };
+    }
 }
 
 fn get_context_files_from_messages(messages: &[ChatMessage]) -> Vec<String> {
@@ -946,14 +976,14 @@ source:
         let gcx = crate::global_context::tests::make_test_gcx().await;
         let app = AppState::from_gcx(gcx).await;
         let (tx, _) = tokio::sync::broadcast::channel(16);
-        let mut state = crate::buddy::state::default_buddy_state();
+        let mut state = refact_buddy_core::state::default_buddy_state();
         state.identity.name = "Pixel".to_string();
         let service = crate::buddy::actor::BuddyService::new(
             std::env::temp_dir().join(format!("buddy-tool-voice-test-{}", uuid::Uuid::new_v4())),
             state,
-            crate::buddy::settings::BuddySettings::default(),
+            refact_buddy_core::settings::BuddySettings::default(),
             Vec::new(),
-            crate::buddy::runtime_queue::RuntimeQueue::new(),
+            refact_buddy_core::runtime_queue::RuntimeQueue::new(),
             tx,
             None,
         );
@@ -980,6 +1010,7 @@ source:
         assert_eq!(renderer.intent_kinds(), vec!["runtime:started".to_string()]);
     }
 
+
     #[test]
     fn tool_runtime_event_lines_falls_back_on_empty_voice() {
         let (title, speech_text) = runtime_event_lines_with_fallback(
@@ -1004,6 +1035,7 @@ source:
             1500
         );
     }
+
 }
 
 pub async fn process_tool_calls_once(
@@ -2178,25 +2210,14 @@ async fn tool_runtime_event_lines(
         "Using {} to help with '{}'...",
         tool_name, chat_label
     ));
-    let Some(snapshot) = crate::buddy::actor::buddy_snapshot(app.clone()).await else {
+    let workflow_summary = format!("Using {} to help with '{}'...", tool_name, chat_label);
+    let Some((title, speech)) = app
+        .buddy_event_sink
+        .render_runtime_event_fast(tool_name, &workflow_summary, "started")
+        .await
+    else {
         return (fallback_title, fallback_speech);
     };
-    let pulse_one_liner = format!(
-        "{} pending ops, {} stuck tasks",
-        snapshot.pulse.memory.pending_ops, snapshot.pulse.tasks.stuck
-    );
-    let workflow_summary = format!("Using {} to help with '{}'...", tool_name, chat_label);
-    let voice_ctx = VoiceCtx {
-        persona: &snapshot.state.personality,
-        identity_name: snapshot.state.identity.name.as_str(),
-        pulse_one_liner,
-        workflow_id: Some(tool_name),
-        workflow_summary: Some(workflow_summary.as_str()),
-    };
-    let (title, speech) = voice_service()
-        .await
-        .render_runtime_event_fast(app, voice_ctx, "started")
-        .await;
     runtime_event_lines_with_fallback(title, speech, fallback_title, fallback_speech)
 }
 
@@ -2286,7 +2307,7 @@ pub async fn execute_tools(
     for (tc, (_, dedupe_key)) in tool_calls.iter().zip(tool_meta.iter()) {
         let (title, speech_text) =
             tool_runtime_event_lines(app.clone(), &tc.function.name, &chat_label).await;
-        let mut ev = crate::buddy::actor::make_runtime_event(
+        let mut ev = make_runtime_event(
             "tool_used",
             &title,
             "tool",
@@ -2297,7 +2318,7 @@ pub async fn execute_tools(
         ev.speech_text = speech_text;
         ev.scene = Some("working".to_string());
         ev.chat_id = Some(chat_id.to_string());
-        crate::buddy::actor::buddy_enqueue_event(app.clone(), ev).await;
+        app.buddy_event_sink.enqueue_event(ev).await;
     }
 
     let (result_msgs, had_corrections) = execute_tools_inner(
@@ -2312,7 +2333,7 @@ pub async fn execute_tools(
         if failed {
             // Emit an explicit tool_failed runtime event so the GUI
             // can distinguish failure from normal tool completion.
-            let mut ev = crate::buddy::actor::make_runtime_event(
+            let mut ev = make_runtime_event(
                 "tool_failed",
                 &format!("Tool failed in '{}'", chat_label),
                 "tool",
@@ -2321,31 +2342,27 @@ pub async fn execute_tools(
                 None,
             );
             ev.chat_id = Some(chat_id.to_string());
-            crate::buddy::actor::buddy_enqueue_event(app2.clone(), ev).await;
+            app2.buddy_event_sink.enqueue_event(ev).await;
         } else {
-            crate::buddy::actor::buddy_complete_event(app2.clone(), dedupe_key, "completed").await;
+            app2.buddy_event_sink.complete_event(dedupe_key, "completed").await;
         }
     }
 
     if !is_buddy && result_msgs.iter().any(|m| m.tool_failed == Some(true)) {
-        let buddy_arc = app2.buddy.buddy.clone();
-        let mut buddy = buddy_arc.lock().await;
-        if let Some(svc) = buddy.as_mut() {
-            let suggestion = crate::buddy::types::BuddySuggestion {
-                id: uuid::Uuid::new_v4().to_string(),
-                suggestion_type: "tool_failure".to_string(),
-                title: "I noticed a tool failure".to_string(),
-                description: format!(
-                    "'{}' failed. Want me to investigate what happened?",
-                    first_tool_name
-                ),
-                created_at: chrono::Utc::now().to_rfc3339(),
-                dismissed: false,
-                controls: vec![],
-                quest: None,
-            };
-            svc.maybe_add_suggestion(suggestion);
-        }
+        let suggestion = refact_buddy_core::types::BuddySuggestion {
+            id: uuid::Uuid::new_v4().to_string(),
+            suggestion_type: "tool_failure".to_string(),
+            title: "I noticed a tool failure".to_string(),
+            description: format!(
+                "'{}' failed. Want me to investigate what happened?",
+                first_tool_name
+            ),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            dismissed: false,
+            controls: vec![],
+            quest: None,
+        };
+        app2.buddy_event_sink.maybe_add_suggestion(suggestion).await;
     }
 
     (result_msgs, had_corrections)

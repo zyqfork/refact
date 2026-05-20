@@ -25,10 +25,7 @@ use crate::worktrees::service::WorktreeService;
 use crate::worktrees::types::{WorktreeMeta, WorktreeReference};
 
 async fn push_user_activity(app: AppState, action: UserAction) {
-    let user_activity = app.buddy.user_activity.clone();
-    if let Ok(mut ring) = user_activity.try_lock() {
-        ring.push(action);
-    };
+    app.activity_sink.record_user_action(action).await;
 }
 
 fn apply_manual_context_files(
@@ -437,7 +434,7 @@ pub fn apply_setparams_patch(
     }
     if let Some(v) = patch.get("buddy_meta") {
         if let Ok(meta) =
-            serde_json::from_value::<Option<crate::buddy::types::BuddyThreadMeta>>(v.clone())
+            serde_json::from_value::<Option<refact_buddy_core::types::BuddyThreadMeta>>(v.clone())
         {
             thread.buddy_meta = meta;
             changed = true;

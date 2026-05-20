@@ -136,6 +136,7 @@ refact-scope-utils = { path = "crates/refact-scope-utils" }
 refact-caps-core = { path = "crates/refact-caps-core" }
 refact-voice = { path = "crates/refact-voice" }
 refact-context-api = { path = "crates/refact-context-api", features = ["http-client"] }
+refact-runtime-api = { path = "crates/refact-runtime-api" }
 
 astral-tokio-tar = "0.5.2"
 axum = { version = "0.6.20", features = ["default", "http2"] }

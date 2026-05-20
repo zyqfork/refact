@@ -13,8 +13,9 @@ use tracing::{error, info};
 
 use crate::ast::ast_indexer_thread::AstIndexService;
 use crate::app_state::{
-    AppState, BuddyServices, CapsState, ChatServices, IntegrationServices, ModelServices,
-    PathServices, RuntimeServices, TokenizerState, WorkspaceServices,
+    AppActivitySink, AppBuddyEventSink, AppState, BuddyServices, CapsState, ChatServices,
+    IntegrationServices, ModelServices, PathServices, RuntimeServices, TokenizerState,
+    WorkspaceServices,
 };
 use crate::caps::CodeAssistantCaps;
 use crate::caps::providers::get_latest_provider_mtime;
@@ -263,6 +264,8 @@ pub type SharedGlobalContext = Arc<GlobalContext>; // TODO: remove this type ali
 
 impl GlobalContext {
     pub fn app_state(&self, gcx: SharedGlobalContext) -> AppState {
+        let activity_sink = Arc::new(AppActivitySink::new(self.user_activity.clone()));
+        let buddy_event_sink = Arc::new(AppBuddyEventSink::new(gcx.clone(), self.buddy.clone()));
         AppState {
             gcx,
             runtime: RuntimeServices {
@@ -335,6 +338,8 @@ impl GlobalContext {
                 init_shadow_repos_lock: self.init_shadow_repos_lock.clone(),
                 git_operations_abort_flag: self.git_operations_abort_flag.clone(),
             },
+            activity_sink,
+            buddy_event_sink,
         }
     }
 }

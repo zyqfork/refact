@@ -18,12 +18,44 @@ use crate::chat::types::{SessionState, TaskMeta};
 use crate::chat::{get_or_create_session_with_trajectory, process_command_queue};
 use crate::chat::types::{CommandRequest, ChatCommand};
 use crate::worktrees::service::WorktreeService;
+use refact_buddy_core::types::BuddyRuntimeEvent;
+use uuid::Uuid;
 
 /// Timeout for agent inactivity before considering it stuck (20 minutes)
 const AGENT_STUCK_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 /// How often to check for stuck agents (5 minutes)
 const MONITOR_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+fn make_runtime_event(
+    signal_type: &str,
+    title: &str,
+    source: &str,
+    dedupe_key: &str,
+    status: &str,
+    priority: Option<&str>,
+) -> BuddyRuntimeEvent {
+    BuddyRuntimeEvent {
+        id: Uuid::new_v4().to_string(),
+        signal_type: signal_type.to_string(),
+        title: title.to_string(),
+        description: None,
+        source: source.to_string(),
+        status: status.to_string(),
+        progress: None,
+        dedupe_key: Some(dedupe_key.to_string()),
+        priority: priority.unwrap_or("normal").to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        ttl_ms: None,
+        speech_text: None,
+        scene: None,
+        duration_hint: None,
+        persistent: false,
+        controls: Vec::new(),
+        chat_id: None,
+        dismissed: false,
+    }
+}
 
 /// Detect if a session error should cause task agent failure
 pub async fn handle_agent_streaming_error(
@@ -134,7 +166,7 @@ async fn mark_agent_as_failed(
     tracing::info!("Marked agent for card {} as failed: {}", card_id, reason);
 
     {
-        let ev = crate::buddy::actor::make_runtime_event(
+        let ev = make_runtime_event(
             "task_failed",
             &format!("Agent failed: {}", card_title),
             "task_agent",
@@ -142,7 +174,7 @@ async fn mark_agent_as_failed(
             "failed",
             Some("high"),
         );
-        crate::buddy::actor::buddy_enqueue_event(app.clone(), ev).await;
+        app.buddy_event_sink.enqueue_event(ev).await;
     }
 
     if let Some(card) = board.get_card(card_id) {
