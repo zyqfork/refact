@@ -1083,6 +1083,6 @@ mod tests {
         assert!(!kind.should_cleanup_worktree());
         assert!(report.contains("context limit"));
         assert!(report.contains("Context too large"));
-        assert!(report.contains("Suggested action: Compact chat"));
+        assert!(report.contains("Suggested action: Compact the chat"));
     }
 }
