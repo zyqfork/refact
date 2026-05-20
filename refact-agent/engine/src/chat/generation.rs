@@ -20,7 +20,7 @@ use crate::llm::LlmRequest;
 use crate::llm::params::CacheControl;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::constants::CHAT_TOP_N;
-use crate::http::routers::v1::knowledge_enrichment::enrich_messages_with_knowledge;
+use crate::knowledge::enrichment::enrich_messages_with_knowledge;
 
 use super::types::*;
 use super::trajectories::{maybe_save_trajectory, check_external_reload_pending};

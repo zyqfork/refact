@@ -49,6 +49,7 @@ pub mod caps;
 pub mod global_context;
 pub mod indexing_utils;
 pub mod json_utils;
+pub mod knowledge;
 pub mod nicer_logs;
 pub mod version;
 pub mod yaml_configs;
