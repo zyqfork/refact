@@ -7,8 +7,8 @@ use chrono::Utc;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::chat::types::TaskMeta;
 use crate::global_context::SharedGlobalContext;
+use refact_chat_api::TaskMeta;
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params,
 };
@@ -431,7 +431,7 @@ impl Tool for ToolTaskAssignAgent {
 #[cfg(test)]
 mod tests {
     use super::resolve_task_agent_scope;
-    use crate::chat::types::TaskMeta;
+    use refact_chat_api::TaskMeta;
     use serde_json::{json, Value};
     use std::collections::HashMap;
 

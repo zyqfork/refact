@@ -14,8 +14,8 @@ use tracing::{error, info};
 use crate::ast::ast_indexer_thread::AstIndexService;
 use crate::app_state::{
     AppActivitySink, AppBuddyEventSink, AppState, BuddyServices, CapsState, ChatServices,
-    IntegrationServices, ModelServices, PathServices, RuntimeServices, TokenizerState,
-    WorkspaceServices,
+    EngineChatSessionFacade, IntegrationServices, ModelServices, PathServices, RuntimeServices,
+    TokenizerState, WorkspaceServices,
 };
 use crate::caps::CodeAssistantCaps;
 use crate::caps::providers::get_latest_provider_mtime;
@@ -267,7 +267,7 @@ impl GlobalContext {
         let activity_sink = Arc::new(AppActivitySink::new(self.user_activity.clone()));
         let buddy_event_sink = Arc::new(AppBuddyEventSink::new(gcx.clone(), self.buddy.clone()));
         AppState {
-            gcx,
+            gcx: gcx.clone(),
             runtime: RuntimeServices {
                 shutdown_flag: self.shutdown_flag.clone(),
                 cmdline: Arc::new(self.cmdline.clone()),
@@ -299,6 +299,7 @@ impl GlobalContext {
             },
             chat: ChatServices {
                 sessions: self.chat_sessions.clone(),
+                facade: Arc::new(EngineChatSessionFacade::new(gcx.clone())),
                 trajectory_events_tx: self
                     .trajectory_events_tx
                     .clone()

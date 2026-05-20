@@ -8,8 +8,8 @@ use crate::tools::tools_description::{
     Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params,
 };
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
-use crate::chat::types::TaskMeta;
 use crate::at_commands::at_commands::AtCommandsContext;
+use refact_chat_api::TaskMeta;
 use crate::worktrees::types::WorktreeMeta;
 use crate::subchat::run_subchat;
 use crate::postprocessing::pp_command_output::OutputFilter;

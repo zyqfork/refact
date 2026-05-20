@@ -10,7 +10,7 @@ use crate::tools::tools_description::{
 use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
-use crate::chat::types::SessionState;
+use refact_runtime_api::{ChatSessionFacade, SessionState};
 
 pub(crate) async fn get_task_id(
     ccx: &Arc<AMutex<AtCommandsContext>>,
@@ -48,26 +48,16 @@ pub(crate) struct AgentStatus {
 
 pub(crate) async fn get_agent_statuses(
     gcx: Arc<crate::global_context::GlobalContext>,
+    chat_facade: Arc<dyn ChatSessionFacade>,
     task_id: &str,
 ) -> Result<Vec<AgentStatus>, String> {
     let board = storage::load_board(gcx.clone(), task_id).await?;
-
-    let sessions = gcx.chat_sessions.clone();
 
     let mut statuses = Vec::new();
 
     for card in &board.cards {
         if let Some(agent_chat_id) = &card.agent_chat_id {
-            let session_arc = {
-                let sessions_read = sessions.read().await;
-                sessions_read.get(agent_chat_id).cloned()
-            };
-
-            let session_state = if let Some(sa) = session_arc {
-                Some(sa.lock().await.runtime.state)
-            } else {
-                None
-            };
+            let session_state = chat_facade.session_state(agent_chat_id).await?;
 
             let last_status_update = card
                 .status_updates
@@ -177,9 +167,12 @@ impl Tool for ToolTaskCheckAgents {
         drop(ccx_lock);
 
         let task_id = get_task_id(&ccx, args).await?;
-        let gcx = ccx.lock().await.app.gcx.clone();
+        let (gcx, chat_facade) = {
+            let ccx_lock = ccx.lock().await;
+            (ccx_lock.app.gcx.clone(), ccx_lock.app.chat.facade.clone())
+        };
 
-        let statuses = get_agent_statuses(gcx, &task_id).await?;
+        let statuses = get_agent_statuses(gcx, chat_facade, &task_id).await?;
 
         if statuses.is_empty() {
             let result = "# Agent Status\n\nNo agents have been spawned yet for this task.\n\nUse `task_spawn_agent(card_id)` to spawn an agent for a card.".to_string();

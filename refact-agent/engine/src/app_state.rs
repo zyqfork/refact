@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
 use async_trait::async_trait;
@@ -18,8 +18,8 @@ use crate::buddy::actor::BuddyService;
 use crate::buddy::events::BuddyEvent;
 use crate::buddy::user_activity::UserActivityRing;
 use crate::caps::CodeAssistantCaps;
-use crate::chat::trajectories::TrajectoryEvent;
-use crate::chat::SessionsMap;
+use crate::chat::trajectories::{self, TrajectoryEvent};
+use crate::chat::{self, process_command_queue, SessionsMap};
 use crate::completion_cache::CompletionCache;
 use crate::files_blocklist::IndexingEverywhere;
 use crate::files_in_workspace::DocumentsState;
@@ -36,6 +36,9 @@ use crate::tasks::events::TaskEventEnvelope;
 use crate::voice::SharedVoiceService;
 use crate::yaml_configs::customization_registry::RegistryCacheManager;
 use refact_core::vecdb_types::VecdbSearch;
+use refact_runtime_api::{
+    ChatSessionFacade, ChatSessionSnapshot, ChatSessionUpdate, CreateSessionRequest,
+};
 
 #[derive(Clone)]
 pub struct RuntimeServices {
@@ -92,6 +95,7 @@ pub struct WorkspaceServices {
 #[derive(Clone)]
 pub struct ChatServices {
     pub sessions: SessionsMap,
+    pub facade: Arc<dyn ChatSessionFacade>,
     pub trajectory_events_tx: tokio::sync::broadcast::Sender<TrajectoryEvent>,
     pub workspace_changed_tx: tokio::sync::broadcast::Sender<()>,
     pub task_events_tx: tokio::sync::broadcast::Sender<TaskEventEnvelope>,
@@ -116,6 +120,120 @@ pub struct IntegrationServices {
     pub codelens_cache: Arc<AMutex<CodeLensCache>>,
     pub init_shadow_repos_lock: Arc<AMutex<bool>>,
     pub git_operations_abort_flag: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub struct EngineChatSessionFacade {
+    gcx: SharedGlobalContext,
+}
+
+impl EngineChatSessionFacade {
+    pub fn new(gcx: SharedGlobalContext) -> Self {
+        Self { gcx }
+    }
+}
+
+#[async_trait]
+impl ChatSessionFacade for EngineChatSessionFacade {
+    async fn session_snapshot(&self, chat_id: &str) -> Result<ChatSessionSnapshot, String> {
+        let app = AppState::from_gcx(self.gcx.clone()).await;
+        let session_arc =
+            chat::get_or_create_session_with_trajectory(app, &self.gcx.chat_sessions, chat_id).await;
+        let session = session_arc.lock().await;
+        Ok(ChatSessionSnapshot {
+            messages: session.messages.clone(),
+            thread: session.thread.clone(),
+            session_state: session.runtime.state,
+        })
+    }
+
+    async fn update_session(&self, chat_id: &str, update: ChatSessionUpdate) -> Result<(), String> {
+        let app = AppState::from_gcx(self.gcx.clone()).await;
+        let session_arc =
+            chat::get_or_create_session_with_trajectory(app, &self.gcx.chat_sessions, chat_id).await;
+        let mut session = session_arc.lock().await;
+        session.messages = update.messages;
+        session.increment_version();
+        let snapshot = session.snapshot();
+        session.emit(snapshot);
+        Ok(())
+    }
+
+    async fn create_session(&self, request: CreateSessionRequest) -> Result<(), String> {
+        let app = AppState::from_gcx(self.gcx.clone()).await;
+        let session_arc = chat::get_or_create_session_with_trajectory(
+            app,
+            &self.gcx.chat_sessions,
+            &request.chat_id,
+        )
+        .await;
+        let mut session = session_arc.lock().await;
+        session.thread = request.thread;
+        for message in request.messages {
+            session.add_message(message);
+        }
+        session.increment_version();
+        Ok(())
+    }
+
+    async fn push_command(
+        &self,
+        chat_id: &str,
+        command: refact_chat_api::ChatCommand,
+    ) -> Result<(), String> {
+        let app = AppState::from_gcx(self.gcx.clone()).await;
+        let session_arc =
+            chat::get_or_create_session_with_trajectory(app.clone(), &self.gcx.chat_sessions, chat_id)
+                .await;
+        let mut session = session_arc.lock().await;
+        session.command_queue.push_back(refact_chat_api::CommandRequest {
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            priority: false,
+            command,
+        });
+        session.touch();
+        let processor_running = session.queue_processor_running.clone();
+        let queue_notify = session.queue_notify.clone();
+        drop(session);
+        if !processor_running.swap(true, Ordering::SeqCst) {
+            tokio::spawn(process_command_queue(app, session_arc, processor_running));
+        } else {
+            queue_notify.notify_one();
+        }
+        Ok(())
+    }
+
+    async fn session_state(
+        &self,
+        chat_id: &str,
+    ) -> Result<Option<refact_runtime_api::SessionState>, String> {
+        let session_arc = {
+            let sessions = self.gcx.chat_sessions.read().await;
+            sessions.get(chat_id).cloned()
+        };
+        match session_arc {
+            Some(session_arc) => Ok(Some(session_arc.lock().await.runtime.state)),
+            None => Ok(None),
+        }
+    }
+
+    async fn maybe_save_session(&self, chat_id: &str) -> Result<(), String> {
+        let session_arc = {
+            let sessions = self.gcx.chat_sessions.read().await;
+            sessions.get(chat_id).cloned()
+        };
+        if let Some(session_arc) = session_arc {
+            trajectories::maybe_save_trajectory(AppState::from_gcx(self.gcx.clone()).await, session_arc).await;
+        }
+        Ok(())
+    }
+
+    async fn save_trajectory_snapshot(
+        &self,
+        snapshot: refact_runtime_api::RuntimeTrajectorySnapshot,
+    ) -> Result<(), String> {
+        trajectories::save_trajectory_snapshot(self.gcx.clone(), snapshot).await
+    }
 }
 
 #[derive(Clone)]

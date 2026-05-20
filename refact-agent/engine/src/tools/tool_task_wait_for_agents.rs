@@ -63,9 +63,12 @@ impl Tool for ToolTaskWaitForAgents {
         drop(ccx_lock);
 
         let task_id = get_task_id(&ccx, args).await?;
-        let gcx = ccx.lock().await.app.gcx.clone();
+        let (gcx, chat_facade) = {
+            let ccx_lock = ccx.lock().await;
+            (ccx_lock.app.gcx.clone(), ccx_lock.app.chat.facade.clone())
+        };
 
-        let statuses = get_agent_statuses(gcx, &task_id).await?;
+        let statuses = get_agent_statuses(gcx, chat_facade, &task_id).await?;
 
         if statuses.is_empty() {
             let result = "# Agent Status\n\nNo agents have been spawned yet for this task.\n\nUse `task_spawn_agent(card_id)` to spawn an agent for a card.".to_string();

@@ -13,6 +13,7 @@ use crate::ext::skills_context::expand_skill_includes;
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params,
 };
+use refact_chat_api::{ActiveCommandContext, PendingSkillDeactivation};
 
 pub struct ToolActivateSkill {
     pub config_path: String,
@@ -248,16 +249,12 @@ impl Tool for ToolDeactivateSkill {
                     .active_command
                     .started_at_index
                     .unwrap_or(session.messages.len());
-                session.pending_skill_deactivation =
-                    Some(crate::chat::types::PendingSkillDeactivation {
-                        start_index,
-                        report: report.clone(),
-                        skill_name: skill_name.clone(),
-                        activation_tool_call_id: session
-                            .active_command
-                            .activation_tool_call_id
-                            .clone(),
-                    });
+                session.pending_skill_deactivation = Some(PendingSkillDeactivation {
+                    start_index,
+                    report: report.clone(),
+                    skill_name: skill_name.clone(),
+                    activation_tool_call_id: session.active_command.activation_tool_call_id.clone(),
+                });
                 let compaction_note = if session.active_command.started_at_index.is_some() {
                     String::new()
                 } else {
@@ -265,7 +262,7 @@ impl Tool for ToolDeactivateSkill {
                     " (Note: skill history compaction was skipped — activation anchor was not set.)"
                         .to_string()
                 };
-                session.active_command = crate::chat::types::ActiveCommandContext::default();
+                session.active_command = ActiveCommandContext::default();
                 session.clear_active_skill();
                 return Ok((
                     false,
@@ -482,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deactivate_skill_clears_active_command() {
-        use crate::chat::types::ActiveCommandContext;
+        use refact_chat_api::ActiveCommandContext;
 
         let mut active = ActiveCommandContext {
             name: "my-skill".to_string(),
@@ -505,7 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deactivate_skill_when_no_active_skill() {
-        use crate::chat::types::ActiveCommandContext;
+        use refact_chat_api::ActiveCommandContext;
 
         let active = ActiveCommandContext::default();
         let cleared = ActiveCommandContext::default();
@@ -577,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_activate_started_at_uses_message_count() {
-        use crate::chat::types::ActiveCommandContext;
+        use refact_chat_api::ActiveCommandContext;
 
         let mut ctx = ActiveCommandContext::default();
         assert!(ctx.started_at_index.is_none());
@@ -593,61 +590,21 @@ mod tests {
 
     #[test]
     fn test_deactivate_uses_active_skill_not_active_command() {
-        use crate::chat::types::{ActiveCommandContext, ThreadParams};
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
-        use tokio::sync::{broadcast, Notify};
-        use std::collections::VecDeque;
-        use std::time::Instant;
+        use refact_chat_api::{ActiveCommandContext, ThreadParams};
 
-        let (tx, _rx) = broadcast::channel(16);
-        let mut session = crate::chat::types::ChatSession {
-            chat_id: "test".to_string(),
-            thread: ThreadParams {
-                id: "test".to_string(),
-                active_skill: Some("real-skill".to_string()),
-                ..Default::default()
-            },
-            active_command: ActiveCommandContext {
-                name: "some-slash-command".to_string(),
-                started_at_index: Some(0),
-                activation_tool_call_id: None,
-                ..Default::default()
-            },
-            messages: Vec::new(),
-            runtime: crate::chat::types::RuntimeState::default(),
-            draft_message: None,
-            draft_usage: None,
-            command_queue: VecDeque::new(),
-            event_seq: 0,
-            event_tx: tx,
-            recent_request_ids: VecDeque::new(),
-            recent_request_ids_set: std::collections::HashSet::new(),
-            abort_flag: Arc::new(AtomicBool::new(false)),
-            user_interrupt_flag: Arc::new(AtomicBool::new(false)),
-            queue_processor_running: Arc::new(AtomicBool::new(false)),
-            queue_notify: Arc::new(Notify::new()),
-            last_activity: Instant::now(),
-            trajectory_dirty: false,
-            trajectory_version: 0,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            closed: false,
-            closed_flag: Arc::new(AtomicBool::new(false)),
-            external_reload_pending: false,
-            last_prompt_messages: Vec::new(),
-            cache_guard_snapshot: None,
-            cache_guard_force_next: false,
-            task_agent_error: None,
-            trajectory_events_tx: None,
-            pending_browser_message: None,
-            skills_available_count: 0,
-            skills_included: Vec::new(),
-            pending_skill_deactivation: None,
-            stop_hook_handle: None,
-            suppress_auto_enrichment_for_next_turn: false,
+        let mut thread = ThreadParams {
+            id: "test".to_string(),
+            active_skill: Some("real-skill".to_string()),
+            ..Default::default()
+        };
+        let mut active_command = ActiveCommandContext {
+            name: "some-slash-command".to_string(),
+            started_at_index: Some(0),
+            activation_tool_call_id: None,
+            ..Default::default()
         };
 
-        let skill_name = match session.thread.active_skill.clone() {
+        let skill_name = match thread.active_skill.clone() {
             Some(name) => name,
             None => panic!("Expected active_skill to be set"),
         };
@@ -655,11 +612,13 @@ mod tests {
             skill_name, "real-skill",
             "Must use active_skill, not active_command.name"
         );
-        assert_ne!(skill_name, session.active_command.name);
+        assert_ne!(skill_name, active_command.name);
 
-        session.active_command = ActiveCommandContext::default();
-        session.clear_active_skill();
-        assert!(session.thread.active_skill.is_none());
+        let cleared_command = ActiveCommandContext::default();
+        active_command = cleared_command;
+        thread.active_skill = None;
+        assert!(thread.active_skill.is_none());
+        assert!(active_command.name.is_empty());
     }
 
     #[test]
