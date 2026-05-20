@@ -14,6 +14,7 @@ use chrono::Utc;
 use crate::app_state::AppState;
 use crate::tasks::storage;
 use crate::tasks::types::StatusUpdate;
+use crate::chat::retry_policy::{RetryDecision, classify_llm_error_for_retry};
 use crate::chat::types::{SessionState, TaskMeta};
 use crate::chat::{get_or_create_session_with_trajectory, process_command_queue};
 use crate::chat::types::{CommandRequest, ChatCommand};
@@ -57,6 +58,44 @@ fn make_runtime_event(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentFailureKind {
+    TransientExhausted,
+    ContextLimit,
+    Permanent,
+    Cancelled,
+}
+
+impl AgentFailureKind {
+    fn from_error(error_message: &str) -> Self {
+        match classify_llm_error_for_retry(error_message) {
+            RetryDecision::Retry { .. } => AgentFailureKind::TransientExhausted,
+            RetryDecision::ContextLimit { .. } => AgentFailureKind::ContextLimit,
+            RetryDecision::DoNotRetry { .. } => AgentFailureKind::Permanent,
+            RetryDecision::UserCancelled { .. } => AgentFailureKind::Cancelled,
+        }
+    }
+
+    fn should_cleanup_worktree(self) -> bool {
+        matches!(self, AgentFailureKind::Permanent)
+    }
+
+    fn final_report_reason(self, error_message: &str) -> String {
+        match self {
+            AgentFailureKind::TransientExhausted => format!(
+                "Agent provider/network error after retries were exhausted; worktree retained for retry: {}",
+                error_message
+            ),
+            AgentFailureKind::ContextLimit => format!(
+                "Agent hit provider context limit; compaction or a smaller history is required: {}",
+                error_message
+            ),
+            AgentFailureKind::Permanent => format!("Agent streaming error: {}", error_message),
+            AgentFailureKind::Cancelled => format!("Agent was cancelled: {}", error_message),
+        }
+    }
+}
+
 /// Detect if a session error should cause task agent failure
 pub async fn handle_agent_streaming_error(
     app: AppState,
@@ -74,13 +113,17 @@ pub async fn handle_agent_streaming_error(
         error_message
     );
 
+    let failure_kind = AgentFailureKind::from_error(error_message);
+    let failure_reason = failure_kind.final_report_reason(error_message);
+
     if let Err(e) = mark_agent_as_failed(
         app.clone(),
         &task_meta.task_id,
         card_id,
         task_meta.agent_id.as_deref(),
         task_meta.planner_chat_id.as_deref(),
-        &format!("Agent streaming error: {}", error_message),
+        &failure_reason,
+        failure_kind,
     )
     .await
     {
@@ -96,6 +139,7 @@ async fn mark_agent_as_failed(
     expected_agent_id: Option<&str>,
     planner_chat_id: Option<&str>,
     reason: &str,
+    failure_kind: AgentFailureKind,
 ) -> Result<(), String> {
     let _ = update_card_heartbeat(app.clone(), task_id, card_id).await;
 
@@ -177,35 +221,50 @@ async fn mark_agent_as_failed(
         app.buddy_event_sink.enqueue_event(ev).await;
     }
 
-    if let Some(card) = board.get_card(card_id) {
-        if let (Some(ref wt), Some(ref branch)) = (&card.agent_worktree, &card.agent_branch) {
-            let diff_report = cleanup_failed_agent_worktree(
-                app.clone(),
-                wt,
-                branch,
-                card.agent_worktree_name.as_deref(),
-            )
-            .await;
-            let card_id_for_cleanup = card_id.to_string();
-            let _ = storage::update_board_atomic(app.gcx.clone(), task_id, move |board| {
-                if let Some(c) = board.get_card_mut(&card_id_for_cleanup) {
-                    if !diff_report.is_empty() {
-                        if let Some(ref mut report) = c.final_report {
-                            report.push_str(&diff_report);
+    if failure_kind.should_cleanup_worktree() {
+        if let Some(card) = board.get_card(card_id) {
+            if let (Some(ref wt), Some(ref branch)) = (&card.agent_worktree, &card.agent_branch) {
+                let diff_report = cleanup_failed_agent_worktree(
+                    app.clone(),
+                    wt,
+                    branch,
+                    card.agent_worktree_name.as_deref(),
+                )
+                .await;
+                let card_id_for_cleanup = card_id.to_string();
+                let _ = storage::update_board_atomic(app.gcx.clone(), task_id, move |board| {
+                    if let Some(c) = board.get_card_mut(&card_id_for_cleanup) {
+                        if !diff_report.is_empty() {
+                            if let Some(ref mut report) = c.final_report {
+                                report.push_str(&diff_report);
+                            }
                         }
+                        c.agent_worktree = None;
+                        c.agent_branch = None;
+                        c.agent_worktree_name = None;
                     }
-                    c.agent_worktree = None;
-                    c.agent_branch = None;
-                    c.agent_worktree_name = None;
-                }
-                Ok(())
-            })
-            .await;
+                    Ok(())
+                })
+                .await;
+            }
         }
+    } else {
+        let card_id_for_retain = card_id.to_string();
+        let _ = storage::update_board_atomic(app.gcx.clone(), task_id, move |board| {
+            if let Some(c) = board.get_card_mut(&card_id_for_retain) {
+                if let Some(ref mut report) = c.final_report {
+                    report
+                        .push_str("\n\nWorktree and branch were retained for inspection or retry.");
+                }
+            }
+            Ok(())
+        })
+        .await;
     }
 
     if let Err(e) =
-        notify_planner_agents_finished(app.clone(), task_id, &board, all_finished, planner_chat_id).await
+        notify_planner_agents_finished(app.clone(), task_id, &board, all_finished, planner_chat_id)
+            .await
     {
         tracing::warn!(
             "Marked agent for card {} as failed, but planner notification failed: {}",
@@ -679,6 +738,7 @@ async fn check_for_stuck_agents(app: AppState) -> Result<(), String> {
                                     "Agent appears stuck (no agent_chat_id, no activity for {})",
                                     humantime::format_duration(AGENT_STUCK_TIMEOUT)
                                 ),
+                                AgentFailureKind::Permanent,
                             )
                             .await?;
                         }
@@ -715,6 +775,7 @@ async fn check_for_stuck_agents(app: AppState) -> Result<(), String> {
                                 "Agent appears stuck (no activity for {})",
                                 humantime::format_duration(AGENT_STUCK_TIMEOUT)
                             ),
+                            AgentFailureKind::Permanent,
                         )
                         .await?;
                     }
@@ -746,13 +807,16 @@ async fn check_for_stuck_agents(app: AppState) -> Result<(), String> {
                     error_msg
                 );
 
+                let failure_kind = AgentFailureKind::from_error(&error_msg);
+                let failure_reason = failure_kind.final_report_reason(&error_msg);
                 mark_agent_as_failed(
                     app.clone(),
                     task_id,
                     &card.id,
                     None,
                     planner_chat_id.as_deref(),
-                    &format!("Session error: {}", error_msg),
+                    &failure_reason,
+                    failure_kind,
                 )
                 .await?;
                 continue;
@@ -790,6 +854,7 @@ async fn check_for_stuck_agents(app: AppState) -> Result<(), String> {
                         "Agent stuck (idle with no activity for {})",
                         humantime::format_duration(elapsed)
                     ),
+                    AgentFailureKind::Permanent,
                 )
                 .await?;
             }
@@ -951,5 +1016,37 @@ mod tests {
 
         let matches = card.assignee.as_ref() == Some(&expected_agent.to_string());
         assert!(matches);
+    }
+
+    #[test]
+    fn task_agent_monitor_transient_exhaustion_retains_worktree() {
+        let kind = AgentFailureKind::from_error("LLM error (503 Service Unavailable): overloaded");
+
+        assert_eq!(kind, AgentFailureKind::TransientExhausted);
+        assert!(!kind.should_cleanup_worktree());
+        assert!(kind
+            .final_report_reason("LLM error (503 Service Unavailable): overloaded")
+            .contains("worktree retained"));
+    }
+
+    #[test]
+    fn task_agent_monitor_permanent_failure_can_cleanup_worktree() {
+        let kind = AgentFailureKind::from_error("LLM error (401 Unauthorized): invalid api key");
+
+        assert_eq!(kind, AgentFailureKind::Permanent);
+        assert!(kind.should_cleanup_worktree());
+    }
+
+    #[test]
+    fn task_agent_monitor_context_limit_is_distinct_from_transient() {
+        let kind = AgentFailureKind::from_error(
+            "LLM error (413 Payload Too Large): context length exceeded",
+        );
+
+        assert_eq!(kind, AgentFailureKind::ContextLimit);
+        assert!(!kind.should_cleanup_worktree());
+        assert!(kind
+            .final_report_reason("LLM error (413 Payload Too Large): context length exceeded")
+            .contains("context limit"));
     }
 }

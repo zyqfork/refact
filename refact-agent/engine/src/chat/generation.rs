@@ -667,10 +667,7 @@ pub fn start_generation(
                     network_retry_attempt,
                     &abort_flag,
                 );
-                let retry_reason = match retry_decision {
-                    super::retry_policy::RetryDecision::Retry { reason } => reason,
-                    super::retry_policy::RetryDecision::DoNotRetry { reason } => reason,
-                };
+                let retry_reason = retry_decision.reason();
                 if should_retry_network {
                     let delay = super::retry_policy::retry_delay_for_attempt(network_retry_attempt);
                     network_retry_attempt += 1;

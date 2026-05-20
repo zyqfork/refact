@@ -5,7 +5,32 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
     Retry { reason: &'static str },
+    ContextLimit { reason: &'static str },
     DoNotRetry { reason: &'static str },
+    UserCancelled { reason: &'static str },
+}
+
+impl RetryDecision {
+    pub fn reason(self) -> &'static str {
+        match self {
+            RetryDecision::Retry { reason }
+            | RetryDecision::ContextLimit { reason }
+            | RetryDecision::DoNotRetry { reason }
+            | RetryDecision::UserCancelled { reason } => reason,
+        }
+    }
+
+    pub fn is_retryable_transient(self) -> bool {
+        matches!(self, RetryDecision::Retry { .. })
+    }
+
+    pub fn is_context_limit(self) -> bool {
+        matches!(self, RetryDecision::ContextLimit { .. })
+    }
+
+    pub fn is_user_cancelled(self) -> bool {
+        matches!(self, RetryDecision::UserCancelled { .. })
+    }
 }
 
 pub const MAX_LLM_RETRY_ATTEMPTS: usize = 5;
@@ -24,10 +49,7 @@ const NON_RETRYABLE_STATUS_CODES: &[&str] = &[
 
 const RETRYABLE_STATUS_CODES: &[&str] = &["408", "425", "429", "500", "502", "503", "504", "529"];
 
-const HARD_NON_RETRYABLE_PATTERNS: &[&str] = &[
-    "aborted",
-    "cancelled",
-    "canceled",
+const CONTEXT_LIMIT_PATTERNS: &[&str] = &[
     "context window",
     "context length",
     "context_length",
@@ -38,6 +60,10 @@ const HARD_NON_RETRYABLE_PATTERNS: &[&str] = &[
     "input is too long",
     "request too large",
     "payload too large",
+    "payload exceeds size limit",
+];
+
+const HARD_NON_RETRYABLE_PATTERNS: &[&str] = &[
     "invalid api key",
     "invalid key",
     "invalid_api_key",
@@ -167,20 +193,26 @@ pub fn classify_llm_error_for_retry(error: &str) -> RetryDecision {
     let lower = error.to_lowercase();
 
     if contains_any(&lower, &["aborted", "cancelled", "canceled"]) {
-        return RetryDecision::DoNotRetry {
+        return RetryDecision::UserCancelled {
             reason: "cancelled",
         };
     }
 
-    if contains_any(&lower, &HARD_NON_RETRYABLE_PATTERNS) {
-        return RetryDecision::DoNotRetry {
-            reason: "non_retryable_error",
+    if contains_any(&lower, &CONTEXT_LIMIT_PATTERNS) {
+        return RetryDecision::ContextLimit {
+            reason: "context_limit",
         };
     }
 
     if contains_retryable_status(&lower) {
         return RetryDecision::Retry {
             reason: "retryable_http_status",
+        };
+    }
+
+    if contains_any(&lower, &HARD_NON_RETRYABLE_PATTERNS) {
+        return RetryDecision::DoNotRetry {
+            reason: "non_retryable_error",
         };
     }
 
@@ -204,10 +236,8 @@ pub fn classify_llm_error_for_retry(error: &str) -> RetryDecision {
 }
 
 pub fn should_retry_llm_error(error: &str, retry_attempt: usize, abort_flag: &AtomicBool) -> bool {
-    matches!(
-        classify_llm_error_for_retry(error),
-        RetryDecision::Retry { .. }
-    ) && retry_attempt < MAX_LLM_RETRY_ATTEMPTS
+    classify_llm_error_for_retry(error).is_retryable_transient()
+        && retry_attempt < MAX_LLM_RETRY_ATTEMPTS
         && !abort_flag.load(Ordering::SeqCst)
 }
 
@@ -279,7 +309,7 @@ mod tests {
             RetryDecision::DoNotRetry { .. }
         ));
         assert!(matches!(
-            classify_llm_error_for_retry("LLM error (400 Bad Request): context length exceeded"),
+            classify_llm_error_for_retry("LLM error (400 Bad Request): bad tool schema"),
             RetryDecision::DoNotRetry { .. }
         ));
     }
@@ -338,7 +368,7 @@ mod tests {
     fn does_not_retry_user_cancellation() {
         assert!(matches!(
             classify_llm_error_for_retry("Aborted"),
-            RetryDecision::DoNotRetry {
+            RetryDecision::UserCancelled {
                 reason: "cancelled"
             }
         ));
@@ -355,5 +385,72 @@ mod tests {
         ));
         flag.store(true, Ordering::SeqCst);
         assert!(!should_retry_llm_error("timeout", 0, &flag));
+    }
+
+    #[test]
+    fn classifies_error_kinds_table() {
+        let cases: &[(&str, RetryDecision)] = &[
+            (
+                "LLM request failed: operation timed out",
+                RetryDecision::Retry {
+                    reason: "transient_error",
+                },
+            ),
+            (
+                "LLM error (529): overloaded_error",
+                RetryDecision::Retry {
+                    reason: "retryable_http_status",
+                },
+            ),
+            (
+                "LLM error (413 Payload Too Large): context length exceeded",
+                RetryDecision::ContextLimit {
+                    reason: "context_limit",
+                },
+            ),
+            (
+                "prompt is too long: maximum context window exceeded",
+                RetryDecision::ContextLimit {
+                    reason: "context_limit",
+                },
+            ),
+            (
+                "LLM error (401 Unauthorized): invalid api key",
+                RetryDecision::DoNotRetry {
+                    reason: "non_retryable_error",
+                },
+            ),
+            (
+                "Streaming with n > 1 is not supported",
+                RetryDecision::DoNotRetry {
+                    reason: "non_retryable_error",
+                },
+            ),
+            (
+                "User cancelled the operation",
+                RetryDecision::UserCancelled {
+                    reason: "cancelled",
+                },
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(
+                classify_llm_error_for_retry(error),
+                *expected,
+                "unexpected classification for {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn helper_methods_identify_classification_groups() {
+        assert!(classify_llm_error_for_retry("timeout").is_retryable_transient());
+        assert!(classify_llm_error_for_retry("context length exceeded").is_context_limit());
+        assert!(classify_llm_error_for_retry("cancelled").is_user_cancelled());
+        assert_eq!(
+            classify_llm_error_for_retry("timeout").reason(),
+            "transient_error"
+        );
     }
 }

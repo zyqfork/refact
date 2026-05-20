@@ -23,7 +23,7 @@ use crate::chat::stream_core::{
 };
 use crate::chat::retry_policy::{
     classify_llm_error_for_retry, retry_delay_for_attempt, should_retry_llm_error, sleep_or_abort,
-    MAX_LLM_RETRY_ATTEMPTS, RetryDecision,
+    MAX_LLM_RETRY_ATTEMPTS,
 };
 use crate::chat::tools::{execute_tools, resolve_tool_call_aliases, ExecuteToolsOptions};
 use crate::chat::types::{TaskMeta, ThreadParams};
@@ -1550,10 +1550,9 @@ async fn subchat_stream(
         match &attempt_result {
             Err(e) => {
                 let retry_decision = classify_llm_error_for_retry(e);
-                let retry_reason = match retry_decision {
-                    RetryDecision::Retry { reason } => Some(reason.to_string()),
-                    RetryDecision::DoNotRetry { .. } => None,
-                };
+                let retry_reason = retry_decision
+                    .is_retryable_transient()
+                    .then(|| retry_decision.reason().to_string());
                 let event = LlmCallEvent {
                     id: uuid::Uuid::new_v4().to_string(),
                     ts_start: call_ts_start,
