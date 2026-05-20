@@ -9,7 +9,6 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::buddy::actor::redact_sensitive;
 use crate::buddy::types::BuddyThreadMeta;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
-use crate::chat::trajectories::save_trajectory_snapshot;
 use refact_chat_history::trajectory_snapshot::TrajectorySnapshot;
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 
@@ -123,7 +122,7 @@ impl Tool for ToolBuddyLaunchInvestigation {
         }
         let user_text = msg_parts.join("\n\n");
 
-        let gcx = ccx.lock().await.app.gcx.clone();
+        let chat_facade = ccx.lock().await.app.chat.facade.clone();
         let chat_id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
 
@@ -171,7 +170,8 @@ impl Tool for ToolBuddyLaunchInvestigation {
             }),
         };
 
-        save_trajectory_snapshot(gcx, snapshot)
+        chat_facade
+            .save_trajectory_snapshot(snapshot)
             .await
             .map_err(|e| format!("failed to create investigation chat: {}", e))?;
 

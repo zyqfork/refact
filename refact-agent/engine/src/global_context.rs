@@ -13,8 +13,8 @@ use tracing::{error, info};
 
 use crate::ast::ast_indexer_thread::AstIndexService;
 use crate::app_state::{
-    AppState, BuddyServices, CapsState, ChatServices, IntegrationServices, ModelServices,
-    PathServices, RuntimeServices, TokenizerState, WorkspaceServices,
+    AppState, BuddyServices, CapsState, ChatServices, EngineChatSessionFacade, IntegrationServices,
+    ModelServices, PathServices, RuntimeServices, TokenizerState, WorkspaceServices,
 };
 use crate::caps::CodeAssistantCaps;
 use crate::caps::providers::get_latest_provider_mtime;
@@ -264,7 +264,7 @@ pub type SharedGlobalContext = Arc<GlobalContext>; // TODO: remove this type ali
 impl GlobalContext {
     pub fn app_state(&self, gcx: SharedGlobalContext) -> AppState {
         AppState {
-            gcx,
+            gcx: gcx.clone(),
             runtime: RuntimeServices {
                 shutdown_flag: self.shutdown_flag.clone(),
                 cmdline: Arc::new(self.cmdline.clone()),
@@ -296,6 +296,7 @@ impl GlobalContext {
             },
             chat: ChatServices {
                 sessions: self.chat_sessions.clone(),
+                facade: Arc::new(EngineChatSessionFacade::new(gcx.clone())),
                 trajectory_events_tx: self
                     .trajectory_events_tx
                     .clone()

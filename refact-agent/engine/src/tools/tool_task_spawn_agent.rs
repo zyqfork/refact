@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use serde_json::Value;
 use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
@@ -14,10 +13,10 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::tasks::storage;
 use crate::tasks::types::{BoardCard, StatusUpdate};
 use crate::global_context::{GlobalContext, try_load_caps_quickly_if_not_present};
-use crate::chat::types::{ThreadParams, TaskMeta, CommandRequest, ChatCommand};
-use crate::chat::{get_or_create_session_with_trajectory, process_command_queue};
 use crate::worktrees::service::WorktreeService;
+use refact_chat_api::{ChatCommand, TaskMeta, ThreadParams};
 use crate::worktrees::types::{CreateWorktreeRequest, WorktreeMeta};
+use refact_runtime_api::CreateSessionRequest;
 
 async fn get_task_id(
     ccx: &Arc<AMutex<AtCommandsContext>>,
@@ -619,112 +618,83 @@ impl Tool for ToolTaskSpawnAgent {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        let sessions = {
-            gcx.chat_sessions.clone()
+        let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
+        let thread = build_agent_thread_params(
+            &agent_chat_id,
+            &card_title,
+            &model,
+            &task_id,
+            &agent_id,
+            card_id,
+            &planner_chat_id,
+            prepared_worktree.meta.clone(),
+        );
+        let user_prompt = build_agent_prompt(
+            &card_title,
+            &card_instructions,
+            &dependency_context,
+            suggested_steps,
+        );
+        let user_msg = ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::SimpleText(user_prompt),
+            ..Default::default()
         };
+        let mut messages = vec![user_msg];
 
-        let session_arc =
-            get_or_create_session_with_trajectory(crate::app_state::AppState::from_gcx(gcx.clone()).await, &sessions, &agent_chat_id).await;
-
-        {
-            let mut session = session_arc.lock().await;
-
-            session.thread = build_agent_thread_params(
-                &agent_chat_id,
-                &card_title,
-                &model,
-                &task_id,
-                &agent_id,
-                card_id,
-                &planner_chat_id,
-                prepared_worktree.meta.clone(),
-            );
-
-            let user_prompt = build_agent_prompt(
-                &card_title,
-                &card_instructions,
-                &dependency_context,
-                suggested_steps,
-            );
-            let user_msg = ChatMessage {
-                role: "user".to_string(),
-                content: ChatContent::SimpleText(user_prompt),
-                ..Default::default()
-            };
-            session.add_message(user_msg);
-
-            if !files_to_open.is_empty() {
-                let mut context_files: Vec<ContextFile> = Vec::new();
-                for path_str in &files_to_open {
-                    let orig = std::path::Path::new(path_str);
-                    let source_root = prepared_worktree.source_workspace_root();
-                    let worktree_path = prepared_worktree.worktree_path();
-                    let resolved = match orig.strip_prefix(&source_root) {
-                        Ok(rel) => worktree_path.join(rel),
-                        Err(_) => worktree_path.join(path_str.trim_start_matches('/')),
-                    };
-                    match tokio::fs::read_to_string(&resolved).await {
-                        Ok(content) => {
-                            let line_count = content.lines().count().max(1);
-                            context_files.push(ContextFile {
-                                file_name: resolved.to_string_lossy().to_string(),
-                                file_content: content,
-                                line1: 1,
-                                line2: line_count,
-                                ..Default::default()
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "task_spawn_agent: could not read file {:?}: {}",
-                                resolved,
-                                e
-                            );
-                        }
+        if !files_to_open.is_empty() {
+            let mut context_files: Vec<ContextFile> = Vec::new();
+            for path_str in &files_to_open {
+                let orig = std::path::Path::new(path_str);
+                let source_root = prepared_worktree.source_workspace_root();
+                let worktree_path = prepared_worktree.worktree_path();
+                let resolved = match orig.strip_prefix(&source_root) {
+                    Ok(rel) => worktree_path.join(rel),
+                    Err(_) => worktree_path.join(path_str.trim_start_matches('/')),
+                };
+                match tokio::fs::read_to_string(&resolved).await {
+                    Ok(content) => {
+                        let line_count = content.lines().count().max(1);
+                        context_files.push(ContextFile {
+                            file_name: resolved.to_string_lossy().to_string(),
+                            file_content: content,
+                            line1: 1,
+                            line2: line_count,
+                            ..Default::default()
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "task_spawn_agent: could not read file {:?}: {}",
+                            resolved,
+                            e
+                        );
                     }
                 }
-                if !context_files.is_empty() {
-                    let ctx_msg = ChatMessage {
-                        role: "context_file".to_string(),
-                        content: ChatContent::ContextFiles(context_files),
-                        tool_call_id: "initial_files".to_string(),
-                        ..Default::default()
-                    };
-                    session.add_message(ctx_msg);
-                }
             }
-
-            session.increment_version();
-        }
-
-        crate::chat::maybe_save_trajectory(crate::app_state::AppState::from_gcx(gcx.clone()).await, session_arc.clone()).await;
-
-        {
-            let mut session = session_arc.lock().await;
-
-            let request = CommandRequest {
-                client_request_id: Uuid::new_v4().to_string(),
-                priority: false,
-                command: ChatCommand::Regenerate {},
-            };
-            session.command_queue.push_back(request);
-            session.touch();
-
-            let processor_running = session.queue_processor_running.clone();
-            let queue_notify = session.queue_notify.clone();
-
-            drop(session);
-
-            if !processor_running.swap(true, Ordering::SeqCst) {
-                tokio::spawn(process_command_queue(
-                    crate::app_state::AppState::from_gcx(gcx.clone()).await,
-                    session_arc.clone(),
-                    processor_running,
-                ));
-            } else {
-                queue_notify.notify_one();
+            if !context_files.is_empty() {
+                messages.push(ChatMessage {
+                    role: "context_file".to_string(),
+                    content: ChatContent::ContextFiles(context_files),
+                    tool_call_id: "initial_files".to_string(),
+                    ..Default::default()
+                });
             }
         }
+
+        app.chat
+            .facade
+            .create_session(CreateSessionRequest {
+                chat_id: agent_chat_id.clone(),
+                thread,
+                messages,
+            })
+            .await?;
+        app.chat.facade.maybe_save_session(&agent_chat_id).await?;
+        app.chat
+            .facade
+            .push_command(&agent_chat_id, ChatCommand::Regenerate {})
+            .await?;
 
         tracing::info!(
             "Spawned agent {} for card {}: {} (model: {})",

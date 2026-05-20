@@ -7,17 +7,17 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum, ContextFile};
-use crate::chat::get_or_create_session_with_trajectory;
-use crate::chat::trajectories::maybe_save_trajectory;
-use crate::chat::history_limit::compress_duplicate_context_files;
-use crate::chat::history_limit::remove_invalid_tool_calls_and_tool_calls_results;
-use crate::chat::trajectory_ops::TOOLS_TO_PRESERVE;
-use crate::chat::types::SessionState;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tools::tools_description::{
     json_schema_from_params, Tool, ToolDesc, ToolSource, ToolSourceType,
 };
+use refact_chat_history::history_limit::{
+    compress_duplicate_context_files, remove_invalid_tool_calls_and_tool_calls_results,
+};
+use refact_chat_history::trajectory_ops::TOOLS_TO_PRESERVE;
+use refact_runtime_api::{ChatSessionUpdate, SessionState};
+
 
 const TOOL_OUTPUT_TRUNCATE_LIMIT: usize = 200;
 const MAX_PER_MESSAGE_ENTRIES: usize = 200;
@@ -118,18 +118,12 @@ impl Tool for ToolCompressChatProbe {
         tool_call_id: &String,
         _args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let (gcx, chat_id) = {
+        let (chat_facade, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.app.gcx.clone(), ccx_lock.chat_id.clone())
+            (ccx_lock.app.chat.facade.clone(), ccx_lock.chat_id.clone())
         };
 
-        let sessions = gcx.chat_sessions.clone();
-        let session_arc =
-            get_or_create_session_with_trajectory(crate::app_state::AppState::from_gcx(gcx.clone()).await, &sessions, &chat_id).await;
-        let messages = {
-            let session = session_arc.lock().await;
-            session.messages.clone()
-        };
+        let messages = chat_facade.session_snapshot(&chat_id).await?.messages;
 
         if messages.is_empty() {
             return Err("Cannot probe an empty chat".to_string());
@@ -422,68 +416,47 @@ impl Tool for ToolCompressChatApply {
         let dedup_context_files = parse_bool(args, "dedup_context_files");
         let drop_project_information = parse_bool(args, "drop_project_information");
 
-        let (gcx, chat_id) = {
+        let (chat_facade, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.app.gcx.clone(), ccx_lock.chat_id.clone())
+            (ccx_lock.app.chat.facade.clone(), ccx_lock.chat_id.clone())
         };
 
-        let sessions = gcx.chat_sessions.clone();
-        let session_arc =
-            get_or_create_session_with_trajectory(crate::app_state::AppState::from_gcx(gcx.clone()).await, &sessions, &chat_id).await;
+        let session_snapshot = chat_facade.session_snapshot(&chat_id).await?;
+        if matches!(session_snapshot.session_state, SessionState::Generating) {
+            return Err("Cannot compress while generating".to_string());
+        }
 
-        let (
-            before_tokens,
-            before_count,
-            active_start,
-            mut head_messages,
-            tail_messages,
-            tool_call_names,
-        ) = {
-            let session = session_arc.lock().await;
+        let before_tokens = session_snapshot
+            .messages
+            .iter()
+            .map(approx_tokens_for_message)
+            .sum::<usize>();
+        let before_count = session_snapshot.messages.len();
+        let active_start = session_snapshot
+            .messages
+            .iter()
+            .rposition(|m| {
+                m.role == "assistant"
+                    && m.tool_calls
+                        .as_ref()
+                        .map(|tcs| tcs.iter().any(|tc| tc.id == *tool_call_id))
+                        .unwrap_or(false)
+            })
+            .unwrap_or(session_snapshot.messages.len());
 
-            if matches!(session.runtime.state, SessionState::Generating) {
-                return Err("Cannot compress while generating".to_string());
-            }
+        if active_start >= session_snapshot.messages.len() {
+            return Err("Active tool call not found in session".to_string());
+        }
 
-            let before_tokens = session
-                .messages
-                .iter()
-                .map(approx_tokens_for_message)
-                .sum::<usize>();
-            let before_count = session.messages.len();
-            let active_start = session
-                .messages
-                .iter()
-                .rposition(|m| {
-                    m.role == "assistant"
-                        && m.tool_calls
-                            .as_ref()
-                            .map(|tcs| tcs.iter().any(|tc| tc.id == *tool_call_id))
-                            .unwrap_or(false)
-                })
-                .unwrap_or(session.messages.len());
-
-            if active_start >= session.messages.len() {
-                return Err("Active tool call not found in session".to_string());
-            }
-
-            let tool_call_names: HashMap<String, String> = session
-                .messages
-                .iter()
-                .filter_map(|m| m.tool_calls.as_ref())
-                .flatten()
-                .map(|tc| (tc.id.clone(), tc.function.name.clone()))
-                .collect();
-
-            (
-                before_tokens,
-                before_count,
-                active_start,
-                session.messages[..active_start].to_vec(),
-                session.messages[active_start..].to_vec(),
-                tool_call_names,
-            )
-        };
+        let tool_call_names: HashMap<String, String> = session_snapshot
+            .messages
+            .iter()
+            .filter_map(|m| m.tool_calls.as_ref())
+            .flatten()
+            .map(|tc| (tc.id.clone(), tc.function.name.clone()))
+            .collect();
+        let mut head_messages = session_snapshot.messages[..active_start].to_vec();
+        let tail_messages = session_snapshot.messages[active_start..].to_vec();
 
         let drop_context_files: HashSet<String> = drop_context_files.into_iter().collect();
         let drop_memories: HashSet<String> = drop_memories.into_iter().collect();
@@ -653,15 +626,16 @@ impl Tool for ToolCompressChatApply {
             ));
         }
 
-        {
-            let mut session = session_arc.lock().await;
-            session.messages = head_messages;
-            session.increment_version();
-            let snapshot = session.snapshot();
-            session.emit(snapshot);
-        }
+        chat_facade
+            .update_session(
+                &chat_id,
+                ChatSessionUpdate {
+                    messages: head_messages,
+                },
+            )
+            .await?;
 
-        maybe_save_trajectory(crate::app_state::AppState::from_gcx(gcx.clone()).await, session_arc.clone()).await;
+        chat_facade.maybe_save_session(&chat_id).await?;
 
         let result = json!({
             "type": "compress_chat_apply",

@@ -18,6 +18,7 @@ use crate::knowledge_index::format_related_memories_section;
 use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::memories::{memories_add_enriched, EnrichmentParams};
 use crate::postprocessing::pp_command_output::OutputFilter;
+use refact_chat_api::TaskMeta;
 
 const SUBAGENT_ID: &str = "deep_research";
 
@@ -91,7 +92,7 @@ async fn execute_deep_research(
     tool_call_id: String,
     abort_flag: Arc<std::sync::atomic::AtomicBool>,
     parent_depth: usize,
-    parent_task_meta: Option<crate::chat::types::TaskMeta>,
+    parent_task_meta: Option<TaskMeta>,
     parent_worktree: Option<crate::worktrees::types::WorktreeMeta>,
 ) -> Result<(ChatMessage, serde_json::Map<String, serde_json::Value>), String> {
     let subagent_config = get_subagent_config(gcx.clone(), SUBAGENT_ID, None)

@@ -9,11 +9,9 @@ use uuid::Uuid;
 use crate::agentic::mode_transition::{AgenticPathContext, ParsedDecisions, assemble_new_chat};
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
-use crate::chat::get_or_create_session_with_trajectory;
-use crate::chat::trajectory_ops::sanitize_messages_for_new_thread;
-use crate::chat::trajectories::save_trajectory_snapshot;
+use refact_chat_history::trajectory_ops::sanitize_messages_for_new_thread;
 use refact_chat_history::trajectory_snapshot::TrajectorySnapshot;
-use crate::chat::types::SessionState;
+use refact_runtime_api::SessionState;
 use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tools::tools_description::{
     MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType,
@@ -179,24 +177,20 @@ impl Tool for ToolHandoffToMode {
         };
         let reason = parse_optional_string(args, "reason").unwrap_or_default();
 
-        let (gcx, chat_id) = {
+        let (gcx, chat_facade, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.app.gcx.clone(), ccx_lock.chat_id.clone())
-        };
-
-        let sessions = gcx.chat_sessions.clone();
-        let session_arc =
-            get_or_create_session_with_trajectory(crate::app_state::AppState::from_gcx(gcx.clone()).await, &sessions, &chat_id).await;
-
-        let (messages, thread, task_meta, session_state) = {
-            let session = session_arc.lock().await;
             (
-                session.messages.clone(),
-                session.thread.clone(),
-                session.thread.task_meta.clone(),
-                session.runtime.state,
+                ccx_lock.app.gcx.clone(),
+                ccx_lock.app.chat.facade.clone(),
+                ccx_lock.chat_id.clone(),
             )
         };
+
+        let session_snapshot = chat_facade.session_snapshot(&chat_id).await?;
+        let messages = session_snapshot.messages;
+        let thread = session_snapshot.thread;
+        let task_meta = thread.task_meta.clone();
+        let session_state = session_snapshot.session_state;
 
         if matches!(session_state, SessionState::Generating) {
             return Err("Cannot handoff while generating".to_string());
@@ -288,7 +282,8 @@ impl Tool for ToolHandoffToMode {
             buddy_meta: None,
         };
 
-        save_trajectory_snapshot(gcx.clone(), snapshot)
+        chat_facade
+            .save_trajectory_snapshot(snapshot)
             .await
             .map_err(|e| format!("Failed to save handoff trajectory: {}", e))?;
 
