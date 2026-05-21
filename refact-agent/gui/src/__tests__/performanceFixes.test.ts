@@ -378,7 +378,7 @@ describe("ToolCallTooltip", () => {
       vi.useRealTimers();
 
       await waitFor(() => {
-        expect(getByText("update_textdoc")).toBeTruthy();
+        expect(getByText("Update Textdoc")).toBeTruthy();
         expect(getByText(/arg0/)).toBeTruthy();
         expect(document.body.textContent).toContain("truncated (700 chars)");
         expect(getByText("more arguments hidden")).toBeTruthy();

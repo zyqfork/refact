@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act } from "react-dom/test-utils";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { render } from "../../utils/test-utils";
 import { VirtualizedChatList } from "./VirtualizedChatList";
@@ -12,7 +13,9 @@ type VirtuosoCall = {
 
 type ResizeObserverMockInstance = {
   callback: ResizeObserverCallback;
-  disconnect: () => void;
+  disconnect: ReturnType<typeof vi.fn>;
+  observe: ReturnType<typeof vi.fn>;
+  unobserve: ReturnType<typeof vi.fn>;
 };
 
 function getVirtuosoCalls(): VirtuosoCall[] {
@@ -100,7 +103,7 @@ describe("VirtualizedChatList", () => {
     const previousResizeObserver = globalThis.ResizeObserver;
     const resizeObservers: ResizeObserverMockInstance[] = [];
     const ResizeObserverMock = vi.fn((callback: ResizeObserverCallback) => {
-      const instance = {
+      const instance: ResizeObserverMockInstance = {
         callback,
         disconnect: vi.fn(),
         observe: vi.fn(),
@@ -130,7 +133,9 @@ describe("VirtualizedChatList", () => {
 
     setElementHeight(400);
     const observer = resizeObservers[0];
-    observer.callback([], {} as ResizeObserver);
+    act(() => {
+      observer.callback([], {} as ResizeObserver);
+    });
 
     expect(screen.getByTestId("chat-virtuoso-scroller")).toBeInTheDocument();
     unmount();
