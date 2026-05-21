@@ -245,6 +245,16 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
     [dispatch],
   );
 
+  const restoreNotification = useCallback((id: string) => {
+    setDismissedNotificationIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setActiveNotificationId(id);
+  }, []);
+
   const notification = useMemo<NotificationItem | null>(() => {
     const isEligible = (id: string) =>
       !dismissedNotificationIds.has(id) &&
@@ -434,7 +444,6 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
       if (!notification) return;
 
       if (notification.source === "opportunity") {
-        dismissNotification(notification.id);
         if (pendingRef.current || !notification.opportunity) return;
         const actionIndex = getOpportunityActionIndexFromControl(ctrl);
         if (actionIndex == null) return;
@@ -472,6 +481,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
               (result) => result.status === "rejected",
             );
             if (failed) {
+              restoreNotification(notification.id);
               setActionError(formatOpportunityActionError(failed.reason));
             }
             return;
@@ -484,6 +494,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
           );
           dismissNotification(notification.id);
         } catch (error) {
+          restoreNotification(notification.id);
           setActionError(formatOpportunityActionError(error));
         } finally {
           pendingRef.current = false;
@@ -494,18 +505,22 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
 
       if (ctrl.action === "dismiss" || ctrl.action === "dismiss_speech") {
         dismissNotification(notification.id);
+        setActionError(null);
         if (notification.source === "speech") {
           dispatch(clearActiveSpeech());
         } else if (notification.source === "suggestion") {
-          await dismissMutation(notification.sourceId);
-          dispatch(dismissBuddySuggestion(notification.sourceId));
+          try {
+            await dismissMutation(notification.sourceId).unwrap();
+            dispatch(dismissBuddySuggestion(notification.sourceId));
+          } catch (error) {
+            restoreNotification(notification.id);
+            setActionError(formatOpportunityActionError(error));
+          }
         } else if (notification.source === "runtime") {
           dispatch(dismissRuntimeEvent(notification.sourceId));
-          try {
-            await dismissRuntimeMutation(notification.sourceId).unwrap();
-          } catch {
-            return;
-          }
+          void dismissRuntimeMutation(notification.sourceId)
+            .unwrap()
+            .catch(() => undefined);
         }
         return;
       }
@@ -519,15 +534,14 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
           runtimeEventId,
         );
         dismissNotification(notification.id);
+        setActionError(null);
         if (notification.id !== runtimeNotificationId) {
           dismissNotification(runtimeNotificationId);
         }
         dispatch(dismissRuntimeEvent(runtimeEventId));
-        try {
-          await dismissRuntimeMutation(runtimeEventId).unwrap();
-        } catch {
-          return;
-        }
+        void dismissRuntimeMutation(runtimeEventId)
+          .unwrap()
+          .catch(() => undefined);
         return;
       }
 
@@ -564,15 +578,14 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
         setActionError(null);
         try {
           if (notification.source === "suggestion") {
-            await dismissMutation(notification.sourceId);
+            dismissNotification(notification.id);
+            await dismissMutation(notification.sourceId).unwrap();
             dispatch(dismissBuddySuggestion(notification.sourceId));
           } else if (notification.source === "runtime") {
             dispatch(dismissRuntimeEvent(notification.sourceId));
-            try {
-              await dismissRuntimeMutation(notification.sourceId).unwrap();
-            } catch {
-              return;
-            }
+            void dismissRuntimeMutation(notification.sourceId)
+              .unwrap()
+              .catch(() => undefined);
           }
           await dispatch(
             startBuddyInvestigation({
@@ -581,9 +594,14 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
               sourceChatId: chatId,
               diagnostic: notification.diagnostic,
             }),
-          );
-          dismissNotification(notification.id);
+          ).unwrap();
+          if (notification.source !== "suggestion") {
+            dismissNotification(notification.id);
+          }
         } catch (error) {
+          if (notification.source === "suggestion") {
+            restoreNotification(notification.id);
+          }
           setActionError(formatOpportunityActionError(error));
         } finally {
           pendingRef.current = false;
@@ -598,6 +616,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
       dismissMutation,
       dismissRuntimeMutation,
       dismissNotification,
+      restoreNotification,
       dispatch,
       chatId,
     ],

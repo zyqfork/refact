@@ -3,16 +3,19 @@ import { Provider } from "react-redux";
 import { Theme } from "@radix-ui/themes";
 import { renderHook } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "../utils/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "../utils/test-utils";
 import { server } from "../utils/mockServer";
 import { setUpStore, type AppStore } from "../app/store";
 import { BuddyOpportunityCard } from "../features/Buddy/BuddyOpportunityCard";
+import { BuddyChatCompanion } from "../features/Buddy/BuddyChatCompanion";
+import { setBuddySnapshot } from "../features/Buddy/buddySlice";
 import { useExecuteBuddyAction } from "../features/Buddy/hooks/useExecuteBuddyAction";
 import type {
   BuddyAction,
   BuddyActionResult,
   BuddyOpportunity,
+  BuddyRuntimeEvent,
   BuddySnapshot,
 } from "../features/Buddy/types";
 
@@ -25,7 +28,10 @@ const CONFIG_STATE = {
   },
 };
 
-function makeSnapshot(name = "Buddy"): BuddySnapshot {
+function makeSnapshot(
+  name = "Buddy",
+  overrides?: Partial<BuddySnapshot>,
+): BuddySnapshot {
   return {
     state: {
       identity: { name, created_at: "", palette_index: 0 },
@@ -111,6 +117,7 @@ function makeSnapshot(name = "Buddy"): BuddySnapshot {
       },
     },
     enabled: true,
+    ...overrides,
   };
 }
 
@@ -136,11 +143,100 @@ function makeOpportunity(
   };
 }
 
+function makeRuntimeEvent(
+  overrides?: Partial<BuddyRuntimeEvent>,
+): BuddyRuntimeEvent {
+  return {
+    id: "runtime-1",
+    signal_type: "chat_error",
+    title: "Runtime failed",
+    source: "chat",
+    status: "failed",
+    priority: "high",
+    created_at: "2024-01-01T00:00:00Z",
+    chat_id: "chat-a",
+    ...overrides,
+  };
+}
+
 function acceptResponse(actionResult: BuddyActionResult) {
   return HttpResponse.json({
     snapshot: makeSnapshot("Accepted Snapshot"),
     action_result: actionResult,
   });
+}
+
+function makeNoopCanvasContext(): CanvasRenderingContext2D {
+  const noopCanvasContext = {
+    clearRect: vi.fn(),
+    fillRect: vi.fn(),
+    fillText: vi.fn(),
+    getImageData: vi.fn(
+      () => ({ data: new Uint8ClampedArray(4) }) as ImageData,
+    ),
+    putImageData: vi.fn(),
+    restore: vi.fn(),
+    save: vi.fn(),
+    scale: vi.fn(),
+    translate: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+    imageSmoothingEnabled: false,
+    globalAlpha: 1,
+    fillStyle: "#000000",
+    strokeStyle: "#000000",
+    lineWidth: 1,
+    font: "",
+    textAlign: "center" as CanvasTextAlign,
+    textBaseline: "top" as CanvasTextBaseline,
+  } satisfies Partial<CanvasRenderingContext2D>;
+  return noopCanvasContext as unknown as CanvasRenderingContext2D;
+}
+
+function setupCompanionRender() {
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    window.setTimeout(() => callback(0), 0);
+    return 1;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    makeNoopCanvasContext(),
+  );
+}
+
+function setupCompanionApiHandlers() {
+  server.use(
+    http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+      HttpResponse.json({ opportunities: [] }),
+    ),
+    http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
+      HttpResponse.json({ dismissed: true }),
+    ),
+    http.post("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+      HttpResponse.json({
+        chat_id: "buddy-investigation-chat",
+        title: "Buddy investigation",
+        created_at: "2024-01-01T00:00:00Z",
+        last_message_at: null,
+        message_count: 0,
+      }),
+    ),
+    http.post(
+      "http://127.0.0.1:8001/v1/buddy/investigation-context",
+      async () =>
+        HttpResponse.json({
+          logs: "logs",
+          internal_context: "context",
+          repo_owner: "smallcloudai",
+          repo_name: "refact",
+        }),
+    ),
+    http.post("http://127.0.0.1:8001/v1/chats/:id/commands", () =>
+      HttpResponse.json({ ok: true }),
+    ),
+  );
 }
 
 function renderExecutor() {
@@ -160,6 +256,10 @@ function lastPage(store: AppStore) {
 }
 
 describe("buddy action execution contract", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("click_second_action_sends_action_index_1", async () => {
     let requestBody: unknown = null;
     server.use(
@@ -355,6 +455,205 @@ describe("buddy action execution contract", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("dismiss failed");
     });
     expect(button).toBeEnabled();
+  });
+
+  it("chat_companion_failed_accept_keeps_notification_visible", async () => {
+    setupCompanionRender();
+    const opportunity = makeOpportunity({
+      id: "opp-companion-accept-fails",
+      proposed_actions: [{ kind: "open_page", page: { type: "buddy" } }],
+    });
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [opportunity] }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/opportunities/:id/accept",
+        () => HttpResponse.json({ detail: "accept failed" }, { status: 500 }),
+      ),
+    );
+    const store = setUpStore();
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot("Companion", { opportunities: [opportunity] }),
+      ),
+    );
+
+    const { container } = render(<BuddyChatCompanion chatId="chat-a" />, {
+      store,
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-notification-id="opportunity:opp-companion-accept-fails"]',
+        ),
+      ).not.toBeNull();
+    });
+    const button = await screen.findByRole("button", {
+      name: "Open Companion",
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-notification-id="opportunity:opp-companion-accept-fails"]',
+        ),
+      ).not.toBeNull();
+      expect(screen.getByText(/accept failed/i)).toBeInTheDocument();
+    });
+  });
+
+  it("chat_companion_failed_dismiss_keeps_notification_visible", async () => {
+    setupCompanionRender();
+    const opportunity = makeOpportunity({
+      id: "opp-companion-dismiss-fails",
+      proposed_actions: [{ kind: "dismiss" }],
+    });
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [opportunity] }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/opportunities/:id/dismiss",
+        () => HttpResponse.json({ detail: "dismiss failed" }, { status: 409 }),
+      ),
+    );
+    const store = setUpStore();
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot("Companion", { opportunities: [opportunity] }),
+      ),
+    );
+
+    const { container } = render(<BuddyChatCompanion chatId="chat-a" />, {
+      store,
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-notification-id="opportunity:opp-companion-dismiss-fails"]',
+        ),
+      ).not.toBeNull();
+    });
+    const button = await screen.findByRole("button", { name: "Dismiss" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-notification-id="opportunity:opp-companion-dismiss-fails"]',
+        ),
+      ).not.toBeNull();
+      expect(screen.getByText(/dismiss failed/i)).toBeInTheDocument();
+    });
+  });
+
+  it("runtime_investigation_starts_when_runtime_dismiss_fails", async () => {
+    setupCompanionRender();
+    setupCompanionApiHandlers();
+    let conversationStarted = false;
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
+        HttpResponse.json({ detail: "offline" }, { status: 503 }),
+      ),
+      http.post("http://127.0.0.1:8001/v1/buddy/conversations", () => {
+        conversationStarted = true;
+        return HttpResponse.json({
+          chat_id: "buddy-investigation-chat",
+          title: "Buddy investigation",
+          created_at: "2024-01-01T00:00:00Z",
+          last_message_at: null,
+          message_count: 0,
+        });
+      }),
+    );
+    const store = setUpStore();
+    const runtime = makeRuntimeEvent({
+      id: "runtime-investigate-dismiss-fails",
+      controls: [
+        {
+          id: "investigate-runtime",
+          label: "Investigate",
+          action: "investigate_error",
+          style: "primary",
+        },
+      ],
+    });
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot("Companion", { runtime_queue: [runtime] }),
+      ),
+    );
+
+    render(<BuddyChatCompanion chatId="chat-a" />, { store });
+    const button = await screen.findByRole("button", { name: "Investigate" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(conversationStarted).toBe(true);
+    });
+  });
+
+  it("runtime_dismiss_failure_is_handled", async () => {
+    setupCompanionRender();
+    setupCompanionApiHandlers();
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
+        HttpResponse.json({ detail: "offline" }, { status: 503 }),
+      ),
+    );
+    const unhandled = vi.fn();
+    window.addEventListener("unhandledrejection", unhandled);
+    const store = setUpStore();
+    const runtime = makeRuntimeEvent({
+      id: "runtime-dismiss-fails",
+      controls: [
+        {
+          id: "dismiss-runtime",
+          label: "Dismiss",
+          action: "dismiss_runtime_event",
+          action_param: "runtime-dismiss-fails",
+          style: "ghost",
+        },
+      ],
+    });
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot("Companion", { runtime_queue: [runtime] }),
+      ),
+    );
+
+    try {
+      const { container } = render(<BuddyChatCompanion chatId="chat-a" />, {
+        store,
+      });
+      await waitFor(() => {
+        expect(
+          container.querySelector(
+            '[data-notification-id="runtime:runtime-dismiss-fails"]',
+          ),
+        ).not.toBeNull();
+      });
+      const button = await screen.findByRole(
+        "button",
+        { name: "Dismiss" },
+        { hidden: true },
+      );
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(
+          container.querySelector(
+            '[data-notification-id="runtime:runtime-dismiss-fails"]',
+          ),
+        ).toBeNull();
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("unhandledrejection", unhandled);
+    }
   });
 
   it("successful_marketplace_install_navigates_to_marketplace_hub", async () => {

@@ -281,6 +281,28 @@ function makePostMock() {
   );
 }
 
+function makeOpportunity(
+  overrides?: Partial<BuddyOpportunity>,
+): BuddyOpportunity {
+  return {
+    id: "opp-1",
+    kind: "diagnostic_investigation",
+    summary: "Test opportunity",
+    priority: "normal",
+    confidence: 0.8,
+    fact_keys: [],
+    cooldown_key: "opp-1",
+    cooldown_secs: 1800,
+    status: "new",
+    proposed_actions: [],
+    humor_allowed: false,
+    related: { chat_ids: [], task_ids: [], memory_ids: [], config_paths: [] },
+    created_at: "2024-01-01T00:00:00Z",
+    expires_at: "2099-12-31T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function makeChatRuntimeEvent(
   overrides?: Partial<BuddyRuntimeEvent>,
 ): BuddyRuntimeEvent {
@@ -346,6 +368,28 @@ function setupBuddyCompanionHandlers() {
     ),
     http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
       HttpResponse.json({ dismissed: true }),
+    ),
+    http.post("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+      HttpResponse.json({
+        chat_id: "buddy-investigation-chat",
+        title: "Buddy investigation",
+        created_at: "2024-01-01T00:00:00Z",
+        last_message_at: null,
+        message_count: 0,
+      }),
+    ),
+    http.post(
+      "http://127.0.0.1:8001/v1/buddy/investigation-context",
+      async () =>
+        HttpResponse.json({
+          logs: "logs",
+          internal_context: "context",
+          repo_owner: "smallcloudai",
+          repo_name: "refact",
+        }),
+    ),
+    http.post("http://127.0.0.1:8001/v1/chats/:id/commands", () =>
+      HttpResponse.json({ ok: true }),
     ),
   );
 }
@@ -499,6 +543,176 @@ describe("Buddy chat notification freshness", () => {
     await expectCompanionNotification(container, "speech:global-speech");
   });
 
+  test("failed opportunity accept keeps bubble visible and displays error", async () => {
+    const store = setUpStore();
+    const opportunity = makeOpportunity({
+      id: "opp-accept-fails",
+      priority: "high",
+      summary: "Fix model config",
+      proposed_actions: [{ kind: "open_page", page: { type: "buddy" } }],
+    });
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [opportunity] }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/opportunities/:id/accept",
+        () => HttpResponse.json({ detail: "accept failed" }, { status: 500 }),
+      ),
+    );
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ opportunities: [opportunity] })),
+    );
+
+    const { container } = renderBuddyChatCompanion(store, "chat-a");
+    await expectCompanionNotification(
+      container,
+      "opportunity:opp-accept-fails",
+    );
+    const button = await screen.findByRole("button", {
+      name: "Open Companion",
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(notificationElement(container, "opportunity:opp-accept-fails"))
+        .not.toBeNull();
+      expect(screen.getByText(/accept failed/i)).toBeInTheDocument();
+    });
+  });
+
+  test("failed opportunity dismiss keeps bubble visible and displays error", async () => {
+    const store = setUpStore();
+    const opportunity = makeOpportunity({
+      id: "opp-dismiss-fails",
+      priority: "high",
+      summary: "Ignore noisy thing",
+      proposed_actions: [{ kind: "dismiss" }],
+    });
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [opportunity] }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/opportunities/:id/dismiss",
+        () => HttpResponse.json({ detail: "dismiss failed" }, { status: 409 }),
+      ),
+    );
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ opportunities: [opportunity] })),
+    );
+
+    const { container } = renderBuddyChatCompanion(store, "chat-a");
+    await expectCompanionNotification(
+      container,
+      "opportunity:opp-dismiss-fails",
+    );
+    const button = await screen.findByRole("button", { name: "Dismiss" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(notificationElement(container, "opportunity:opp-dismiss-fails"))
+        .not.toBeNull();
+      expect(screen.getByText(/dismiss failed/i)).toBeInTheDocument();
+    });
+  });
+
+  test("failed runtime dismiss during investigation still starts investigation", async () => {
+    let conversationStarted = false;
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
+        HttpResponse.json({ detail: "offline" }, { status: 503 }),
+      ),
+      http.post("http://127.0.0.1:8001/v1/buddy/conversations", () => {
+        conversationStarted = true;
+        return HttpResponse.json({
+          chat_id: "buddy-investigation-chat",
+          title: "Buddy investigation",
+          created_at: "2024-01-01T00:00:00Z",
+          last_message_at: null,
+          message_count: 0,
+        });
+      }),
+    );
+    const store = setUpStore();
+    const runtime = makeChatRuntimeEvent({
+      id: "runtime-investigate-dismiss-fails",
+      title: "Runtime failure",
+      controls: [
+        {
+          id: "investigate-runtime",
+          label: "Investigate",
+          action: "investigate_error",
+          style: "primary",
+        },
+      ],
+    });
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ runtime_queue: [runtime] })),
+    );
+
+    renderBuddyChatCompanion(store, "chat-a");
+    const button = await screen.findByRole("button", { name: "Investigate" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(conversationStarted).toBe(true);
+    });
+  });
+
+  test("runtime dismiss failure does not create unhandled rejection", async () => {
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
+        HttpResponse.json({ detail: "offline" }, { status: 503 }),
+      ),
+    );
+    const unhandled = vi.fn();
+    window.addEventListener("unhandledrejection", unhandled);
+    const store = setUpStore();
+    const runtime = makeChatRuntimeEvent({
+      id: "runtime-dismiss-fails",
+      title: "Dismiss me",
+      controls: [
+        {
+          id: "dismiss-runtime",
+          label: "Dismiss",
+          action: "dismiss_runtime_event",
+          action_param: "runtime-dismiss-fails",
+          style: "ghost",
+        },
+      ],
+    });
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ runtime_queue: [runtime] })),
+    );
+
+    try {
+      const { container } = renderBuddyChatCompanion(store, "chat-a");
+      await expectCompanionNotification(
+        container,
+        "runtime:runtime-dismiss-fails",
+      );
+      const button = await screen.findByRole(
+        "button",
+        { name: "Dismiss" },
+        { hidden: true },
+      );
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(
+          container.querySelector(
+            '[data-notification-id="runtime:runtime-dismiss-fails"]',
+          ),
+        ).toBeNull();
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("unhandledrejection", unhandled);
+    }
+  });
+
   test("same runtime notification does not reappear after BuddyChatCompanion unmount/remount", async () => {
     const store = setUpStore();
     const runtime = makeChatRuntimeEvent({
@@ -595,7 +809,7 @@ describe("Buddy chat notification freshness", () => {
     expect(source).toContain(
       "dispatch(dismissRuntimeEvent(notification.sourceId))",
     );
-    expect(source).toContain("await dismissMutation(notification.sourceId)");
+    expect(source).toContain("await dismissMutation(notification.sourceId).unwrap()");
   });
 });
 
@@ -2083,27 +2297,6 @@ describe("Buddy frontend error reporting helpers", () => {
 });
 
 describe("buddy opportunities, pulse, and drafts", () => {
-  function makeOpportunity(
-    overrides?: Partial<BuddyOpportunity>,
-  ): BuddyOpportunity {
-    return {
-      id: "opp-1",
-      kind: "diagnostic_investigation",
-      summary: "Test opportunity",
-      priority: "normal",
-      confidence: 0.8,
-      fact_keys: [],
-      cooldown_key: "opp-1",
-      cooldown_secs: 1800,
-      status: "new",
-      proposed_actions: [],
-      humor_allowed: false,
-      related: { chat_ids: [], task_ids: [], memory_ids: [], config_paths: [] },
-      created_at: "2024-01-01T00:00:00Z",
-      expires_at: "2099-12-31T00:00:00Z",
-      ...overrides,
-    };
-  }
 
   function makeDraft(overrides?: Partial<BuddyDraft>): BuddyDraft {
     return {
