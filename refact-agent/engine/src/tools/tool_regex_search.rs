@@ -294,10 +294,7 @@ impl Tool for ToolRegexSearch {
 
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
 
         let scoped_files =

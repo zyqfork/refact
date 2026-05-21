@@ -293,13 +293,20 @@ impl Tool for ToolRm {
                 let gcx_write = gcx.clone();
                 let paths_to_remove: Vec<_> = gcx_write
                     .documents_state
-                    .memory_document_map.lock().await
+                    .memory_document_map
+                    .lock()
+                    .await
                     .keys()
                     .filter(|p| p.starts_with(&true_path))
                     .cloned()
                     .collect();
                 for p in paths_to_remove {
-                    gcx_write.documents_state.memory_document_map.lock().await.remove(&p);
+                    gcx_write
+                        .documents_state
+                        .memory_document_map
+                        .lock()
+                        .await
+                        .remove(&p);
                 }
             }
             messages.push(ContextEnum::ChatMessage(ChatMessage {
@@ -328,7 +335,9 @@ impl Tool for ToolRm {
                 .map_err(|e| format!("Failed to remove file '{}': {}", corrected_path, e))?;
             // Invalidate cache entry for the deleted file
             gcx.documents_state
-                .memory_document_map.lock().await
+                .memory_document_map
+                .lock()
+                .await
                 .remove(&true_path);
             if !file_content.is_empty() {
                 let diff_chunk = DiffChunk {

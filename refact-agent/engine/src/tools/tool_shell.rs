@@ -254,10 +254,7 @@ impl Tool for ToolShell {
     ) -> Result<String, String> {
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
         let (command, _) = parse_args(gcx, args, execution_scope.as_ref()).await?;
         Ok(command)

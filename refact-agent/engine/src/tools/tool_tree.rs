@@ -127,7 +127,10 @@ impl Tool for ToolTree {
                             resolved.outside_absolute_path,
                         )
                         .await?;
-                        (TreeNode::build_relative(&paths_in_dir, &resolved.path), false)
+                        (
+                            TreeNode::build_relative(&paths_in_dir, &resolved.path),
+                            false,
+                        )
                     }
                 }
                 None => {

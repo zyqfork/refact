@@ -92,10 +92,7 @@ impl Tool for ToolCreateTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
         let (_, _, chunks, summary) =
             tool_create_text_doc_exec(gcx.clone(), args, false, execution_scope.as_ref()).await?;

@@ -10,6 +10,7 @@ pub mod tool_name_alias;
 
 mod tool_activate_skill;
 mod tool_add_workspace_folder;
+mod tool_agent_chat_summary;
 mod tool_agent_diff;
 mod tool_agent_pulse;
 mod tool_agent_steer;

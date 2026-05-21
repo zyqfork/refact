@@ -19,7 +19,6 @@ use refact_chat_history::history_limit::{
 use refact_chat_history::trajectory_ops::TOOLS_TO_PRESERVE;
 use refact_runtime_api::{ChatSessionUpdate, SessionState};
 
-
 const TOOL_OUTPUT_TRUNCATE_LIMIT: usize = 200;
 const MAX_PER_MESSAGE_ENTRIES: usize = 200;
 const MAX_CONTEXT_ENTRIES: usize = 200;
@@ -136,7 +135,11 @@ impl Tool for ToolCompressChatProbe {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (chat_facade, chat_id, n_ctx) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.app.chat.facade.clone(), ccx_lock.chat_id.clone(), ccx_lock.n_ctx)
+            (
+                ccx_lock.app.chat.facade.clone(),
+                ccx_lock.chat_id.clone(),
+                ccx_lock.n_ctx,
+            )
         };
 
         let messages = chat_facade.session_snapshot(&chat_id).await?.messages;
@@ -321,7 +324,11 @@ impl Tool for ToolCompressChatProbe {
             refact_chat_history::history_limit::ContextPressure::High => "high",
             refact_chat_history::history_limit::ContextPressure::Critical => "critical",
         };
-        let pct_used = if n_ctx > 0 { total_tokens.saturating_mul(100) / n_ctx } else { 0 };
+        let pct_used = if n_ctx > 0 {
+            total_tokens.saturating_mul(100) / n_ctx
+        } else {
+            0
+        };
 
         let result = json!({
             "type": "ctx_probe",
@@ -461,9 +468,19 @@ impl Tool for ToolCompressChatApply {
         let dedup_context_files = parse_bool(args, "dedup_context_files");
         let drop_project_information = parse_bool(args, "drop_project_information");
         let dry_run = parse_bool(args, "dry_run");
-        let strength = args.get("strength").and_then(|v| v.as_str()).unwrap_or("conservative").to_string();
-        let preserve_last_turns = args.get("preserve_last_turns").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let target_tokens = args.get("target_tokens").and_then(|v| v.as_u64()).map(|n| n as usize);
+        let strength = args
+            .get("strength")
+            .and_then(|v| v.as_str())
+            .unwrap_or("conservative")
+            .to_string();
+        let preserve_last_turns = args
+            .get("preserve_last_turns")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let target_tokens = args
+            .get("target_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
 
         let (chat_facade, chat_id) = {
             let ccx_lock = ccx.lock().await;
@@ -668,11 +685,13 @@ impl Tool for ToolCompressChatApply {
             let cur_tokens: usize = head_messages.iter().map(approx_tokens_for_message).sum();
             let needs_more = target_tokens.map_or(true, |t| cur_tokens > t);
             if needs_more {
-                let mut modifiable = head_messages[..preserve_cutoff.min(head_messages.len())].to_vec();
+                let mut modifiable =
+                    head_messages[..preserve_cutoff.min(head_messages.len())].to_vec();
                 if let Ok((count, _)) = compress_duplicate_context_files(&mut modifiable) {
                     if count > 0 {
                         dedup_count += count;
-                        head_messages.splice(..preserve_cutoff.min(head_messages.len()), modifiable);
+                        head_messages
+                            .splice(..preserve_cutoff.min(head_messages.len()), modifiable);
                     }
                 }
             }

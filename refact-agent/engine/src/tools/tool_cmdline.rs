@@ -14,8 +14,7 @@ mod tests {
     async fn command_run_pushed_from_tool_cmdline() {
         let gcx = crate::global_context::tests::make_test_gcx().await;
         {
-            *gcx.documents_state.workspace_folders.lock().unwrap() =
-                vec![std::env::temp_dir()];
+            *gcx.documents_state.workspace_folders.lock().unwrap() = vec![std::env::temp_dir()];
         }
         let ccx = Arc::new(AMutex::new(
             AtCommandsContext::new_from_app(

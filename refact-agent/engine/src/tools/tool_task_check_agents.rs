@@ -101,7 +101,10 @@ pub(crate) struct AgentStatusQuery {
 
 impl AgentStatusQuery {
     fn default_for_format(format: AgentReportFormat) -> Self {
-        let default_status_filter = if matches!(format, AgentReportFormat::Summary | AgentReportFormat::Detail) {
+        let default_status_filter = if matches!(
+            format,
+            AgentReportFormat::Summary | AgentReportFormat::Detail
+        ) {
             None
         } else {
             Some(HashSet::from([
@@ -378,11 +381,9 @@ pub(crate) async fn get_agent_statuses(
                 .as_ref()
                 .and_then(|snapshot| last_tool_name_from_messages(&snapshot.messages));
             let last_update = card.status_updates.last();
-            let last_status_update_at = last_update.and_then(|update| parse_timestamp(&update.timestamp));
-            let last_heartbeat_at = card
-                .last_heartbeat_at
-                .as_deref()
-                .and_then(parse_timestamp);
+            let last_status_update_at =
+                last_update.and_then(|update| parse_timestamp(&update.timestamp));
+            let last_heartbeat_at = card.last_heartbeat_at.as_deref().and_then(parse_timestamp);
             let completed_at = card.completed_at.as_deref().and_then(parse_timestamp);
             let started_at = card.started_at.as_deref().and_then(parse_timestamp);
             let created_at = parse_timestamp(&card.created_at);
@@ -433,7 +434,9 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-fn latest_timestamp(times: impl IntoIterator<Item = Option<DateTime<Utc>>>) -> Option<DateTime<Utc>> {
+fn latest_timestamp(
+    times: impl IntoIterator<Item = Option<DateTime<Utc>>>,
+) -> Option<DateTime<Utc>> {
     times.into_iter().flatten().max()
 }
 
@@ -565,16 +568,36 @@ fn format_agent_statuses_at(
         }
         AgentReportFormat::Detail => {
             result.push_str(&format_detail(&page, total_after_filter, now));
-            result.push_str(&format_pagination(total_after_filter, page.len(), query.offset, query.limit));
+            result.push_str(&format_pagination(
+                total_after_filter,
+                page.len(),
+                query.offset,
+                query.limit,
+            ));
         }
         AgentReportFormat::Compact => {
             result.push_str(&format_compact(&page, total_after_filter, now, None));
-            result.push_str(&format_pagination(total_after_filter, page.len(), query.offset, query.limit));
+            result.push_str(&format_pagination(
+                total_after_filter,
+                page.len(),
+                query.offset,
+                query.limit,
+            ));
         }
         AgentReportFormat::Delta => {
             let since_seq = query.since_seq.unwrap_or_default();
-            result.push_str(&format_compact(&page, total_after_filter, now, Some(since_seq)));
-            result.push_str(&format_pagination(total_after_filter, page.len(), query.offset, query.limit));
+            result.push_str(&format_compact(
+                &page,
+                total_after_filter,
+                now,
+                Some(since_seq),
+            ));
+            result.push_str(&format_pagination(
+                total_after_filter,
+                page.len(),
+                query.offset,
+                query.limit,
+            ));
         }
     }
 
@@ -658,12 +681,7 @@ fn paginate_statuses<'a>(
     offset: usize,
     limit: usize,
 ) -> Vec<&'a AgentStatus> {
-    statuses
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .copied()
-        .collect()
+    statuses.iter().skip(offset).take(limit).copied().collect()
 }
 
 fn last_activity_sort_key(status: &AgentStatus) -> i64 {
@@ -737,7 +755,9 @@ fn format_summary(statuses: &[&AgentStatus], now: DateTime<Utc>) -> String {
             AgentStateKind::Done => done += 1,
             AgentStateKind::Paused => paused += 1,
         }
-        *priorities.entry(status.priority.to_ascii_uppercase()).or_default() += 1;
+        *priorities
+            .entry(status.priority.to_ascii_uppercase())
+            .or_default() += 1;
     }
 
     let mut priority_counts = priorities.into_iter().collect::<Vec<_>>();
@@ -754,12 +774,21 @@ fn format_summary(statuses: &[&AgentStatus], now: DateTime<Utc>) -> String {
     )
 }
 
-fn format_detail(statuses: &[&AgentStatus], total_after_filter: usize, now: DateTime<Utc>) -> String {
+fn format_detail(
+    statuses: &[&AgentStatus],
+    total_after_filter: usize,
+    now: DateTime<Utc>,
+) -> String {
     if statuses.is_empty() {
-        return "# Agent Status Detail\n\nNo agent statuses match the requested filters.\n".to_string();
+        return "# Agent Status Detail\n\nNo agent statuses match the requested filters.\n"
+            .to_string();
     }
 
-    let mut result = format!("# Agent Status Detail\n\nShowing {} of {} agents.\n\n", statuses.len(), total_after_filter);
+    let mut result = format!(
+        "# Agent Status Detail\n\nShowing {} of {} agents.\n\n",
+        statuses.len(),
+        total_after_filter
+    );
     for status in statuses {
         result.push_str(&format_agent_status_detail_at(status, now));
         result.push_str("\n---\n\n");
@@ -1031,7 +1060,8 @@ mod tests {
             status("T-1", "P0", "doing", Some(SessionState::Generating), 3),
             status("T-2", "P1", "doing", Some(SessionState::ExecutingTools), 4),
         ];
-        let output = format_agent_statuses_at(&statuses, &query(AgentReportFormat::Compact), now()).unwrap();
+        let output =
+            format_agent_statuses_at(&statuses, &query(AgentReportFormat::Compact), now()).unwrap();
 
         let lines = card_lines(&output);
         assert_eq!(lines.len(), 2);
@@ -1061,7 +1091,10 @@ mod tests {
             status("T-3", "P1", "failed", Some(SessionState::Error), 6),
         ];
         let mut query = query(AgentReportFormat::Compact);
-        query.status_filter = Some(HashSet::from([AgentStateKind::Done, AgentStateKind::Failed]));
+        query.status_filter = Some(HashSet::from([
+            AgentStateKind::Done,
+            AgentStateKind::Failed,
+        ]));
         query.priority_filter = Some(HashSet::from(["P1".to_string()]));
         query.card_ids = Some(HashSet::from(["T-2".to_string()]));
         let output = format_agent_statuses_at(&statuses, &query, now()).unwrap();

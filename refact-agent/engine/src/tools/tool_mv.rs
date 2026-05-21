@@ -272,13 +272,20 @@ impl Tool for ToolMv {
                     let gcx_write = gcx.clone();
                     let paths_to_remove: Vec<_> = gcx_write
                         .documents_state
-                        .memory_document_map.lock().await
+                        .memory_document_map
+                        .lock()
+                        .await
                         .keys()
                         .filter(|p| p.starts_with(&dst_true_path))
                         .cloned()
                         .collect();
                     for p in paths_to_remove {
-                        gcx_write.documents_state.memory_document_map.lock().await.remove(&p);
+                        gcx_write
+                            .documents_state
+                            .memory_document_map
+                            .lock()
+                            .await
+                            .remove(&p);
                     }
                 }
             } else {
@@ -292,7 +299,9 @@ impl Tool for ToolMv {
                     .map_err(|e| format!("Failed to remove existing file '{}': {}", dst_str, e))?;
                 // Invalidate cache entry for the removed file
                 gcx.documents_state
-                    .memory_document_map.lock().await
+                    .memory_document_map
+                    .lock()
+                    .await
                     .remove(&dst_true_path);
             }
         }
@@ -327,11 +336,15 @@ impl Tool for ToolMv {
             let gcx_write = gcx.clone();
             gcx_write
                 .documents_state
-                .memory_document_map.lock().await
+                .memory_document_map
+                .lock()
+                .await
                 .remove(&src_true_path);
             gcx_write
                 .documents_state
-                .memory_document_map.lock().await
+                .memory_document_map
+                .lock()
+                .await
                 .remove(&dst_true_path);
         }
 

@@ -187,10 +187,12 @@ impl Tool for ToolAgentSteer {
                 card_id, card.column
             ));
         }
-        let agent_chat_id = card
-            .agent_chat_id
-            .clone()
-            .ok_or_else(|| format!("Card {} has no agent_chat_id; no running agent to steer.", card_id))?;
+        let agent_chat_id = card.agent_chat_id.clone().ok_or_else(|| {
+            format!(
+                "Card {} has no agent_chat_id; no running agent to steer.",
+                card_id
+            )
+        })?;
 
         let session_state = chat_facade
             .session_snapshot(&agent_chat_id)
@@ -242,11 +244,7 @@ impl Tool for ToolAgentSteer {
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
                 role: "tool".to_string(),
-                content: ChatContent::SimpleText(tool_output(
-                    &card_id,
-                    &message,
-                    session_state,
-                )),
+                content: ChatContent::SimpleText(tool_output(&card_id, &message, session_state)),
                 tool_calls: None,
                 tool_call_id: tool_call_id.clone(),
                 ..Default::default()
@@ -485,10 +483,7 @@ mod tests {
             .tool_execute(
                 ccx,
                 &"call".to_string(),
-                &args(&[
-                    ("card_id", json!("T-29")),
-                    ("message", json!("add tests")),
-                ]),
+                &args(&[("card_id", json!("T-29")), ("message", json!("add tests"))]),
             )
             .await
             .unwrap_err();
@@ -513,10 +508,7 @@ mod tests {
             .tool_execute(
                 ccx,
                 &"call".to_string(),
-                &args(&[
-                    ("card_id", json!("T-29")),
-                    ("message", json!("add tests")),
-                ]),
+                &args(&[("card_id", json!("T-29")), ("message", json!("add tests"))]),
             )
             .await
             .unwrap_err();
@@ -537,10 +529,7 @@ mod tests {
             .tool_execute(
                 ccx,
                 &"call".to_string(),
-                &args(&[
-                    ("card_id", json!("T-29")),
-                    ("message", json!("add tests")),
-                ]),
+                &args(&[("card_id", json!("T-29")), ("message", json!("add tests"))]),
             )
             .await
             .unwrap_err();

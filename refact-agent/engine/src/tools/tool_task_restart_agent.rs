@@ -74,10 +74,7 @@ async fn restore_card_after_restart_failure(
     let _ = storage::update_task_stats(stats_gcx, task_id).await;
 }
 
-async fn wait_for_agent_abort(
-    gcx: Arc<GlobalContext>,
-    old_chat_id: &str,
-) -> Result<(), String> {
+async fn wait_for_agent_abort(gcx: Arc<GlobalContext>, old_chat_id: &str) -> Result<(), String> {
     let session_arc = {
         let sessions = gcx.chat_sessions.read().await;
         sessions.get(old_chat_id).cloned()
@@ -152,11 +149,7 @@ fn mark_card_restarted_fresh(
     });
 }
 
-fn mark_card_restarted_resume(
-    card: &mut BoardCard,
-    new_agent_id: &str,
-    new_agent_chat_id: &str,
-) {
+fn mark_card_restarted_resume(card: &mut BoardCard, new_agent_id: &str, new_agent_chat_id: &str) {
     if let Some(prev_report) = card.final_report.take() {
         let preview: String = prev_report.chars().take(300).collect();
         card.status_updates.push(StatusUpdate {
@@ -200,10 +193,12 @@ async fn get_worktree_meta_for_resume(
         .cloned()
         .ok_or("No workspace folder found")?;
     let service = WorktreeService::new(cache_dir, source_root)?;
-    let view = service
-        .get_worktree(wt_name)
-        .await
-        .map_err(|e| format!("Retained worktree '{}' is no longer registered: {}. Use mode=fresh.", wt_name, e))?;
+    let view = service.get_worktree(wt_name).await.map_err(|e| {
+        format!(
+            "Retained worktree '{}' is no longer registered: {}. Use mode=fresh.",
+            wt_name, e
+        )
+    })?;
     if !view.meta.root.exists() {
         return Err(format!(
             "Retained worktree root '{}' no longer exists on disk. Use mode=fresh.",
@@ -300,17 +295,14 @@ impl Tool for ToolTaskRestartAgent {
             .get("card_id")
             .and_then(|v| v.as_str())
             .ok_or("Missing 'card_id'")?;
-        let mode = args
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("fresh");
+        let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("fresh");
         if mode != "fresh" && mode != "resume" {
-            return Err(format!("Invalid mode '{}', must be 'fresh' or 'resume'", mode));
+            return Err(format!(
+                "Invalid mode '{}', must be 'fresh' or 'resume'",
+                mode
+            ));
         }
-        let force = args
-            .get("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
         let suggested_steps: usize = match args
             .get("suggested_steps")
             .or_else(|| args.get("max_steps"))
@@ -331,7 +323,12 @@ impl Tool for ToolTaskRestartAgent {
             .unwrap_or_default();
 
         let task_meta = storage::load_task_meta(gcx.clone(), &task_id).await?;
-        let model = resolve_agent_model(gcx.clone(), task_meta.default_agent_model.as_deref(), &current_model).await?;
+        let model = resolve_agent_model(
+            gcx.clone(),
+            task_meta.default_agent_model.as_deref(),
+            &current_model,
+        )
+        .await?;
 
         let board = storage::load_board(gcx.clone(), &task_id).await?;
         let card = board
@@ -339,8 +336,16 @@ impl Tool for ToolTaskRestartAgent {
             .ok_or_else(|| format!("Card {} not found", card_id))?;
 
         match card.column.as_str() {
-            "done" => return Err(format!("Card {} is already done and cannot be restarted.", card_id)),
-            "planned" => return Err(format!("Card {} is in 'planned' column. Use spawn_agent to start it for the first time.", card_id)),
+            "done" => {
+                return Err(format!(
+                    "Card {} is already done and cannot be restarted.",
+                    card_id
+                ))
+            }
+            "planned" => return Err(format!(
+                "Card {} is in 'planned' column. Use spawn_agent to start it for the first time.",
+                card_id
+            )),
             "failed" => {}
             "doing" => {
                 if card.agent_chat_id.is_some() && !force {
@@ -351,7 +356,12 @@ impl Tool for ToolTaskRestartAgent {
                     ));
                 }
             }
-            other => return Err(format!("Card {} is in unexpected column '{}'", card_id, other)),
+            other => {
+                return Err(format!(
+                    "Card {} is in unexpected column '{}'",
+                    card_id, other
+                ))
+            }
         }
 
         if force {
@@ -451,18 +461,20 @@ impl ToolTaskRestartAgent {
         .await?;
 
         let worktree_branch = prepared_worktree.branch_name();
-        let worktree_path_str =
-            Some(prepared_worktree.worktree_path().to_string_lossy().to_string());
+        let worktree_path_str = Some(
+            prepared_worktree
+                .worktree_path()
+                .to_string_lossy()
+                .to_string(),
+        );
         let worktree_name = Some(prepared_worktree.worktree_name());
         let worktree_meta = prepared_worktree.worktree_meta();
         let card_id_owned = card_id.to_string();
         let agent_id_clone = agent_id.clone();
         let agent_chat_id_clone = agent_chat_id.clone();
 
-        let board_update_result = storage::update_board_atomic(
-            gcx.clone(),
-            task_id,
-            move |board| {
+        let board_update_result =
+            storage::update_board_atomic(gcx.clone(), task_id, move |board| {
                 let card = board
                     .get_card_mut(&card_id_owned)
                     .ok_or(format!("Card {} not found", card_id_owned))?;
@@ -475,9 +487,8 @@ impl ToolTaskRestartAgent {
                     worktree_name.clone(),
                 );
                 Ok(())
-            },
-        )
-        .await;
+            })
+            .await;
 
         if let Err(e) = board_update_result {
             prepared_worktree.cleanup(gcx.clone()).await;
@@ -486,22 +497,23 @@ impl ToolTaskRestartAgent {
 
         let _ = storage::update_task_stats(gcx.clone(), task_id).await;
 
-        if let Err(e) = self.create_and_dispatch_session(
-            gcx.clone(),
-            task_id,
-            planner_chat_id,
-            card_id,
-            card_title,
-            card_instructions,
-            dependency_context,
-            model,
-            &agent_id,
-            &agent_chat_id,
-            worktree_meta.clone(),
-            suggested_steps,
-            files_to_open,
-        )
-        .await
+        if let Err(e) = self
+            .create_and_dispatch_session(
+                gcx.clone(),
+                task_id,
+                planner_chat_id,
+                card_id,
+                card_title,
+                card_instructions,
+                dependency_context,
+                model,
+                &agent_id,
+                &agent_chat_id,
+                worktree_meta.clone(),
+                suggested_steps,
+                files_to_open,
+            )
+            .await
         {
             prepared_worktree.cleanup(gcx.clone()).await;
             restore_card_after_restart_failure(
@@ -562,22 +574,23 @@ impl ToolTaskRestartAgent {
 
         let _ = storage::update_task_stats(gcx.clone(), task_id).await;
 
-        if let Err(e) = self.create_and_dispatch_session(
-            gcx.clone(),
-            task_id,
-            planner_chat_id,
-            card_id,
-            card_title,
-            card_instructions,
-            dependency_context,
-            model,
-            &agent_id,
-            &agent_chat_id,
-            worktree_meta,
-            suggested_steps,
-            files_to_open,
-        )
-        .await
+        if let Err(e) = self
+            .create_and_dispatch_session(
+                gcx.clone(),
+                task_id,
+                planner_chat_id,
+                card_id,
+                card_title,
+                card_instructions,
+                dependency_context,
+                model,
+                &agent_id,
+                &agent_chat_id,
+                worktree_meta,
+                suggested_steps,
+                files_to_open,
+            )
+            .await
         {
             restore_card_after_restart_failure(
                 gcx.clone(),
@@ -642,8 +655,8 @@ impl ToolTaskRestartAgent {
         if !files_to_open.is_empty() {
             let mut context_files: Vec<ContextFile> = Vec::new();
             let wt_root = &worktree_meta.root;
-            let worktree_canonical = dunce::canonicalize(wt_root)
-                .unwrap_or_else(|_| wt_root.clone());
+            let worktree_canonical =
+                dunce::canonicalize(wt_root).unwrap_or_else(|_| wt_root.clone());
             for path_str in &files_to_open {
                 let orig = std::path::Path::new(path_str);
                 let source_root = &worktree_meta.source_workspace_root;
@@ -654,19 +667,31 @@ impl ToolTaskRestartAgent {
                 let canonical_resolved = match dunce::canonicalize(&resolved) {
                     Ok(p) => p,
                     Err(_) => {
-                        tracing::warn!("restart_agent: files_to_open '{}' does not exist, skipping", path_str);
+                        tracing::warn!(
+                            "restart_agent: files_to_open '{}' does not exist, skipping",
+                            path_str
+                        );
                         continue;
                     }
                 };
                 if !canonical_resolved.starts_with(&worktree_canonical) {
-                    tracing::warn!("restart_agent: files_to_open '{}' escapes worktree, rejecting", path_str);
+                    tracing::warn!(
+                        "restart_agent: files_to_open '{}' escapes worktree, rejecting",
+                        path_str
+                    );
                     continue;
                 }
-                if crate::files_in_workspace::check_file_privacy_for_send(gcx.clone(), &canonical_resolved)
-                    .await
-                    .is_err()
+                if crate::files_in_workspace::check_file_privacy_for_send(
+                    gcx.clone(),
+                    &canonical_resolved,
+                )
+                .await
+                .is_err()
                 {
-                    tracing::warn!("restart_agent: files_to_open '{}' blocked by privacy settings, skipping", path_str);
+                    tracing::warn!(
+                        "restart_agent: files_to_open '{}' blocked by privacy settings, skipping",
+                        path_str
+                    );
                     continue;
                 }
                 match tokio::fs::read_to_string(&canonical_resolved).await {
@@ -681,7 +706,11 @@ impl ToolTaskRestartAgent {
                         });
                     }
                     Err(e) => {
-                        tracing::warn!("restart_agent: could not read file {:?}: {}", canonical_resolved, e);
+                        tracing::warn!(
+                            "restart_agent: could not read file {:?}: {}",
+                            canonical_resolved,
+                            e
+                        );
                     }
                 }
             }
@@ -765,7 +794,10 @@ mod tests {
         assert_eq!(card.agent_chat_id.as_deref(), Some(new_chat));
         assert!(card.completed_at.is_none());
         assert!(card.final_report.is_none());
-        assert!(card.status_updates.iter().any(|u| u.message.contains("Previous failure")));
+        assert!(card
+            .status_updates
+            .iter()
+            .any(|u| u.message.contains("Previous failure")));
         assert_eq!(card.agent_worktree.as_deref(), Some("/tmp/wt"));
         assert_eq!(card.agent_worktree_name.as_deref(), Some("wt-new"));
     }
@@ -789,8 +821,14 @@ mod tests {
         assert_eq!(card.agent_chat_id.as_deref(), Some(new_chat));
         assert!(card.completed_at.is_none());
         assert!(card.final_report.is_none());
-        assert!(card.status_updates.iter().any(|u| u.message.contains("Previous failure")));
-        assert!(card.status_updates.iter().any(|u| u.message.contains("Resume restart")));
+        assert!(card
+            .status_updates
+            .iter()
+            .any(|u| u.message.contains("Previous failure")));
+        assert!(card
+            .status_updates
+            .iter()
+            .any(|u| u.message.contains("Resume restart")));
         assert_eq!(card.agent_worktree, old_worktree, "worktree path preserved");
         assert_eq!(card.agent_branch, old_branch, "branch preserved");
     }
@@ -823,7 +861,10 @@ mod tests {
 
         let card = board.get_card("T-3").unwrap();
         let should_refuse = card.column == "doing" && card.agent_chat_id.is_some();
-        assert!(should_refuse, "active doing card should trigger refusal without force");
+        assert!(
+            should_refuse,
+            "active doing card should trigger refusal without force"
+        );
     }
 
     #[test]
@@ -839,14 +880,7 @@ mod tests {
         let mut card = failed_card("T-5", None, None);
         let original_status_count = card.status_updates.len();
 
-        mark_card_restarted_fresh(
-            &mut card,
-            "new-agent",
-            "agent-T-5-new",
-            None,
-            None,
-            None,
-        );
+        mark_card_restarted_fresh(&mut card, "new-agent", "agent-T-5-new", None, None, None);
 
         assert!(
             card.status_updates.len() > original_status_count,
@@ -874,7 +908,11 @@ mod tests {
 
     #[test]
     fn restart_agent_fresh_rollback_resets_card_to_failed() {
-        let original = failed_card("T-7", Some("/tmp/old-wt".to_string()), Some("old-branch".to_string()));
+        let original = failed_card(
+            "T-7",
+            Some("/tmp/old-wt".to_string()),
+            Some("old-branch".to_string()),
+        );
         let mut board = TaskBoard::default();
         let mut restarted = original.clone();
         mark_card_restarted_fresh(
@@ -908,7 +946,14 @@ mod tests {
         let original = failed_card("T-8", None, None);
         let mut board = TaskBoard::default();
         let mut newer = original.clone();
-        mark_card_restarted_fresh(&mut newer, "newer-agent", "agent-T-8-newer", None, None, None);
+        mark_card_restarted_fresh(
+            &mut newer,
+            "newer-agent",
+            "agent-T-8-newer",
+            None,
+            None,
+            None,
+        );
         board.cards.push(newer.clone());
 
         assert!(!restore_original_card_if_current_agent(
@@ -928,7 +973,11 @@ mod tests {
         let task_default = Some("task-model-x");
         let current = "current-model";
         let result = if let Some(m) = task_default {
-            if !m.is_empty() { m.to_string() } else { current.to_string() }
+            if !m.is_empty() {
+                m.to_string()
+            } else {
+                current.to_string()
+            }
         } else {
             current.to_string()
         };

@@ -12,9 +12,7 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::global_context::GlobalContext;
 use crate::tasks::storage;
-use crate::tasks::types::{
-    BoardCard, FinalReport, StatusUpdate, SuggestedCard, VerificationResult,
-};
+use crate::tasks::types::{BoardCard, FinalReport, StatusUpdate, SuggestedCard, VerificationResult};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::worktrees::types::WorktreeMeta;
 

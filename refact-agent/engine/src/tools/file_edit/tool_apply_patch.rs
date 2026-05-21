@@ -259,7 +259,9 @@ pub async fn tool_apply_patch_exec(
                         .await
                         .map_err(|e| format!("Failed to delete: {}", e))?;
                     gcx.documents_state
-                        .memory_document_map.lock().await
+                        .memory_document_map
+                        .lock()
+                        .await
                         .remove(&full_path);
                 }
 
@@ -341,7 +343,9 @@ pub async fn tool_apply_patch_exec(
                             .await
                             .map_err(|e| format!("Failed to remove: {}", e))?;
                         gcx.documents_state
-                            .memory_document_map.lock().await
+                            .memory_document_map
+                            .lock()
+                            .await
                             .remove(&full_path);
                         sync_documents_ast(gcx.clone(), &dest_path).await?;
                     }
@@ -411,10 +415,7 @@ impl Tool for ToolApplyPatch {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
 
         let result =

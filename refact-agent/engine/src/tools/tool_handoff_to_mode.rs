@@ -234,9 +234,7 @@ impl Tool for ToolHandoffToMode {
 
         apply_overrides(&mut decisions, args);
 
-        let path_context = {
-            AgenticPathContext::from_context(&*gcx)
-        };
+        let path_context = { AgenticPathContext::from_context(&*gcx) };
         let new_messages = assemble_new_chat(&path_context, &messages, &decisions)
             .await
             .map_err(|e| format!("handoff assembly failed: {}", e))?;

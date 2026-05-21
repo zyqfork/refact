@@ -193,9 +193,7 @@ async fn read_dir_summary(dir: &std::path::Path, depth: usize) -> String {
     lines.join("\n")
 }
 
-async fn read_integrations_summary(
-    gcx: Arc<crate::global_context::GlobalContext>,
-) -> String {
+async fn read_integrations_summary(gcx: Arc<crate::global_context::GlobalContext>) -> String {
     let config_dir = gcx.config_dir.clone();
     let integr_dir = config_dir.join("integrations.d");
     if !integr_dir.exists() {
@@ -232,9 +230,7 @@ async fn read_mcp_summary(config_dir: &std::path::Path) -> String {
     format!("MCP servers: {}", mcp_names.join(", "))
 }
 
-async fn read_modes_summary(
-    gcx: Arc<crate::global_context::GlobalContext>,
-) -> String {
+async fn read_modes_summary(gcx: Arc<crate::global_context::GlobalContext>) -> String {
     use crate::yaml_configs::customization_registry::get_project_registry;
     let Some(registry) = get_project_registry(gcx).await else {
         return "no mode registry available".to_string();

@@ -714,8 +714,13 @@ mod tests {
 
     #[test]
     fn update_card_schema_includes_target_files() {
-        let schema = ToolTaskBoardUpdateCard::new().tool_description().input_schema;
+        let schema = ToolTaskBoardUpdateCard::new()
+            .tool_description()
+            .input_schema;
         assert!(schema["properties"].get("target_files").is_some());
-        assert_eq!(schema["properties"]["target_files"]["type"], serde_json::json!("string"));
+        assert_eq!(
+            schema["properties"]["target_files"]["type"],
+            serde_json::json!("string")
+        );
     }
 }

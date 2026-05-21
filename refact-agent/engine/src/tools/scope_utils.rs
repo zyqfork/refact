@@ -273,7 +273,10 @@ async fn create_scope_filter_legacy(
         } else {
             format!("{}{}", dir_path, std::path::MAIN_SEPARATOR)
         };
-        return Ok(Some(format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escape_path_for_scope_filter(&dir_path_with_sep))));
+        return Ok(Some(format!(
+            r#"(scope LIKE "{}%" ESCAPE '\')"#,
+            escape_path_for_scope_filter(&dir_path_with_sep)
+        )));
     }
 
     match return_one_candidate_or_a_good_error(
@@ -285,7 +288,10 @@ async fn create_scope_filter_legacy(
     )
     .await
     {
-        Ok(file_path) => Ok(Some(format!("(scope = \"{}\")", escape_path_for_scope_filter(&file_path)))),
+        Ok(file_path) => Ok(Some(format!(
+            "(scope = \"{}\")",
+            escape_path_for_scope_filter(&file_path)
+        ))),
         Err(file_err) => {
             match return_one_candidate_or_a_good_error(
                 gcx.clone(),
@@ -302,7 +308,10 @@ async fn create_scope_filter_legacy(
                     } else {
                         format!("{}{}", dir_path, std::path::MAIN_SEPARATOR)
                     };
-                    Ok(Some(format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escape_path_for_scope_filter(&dir_path_with_sep))))
+                    Ok(Some(format!(
+                        r#"(scope LIKE "{}%" ESCAPE '\')"#,
+                        escape_path_for_scope_filter(&dir_path_with_sep)
+                    )))
                 }
                 Err(_) => Err(file_err),
             }
@@ -362,9 +371,10 @@ pub async fn create_scope_filter_with_execution_scope(
     if is_worktree_root_alias(scope) {
         return Ok(ScopedScopeFilter {
             filter: Some(format!(
-
                 r#"(scope LIKE "{}%" ESCAPE '\')"#,
-                escape_path_for_scope_filter(&path_with_sep(execution_scope.source_workspace_root()))
+                escape_path_for_scope_filter(&path_with_sep(
+                    execution_scope.source_workspace_root()
+                ))
             )),
             notices: vec![],
         });
@@ -377,10 +387,15 @@ pub async fn create_scope_filter_with_execution_scope(
     }
     let indexed_path = indexed_path_for_scoped_path(execution_scope, &scoped.path);
     let filter = if scoped.path.is_dir() || scope_is_dir {
-
-        Some(format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escape_path_for_scope_filter(&path_with_sep(&indexed_path))))
+        Some(format!(
+            r#"(scope LIKE "{}%" ESCAPE '\')"#,
+            escape_path_for_scope_filter(&path_with_sep(&indexed_path))
+        ))
     } else {
-        Some(format!("(scope = \"{}\")", escape_path_for_scope_filter(&indexed_path.to_string_lossy())))
+        Some(format!(
+            "(scope = \"{}\")",
+            escape_path_for_scope_filter(&indexed_path.to_string_lossy())
+        ))
     };
     Ok(ScopedScopeFilter {
         filter,
@@ -838,7 +853,10 @@ mod worktree_scope_read_tools {
         let (_corrections, results) = tool.tool_execute(ccx, &tool_call_id, &args).await.unwrap();
         let text = tool_text(&results);
 
-        assert!(text.contains("Absolute path used in active worktree"), "{text}");
+        assert!(
+            text.contains("Absolute path used in active worktree"),
+            "{text}"
+        );
         assert!(text.contains("lib.rs"), "{text}");
         assert!(text.contains("worktree_only.rs"), "{text}");
         assert!(!text.contains("No files found"), "{text}");
@@ -882,7 +900,10 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         assert_eq!(replacement, "");
-        assert!(text.contains("Absolute path used in active worktree"), "{text}");
+        assert!(
+            text.contains("Absolute path used in active worktree"),
+            "{text}"
+        );
         assert!(text.contains("lib.rs"), "{text}");
         assert!(text.contains("worktree_only.rs"), "{text}");
         assert!(!text.contains("tree(): directory is empty"), "{text}");
@@ -926,10 +947,7 @@ mod worktree_scope_read_tools {
             .unwrap();
         let names = context_file_names(&results);
 
-        assert_eq!(
-            names,
-            vec![norm(fixture.root.join("src").join("lib.rs"))]
-        );
+        assert_eq!(names, vec![norm(fixture.root.join("src").join("lib.rs"))]);
     }
 
     #[tokio::test]
@@ -950,10 +968,7 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         assert_eq!(names.len(), 1);
-        assert_eq!(
-            names[0],
-            norm(fixture.root.join("src").join("lib.rs"))
-        );
+        assert_eq!(names[0], norm(fixture.root.join("src").join("lib.rs")));
         assert!(
             !norm_str(&text).contains(&norm(fixture.source.clone())),
             "{text}"
@@ -1111,14 +1126,14 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         let expected = norm(fixture.root.join("src/lib.rs"));
-        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
+        assert!(
+            names.iter().any(|path| path == &expected),
+            "expected {expected} in {names:?}"
+        );
         assert!(!names.iter().any(|path| path.contains("source_only.rs")));
         assert!(text.contains("worktree_version"), "{text}");
         assert!(!text.contains("source_version"), "{text}");
-        assert!(
-            !text.contains(&norm(fixture.source.clone())),
-            "{text}"
-        );
+        assert!(!text.contains(&norm(fixture.source.clone())), "{text}");
     }
 
     #[tokio::test]
@@ -1143,7 +1158,10 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         let expected = norm(fixture.root.join("src/worktree_only.rs"));
-        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
+        assert!(
+            names.iter().any(|path| path == &expected),
+            "expected {expected} in {names:?}"
+        );
         assert!(text.contains("only_worktree"), "{text}");
         assert!(!text.contains("only_source"), "{text}");
     }
@@ -1199,14 +1217,14 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         let expected = norm(fixture.root.join("src/new_name.rs"));
-        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
+        assert!(
+            names.iter().any(|path| path == &expected),
+            "expected {expected} in {names:?}"
+        );
         assert!(!names.iter().any(|path| path.contains("old_name.rs")));
         assert!(text.contains("new_name.rs"), "{text}");
         assert!(!text.contains("old_name.rs"), "{text}");
-        assert!(
-            !text.contains(&norm(fixture.source.clone())),
-            "{text}"
-        );
+        assert!(!text.contains(&norm(fixture.source.clone())), "{text}");
     }
 
     #[tokio::test]
@@ -1237,7 +1255,10 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         let expected = norm(fixture.root.join("src/lib.rs"));
-        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
+        assert!(
+            names.iter().any(|path| path == &expected),
+            "expected {expected} in {names:?}"
+        );
         assert!(!names.iter().any(|path| path.contains("source_only.rs")));
         assert!(!names.iter().any(|path| path.contains("deleted_stale.rs")));
         assert!(!names.iter().any(|path| path.contains("old_name.rs")));
@@ -1265,7 +1286,10 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         let expected = norm(fixture.root.join("src/worktree_only.rs"));
-        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
+        assert!(
+            names.iter().any(|path| path == &expected),
+            "expected {expected} in {names:?}"
+        );
         assert!(
             text.contains("Direct worktree filesystem fallback"),
             "{text}"
@@ -1296,7 +1320,10 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         let expected = norm(fixture.root.join("src/new_name.rs"));
-        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
+        assert!(
+            names.iter().any(|path| path == &expected),
+            "expected {expected} in {names:?}"
+        );
         assert!(!names.iter().any(|path| path.contains("old_name.rs")));
         assert!(text.contains("new_name.rs"), "{text}");
         assert!(!text.contains("old_name.rs"), "{text}");
@@ -1526,8 +1553,7 @@ mod worktree_scope_read_tools {
             skip_pp: false,
         };
 
-        let result =
-            remap_context_file_for_execution_scope(gcx, Some(&scope), context_file).await;
+        let result = remap_context_file_for_execution_scope(gcx, Some(&scope), context_file).await;
         assert!(
             result.is_err(),
             "privacy-blocked .env inside worktree should return error"
@@ -1587,12 +1613,27 @@ mod worktree_scope_read_tools {
     #[test]
     fn scope_filter_percent_and_underscore_match_literally() {
         let escaped = escape_path_for_scope_filter("/path/50%/a_b/");
-        assert!(escaped.contains(r"\%"), "percent should be escaped: {escaped}");
-        assert!(escaped.contains(r"\_"), "underscore should be escaped: {escaped}");
+        assert!(
+            escaped.contains(r"\%"),
+            "percent should be escaped: {escaped}"
+        );
+        assert!(
+            escaped.contains(r"\_"),
+            "underscore should be escaped: {escaped}"
+        );
 
         let filter = format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escaped);
-        assert!(filter.contains("ESCAPE"), "filter should include ESCAPE clause: {filter}");
-        assert!(filter.contains(r"\%/"), "escaped percent should appear in filter: {filter}");
-        assert!(filter.contains(r"\_"), "escaped underscore should appear in filter: {filter}");
+        assert!(
+            filter.contains("ESCAPE"),
+            "filter should include ESCAPE clause: {filter}"
+        );
+        assert!(
+            filter.contains(r"\%/"),
+            "escaped percent should appear in filter: {filter}"
+        );
+        assert!(
+            filter.contains(r"\_"),
+            "escaped underscore should appear in filter: {filter}"
+        );
     }
 }

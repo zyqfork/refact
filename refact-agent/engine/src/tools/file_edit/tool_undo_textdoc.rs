@@ -104,7 +104,9 @@ pub async fn tool_undo_text_doc_exec(
     }
 
     gcx.documents_state
-        .memory_document_map.lock().await
+        .memory_document_map
+        .lock()
+        .await
         .remove(&a.path);
 
     let summary = if target_content.is_empty() {
@@ -137,10 +139,7 @@ impl Tool for ToolUndoTextDoc {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
         let (_, _, chunks, summary) =
             tool_undo_text_doc_exec(gcx.clone(), args, execution_scope.as_ref()).await?;
@@ -200,10 +199,7 @@ impl Tool for ToolUndoTextDoc {
     ) -> Result<MatchConfirmDeny, String> {
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
         let can_exec = parse_args(gcx, args, execution_scope.as_ref())
             .await

@@ -134,10 +134,7 @@ impl Tool for ToolUpdateTextDocAnchored {
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let (gcx, execution_scope) = {
             let cgcx = ccx.lock().await;
-            (
-                cgcx.app.gcx.clone(),
-                cgcx.execution_scope.clone(),
-            )
+            (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
         let (_, _, chunks, summary) =
             tool_update_text_doc_anchored_exec(gcx.clone(), args, false, execution_scope.as_ref())

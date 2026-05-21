@@ -203,10 +203,7 @@ async fn project_root(gcx: Arc<GlobalContext>) -> Result<PathBuf, String> {
         .ok_or_else(|| "No workspace folder found".to_string())
 }
 
-async fn resolve_memory_path(
-    gcx: Arc<GlobalContext>,
-    raw: &str,
-) -> Result<PathBuf, String> {
+async fn resolve_memory_path(gcx: Arc<GlobalContext>, raw: &str) -> Result<PathBuf, String> {
     let raw = raw.trim();
     if raw.is_empty() || raw.contains('\0') {
         return Err("memory path is empty or invalid".to_string());
@@ -429,10 +426,7 @@ fn markdown_table(cards: &[KnowledgeCard]) -> String {
     lines.join("\n")
 }
 
-async fn append_audit_op(
-    gcx: Arc<GlobalContext>,
-    mut op: MemoryLifecycleOp,
-) -> Result<(), String> {
+async fn append_audit_op(gcx: Arc<GlobalContext>, mut op: MemoryLifecycleOp) -> Result<(), String> {
     let root = project_root(gcx).await?;
     let now = Utc::now().to_rfc3339();
     op.status = MemoryOpStatus::Applied;
@@ -694,8 +688,7 @@ impl Tool for ToolBuddyMemoryArchive {
         let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
         let path = resolve_memory_path(gcx.clone(), string_arg(args, "path")?).await?;
         let superseded_by = optional_string_arg(args, "superseded_by");
-        let changed =
-            archive_memory_file_checked(app, &path, superseded_by.as_deref()).await?;
+        let changed = archive_memory_file_checked(app, &path, superseded_by.as_deref()).await?;
         let mut op = MemoryLifecycleOp::pending(
             op_id("archive", &[&path.to_string_lossy(), reason]),
             MemorySource::Buddy,

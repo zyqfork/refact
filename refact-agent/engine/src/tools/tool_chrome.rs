@@ -219,15 +219,12 @@ impl Tool for ToolChrome {
             let runtime_arc = {
                 let browser_runtimes = gcx.browser_runtimes.clone();
                 let browser_runtimes = browser_runtimes.lock().await;
-                browser_runtimes
-                    .get(&runtime_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        format!(
-                            "BrowserRuntime {} not found. Browser may have been closed.",
-                            runtime_id
-                        )
-                    })?
+                browser_runtimes.get(&runtime_id).cloned().ok_or_else(|| {
+                    format!(
+                        "BrowserRuntime {} not found. Browser may have been closed.",
+                        runtime_id
+                    )
+                })?
             };
 
             match browser_controller::execute_request_with_runtime(runtime_arc, request).await {
@@ -488,9 +485,7 @@ async fn setup_chrome_session(
     let session_entry = {
         let integration_sessions = gcx.integration_sessions.clone();
         let integration_sessions = integration_sessions.lock().await;
-        integration_sessions
-            .get(session_hashmap_key)
-            .cloned()
+        integration_sessions.get(session_hashmap_key).cloned()
     };
 
     if let Some(session) = session_entry {
@@ -533,7 +528,12 @@ async fn setup_chrome_session(
         }
     }
 
-    if let Some((runtime_id, _)) = find_runtime_by_chat_id(crate::app_state::AppState::from_gcx(gcx.clone()).await, chat_id).await {
+    if let Some((runtime_id, _)) = find_runtime_by_chat_id(
+        crate::app_state::AppState::from_gcx(gcx.clone()).await,
+        chat_id,
+    )
+    .await
+    {
         setup_log.push("Reusing existing browser session.".to_string());
         let idle_browser_timeout = args
             .idle_browser_timeout
@@ -773,10 +773,7 @@ async fn session_open_tab(
             {
                 let browser_runtimes = gcx.browser_runtimes.clone();
                 let browser_runtimes = browser_runtimes.lock().await;
-                if let Some(rt_arc) = browser_runtimes
-                    .get(&chrome_session.runtime_id)
-                    .cloned()
-                {
+                if let Some(rt_arc) = browser_runtimes.get(&chrome_session.runtime_id).cloned() {
                     let mut rt = rt_arc.lock().await;
                     let _ = setup_recording_for_tab(&mut rt, &runtime_tab);
                     rt.set_active_tab_target_id(target_id.clone());

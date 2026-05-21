@@ -152,9 +152,7 @@ fn legacy_finish_tool_error(tool_name: &str) -> String {
     )
 }
 
-async fn get_global_context(
-    ccx: &Arc<AMutex<AtCommandsContext>>,
-) -> SharedGlobalContext {
+async fn get_global_context(ccx: &Arc<AMutex<AtCommandsContext>>) -> SharedGlobalContext {
     ccx.lock().await.app.gcx.clone()
 }
 
@@ -473,8 +471,8 @@ mod tests {
     #[test]
     fn task_agent_scope_accepts_bound_matching_ids() {
         let args = args(&[("task_id", json!("task-1")), ("card_id", json!("card-1"))]);
-        let scope = resolve_task_agent_scope(Some(&bound_meta()), "agent-chat", &args, true, true)
-            .unwrap();
+        let scope =
+            resolve_task_agent_scope(Some(&bound_meta()), "agent-chat", &args, true, true).unwrap();
 
         assert_eq!(scope.task_id, "task-1");
         assert_eq!(scope.card_id.as_deref(), Some("card-1"));

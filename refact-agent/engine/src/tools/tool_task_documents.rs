@@ -72,7 +72,9 @@ fn validate_slug(slug: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err("slug must contain only alphanumeric characters, hyphens, or underscores".to_string());
+        return Err(
+            "slug must contain only alphanumeric characters, hyphens, or underscores".to_string(),
+        );
     }
     Ok(())
 }
@@ -171,18 +173,27 @@ async fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| format!("invalid destination path {}", path.display()))?;
     let tmp_path = path.with_file_name(format!(".{}.tmp", file_name));
-    fs::write(&tmp_path, content)
-        .await
-        .map_err(|e| format!("failed to write temporary file {}: {}", tmp_path.display(), e))?;
+    fs::write(&tmp_path, content).await.map_err(|e| {
+        format!(
+            "failed to write temporary file {}: {}",
+            tmp_path.display(),
+            e
+        )
+    })?;
     #[cfg(windows)]
     if path.exists() {
         fs::remove_file(path)
             .await
             .map_err(|e| format!("failed to replace {}: {}", path.display(), e))?;
     }
-    fs::rename(&tmp_path, path)
-        .await
-        .map_err(|e| format!("failed to rename {} to {}: {}", tmp_path.display(), path.display(), e))
+    fs::rename(&tmp_path, path).await.map_err(|e| {
+        format!(
+            "failed to rename {} to {}: {}",
+            tmp_path.display(),
+            path.display(),
+            e
+        )
+    })
 }
 
 async fn read_document(path: &Path) -> Result<TaskDocument, String> {
@@ -196,7 +207,11 @@ async fn write_document(path: &Path, document: &TaskDocument) -> Result<(), Stri
     atomic_write(path, &render_document(document)).await
 }
 
-async fn list_history_files_in(dir: &Path, slug: &str, deleted: bool) -> Result<Vec<HistoryItem>, String> {
+async fn list_history_files_in(
+    dir: &Path,
+    slug: &str,
+    deleted: bool,
+) -> Result<Vec<HistoryItem>, String> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -249,9 +264,13 @@ async fn cap_history(documents_dir: &Path, slug: &str) -> Result<(), String> {
     items.sort_by(|a, b| a.snapshot_at.cmp(&b.snapshot_at));
     let remove_count = items.len() - HISTORY_CAP;
     for item in items.into_iter().take(remove_count) {
-        fs::remove_file(&item.path)
-            .await
-            .map_err(|e| format!("failed to remove old history {}: {}", item.path.display(), e))?;
+        fs::remove_file(&item.path).await.map_err(|e| {
+            format!(
+                "failed to remove old history {}: {}",
+                item.path.display(),
+                e
+            )
+        })?;
     }
     Ok(())
 }
@@ -448,7 +467,9 @@ fn format_doc_list(documents: &[TaskDocument]) -> String {
     if documents.is_empty() {
         return "No task documents found.".to_string();
     }
-    let mut output = String::from("| slug | name | kind | pinned | version | updated_at |\n|---|---|---|---|---:|---|\n");
+    let mut output = String::from(
+        "| slug | name | kind | pinned | version | updated_at |\n|---|---|---|---|---:|---|\n",
+    );
     for document in documents {
         let fm = &document.frontmatter;
         output.push_str(&format!(
@@ -463,7 +484,9 @@ fn format_history(items: &[HistoryItem]) -> String {
     if items.is_empty() {
         return "No history found for document.".to_string();
     }
-    let mut output = String::from("| version | updated_at | snapshot_at | state | path |\n|---:|---|---|---|---|\n");
+    let mut output = String::from(
+        "| version | updated_at | snapshot_at | state | path |\n|---:|---|---|---|---|\n",
+    );
     for item in items {
         output.push_str(&format!(
             "| {} | {} | {} | {} | {} |\n",
@@ -493,7 +516,9 @@ async fn task_context(
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string())
         })
-        .ok_or_else(|| "task document tools require task context or a task_id argument".to_string())?;
+        .ok_or_else(|| {
+            "task document tools require task context or a task_id argument".to_string()
+        })?;
     let author_role = match ccx_lock.task_meta.as_ref().map(|meta| meta.role.as_str()) {
         Some("planner") => "planner",
         Some("agents") | Some("agent") => "agents",
@@ -528,7 +553,10 @@ fn optional_u64_arg(args: &HashMap<String, Value>, name: &str) -> Result<Option<
             .map(Some)
             .map_err(|_| format!("argument `{}` must be a non-negative integer", name)),
         Some(Value::Null) | None => Ok(None),
-        Some(value) => Err(format!("argument `{}` must be a non-negative integer: {:?}", name, value)),
+        Some(value) => Err(format!(
+            "argument `{}` must be a non-negative integer: {:?}",
+            name, value
+        )),
     }
 }
 
@@ -556,7 +584,12 @@ fn optional_cards_arg(args: &HashMap<String, Value>, name: &str) -> Result<Vec<S
                     .ok_or_else(|| format!("argument `{}` must contain only strings", name))
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(|values| values.into_iter().filter(|value| !value.is_empty()).collect()),
+            .map(|values| {
+                values
+                    .into_iter()
+                    .filter(|value| !value.is_empty())
+                    .collect()
+            }),
         Some(Value::String(value)) => Ok(value
             .split(',')
             .map(str::trim)
@@ -564,7 +597,10 @@ fn optional_cards_arg(args: &HashMap<String, Value>, name: &str) -> Result<Vec<S
             .map(str::to_string)
             .collect()),
         Some(Value::Null) | None => Ok(Vec::new()),
-        Some(value) => Err(format!("argument `{}` must be a string or string array: {:?}", name, value)),
+        Some(value) => Err(format!(
+            "argument `{}` must be a string or string array: {:?}",
+            name, value
+        )),
     }
 }
 
@@ -618,7 +654,10 @@ impl Tool for ToolDocList {
         let (gcx, task_id, _) = task_context(&ccx, args).await?;
         let documents_dir = documents_dir_for_task(gcx, &task_id).await?;
         let documents = list_documents_at(&documents_dir).await?;
-        Ok((false, tool_message(tool_call_id, format_doc_list(&documents))))
+        Ok((
+            false,
+            tool_message(tool_call_id, format_doc_list(&documents)),
+        ))
     }
 
     fn tool_description(&self) -> ToolDesc {
@@ -649,7 +688,10 @@ impl Tool for ToolDocGet {
         let version = optional_u64_arg(args, "version")?;
         let documents_dir = documents_dir_for_task(gcx, &task_id).await?;
         let document = get_document_at(&documents_dir, &slug, version).await?;
-        Ok((false, tool_message(tool_call_id, format_document(&document))))
+        Ok((
+            false,
+            tool_message(tool_call_id, format_document(&document)),
+        ))
     }
 
     fn tool_description(&self) -> ToolDesc {
@@ -701,7 +743,10 @@ impl Tool for ToolDocCreate {
             &author_role,
         )
         .await?;
-        Ok((false, tool_message(tool_call_id, format_document(&document))))
+        Ok((
+            false,
+            tool_message(tool_call_id, format_document(&document)),
+        ))
     }
 
     fn tool_description(&self) -> ToolDesc {
@@ -711,15 +756,32 @@ impl Tool for ToolDocCreate {
             source: make_source(),
             experimental: false,
             allow_parallel: false,
-            description: "Create a new task document. Fails if the slug already exists.".to_string(),
+            description: "Create a new task document. Fails if the slug already exists."
+                .to_string(),
             input_schema: json_schema_from_params(
                 &[
-                    ("slug", "string", "Document slug: alphanumeric, dash, underscore"),
+                    (
+                        "slug",
+                        "string",
+                        "Document slug: alphanumeric, dash, underscore",
+                    ),
                     ("name", "string", "Document display name"),
-                    ("kind", "string", "Document kind: plan, design, runbook, brief, postmortem, or spec"),
+                    (
+                        "kind",
+                        "string",
+                        "Document kind: plan, design, runbook, brief, postmortem, or spec",
+                    ),
                     ("content", "string", "Markdown body content"),
-                    ("pinned", "boolean", "Whether the document should always inject; defaults to true"),
-                    ("relevant_cards", "string", "Comma-separated relevant card IDs"),
+                    (
+                        "pinned",
+                        "boolean",
+                        "Whether the document should always inject; defaults to true",
+                    ),
+                    (
+                        "relevant_cards",
+                        "string",
+                        "Comma-separated relevant card IDs",
+                    ),
                     ("task_id", "string", "Task ID (optional if in task context)"),
                 ],
                 &["slug", "name", "kind", "content"],
@@ -743,7 +805,10 @@ impl Tool for ToolDocUpdate {
         let content = string_arg(args, "content")?;
         let documents_dir = documents_dir_for_task(gcx, &task_id).await?;
         let document = update_document_at(&documents_dir, &slug, &content).await?;
-        Ok((false, tool_message(tool_call_id, format_document(&document))))
+        Ok((
+            false,
+            tool_message(tool_call_id, format_document(&document)),
+        ))
     }
 
     fn tool_description(&self) -> ToolDesc {
@@ -753,7 +818,8 @@ impl Tool for ToolDocUpdate {
             source: make_source(),
             experimental: false,
             allow_parallel: false,
-            description: "Replace a task document body, snapshotting the old version first.".to_string(),
+            description: "Replace a task document body, snapshotting the old version first."
+                .to_string(),
             input_schema: json_schema_from_params(
                 &[
                     ("slug", "string", "Document slug"),
@@ -781,7 +847,10 @@ impl Tool for ToolDocAppend {
         let section = string_arg(args, "section")?;
         let documents_dir = documents_dir_for_task(gcx, &task_id).await?;
         let document = append_document_at(&documents_dir, &slug, &section).await?;
-        Ok((false, tool_message(tool_call_id, format_document(&document))))
+        Ok((
+            false,
+            tool_message(tool_call_id, format_document(&document)),
+        ))
     }
 
     fn tool_description(&self) -> ToolDesc {
@@ -822,7 +891,11 @@ impl Tool for ToolDocDelete {
             false,
             tool_message(
                 tool_call_id,
-                format!("Deleted document `{}`. Moved to {}", slug, deleted_path.display()),
+                format!(
+                    "Deleted document `{}`. Moved to {}",
+                    slug,
+                    deleted_path.display()
+                ),
             ),
         ))
     }
@@ -834,7 +907,8 @@ impl Tool for ToolDocDelete {
             source: make_source(),
             experimental: false,
             allow_parallel: false,
-            description: "Soft-delete a task document by moving it to document history.".to_string(),
+            description: "Soft-delete a task document by moving it to document history."
+                .to_string(),
             input_schema: json_schema_from_params(
                 &[
                     ("slug", "string", "Document slug"),
@@ -862,7 +936,10 @@ impl Tool for ToolDocPin {
             .ok_or_else(|| "argument `pinned` is required".to_string())?;
         let documents_dir = documents_dir_for_task(gcx, &task_id).await?;
         let document = pin_document_at(&documents_dir, &slug, pinned).await?;
-        Ok((false, tool_message(tool_call_id, format_document(&document))))
+        Ok((
+            false,
+            tool_message(tool_call_id, format_document(&document)),
+        ))
     }
 
     fn tool_description(&self) -> ToolDesc {
@@ -872,7 +949,8 @@ impl Tool for ToolDocPin {
             source: make_source(),
             experimental: false,
             allow_parallel: false,
-            description: "Toggle whether a task document is pinned for automatic injection.".to_string(),
+            description: "Toggle whether a task document is pinned for automatic injection."
+                .to_string(),
             input_schema: json_schema_from_params(
                 &[
                     ("slug", "string", "Document slug"),
@@ -981,9 +1059,18 @@ mod tests {
     #[tokio::test]
     async fn update_creates_history_and_get_version_reads_historical_body() {
         let (_temp, dir) = temp_documents_dir().await;
-        create_document_at(&dir, "spec", "Spec", "spec", "v1", true, Vec::new(), "planner")
-            .await
-            .unwrap();
+        create_document_at(
+            &dir,
+            "spec",
+            "Spec",
+            "spec",
+            "v1",
+            true,
+            Vec::new(),
+            "planner",
+        )
+        .await
+        .unwrap();
         update_document_at(&dir, "spec", "v2").await.unwrap();
         update_document_at(&dir, "spec", "v3").await.unwrap();
 
@@ -1004,9 +1091,18 @@ mod tests {
     #[tokio::test]
     async fn history_cap_keeps_last_twenty_snapshots() {
         let (_temp, dir) = temp_documents_dir().await;
-        create_document_at(&dir, "runbook", "Runbook", "runbook", "v1", true, Vec::new(), "planner")
-            .await
-            .unwrap();
+        create_document_at(
+            &dir,
+            "runbook",
+            "Runbook",
+            "runbook",
+            "v1",
+            true,
+            Vec::new(),
+            "planner",
+        )
+        .await
+        .unwrap();
         for version in 2..=26 {
             update_document_at(&dir, "runbook", &format!("v{}", version))
                 .await
@@ -1023,10 +1119,21 @@ mod tests {
     #[tokio::test]
     async fn append_and_pin_update_document_versions() {
         let (_temp, dir) = temp_documents_dir().await;
-        create_document_at(&dir, "brief", "Brief", "brief", "", true, Vec::new(), "agents")
+        create_document_at(
+            &dir,
+            "brief",
+            "Brief",
+            "brief",
+            "",
+            true,
+            Vec::new(),
+            "agents",
+        )
+        .await
+        .unwrap();
+        let appended = append_document_at(&dir, "brief", "Notes body")
             .await
             .unwrap();
-        let appended = append_document_at(&dir, "brief", "Notes body").await.unwrap();
         assert_eq!(appended.frontmatter.version, 2);
         assert_eq!(appended.content, "## Section\n\nNotes body\n");
 
