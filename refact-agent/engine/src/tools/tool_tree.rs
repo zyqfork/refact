@@ -92,20 +92,20 @@ impl Tool for ToolTree {
 
         let mut scope_notices = vec![];
         let (tree, is_root_query) = if scoped_enforced {
+            let scope = execution_scope.as_ref().unwrap();
             match path_mb.clone() {
                 Some(path) => {
                     if is_worktree_root_alias(&path) {
-                        let paths_in_dir = list_execution_scope_root(
-                            gcx.clone(),
-                            execution_scope.as_ref().unwrap(),
+                        let paths_in_dir =
+                            list_execution_scope_root(gcx.clone(), scope, true).await?;
+                        (
+                            TreeNode::build_relative(&paths_in_dir, scope.effective_root()),
                             true,
                         )
-                        .await?;
-                        (TreeNode::build(&paths_in_dir), true)
                     } else {
                         let resolved = resolve_existing_path_with_execution_scope(
                             gcx.clone(),
-                            execution_scope.as_ref(),
+                            Some(scope),
                             &path,
                         )
                         .await?
@@ -127,17 +127,15 @@ impl Tool for ToolTree {
                             resolved.outside_absolute_path,
                         )
                         .await?;
-                        (TreeNode::build(&paths_in_dir), false)
+                        (TreeNode::build_relative(&paths_in_dir, &resolved.path), false)
                     }
                 }
                 None => {
-                    let paths_in_dir = list_execution_scope_root(
-                        gcx.clone(),
-                        execution_scope.as_ref().unwrap(),
+                    let paths_in_dir = list_execution_scope_root(gcx.clone(), scope, true).await?;
+                    (
+                        TreeNode::build_relative(&paths_in_dir, scope.effective_root()),
                         true,
                     )
-                    .await?;
-                    (TreeNode::build(&paths_in_dir), true)
                 }
             }
         } else {

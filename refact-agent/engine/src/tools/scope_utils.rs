@@ -498,6 +498,7 @@ mod worktree_scope_read_tools {
     use super::*;
     use crate::at_commands::at_commands::{AtCommand, AtCommandsContext};
     use crate::at_commands::at_file::AtFile;
+    use crate::at_commands::at_tree::AtTree;
     use crate::at_commands::execute_at::AtCommandMember;
     use crate::call_validation::{ChatContent, ContextEnum};
     use crate::privacy::{FilePrivacySettings, PrivacySettings};
@@ -598,7 +599,14 @@ mod worktree_scope_read_tools {
             .prefix("refact-worktree-scope-")
             .tempdir()
             .unwrap();
-        let root = temp.path().join("worktree");
+        let root = temp
+            .path()
+            .join(".cache")
+            .join("refact")
+            .join("worktrees")
+            .join("wt")
+            .join("refact-agent")
+            .join("engine");
         let source = temp.path().join("source");
         let outside = temp.path().join("outside");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -809,7 +817,75 @@ mod worktree_scope_read_tools {
         let text = tool_text(&results);
 
         assert!(text.contains("worktree_only.rs"), "{text}");
+        assert!(text.contains("src"), "{text}");
+        assert!(text.contains("lib.rs"), "{text}");
+        assert!(!text.contains("No files found"), "{text}");
         assert!(!text.contains("source_only.rs"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn worktree_scope_read_tools_tree_absolute_worktree_subdir_warns_and_lists() {
+        let fixture = make_fixture();
+        let gcx = make_gcx(&fixture, vec![]).await;
+        let ccx = make_ccx(gcx, fixture.worktree.clone()).await;
+        let mut tool = ToolTree {
+            config_path: String::new(),
+        };
+        let tool_call_id = "tree-call".to_string();
+        let path = fixture.root.join("src").to_string_lossy().to_string();
+        let args = HashMap::from_iter([("path".to_string(), Value::String(path))]);
+
+        let (_corrections, results) = tool.tool_execute(ccx, &tool_call_id, &args).await.unwrap();
+        let text = tool_text(&results);
+
+        assert!(text.contains("Absolute path used in active worktree"), "{text}");
+        assert!(text.contains("lib.rs"), "{text}");
+        assert!(text.contains("worktree_only.rs"), "{text}");
+        assert!(!text.contains("No files found"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn worktree_scope_read_tools_tree_hidden_child_dir_still_skipped() {
+        let fixture = make_fixture();
+        fs::create_dir_all(fixture.root.join(".git")).unwrap();
+        fs::write(fixture.root.join(".git").join("config"), "[core]\n").unwrap();
+        let gcx = make_gcx(&fixture, vec![]).await;
+        let ccx = make_ccx(gcx, fixture.worktree.clone()).await;
+        let mut tool = ToolTree {
+            config_path: String::new(),
+        };
+        let tool_call_id = "tree-call".to_string();
+
+        let (_corrections, results) = tool
+            .tool_execute(ccx, &tool_call_id, &HashMap::new())
+            .await
+            .unwrap();
+        let text = tool_text(&results);
+
+        assert!(text.contains("lib.rs"), "{text}");
+        assert!(!text.contains(".git"), "{text}");
+        assert!(!text.contains("config"), "{text}");
+        assert!(!text.contains("No files found"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn worktree_scope_read_tools_at_tree_absolute_worktree_subdir_lists() {
+        let fixture = make_fixture();
+        let gcx = make_gcx(&fixture, vec![]).await;
+        let ccx = make_ccx(gcx, fixture.worktree.clone()).await;
+        let at_tree = AtTree::new();
+        let mut cmd = AtCommandMember::new("cmd".to_string(), "@tree".to_string(), 1, 6);
+        let path = fixture.root.join("src").to_string_lossy().to_string();
+        let mut args = vec![AtCommandMember::new("arg".to_string(), path, 7, 10)];
+
+        let (results, replacement) = at_tree.at_execute(ccx, &mut cmd, &mut args).await.unwrap();
+        let text = tool_text(&results);
+
+        assert_eq!(replacement, "");
+        assert!(text.contains("Absolute path used in active worktree"), "{text}");
+        assert!(text.contains("lib.rs"), "{text}");
+        assert!(text.contains("worktree_only.rs"), "{text}");
+        assert!(!text.contains("tree(): directory is empty"), "{text}");
     }
 
     #[tokio::test]

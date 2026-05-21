@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::fs;
 
@@ -53,6 +53,7 @@ pub struct TreeNode {
     pub children: HashMap<String, TreeNode>,
     pub file_size: Option<u64>,
     pub line_count: Option<usize>,
+    pub source_path: Option<PathBuf>,
 }
 
 impl TreeNode {
@@ -61,34 +62,52 @@ impl TreeNode {
             children: HashMap::new(),
             file_size: None,
             line_count: None,
+            source_path: None,
         }
     }
 
-    pub fn build(paths: &Vec<PathBuf>) -> Self {
+    pub fn build(paths: &[PathBuf]) -> Self {
         let mut root = TreeNode::new();
         for path in paths {
             if should_skip_path(path) {
                 continue;
             }
-            let mut node = &mut root;
-            let components: Vec<_> = path.components().collect();
-            let last_idx = components.len().saturating_sub(1);
+            root.insert_path(path, path);
+        }
+        root
+    }
 
-            for (i, component) in components.iter().enumerate() {
-                let key = component.as_os_str().to_string_lossy().to_string();
-                node = node.children.entry(key).or_insert_with(TreeNode::new);
+    pub fn build_relative(paths: &[PathBuf], base: &Path) -> Self {
+        let mut root = TreeNode::new();
+        for path in paths {
+            let display_path = path.strip_prefix(base).unwrap_or(path.as_path()).to_path_buf();
+            if should_skip_path(&display_path) {
+                continue;
+            }
+            root.insert_path(&display_path, path);
+        }
+        root
+    }
 
-                if i == last_idx {
-                    if let Ok(meta) = fs::metadata(path) {
-                        node.file_size = Some(meta.len());
-                        if !is_binary_file(path) {
-                            node.line_count = count_lines(path);
-                        }
+    fn insert_path(&mut self, display_path: &Path, source_path: &Path) {
+        let components: Vec<_> = display_path.components().collect();
+        let last_idx = components.len().saturating_sub(1);
+        let mut node = self;
+
+        for (i, component) in components.iter().enumerate() {
+            let key = component.as_os_str().to_string_lossy().to_string();
+            node = node.children.entry(key).or_insert_with(TreeNode::new);
+
+            if i == last_idx {
+                node.source_path = Some(source_path.to_path_buf());
+                if let Ok(meta) = fs::metadata(source_path) {
+                    node.file_size = Some(meta.len());
+                    if !is_binary_file(source_path) {
+                        node.line_count = count_lines(source_path);
                     }
                 }
             }
         }
-        root
     }
 
     pub fn is_dir(&self) -> bool {
@@ -96,7 +115,7 @@ impl TreeNode {
     }
 }
 
-fn should_skip_path(path: &PathBuf) -> bool {
+fn should_skip_path(path: &Path) -> bool {
     for component in path.components() {
         let name = component.as_os_str().to_string_lossy();
         if name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
@@ -106,14 +125,14 @@ fn should_skip_path(path: &PathBuf) -> bool {
     is_binary_file(path)
 }
 
-fn is_binary_file(path: &PathBuf) -> bool {
+fn is_binary_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| BINARY_EXTENSIONS.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
 }
 
-fn count_lines(path: &PathBuf) -> Option<usize> {
+fn count_lines(path: &Path) -> Option<usize> {
     fs::read_to_string(path).ok().map(|c| c.lines().count())
 }
 
@@ -127,7 +146,7 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-fn print_symbols(db: Arc<AstDB>, path: &PathBuf) -> String {
+fn print_symbols(db: Arc<AstDB>, path: &Path) -> String {
     let cpath = path.to_string_lossy().to_string();
     let defs = crate::ast::ast_db::doc_defs(db.clone(), &cpath);
     let symbols: Vec<String> = defs
@@ -185,7 +204,8 @@ fn print_files_tree(
                 info.push_str(&format!(" {}L", lines));
             }
             if let Some(db) = ast_db.clone() {
-                info.push_str(&print_symbols(db, &path));
+                let symbol_path = node.source_path.as_deref().unwrap_or(&path);
+                info.push_str(&print_symbols(db, symbol_path));
             }
             return Some(format!("{}{}{}\n", indent, name, info));
         }
@@ -373,30 +393,27 @@ impl AtCommand for AtTree {
 
         let mut scope_notices = vec![];
         let (tree, is_root_query) = if scoped_enforced {
+            let scope = execution_scope.as_ref().unwrap();
             match args.iter().find(|x| x.text != "--ast") {
                 None => {
-                    let paths = list_execution_scope_root(
-                        gcx.clone(),
-                        execution_scope.as_ref().unwrap(),
+                    let paths = list_execution_scope_root(gcx.clone(), scope, true).await?;
+                    (
+                        TreeNode::build_relative(&paths, scope.effective_root()),
                         true,
                     )
-                    .await?;
-                    (TreeNode::build(&paths), true)
                 }
                 Some(arg) => {
                     let path = arg.text.clone();
                     if is_worktree_root_alias(&path) {
-                        let paths = list_execution_scope_root(
-                            gcx.clone(),
-                            execution_scope.as_ref().unwrap(),
+                        let paths = list_execution_scope_root(gcx.clone(), scope, true).await?;
+                        (
+                            TreeNode::build_relative(&paths, scope.effective_root()),
                             true,
                         )
-                        .await?;
-                        (TreeNode::build(&paths), true)
                     } else {
                         let resolved = resolve_existing_path_with_execution_scope(
                             gcx.clone(),
-                            execution_scope.as_ref(),
+                            Some(scope),
                             &path,
                         )
                         .await?
@@ -417,7 +434,7 @@ impl AtCommand for AtTree {
                             resolved.outside_absolute_path,
                         )
                         .await?;
-                        (TreeNode::build(&paths), false)
+                        (TreeNode::build_relative(&paths, &resolved.path), false)
                     }
                 }
             }
@@ -443,7 +460,7 @@ impl AtCommand for AtTree {
                         e
                     })?;
                     let start_dir = PathBuf::from(candidate);
-                    let paths = filtered_paths
+                    let paths: Vec<PathBuf> = filtered_paths
                         .iter()
                         .filter(|f| f.starts_with(&start_dir))
                         .cloned()
