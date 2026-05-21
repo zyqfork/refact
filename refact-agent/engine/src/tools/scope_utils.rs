@@ -766,6 +766,12 @@ mod worktree_scope_read_tools {
             .collect()
     }
 
+    /// Normalize a PathBuf to a forward-slash string for cross-platform test comparison.
+    /// On Windows, PathBuf::join produces backslash paths but tool results use forward slashes.
+    fn norm(p: std::path::PathBuf) -> String {
+        p.to_string_lossy().replace('\\', "/")
+    }
+
     fn cat_args(path: String) -> HashMap<String, Value> {
         HashMap::from_iter([("paths".to_string(), Value::String(path))])
     }
@@ -1034,17 +1040,13 @@ mod worktree_scope_read_tools {
         let names = context_file_names(&results);
         let text = tool_text(&results);
 
-        assert!(names.iter().any(|path| path
-            == &fixture
-                .root
-                .join("src/lib.rs")
-                .to_string_lossy()
-                .to_string()));
+        let expected = norm(fixture.root.join("src/lib.rs"));
+        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
         assert!(!names.iter().any(|path| path.contains("source_only.rs")));
         assert!(text.contains("worktree_version"), "{text}");
         assert!(!text.contains("source_version"), "{text}");
         assert!(
-            !text.contains(&fixture.source.to_string_lossy().to_string()),
+            !text.contains(&norm(fixture.source.clone())),
             "{text}"
         );
     }
@@ -1070,12 +1072,8 @@ mod worktree_scope_read_tools {
         let names = context_file_names(&results);
         let text = tool_text(&results);
 
-        assert!(names.iter().any(|path| path
-            == &fixture
-                .root
-                .join("src/worktree_only.rs")
-                .to_string_lossy()
-                .to_string()));
+        let expected = norm(fixture.root.join("src/worktree_only.rs"));
+        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
         assert!(text.contains("only_worktree"), "{text}");
         assert!(!text.contains("only_source"), "{text}");
     }
@@ -1130,17 +1128,13 @@ mod worktree_scope_read_tools {
         let names = context_file_names(&results);
         let text = tool_text(&results);
 
-        assert!(names.iter().any(|path| path
-            == &fixture
-                .root
-                .join("src/new_name.rs")
-                .to_string_lossy()
-                .to_string()));
+        let expected = norm(fixture.root.join("src/new_name.rs"));
+        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
         assert!(!names.iter().any(|path| path.contains("old_name.rs")));
         assert!(text.contains("new_name.rs"), "{text}");
         assert!(!text.contains("old_name.rs"), "{text}");
         assert!(
-            !text.contains(&fixture.source.to_string_lossy().to_string()),
+            !text.contains(&norm(fixture.source.clone())),
             "{text}"
         );
     }
@@ -1172,12 +1166,8 @@ mod worktree_scope_read_tools {
         let names = context_file_names(&results);
         let text = tool_text(&results);
 
-        assert!(names.iter().any(|path| path
-            == &fixture
-                .root
-                .join("src/lib.rs")
-                .to_string_lossy()
-                .to_string()));
+        let expected = norm(fixture.root.join("src/lib.rs"));
+        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
         assert!(!names.iter().any(|path| path.contains("source_only.rs")));
         assert!(!names.iter().any(|path| path.contains("deleted_stale.rs")));
         assert!(!names.iter().any(|path| path.contains("old_name.rs")));
@@ -1204,12 +1194,8 @@ mod worktree_scope_read_tools {
         let names = context_file_names(&results);
         let text = tool_text(&results);
 
-        assert!(names.iter().any(|path| path
-            == &fixture
-                .root
-                .join("src/worktree_only.rs")
-                .to_string_lossy()
-                .to_string()));
+        let expected = norm(fixture.root.join("src/worktree_only.rs"));
+        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
         assert!(
             text.contains("Direct worktree filesystem fallback"),
             "{text}"
@@ -1239,12 +1225,8 @@ mod worktree_scope_read_tools {
         let names = context_file_names(&results);
         let text = tool_text(&results);
 
-        assert!(names.iter().any(|path| path
-            == &fixture
-                .root
-                .join("src/new_name.rs")
-                .to_string_lossy()
-                .to_string()));
+        let expected = norm(fixture.root.join("src/new_name.rs"));
+        assert!(names.iter().any(|path| path == &expected), "expected {expected} in {names:?}");
         assert!(!names.iter().any(|path| path.contains("old_name.rs")));
         assert!(text.contains("new_name.rs"), "{text}");
         assert!(!text.contains("old_name.rs"), "{text}");
