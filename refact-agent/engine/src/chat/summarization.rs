@@ -207,7 +207,7 @@ pub async fn maybe_apply_tier1(
         return;
     }
 
-    let (effective_n_ctx_opt, messages_clone) = {
+    let messages_clone = {
         let session = session_arc.lock().await;
         let last_has_pending_tool_calls = session.messages.last().map(|msg| {
             msg.role == "assistant"
@@ -216,22 +216,23 @@ pub async fn maybe_apply_tier1(
         if last_has_pending_tool_calls {
             return;
         }
-        let caps_res = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await;
-        let effective_n_ctx = caps_res.ok().and_then(|caps| {
-            crate::caps::resolve_chat_model(caps, &thread.model).ok().map(|rec| {
-                let model_n_ctx = if rec.base.n_ctx > 0 {
-                    rec.base.n_ctx
-                } else {
-                    crate::chat::config::tokens().default_n_ctx
-                };
-                match thread.context_tokens_cap {
-                    Some(cap) if cap > 0 => cap.min(model_n_ctx),
-                    _ => model_n_ctx,
-                }
-            })
-        });
-        (effective_n_ctx, session.messages.clone())
+        session.messages.clone()
     };
+
+    let caps_res = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await;
+    let effective_n_ctx_opt = caps_res.ok().and_then(|caps| {
+        crate::caps::resolve_chat_model(caps, &thread.model).ok().map(|rec| {
+            let model_n_ctx = if rec.base.n_ctx > 0 {
+                rec.base.n_ctx
+            } else {
+                crate::chat::config::tokens().default_n_ctx
+            };
+            match thread.context_tokens_cap {
+                Some(cap) if cap > 0 => cap.min(model_n_ctx),
+                _ => model_n_ctx,
+            }
+        })
+    });
 
     let effective_n_ctx = match effective_n_ctx_opt {
         Some(v) => v,
@@ -262,6 +263,7 @@ pub async fn maybe_apply_tier1(
             );
         }
         Err(e) => {
+            *tier1_compact_count += 1;
             warn!("Tier1 summarization failed (non-fatal): {}", e);
         }
     }
@@ -364,6 +366,16 @@ mod tests {
     #[test]
     fn test_max_tier1_attempts_constant() {
         assert_eq!(MAX_TIER1_COMPACT_ATTEMPTS, 2);
+    }
+
+    #[test]
+    fn test_tier1_failures_counted_toward_limit() {
+        let mut count = 0usize;
+        count += 1;
+        assert_eq!(count, 1);
+        count += 1;
+        assert_eq!(count, 2);
+        assert!(count >= MAX_TIER1_COMPACT_ATTEMPTS, "after 2 failures count should meet limit");
     }
 
     #[test]

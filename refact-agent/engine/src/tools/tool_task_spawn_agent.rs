@@ -35,7 +35,7 @@ async fn get_task_id(
         .ok_or_else(|| "Missing 'task_id' (and chat is not bound to a task)".to_string())
 }
 
-async fn resolve_agent_model(
+pub(crate) async fn resolve_agent_model(
     gcx: Arc<GlobalContext>,
     task_default_model: Option<&str>,
     current_model: &str,

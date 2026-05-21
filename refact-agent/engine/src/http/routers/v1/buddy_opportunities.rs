@@ -1049,6 +1049,7 @@ async fn create_investigation_chat(
             buddy_chat_kind: "investigation".to_string(),
             workflow_id: None,
         }),
+        auto_compact_enabled: None,
     };
 
     crate::chat::trajectories::save_trajectory_snapshot(gcx, snapshot)

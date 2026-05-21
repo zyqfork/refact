@@ -4833,6 +4833,7 @@ async fn tool_buddy_launch_investigation_creates_chat() {
             buddy_chat_kind: "investigation".to_string(),
             workflow_id: None,
         }),
+        auto_compact_enabled: None,
     };
 
     let result = save_trajectory_snapshot(gcx, snapshot).await;

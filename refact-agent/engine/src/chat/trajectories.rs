@@ -811,6 +811,7 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
         previous_response_id: None,
         active_skill: None,
         buddy_meta: None,
+        auto_compact_enabled: None,
     };
 
     save_trajectory_snapshot(gcx, snapshot).await
@@ -856,6 +857,7 @@ pub async fn save_trajectory_as(
         active_skill: thread.active_skill.clone(),
         auto_enrichment_enabled: thread.auto_enrichment_enabled,
         buddy_meta: thread.buddy_meta.clone(),
+        auto_compact_enabled: thread.auto_compact_enabled,
     };
     if let Err(e) = save_trajectory_snapshot(gcx, snapshot).await {
         warn!("Failed to save trajectory: {}", e);
@@ -925,6 +927,9 @@ pub async fn save_trajectory_snapshot(
     }
     if let Some(ref buddy_meta) = snapshot.buddy_meta {
         trajectory["buddy_meta"] = serde_json::to_value(buddy_meta).unwrap_or_default();
+    }
+    if let Some(auto_compact) = snapshot.auto_compact_enabled {
+        trajectory["auto_compact_enabled"] = json!(auto_compact);
     }
     if let Some(ref worktree) = snapshot.worktree {
         trajectory["worktree"] = serde_json::to_value(worktree).unwrap_or_default();
@@ -3583,6 +3588,7 @@ mod tests {
             active_skill: None,
             auto_enrichment_enabled: None,
             buddy_meta: None,
+            auto_compact_enabled: None,
         };
 
         save_trajectory_snapshot(gcx.clone(), snapshot)
@@ -3653,6 +3659,7 @@ mod tests {
                 active_skill: None,
                 auto_enrichment_enabled: None,
                 buddy_meta: None,
+                auto_compact_enabled: None,
             }
         }
 

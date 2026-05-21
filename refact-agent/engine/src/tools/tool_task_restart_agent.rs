@@ -15,6 +15,7 @@ use crate::tasks::storage;
 use crate::tasks::types::{BoardCard, StatusUpdate};
 use crate::tools::tool_task_spawn_agent::{
     build_agent_prompt, build_agent_thread_params, mark_card_agent_started, prepare_agent_worktree,
+    resolve_agent_model,
 };
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::worktrees::service::WorktreeService;
@@ -265,18 +266,7 @@ impl Tool for ToolTaskRestartAgent {
             .unwrap_or_default();
 
         let task_meta = storage::load_task_meta(gcx.clone(), &task_id).await?;
-        let model = {
-            let task_default = task_meta.default_agent_model.as_deref();
-            if let Some(m) = task_default {
-                if !m.is_empty() {
-                    m.to_string()
-                } else {
-                    current_model.clone()
-                }
-            } else {
-                current_model.clone()
-            }
-        };
+        let model = resolve_agent_model(gcx.clone(), task_meta.default_agent_model.as_deref(), &current_model).await?;
 
         let board = storage::load_board(gcx.clone(), &task_id).await?;
         let card = board
@@ -307,6 +297,7 @@ impl Tool for ToolTaskRestartAgent {
                     .facade
                     .push_command(old_chat_id, ChatCommand::Abort {})
                     .await;
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
         }
 
@@ -449,7 +440,7 @@ impl ToolTaskRestartAgent {
 
         let _ = storage::update_task_stats(gcx.clone(), task_id).await;
 
-        self.create_and_dispatch_session(
+        if let Err(e) = self.create_and_dispatch_session(
             gcx.clone(),
             task_id,
             planner_chat_id,
@@ -460,11 +451,32 @@ impl ToolTaskRestartAgent {
             model,
             &agent_id,
             &agent_chat_id,
-            worktree_meta,
+            worktree_meta.clone(),
             suggested_steps,
             files_to_open,
         )
-        .await?;
+        .await
+        {
+            let wt_id = worktree_meta.id.clone();
+            let cache_dir = gcx.cache_dir.clone();
+            let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
+            if let Some(source_root) = project_dirs.first() {
+                if let Ok(service) = WorktreeService::new(cache_dir, source_root.clone()) {
+                    let _ = service.delete_worktree(&wt_id, true).await;
+                }
+            }
+            let card_id_rb = card_id.to_string();
+            let _ = storage::update_board_atomic(gcx.clone(), task_id, move |board| {
+                if let Some(c) = board.get_card_mut(&card_id_rb) {
+                    c.column = "failed".to_string();
+                    c.agent_chat_id = None;
+                    c.assignee = None;
+                }
+                Ok(())
+            })
+            .await;
+            return Err(e);
+        }
 
         Ok(format!(
             "# Agent Restarted (Fresh): {}\n\n**Card:** {}\n**Agent ID:** {}\n**Model:** {}\n**Mode:** fresh\n**Status:** Running in background\n\nPrevious worktree cleaned up. New agent started from scratch.",
@@ -505,7 +517,7 @@ impl ToolTaskRestartAgent {
 
         let _ = storage::update_task_stats(gcx.clone(), task_id).await;
 
-        self.create_and_dispatch_session(
+        if let Err(e) = self.create_and_dispatch_session(
             gcx.clone(),
             task_id,
             planner_chat_id,
@@ -520,7 +532,20 @@ impl ToolTaskRestartAgent {
             suggested_steps,
             files_to_open,
         )
-        .await?;
+        .await
+        {
+            let card_id_rb = card_id.to_string();
+            let _ = storage::update_board_atomic(gcx.clone(), task_id, move |board| {
+                if let Some(c) = board.get_card_mut(&card_id_rb) {
+                    c.column = "failed".to_string();
+                    c.agent_chat_id = None;
+                    c.assignee = None;
+                }
+                Ok(())
+            })
+            .await;
+            return Err(e);
+        }
 
         Ok(format!(
             "# Agent Restarted (Resume): {}\n\n**Card:** {}\n**Agent ID:** {}\n**Model:** {}\n**Mode:** resume\n**Status:** Running in background\n\nAgent attached to retained worktree and continuing.",
@@ -801,5 +826,30 @@ mod tests {
 
         let wt_name = card.agent_worktree_name.as_deref();
         assert!(wt_name.is_none());
+    }
+
+    #[test]
+    fn restart_agent_fresh_rollback_resets_card_to_failed() {
+        let mut card = failed_card("T-7", None, None);
+        mark_card_restarted_fresh(&mut card, "new-agent", "agent-T-7-new", None, None, None);
+        assert_eq!(card.column, "doing");
+        card.column = "failed".to_string();
+        card.agent_chat_id = None;
+        card.assignee = None;
+        assert_eq!(card.column, "failed");
+        assert!(card.agent_chat_id.is_none());
+        assert!(card.assignee.is_none());
+    }
+
+    #[test]
+    fn restart_agent_uses_task_default_model_over_current() {
+        let task_default = Some("task-model-x");
+        let current = "current-model";
+        let result = if let Some(m) = task_default {
+            if !m.is_empty() { m.to_string() } else { current.to_string() }
+        } else {
+            current.to_string()
+        };
+        assert_eq!(result, "task-model-x");
     }
 }

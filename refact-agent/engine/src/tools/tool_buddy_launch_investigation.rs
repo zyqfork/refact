@@ -168,6 +168,7 @@ impl Tool for ToolBuddyLaunchInvestigation {
                 buddy_chat_kind: "investigation".to_string(),
                 workflow_id: None,
             }),
+            auto_compact_enabled: None,
         };
 
         chat_facade

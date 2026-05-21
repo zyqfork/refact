@@ -34,6 +34,7 @@ pub struct TrajectorySnapshot {
     pub active_skill: Option<String>,
     pub auto_enrichment_enabled: Option<bool>,
     pub buddy_meta: Option<BuddyThreadMeta>,
+    pub auto_compact_enabled: Option<bool>,
 }
 
 impl TrajectorySnapshot {
@@ -76,6 +77,7 @@ impl TrajectorySnapshot {
             active_skill: thread.active_skill.clone(),
             auto_enrichment_enabled: thread.auto_enrichment_enabled,
             buddy_meta: thread.buddy_meta.clone(),
+            auto_compact_enabled: thread.auto_compact_enabled,
         }
     }
 }
