@@ -5,7 +5,8 @@ import React, {
   useCallback,
   useEffect,
 } from "react";
-import { ToolCall } from "../../../services/refact/types";
+import { formatToolDisplayName } from "../../../utils/toolNameAliases";
+import type { ToolCall } from "../../../services/refact/types";
 import { Portal } from "../../Portal";
 import styles from "./ToolCallTooltip.module.css";
 
@@ -67,7 +68,7 @@ export const ToolCallTooltip: React.FC<ToolCallTooltipProps> = ({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  const toolName = toolCall.function.name ?? "unknown";
+  const toolName = formatToolDisplayName(toolCall.function.name ?? "unknown");
   const entries = useMemo(
     () => (visible ? parseArgs(toolCall) : []),
     [toolCall, visible],

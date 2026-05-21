@@ -4,6 +4,7 @@ import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { Box, Flex, Text } from "@radix-ui/themes";
 import { Link } from "../Link";
 import { ToolCard } from "./ToolCard";
+import { normalizeToolName } from "../../utils/toolNameAliases";
 import styles from "./ToolCard/OpenAIResponsesTool.module.css";
 import scrollbarStyles from "../shared/scrollbar.module.css";
 
@@ -67,7 +68,10 @@ function groupServerBlocks(blocks: unknown[]): {
 
   for (let i = 0; i < typedBlocks.length; i++) {
     const block = typedBlocks[i];
-    if (isServerToolUse(block) && block.name === "web_search") {
+    if (
+      isServerToolUse(block) &&
+      normalizeToolName(block.name) === "web_search"
+    ) {
       const resultIdx = typedBlocks.findIndex(
         (b, j) =>
           j > i && isWebSearchToolResult(b) && b.tool_use_id === block.id,

@@ -9,17 +9,14 @@ import {
   selectIsStreaming,
   selectIsWaiting,
 } from "../../../features/Chat/Thread/selectors";
-import { ToolCall } from "../../../services/refact/types";
+import type { ToolCall } from "../../../services/refact/types";
 import { ShikiCodeBlock } from "../../Markdown";
 import { Markdown } from "../../Markdown";
+import { formatToolDisplayName } from "../../../utils/toolNameAliases";
 import styles from "./GenericTool.module.css";
 
 interface GenericToolProps {
   toolCall: ToolCall;
-}
-
-function formatToolName(name: string): string {
-  return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function formatArgs(argsStr: string): string {
@@ -82,7 +79,7 @@ export const GenericTool: React.FC<GenericToolProps> = ({ toolCall }) => {
   const argsPreview = formatArgs(toolCall.function.arguments);
 
   const summary = useMemo(() => {
-    const displayName = formatToolName(toolName);
+    const displayName = formatToolDisplayName(toolName);
     if (argsPreview) {
       return (
         <>

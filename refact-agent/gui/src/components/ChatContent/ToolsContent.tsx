@@ -34,6 +34,11 @@ import { DialogImage } from "../DialogImage";
 import { RootState } from "../../app/store";
 import { selectFeatures } from "../../features/Config/configSlice";
 import { isRawTextDocToolCall } from "../Tools/types";
+import {
+  normalizeToolCall,
+  normalizeToolName,
+  formatToolDisplayName,
+} from "../../utils/toolNameAliases";
 import { useCollapsibleStore } from "./useStoredOpen";
 import { ShikiCodeBlock } from "../Markdown/ShikiCodeBlock";
 import { Markdown } from "../Markdown";
@@ -72,39 +77,6 @@ import {
   OpenAIMcpListToolsTool,
   CompressReportTool,
 } from "./ToolCard";
-
-const CC_TOOL_RENAMES: Partial<Record<string, string>> = {
-  delegate: "subagent",
-  plan: "strategic_planning",
-  finish: "task_done",
-  ask: "ask_questions",
-  write: "create_textdoc",
-  patch: "update_textdoc",
-  patch_re: "update_textdoc_regex",
-  patch_ln: "update_textdoc_by_lines",
-  patch_at: "update_textdoc_anchored",
-  undo: "undo_textdoc",
-  review: "code_review",
-  research: "deep_research",
-  set_tasks: "tasks_set",
-  save_knowledge: "create_knowledge",
-  hist_search: "search_trajectories",
-  hist_get: "get_trajectory_context",
-  load_skill: "activate_skill",
-  unload_skill: "deactivate_skill",
-  ctx_probe: "compress_chat_probe",
-  ctx_apply: "compress_chat_apply",
-  switch_mode: "handoff_to_mode",
-};
-
-function normalizeToolName(name: string | undefined): string | undefined {
-  if (name === undefined) return undefined;
-  if (name.startsWith("t_")) {
-    const base = name.slice(2);
-    return CC_TOOL_RENAMES[base] ?? base;
-  }
-  return name;
-}
 
 function parseProgressEntry(entry: string): { step?: string; text: string } {
   const m = entry.match(/^(\d+\/\d+):\s*([\s\S]+)$/);
@@ -192,7 +164,7 @@ const ToolMessage: React.FC<{
   toolCall: ToolCall;
   onClose: () => void;
 }> = ({ toolCall, onClose }) => {
-  const name = toolCall.function.name ?? "";
+  const name = normalizeToolName(toolCall.function.name) ?? "";
   const maybeResult = useAppSelector((state) =>
     selectToolResultById(state, toolCall.id),
   );
@@ -234,7 +206,7 @@ const ToolUsageDisplay: React.FC<{
 }> = ({ functionName, amountOfCalls }) => {
   return (
     <>
-      {functionName}
+      {formatToolDisplayName(functionName)}
       {amountOfCalls > 1 ? ` (${amountOfCalls})` : ""}
     </>
   );
@@ -315,9 +287,10 @@ export const SingleModelToolContent: React.FC<{
       console.error("toolCall is null");
       return acc;
     }
-    if (!toolCall.function.name) return acc;
-    if (acc.includes(toolCall.function.name)) return acc;
-    return [...acc, toolCall.function.name];
+    const normalizedName = normalizeToolName(toolCall.function.name);
+    if (!normalizedName) return acc;
+    if (acc.includes(normalizedName)) return acc;
+    return [...acc, normalizedName];
   }, []);
 
   /*
@@ -328,7 +301,7 @@ export const SingleModelToolContent: React.FC<{
     return {
       functionName: toolName,
       amountOfCalls: toolCalls.filter(
-        (toolCall) => toolCall.function.name === toolName,
+        (toolCall) => normalizeToolName(toolCall.function.name) === toolName,
       ).length,
     };
   });
@@ -432,11 +405,8 @@ function processToolCalls(
 ) {
   if (toolCalls.length === 0) return processed;
   const [head, ...tail] = toolCalls;
-  const headName = normalizeToolName(head.function.name) ?? head.function.name;
-  const normalizedHead: ToolCall = {
-    ...head,
-    function: { ...head.function, name: headName },
-  };
+  const normalizedHead = normalizeToolCall(head);
+  const headName = normalizedHead.function.name;
   const result = toolResults.find((result) => result.tool_call_id === head.id);
   const contextFiles = head.id ? contextFilesByToolId[head.id] : undefined;
   const diffs = head.id ? diffsByToolId[head.id] : undefined;
@@ -446,7 +416,7 @@ function processToolCalls(
     const elem = (
       <ReadTool
         key={`read-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         contextFiles={contextFiles}
       />
     );
@@ -465,7 +435,7 @@ function processToolCalls(
     const elem = (
       <ListTool
         key={`list-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         contextFiles={contextFiles}
       />
     );
@@ -484,7 +454,7 @@ function processToolCalls(
     const elem = (
       <SearchTool
         key={`search-pattern-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="search_pattern"
         contextFiles={contextFiles}
       />
@@ -504,7 +474,7 @@ function processToolCalls(
     const elem = (
       <SearchTool
         key={`search-semantic-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="search_semantic"
         contextFiles={contextFiles}
       />
@@ -524,7 +494,7 @@ function processToolCalls(
     const elem = (
       <SearchTool
         key={`search-symbol-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="search_symbol_definition"
         contextFiles={contextFiles}
       />
@@ -542,7 +512,10 @@ function processToolCalls(
 
   if (headName === "shell") {
     const elem = (
-      <NewShellTool key={`shell-tool-${processed.length}`} toolCall={head} />
+      <NewShellTool
+        key={`shell-tool-${processed.length}`}
+        toolCall={normalizedHead}
+      />
     );
     return processToolCalls(
       tail,
@@ -559,7 +532,7 @@ function processToolCalls(
     const elem = (
       <NewShellServiceTool
         key={`shell-service-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -577,7 +550,7 @@ function processToolCalls(
     const elem = (
       <NewSubagentTool
         key={`subagent-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -595,7 +568,7 @@ function processToolCalls(
     const elem = (
       <PlanningTool
         key={`strategic-planning-tool-${head.id ?? processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -613,7 +586,7 @@ function processToolCalls(
     const elem = (
       <NewCodeReviewTool
         key={`code-review-tool-${head.id ?? processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -631,7 +604,7 @@ function processToolCalls(
     const elem = (
       <ResearchTool
         key={`deep-research-tool-${head.id ?? processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -649,7 +622,7 @@ function processToolCalls(
     const elem = (
       <KnowledgeTool
         key={`knowledge-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="knowledge"
         contextFiles={contextFiles}
       />
@@ -669,7 +642,7 @@ function processToolCalls(
     const elem = (
       <KnowledgeTool
         key={`trajectories-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="search_trajectories"
         contextFiles={contextFiles}
       />
@@ -689,7 +662,7 @@ function processToolCalls(
     const elem = (
       <KnowledgeTool
         key={`trajectory-context-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="trajectories"
         contextFiles={contextFiles}
       />
@@ -709,7 +682,7 @@ function processToolCalls(
     const elem = (
       <KnowledgeTool
         key={`create-knowledge-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="create_knowledge"
         contextFiles={contextFiles}
       />
@@ -741,7 +714,7 @@ function processToolCalls(
     const elem = (
       <WebTool
         key={`web-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="web"
         contextFiles={contextFiles}
       />
@@ -761,7 +734,7 @@ function processToolCalls(
     const elem = (
       <WebTool
         key={`web-search-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="web_search"
         contextFiles={contextFiles}
       />
@@ -780,7 +753,7 @@ function processToolCalls(
   if (isRawTextDocToolCall(normalizedHead)) {
     const elem = (
       <EditTool
-        key={`edit-tool-${head.function.name}-${processed.length}`}
+        key={`edit-tool-${headName}-${processed.length}`}
         toolCall={normalizedHead}
         diffs={diffs}
         isActiveTool={isActiveTool}
@@ -801,7 +774,7 @@ function processToolCalls(
     const elem = (
       <FileOpTool
         key={`mv-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="mv"
         isActiveTool={isActiveTool}
       />
@@ -821,7 +794,7 @@ function processToolCalls(
     const elem = (
       <FileOpTool
         key={`rm-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="rm"
         diffs={diffs}
         isActiveTool={isActiveTool}
@@ -842,7 +815,7 @@ function processToolCalls(
     const elem = (
       <FileOpTool
         key={`add-workspace-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType="add_workspace_folder"
         isActiveTool={isActiveTool}
       />
@@ -862,7 +835,7 @@ function processToolCalls(
     const elem = (
       <TasksTool
         key={`tasks-tool-${head.id ?? processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -880,7 +853,7 @@ function processToolCalls(
     const elem = (
       <TaskDoneTool
         key={`task-done-tool-${head.id ?? processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -898,7 +871,7 @@ function processToolCalls(
     const elem = (
       <AskQuestionsTool
         key={`ask-questions-tool-${processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
       />
     );
     return processToolCalls(
@@ -920,7 +893,7 @@ function processToolCalls(
         elem = (
           <OpenAIWebSearchCallTool
             key={`openai-web-search-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -928,7 +901,7 @@ function processToolCalls(
         elem = (
           <OpenAIFileSearchCallTool
             key={`openai-file-search-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -936,7 +909,7 @@ function processToolCalls(
         elem = (
           <OpenAICodeInterpreterCallTool
             key={`openai-code-interpreter-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -944,7 +917,7 @@ function processToolCalls(
         elem = (
           <OpenAIComputerCallTool
             key={`openai-computer-call-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -952,7 +925,7 @@ function processToolCalls(
         elem = (
           <OpenAIComputerCallOutputTool
             key={`openai-computer-output-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -960,7 +933,7 @@ function processToolCalls(
         elem = (
           <OpenAIImageGenerationCallTool
             key={`openai-image-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -968,7 +941,7 @@ function processToolCalls(
         elem = (
           <OpenAIAudioTool
             key={`openai-audio-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -976,7 +949,7 @@ function processToolCalls(
         elem = (
           <OpenAIRefusalTool
             key={`openai-refusal-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -984,7 +957,7 @@ function processToolCalls(
         elem = (
           <OpenAIMcpCallTool
             key={`openai-mcp-call-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -992,7 +965,7 @@ function processToolCalls(
         elem = (
           <OpenAIMcpListToolsTool
             key={`openai-mcp-list-tools-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
         break;
@@ -1000,7 +973,7 @@ function processToolCalls(
         elem = (
           <OpenAIResponsesTool
             key={`openai-responses-tool-${head.id ?? processed.length}`}
-            toolCall={head}
+            toolCall={normalizedHead}
           />
         );
     }
@@ -1023,7 +996,7 @@ function processToolCalls(
     const elem = (
       <CompressReportTool
         key={`compress-tool-${head.id ?? processed.length}`}
-        toolCall={head}
+        toolCall={normalizedHead}
         toolType={headName}
       />
     );
@@ -1040,7 +1013,10 @@ function processToolCalls(
 
   if (headName === "chrome") {
     const elem = (
-      <ChromeTool key={`chrome-tool-${processed.length}`} toolCall={head} />
+      <ChromeTool
+        key={`chrome-tool-${processed.length}`}
+        toolCall={normalizedHead}
+      />
     );
     return processToolCalls(
       tail,
@@ -1062,7 +1038,10 @@ function processToolCalls(
     });
 
     const nextTail = tail.slice(restInTail.length);
-    const multiModalToolCalls = [head, ...restInTail];
+    const multiModalToolCalls = [
+      normalizedHead,
+      ...restInTail.map(normalizeToolCall),
+    ];
     const ids = multiModalToolCalls.map((d) => d.id);
     const multiModalToolResults: MultiModalToolResult[] = toolResults
       .filter(isMultiModalToolResult)
@@ -1090,7 +1069,7 @@ function processToolCalls(
   const elem = (
     <GenericTool
       key={`generic-tool-${head.id ?? processed.length}`}
-      toolCall={head}
+      toolCall={normalizedHead}
     />
   );
   return processToolCalls(
@@ -1151,16 +1130,17 @@ const MultiModalToolContent: React.FC<{
   );
 
   const toolNames = toolCalls.reduce<string[]>((acc, toolCall) => {
-    if (!toolCall.function.name) return acc;
-    if (acc.includes(toolCall.function.name)) return acc;
-    return [...acc, toolCall.function.name];
+    const normalizedName = normalizeToolName(toolCall.function.name);
+    if (!normalizedName) return acc;
+    if (acc.includes(normalizedName)) return acc;
+    return [...acc, normalizedName];
   }, []);
 
   const toolUsageAmount = toolNames.map<ToolUsage>((toolName) => {
     return {
       functionName: toolName,
       amountOfCalls: toolCalls.filter(
-        (toolCall) => toolCall.function.name === toolName,
+        (toolCall) => normalizeToolName(toolCall.function.name) === toolName,
       ).length,
     };
   });
@@ -1205,7 +1185,7 @@ const MultiModalToolContent: React.FC<{
                 .map((result) => result.m_content)
                 .join("\n");
 
-              const name = toolCall.function.name ?? "";
+              const name = normalizeToolName(toolCall.function.name) ?? "";
               const argsString = toolCallArgsToString(
                 toolCall.function.arguments,
               );

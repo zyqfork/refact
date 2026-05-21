@@ -1,5 +1,6 @@
 import { RootState } from "../../../app/store";
 import { createSelector } from "@reduxjs/toolkit";
+import { isToolName } from "../../../utils/toolNameAliases";
 import {
   isAssistantMessage,
   isDiffMessage,
@@ -631,7 +632,7 @@ export function deriveTasksFromMessages(
 
     for (let j = msg.tool_calls.length - 1; j >= 0; j--) {
       const tc = msg.tool_calls[j];
-      if (tc.function.name !== "tasks_set" || !tc.id) continue;
+      if (!isToolName(tc.function.name, "tasks_set") || !tc.id) continue;
       if (!successfulToolIds.has(tc.id)) continue;
 
       const parsed = parseTasksFromArgs(tc.function.arguments);
@@ -681,7 +682,7 @@ export const selectTasksEverUsed = createSelector(
       if (!isAssistantMessage(msg) || !msg.tool_calls) continue;
       for (const tc of msg.tool_calls) {
         if (
-          tc.function.name === "tasks_set" &&
+          isToolName(tc.function.name, "tasks_set") &&
           tc.id &&
           successfulToolIds.has(tc.id)
         ) {

@@ -54,6 +54,7 @@ import { ChatLinks, UncommittedChangesWarning } from "../ChatLinks";
 import { PlaceHolderText } from "./PlaceHolderText";
 import { SkillActivatedCard } from "./SkillActivatedCard";
 import { SkillReportCard } from "./SkillReportCard";
+import { normalizeToolName, isToolName } from "../../utils/toolNameAliases";
 import { isSkillReportContent, parseSkillReport } from "./skillReportUtils";
 import { QueuedMessage } from "./QueuedMessage";
 import { selectSseStatusForChat } from "../../features/Connection";
@@ -696,7 +697,7 @@ function rebuildDisplayItemsFromStart(
 function assistantGroupingSignature(message: AssistantMessage): string {
   return (message.tool_calls ?? [])
     .map((toolCall) => {
-      const name = toolCall.function.name ?? "";
+      const name = normalizeToolName(toolCall.function.name) ?? "";
       const id = toolCall.id ?? "";
       return `${id}:${name}`;
     })
@@ -779,7 +780,9 @@ function buildDisplayItemsFromIndex(
       const toolCalls = "tool_calls" in head ? head.tool_calls ?? [] : [];
       const isOnlyActivateSkill =
         toolCalls.length > 0 &&
-        toolCalls.every((tc) => tc.function.name === "activate_skill") &&
+        toolCalls.every((tc) =>
+          isToolName(tc.function.name, "activate_skill"),
+        ) &&
         !("content" in head && head.content && String(head.content).trim());
       if (isOnlyActivateSkill) {
         continue;
@@ -794,7 +797,10 @@ function buildDisplayItemsFromIndex(
       const diffsByToolId: Partial<Record<string, DiffChunk[]>> = {};
 
       const eligibleToolCalls = toolCalls.filter(
-        (tc) => tc.id && tc.function.name && READ_TOOLS.has(tc.function.name),
+        (tc) =>
+          tc.id &&
+          tc.function.name &&
+          READ_TOOLS.has(normalizeToolName(tc.function.name) ?? ""),
       );
       const eligibleToolIds = new Set(
         eligibleToolCalls
@@ -807,7 +813,10 @@ function buildDisplayItemsFromIndex(
           : null;
 
       const editToolCalls = toolCalls.filter(
-        (tc) => tc.id && tc.function.name && EDIT_TOOLS.has(tc.function.name),
+        (tc) =>
+          tc.id &&
+          tc.function.name &&
+          EDIT_TOOLS.has(normalizeToolName(tc.function.name) ?? ""),
       );
       const editToolIds = new Set(
         editToolCalls
@@ -1129,7 +1138,9 @@ function buildDisplayItems(
       const toolCalls = "tool_calls" in head ? head.tool_calls ?? [] : [];
       const isOnlyActivateSkill =
         toolCalls.length > 0 &&
-        toolCalls.every((tc) => tc.function.name === "activate_skill") &&
+        toolCalls.every((tc) =>
+          isToolName(tc.function.name, "activate_skill"),
+        ) &&
         !("content" in head && head.content && String(head.content).trim());
       if (isOnlyActivateSkill) {
         continue;
@@ -1143,7 +1154,10 @@ function buildDisplayItems(
       const diffsByToolId: Record<string, DiffChunk[]> = {};
 
       const eligibleToolCalls = toolCalls.filter(
-        (tc) => tc.id && tc.function.name && READ_TOOLS.has(tc.function.name),
+        (tc) =>
+          tc.id &&
+          tc.function.name &&
+          READ_TOOLS.has(normalizeToolName(tc.function.name) ?? ""),
       );
       const eligibleToolIds = new Set(
         eligibleToolCalls
@@ -1156,7 +1170,10 @@ function buildDisplayItems(
           : null;
 
       const editToolCalls = toolCalls.filter(
-        (tc) => tc.id && tc.function.name && EDIT_TOOLS.has(tc.function.name),
+        (tc) =>
+          tc.id &&
+          tc.function.name &&
+          EDIT_TOOLS.has(normalizeToolName(tc.function.name) ?? ""),
       );
       const editToolIds = new Set(
         editToolCalls
@@ -1452,11 +1469,7 @@ function computeHiddenQaMessageIndices(messages: ChatMessages): Set<number> {
     const msg = messages[i];
     if (msg.role === "assistant" && "tool_calls" in msg && msg.tool_calls) {
       for (const tc of msg.tool_calls) {
-        if (
-          (tc.function.name === "ask_questions" ||
-            tc.function.name === "t_ask") &&
-          tc.id
-        ) {
+        if (isToolName(tc.function.name, "ask_questions") && tc.id) {
           askQuestionsToolIds.set(tc.id, i);
         }
       }

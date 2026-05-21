@@ -96,6 +96,50 @@ describe("AssistantInput", () => {
     expect(screen.getByTitle("HTML Preview")).toBeInTheDocument();
   });
 
+  test("renders Claude Code augmented tool aliases as their specialized tool cards", () => {
+    const aliasCalls: ToolCall[] = [
+      {
+        id: "alias-read",
+        index: 0,
+        function: {
+          name: "t_cat",
+          arguments: JSON.stringify({ paths: "src/main.rs" }),
+        },
+      },
+      {
+        id: "alias-grep",
+        index: 1,
+        function: {
+          name: "t_regex_search",
+          arguments: JSON.stringify({ pattern: "TODO", scope: "workspace" }),
+        },
+      },
+      {
+        id: "alias-plan",
+        index: 2,
+        function: {
+          name: "t_plan",
+          arguments: "{}",
+        },
+      },
+      {
+        id: "alias-web-search",
+        index: 3,
+        function: {
+          name: "WebSearch",
+          arguments: JSON.stringify({ query: "refact" }),
+        },
+      },
+    ];
+
+    render(<AssistantInput message="" serverExecutedTools={aliasCalls} />);
+
+    expect(screen.getByText(/Read/i)).toBeInTheDocument();
+    expect(screen.getByText("TODO")).toBeInTheDocument();
+    expect(screen.getByText(/Plan solution/i)).toBeInTheDocument();
+    expect(screen.getByText(/Search web/i)).toBeInTheDocument();
+  });
+
   test("passes diffsByToolId through to serverExecutedTools so diff blocks are not repeated outside the tool card", () => {
     const toolCall: ToolCall = {
       id: "call-1",

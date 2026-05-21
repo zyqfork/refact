@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { render } from "../../utils/test-utils";
 import { VirtualizedChatList } from "./VirtualizedChatList";
@@ -10,9 +10,7 @@ type VirtuosoCall = {
   skipAnimationFrameInResizeObserver?: boolean;
 };
 
-type ResizeObserverCallback = ConstructorParameters<typeof ResizeObserver>[0];
-
-type ResizeObserverInstance = {
+type ResizeObserverMockInstance = {
   callback: ResizeObserverCallback;
   disconnect: () => void;
 };
@@ -97,10 +95,10 @@ describe("VirtualizedChatList", () => {
     expect(call?.skipAnimationFrameInResizeObserver).toBe(true);
   });
 
-  test("waits for a non-zero wrapper height before mounting Virtuoso", async () => {
+  test("waits for a non-zero wrapper height before mounting Virtuoso", () => {
     setElementHeight(0);
     const previousResizeObserver = globalThis.ResizeObserver;
-    const resizeObservers: ResizeObserverInstance[] = [];
+    const resizeObservers: ResizeObserverMockInstance[] = [];
     const ResizeObserverMock = vi.fn((callback: ResizeObserverCallback) => {
       const instance = {
         callback,
@@ -131,9 +129,8 @@ describe("VirtualizedChatList", () => {
     ).not.toBeInTheDocument();
 
     setElementHeight(400);
-    await act(async () => {
-      resizeObservers[0]?.callback([], resizeObservers[0] as ResizeObserver);
-    });
+    const observer = resizeObservers[0];
+    observer.callback([], {} as ResizeObserver);
 
     expect(screen.getByTestId("chat-virtuoso-scroller")).toBeInTheDocument();
     unmount();
@@ -152,7 +149,9 @@ describe("VirtualizedChatList", () => {
       </div>,
     );
 
-    expect(screen.getAllByTestId("chat-virtuoso-item")).toHaveLength(items.length);
+    expect(screen.getAllByTestId("chat-virtuoso-item")).toHaveLength(
+      items.length,
+    );
   });
 
   test("re-arms auto-follow when keyboard users scroll back down", async () => {
