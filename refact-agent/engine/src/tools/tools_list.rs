@@ -422,6 +422,9 @@ async fn get_builtin_tools(gcx: Arc<GlobalContext>) -> Vec<ToolGroup> {
         Box::new(crate::tools::tool_task_mark_card::ToolTaskMarkCardFailed::new()),
         Box::new(crate::tools::tool_task_merge_agent::ToolTaskMergeAgent::new()),
         Box::new(crate::tools::tool_task_restart_agent::ToolTaskRestartAgent::new()),
+        Box::new(crate::tools::tool_swarm_investigate::ToolSwarmInvestigate {
+            config_path: config_path.clone(),
+        }),
         Box::new(crate::tools::tool_task_documents::ToolDocList::new()),
         Box::new(crate::tools::tool_task_documents::ToolDocGet::new()),
         Box::new(crate::tools::tool_task_documents::ToolDocCreate::new()),
