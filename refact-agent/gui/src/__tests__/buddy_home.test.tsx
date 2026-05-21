@@ -2081,7 +2081,7 @@ describe("BuddySettingsPanel_local_state_save", () => {
 });
 
 describe("BuddyDraftPreview_renders_draft_metadata", () => {
-  it("shows title and explanation from draft", () => {
+  it("shows title and explanation from draft without DOM nesting warnings", () => {
     const draft: BuddyDraft = {
       id: "draft-test",
       kind: "skill",
@@ -2091,15 +2091,27 @@ describe("BuddyDraftPreview_renders_draft_metadata", () => {
       created_at: "2024-01-01T00:00:00Z",
       expires_at: "2099-12-31T00:00:00Z",
     };
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
-    render(<BuddyDraftPreview draft={draft} />, {
-      preloadedState: CONFIG_STATE,
-    });
+    try {
+      render(<BuddyDraftPreview draft={draft} />, {
+        preloadedState: CONFIG_STATE,
+      });
 
-    expect(screen.getByText(/My Test Draft Title/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/This is the explanation text/),
-    ).toBeInTheDocument();
+      expect(screen.getByText(/My Test Draft Title/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/This is the explanation text/),
+      ).toBeInTheDocument();
+      expect(
+        consoleError.mock.calls.some((call) =>
+          call.some((arg) => String(arg).includes("validateDOMNesting")),
+        ),
+      ).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
 

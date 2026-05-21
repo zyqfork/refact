@@ -2,6 +2,7 @@ import React from "react";
 import { Text, Tooltip } from "@radix-ui/themes";
 import classNames from "classnames";
 import type { BuddyRuntimeEvent } from "./types";
+import { formatBuddyTime } from "./buddyUtils";
 import styles from "./BuddyHome.module.css";
 
 export type RecentBuddyError = BuddyRuntimeEvent & {
@@ -10,14 +11,6 @@ export type RecentBuddyError = BuddyRuntimeEvent & {
   dismissedAll?: boolean;
   relatedIds?: string[];
 };
-
-function formatTime(ts: string): string {
-  if (!ts) return "";
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 interface BuddyRecentErrorsPanelProps {
   recentErrors: RecentBuddyError[];
@@ -103,7 +96,9 @@ export const BuddyRecentErrorsPanel: React.FC<BuddyRecentErrorsPanelProps> = ({
                 </Tooltip>
               )}
             </div>
-            <span className={styles.listMeta}>{formatTime(e.created_at)}</span>
+            <span className={styles.listMeta}>
+              {formatBuddyTime(e.created_at)}
+            </span>
           </div>
         );
       })}

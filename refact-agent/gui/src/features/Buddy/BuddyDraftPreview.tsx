@@ -18,14 +18,14 @@ export const BuddyDraftPreview: React.FC<Props> = ({ draft }) => {
       <Callout.Icon>
         <InfoCircledIcon />
       </Callout.Icon>
-      <Callout.Text>
+      <Text as="div">
         <Flex direction="column" gap="1">
           <Text size="2" weight="bold">
             {titlePrefix}: {draft.title}
           </Text>
           {draft.explanation && <Text size="1">{draft.explanation}</Text>}
         </Flex>
-      </Callout.Text>
+      </Text>
     </Callout.Root>
   );
 };

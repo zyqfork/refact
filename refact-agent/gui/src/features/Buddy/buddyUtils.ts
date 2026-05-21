@@ -5,6 +5,16 @@ export function computeXpFill(xp: number, xpNext: number): number {
   return Math.min(100, Math.max(0, (xp / xpNext) * 100));
 }
 
+export function formatBuddyTime(ts: string | null | undefined): string {
+  if (!ts) return "";
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /**
  * Format a large integer count (tokens, messages, …) using compact unit
  * suffixes (k, M, B, T). Picks the largest unit that keeps the value
@@ -15,7 +25,7 @@ export function formatCompactNumber(value: number): string {
   if (!Number.isFinite(value)) return "0";
   const abs = Math.abs(value);
   const sign = value < 0 ? "-" : "";
-  if (abs < 1000) return `${sign}${abs}`;
+  if (abs < 1000) return Math.trunc(value).toString();
   const units: { threshold: number; suffix: string }[] = [
     { threshold: 1e12, suffix: "T" },
     { threshold: 1e9, suffix: "B" },

@@ -2,17 +2,10 @@ import React from "react";
 import { SegmentedControl, Text, Tooltip } from "@radix-ui/themes";
 import classNames from "classnames";
 import type { BuddyActivityEntry } from "./types";
+import { formatBuddyTime } from "./buddyUtils";
 import styles from "./BuddyHome.module.css";
 
 type ActivityFilter = "all" | "refact_" | "buddy_";
-
-function formatTime(ts: string): string {
-  if (!ts) return "";
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 interface BuddyActivityPanelProps {
   activities: BuddyActivityEntry[];
@@ -74,25 +67,31 @@ export const BuddyActivityPanel: React.FC<BuddyActivityPanelProps> = ({
               <div
                 className={styles.listRow}
                 data-clickable={canOpen ? "true" : undefined}
-                tabIndex={0}
-                role={canOpen ? "button" : "listitem"}
-                aria-label={canOpen ? `${tooltip}. Open Buddy chat` : tooltip}
-                onClick={() => {
-                  if (a.chat_id) onOpenChat?.(a.chat_id, a.title);
-                }}
-                onKeyDown={(event) => {
-                  if (!a.chat_id || !onOpenChat) return;
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  onOpenChat(a.chat_id, a.title);
-                }}
+                {...(canOpen
+                  ? {
+                      tabIndex: 0,
+                      role: "button",
+                      "aria-label": `${tooltip}. Open Buddy chat`,
+                      onClick: () => {
+                        if (a.chat_id) onOpenChat?.(a.chat_id, a.title);
+                      },
+                      onKeyDown: (
+                        event: React.KeyboardEvent<HTMLDivElement>,
+                      ) => {
+                        if (!a.chat_id || !onOpenChat) return;
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        onOpenChat(a.chat_id, a.title);
+                      },
+                    }
+                  : {})}
               >
                 <span className={styles.listIcon}>{a.icon}</span>
                 <div className={styles.listContent}>
                   <span className={styles.listTitle}>{a.title}</span>
                 </div>
                 <span className={styles.listMeta}>
-                  {formatTime(a.timestamp)}
+                  {formatBuddyTime(a.timestamp)}
                 </span>
               </div>
             </Tooltip>
