@@ -27,6 +27,7 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
   const liveSettings = useAppSelector(selectBuddySettings);
   const [updateSettings, { isLoading }] = useUpdateBuddySettingsMutation();
   const [cached, setCached] = useState<BuddySettings | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (liveSettings && cached === null) {
@@ -55,8 +56,13 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
 
   const handleSave = async () => {
     if (!cached) return;
-    await updateSettings(cached);
-    if (onClose) onClose();
+    setSaveError(null);
+    try {
+      await updateSettings(cached).unwrap();
+      if (onClose) onClose();
+    } catch {
+      setSaveError("Failed to save Buddy settings. Please try again.");
+    }
   };
 
   const handleCancel = () => {
@@ -161,6 +167,12 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
           ))}
         </div>
       </div>
+
+      {saveError ? (
+        <Text size="1" color="red" role="alert">
+          {saveError}
+        </Text>
+      ) : null}
 
       <div className={styles.footer}>
         <Button size="1" variant="ghost" onClick={handleCancel}>

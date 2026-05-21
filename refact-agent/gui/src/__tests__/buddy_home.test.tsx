@@ -2078,6 +2078,88 @@ describe("BuddySettingsPanel_local_state_save", () => {
     const storeSettings = store.getState().buddy.snapshot?.settings;
     expect(storeSettings?.quiet_mode).toBe(currentChecked);
   });
+
+  it("successful save calls onClose", async () => {
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/settings", () =>
+        HttpResponse.json(makeSnapshot().settings),
+      ),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot()));
+    const onClose = vi.fn();
+
+    const { user } = render(<BuddySettingsPanel onClose={onClose} />, {
+      preloadedState: { ...CONFIG_STATE, buddy: store.getState().buddy },
+    });
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("failed save keeps panel open, preserves edits, and shows an alert", async () => {
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/settings", () =>
+        HttpResponse.json({ error: "nope" }, { status: 500 }),
+      ),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot()));
+    const onClose = vi.fn();
+
+    const { user } = render(<BuddySettingsPanel onClose={onClose} />, {
+      preloadedState: { ...CONFIG_STATE, buddy: store.getState().buddy },
+    });
+
+    const quietSwitch = screen.getByRole("switch", { name: /quiet mode/i });
+    await user.click(quietSwitch);
+    expect(quietSwitch).toHaveAttribute("data-state", "checked");
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /failed to save buddy settings/i,
+    );
+    expect(screen.getByTestId("buddy-settings-panel")).toBeInTheDocument();
+    expect(quietSwitch).toHaveAttribute("data-state", "checked");
+  });
+
+  it("retry success clears save error and closes", async () => {
+    let attempts = 0;
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/settings", () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return HttpResponse.json({ error: "nope" }, { status: 500 });
+        }
+        return HttpResponse.json(makeSnapshot().settings);
+      }),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot()));
+    const onClose = vi.fn();
+
+    const { user } = render(<BuddySettingsPanel onClose={onClose} />, {
+      preloadedState: { ...CONFIG_STATE, buddy: store.getState().buddy },
+    });
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });
 
 describe("BuddyDraftPreview_renders_draft_metadata", () => {
