@@ -760,16 +760,20 @@ mod worktree_scope_read_tools {
         results
             .iter()
             .filter_map(|item| match item {
-                ContextEnum::ContextFile(file) => Some(file.file_name.clone()),
+                ContextEnum::ContextFile(file) => Some(norm_str(&file.file_name)),
                 _ => None,
             })
             .collect()
     }
 
-    /// Normalize a PathBuf to a forward-slash string for cross-platform test comparison.
-    /// On Windows, PathBuf::join produces backslash paths but tool results use forward slashes.
+    /// Normalize a path string to forward slashes for cross-platform test comparison.
+    /// On Windows, tool results may use backslashes; PathBuf::join also produces backslashes.
+    fn norm_str(s: &str) -> String {
+        s.replace('\\', "/")
+    }
+
     fn norm(p: std::path::PathBuf) -> String {
-        p.to_string_lossy().replace('\\', "/")
+        norm_str(&p.to_string_lossy())
     }
 
     fn cat_args(path: String) -> HashMap<String, Value> {
@@ -880,7 +884,7 @@ mod worktree_scope_read_tools {
                 .to_string()
         );
         assert!(
-            !text.contains(&fixture.source.to_string_lossy().to_string()),
+            !norm_str(&text).contains(&norm(fixture.source.clone())),
             "{text}"
         );
         assert!(!text.contains("sibling"), "{text}");
@@ -1101,7 +1105,7 @@ mod worktree_scope_read_tools {
 
             assert!(err.contains("No matches found"), "{err}");
             assert!(
-                !err.contains(&fixture.source.to_string_lossy().to_string()),
+                !norm_str(&err).contains(&norm(fixture.source.clone())),
                 "{err}"
             );
         }
