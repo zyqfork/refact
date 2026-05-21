@@ -94,7 +94,7 @@ impl PreparedWorktree {
         self.meta.clone()
     }
 
-    async fn cleanup(&self, gcx: Arc<GlobalContext>) {
+    pub(crate) async fn cleanup(&self, gcx: Arc<GlobalContext>) {
         let cache_dir = gcx.cache_dir.clone();
         if let Ok(service) =
             WorktreeService::new(cache_dir, self.meta.source_workspace_root.clone())
@@ -288,6 +288,20 @@ pub(crate) fn mark_card_agent_started(
         timestamp: Utc::now().to_rfc3339(),
         message: "Agent started working on card".to_string(),
     });
+}
+
+pub(crate) fn restore_original_card_if_current_agent(
+    board: &mut crate::tasks::types::TaskBoard,
+    original_card: &BoardCard,
+    guard_chat_id: &str,
+) -> bool {
+    if let Some(card) = board.get_card_mut(&original_card.id) {
+        if card.agent_chat_id.as_deref() == Some(guard_chat_id) {
+            *card = original_card.clone();
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn build_agent_thread_params(
@@ -684,30 +698,29 @@ impl Tool for ToolTaskSpawnAgent {
         async fn rollback(
             gcx: Arc<GlobalContext>,
             task_id: &str,
-            original_card: crate::tasks::types::BoardCard,
-            guard_chat_id: String,
+            original_card: &crate::tasks::types::BoardCard,
+            guard_chat_id: &str,
             prepared_worktree: &PreparedWorktree,
         ) {
-            let card_id_rb = original_card.id.clone();
+            let original_card = original_card.clone();
+            let guard_chat_id = guard_chat_id.to_string();
             let cleanup_gcx = gcx.clone();
+            let stats_gcx = gcx.clone();
             let _ = storage::update_board_atomic(gcx, task_id, move |board| {
-                if let Some(card) = board.get_card_mut(&card_id_rb) {
-                    if card.agent_chat_id.as_deref() == Some(&guard_chat_id) {
-                        *card = original_card.clone();
-                    }
-                }
+                restore_original_card_if_current_agent(board, &original_card, &guard_chat_id);
                 Ok(Some(()))
             })
             .await;
             prepared_worktree.cleanup(cleanup_gcx).await;
+            let _ = storage::update_task_stats(stats_gcx, task_id).await;
         }
 
         if let Err(e) = storage::update_task_stats(gcx.clone(), &task_id).await {
             rollback(
                 gcx.clone(),
                 &task_id,
-                original_card,
-                agent_chat_id.clone(),
+                &original_card,
+                &agent_chat_id,
                 &prepared_worktree,
             )
             .await;
@@ -720,8 +733,8 @@ impl Tool for ToolTaskSpawnAgent {
                 rollback(
                     gcx.clone(),
                     &task_id,
-                    original_card,
-                    agent_chat_id.clone(),
+                    &original_card,
+                    &agent_chat_id,
                     &prepared_worktree,
                 )
                 .await;
@@ -746,8 +759,8 @@ impl Tool for ToolTaskSpawnAgent {
             rollback(
                 gcx.clone(),
                 &task_id,
-                original_card,
-                agent_chat_id.clone(),
+                &original_card,
+                &agent_chat_id,
                 &prepared_worktree,
             )
             .await;
@@ -802,19 +815,33 @@ impl Tool for ToolTaskSpawnAgent {
             });
         }
 
-        app.chat
-            .facade
-            .create_session(CreateSessionRequest {
-                chat_id: agent_chat_id.clone(),
-                thread,
-                messages,
-            })
-            .await?;
-        app.chat.facade.maybe_save_session(&agent_chat_id).await?;
-        app.chat
-            .facade
-            .push_command(&agent_chat_id, ChatCommand::Regenerate {})
-            .await?;
+        let session_result = async {
+            app.chat
+                .facade
+                .create_session(CreateSessionRequest {
+                    chat_id: agent_chat_id.clone(),
+                    thread,
+                    messages,
+                })
+                .await?;
+            app.chat.facade.maybe_save_session(&agent_chat_id).await?;
+            app.chat
+                .facade
+                .push_command(&agent_chat_id, ChatCommand::Regenerate {})
+                .await
+        }
+        .await;
+        if let Err(e) = session_result {
+            rollback(
+                gcx.clone(),
+                &task_id,
+                &original_card,
+                &agent_chat_id,
+                &prepared_worktree,
+            )
+            .await;
+            return Err(e);
+        }
 
         tracing::info!(
             "Spawned agent {} for card {}: {} (model: {})",
@@ -1257,6 +1284,55 @@ mod tests {
         assert_eq!(thread.root_chat_id.as_deref(), Some("planner-task-1-1"));
         assert_eq!(thread.worktree.as_ref(), Some(&worktree));
         assert!(thread.worktree.as_ref().unwrap().enforce);
+    }
+
+    #[test]
+    fn task_spawn_agent_rollback_restore_original_card_after_session_failure() {
+        let mut board = TaskBoard::default();
+        let original = test_card("T-1", "planned", None);
+        let mut spawned = original.clone();
+        mark_card_agent_started(
+            &mut spawned,
+            "agent-1",
+            "agent-chat-1",
+            Some("branch-new".to_string()),
+            Some("/tmp/new-worktree".to_string()),
+            Some("wt-new".to_string()),
+        );
+        board.cards.push(spawned);
+
+        assert!(restore_original_card_if_current_agent(
+            &mut board,
+            &original,
+            "agent-chat-1"
+        ));
+
+        let card = board.get_card("T-1").unwrap();
+        assert_eq!(card.column, "planned");
+        assert!(card.assignee.is_none());
+        assert!(card.agent_chat_id.is_none());
+        assert!(card.agent_worktree.is_none());
+        assert!(card.agent_branch.is_none());
+    }
+
+    #[test]
+    fn task_spawn_agent_rollback_guard_skips_different_agent() {
+        let mut board = TaskBoard::default();
+        let original = test_card("T-1", "planned", None);
+        let mut spawned = original.clone();
+        mark_card_agent_started(&mut spawned, "agent-2", "agent-chat-2", None, None, None);
+        board.cards.push(spawned.clone());
+
+        assert!(!restore_original_card_if_current_agent(
+            &mut board,
+            &original,
+            "agent-chat-1"
+        ));
+
+        let card = board.get_card("T-1").unwrap();
+        assert_eq!(card.agent_chat_id, spawned.agent_chat_id);
+        assert_eq!(card.assignee, spawned.assignee);
+        assert_eq!(card.column, "doing");
     }
 
     #[test]

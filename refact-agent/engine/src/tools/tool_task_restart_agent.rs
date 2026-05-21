@@ -15,13 +15,14 @@ use crate::tasks::storage;
 use crate::tasks::types::{BoardCard, StatusUpdate};
 use crate::tools::tool_task_spawn_agent::{
     build_agent_prompt, build_agent_thread_params, mark_card_agent_started, prepare_agent_worktree,
-    resolve_agent_model,
+    resolve_agent_model, restore_original_card_if_current_agent,
 };
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::worktrees::service::WorktreeService;
 use crate::worktrees::types::WorktreeMeta;
 use refact_chat_api::ChatCommand;
 use refact_runtime_api::CreateSessionRequest;
+use std::sync::atomic::Ordering;
 
 async fn cleanup_old_worktree(
     gcx: Arc<GlobalContext>,
@@ -55,6 +56,68 @@ async fn cleanup_old_worktree(
                 .current_dir(workspace_root)
                 .output();
         }
+    }
+}
+
+async fn restore_card_after_restart_failure(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    original_card: BoardCard,
+    guard_chat_id: String,
+) {
+    let stats_gcx = gcx.clone();
+    let _ = storage::update_board_atomic(gcx, task_id, move |board| {
+        restore_original_card_if_current_agent(board, &original_card, &guard_chat_id);
+        Ok(())
+    })
+    .await;
+    let _ = storage::update_task_stats(stats_gcx, task_id).await;
+}
+
+async fn wait_for_agent_abort(
+    gcx: Arc<GlobalContext>,
+    old_chat_id: &str,
+) -> Result<(), String> {
+    let session_arc = {
+        let sessions = gcx.chat_sessions.read().await;
+        sessions.get(old_chat_id).cloned()
+    };
+    let Some(session_arc) = session_arc else {
+        return Ok(());
+    };
+    let processor_running = {
+        let mut session = session_arc.lock().await;
+        session.abort_stream();
+        session.close_event_channel();
+        session.queue_notify.notify_waiters();
+        session.queue_processor_running.clone()
+    };
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let state = {
+            let session = session_arc.lock().await;
+            session.runtime.state
+        };
+        let state_stopped = !matches!(
+            state,
+            refact_runtime_api::SessionState::Generating
+                | refact_runtime_api::SessionState::ExecutingTools
+                | refact_runtime_api::SessionState::Paused
+                | refact_runtime_api::SessionState::WaitingIde
+                | refact_runtime_api::SessionState::WaitingUserInput
+        );
+        if state_stopped && !processor_running.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "Timed out waiting for old agent {} to stop after abort",
+                old_chat_id
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
 
@@ -291,13 +354,7 @@ impl Tool for ToolTaskRestartAgent {
 
         if force {
             if let Some(old_chat_id) = card.agent_chat_id.as_deref() {
-                let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
-                let _ = app
-                    .chat
-                    .facade
-                    .push_command(old_chat_id, ChatCommand::Abort {})
-                    .await;
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                wait_for_agent_abort(gcx.clone(), old_chat_id).await?;
             }
         }
 
@@ -376,13 +433,7 @@ impl ToolTaskRestartAgent {
         files_to_open: Vec<String>,
         card: &BoardCard,
     ) -> Result<String, String> {
-        cleanup_old_worktree(
-            gcx.clone(),
-            card.agent_worktree_name.as_deref(),
-            card.agent_worktree.as_deref(),
-            card.agent_branch.as_deref(),
-        )
-        .await;
+        let original_card = card.clone();
 
         let agent_id = Uuid::new_v4().to_string();
         let agent_chat_id = format!("agent-{}-{}", card_id, &agent_id[..8]);
@@ -427,14 +478,7 @@ impl ToolTaskRestartAgent {
         .await;
 
         if let Err(e) = board_update_result {
-            let wt_id = worktree_meta.id.clone();
-            let cache_dir = gcx.cache_dir.clone();
-            let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
-            if let Some(source_root) = project_dirs.first() {
-                if let Ok(service) = WorktreeService::new(cache_dir, source_root.clone()) {
-                    let _ = service.delete_worktree(&wt_id, true).await;
-                }
-            }
+            prepared_worktree.cleanup(gcx.clone()).await;
             return Err(e);
         }
 
@@ -457,26 +501,24 @@ impl ToolTaskRestartAgent {
         )
         .await
         {
-            let wt_id = worktree_meta.id.clone();
-            let cache_dir = gcx.cache_dir.clone();
-            let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
-            if let Some(source_root) = project_dirs.first() {
-                if let Ok(service) = WorktreeService::new(cache_dir, source_root.clone()) {
-                    let _ = service.delete_worktree(&wt_id, true).await;
-                }
-            }
-            let card_id_rb = card_id.to_string();
-            let _ = storage::update_board_atomic(gcx.clone(), task_id, move |board| {
-                if let Some(c) = board.get_card_mut(&card_id_rb) {
-                    c.column = "failed".to_string();
-                    c.agent_chat_id = None;
-                    c.assignee = None;
-                }
-                Ok(())
-            })
+            prepared_worktree.cleanup(gcx.clone()).await;
+            restore_card_after_restart_failure(
+                gcx.clone(),
+                task_id,
+                original_card,
+                agent_chat_id.clone(),
+            )
             .await;
             return Err(e);
         }
+
+        cleanup_old_worktree(
+            gcx.clone(),
+            original_card.agent_worktree_name.as_deref(),
+            original_card.agent_worktree.as_deref(),
+            original_card.agent_branch.as_deref(),
+        )
+        .await;
 
         Ok(format!(
             "# Agent Restarted (Fresh): {}\n\n**Card:** {}\n**Agent ID:** {}\n**Model:** {}\n**Mode:** fresh\n**Status:** Running in background\n\nPrevious worktree cleaned up. New agent started from scratch.",
@@ -498,6 +540,7 @@ impl ToolTaskRestartAgent {
         files_to_open: Vec<String>,
         card: &BoardCard,
     ) -> Result<String, String> {
+        let original_card = card.clone();
         let worktree_meta = get_worktree_meta_for_resume(gcx.clone(), card).await?;
 
         let agent_id = Uuid::new_v4().to_string();
@@ -534,15 +577,12 @@ impl ToolTaskRestartAgent {
         )
         .await
         {
-            let card_id_rb = card_id.to_string();
-            let _ = storage::update_board_atomic(gcx.clone(), task_id, move |board| {
-                if let Some(c) = board.get_card_mut(&card_id_rb) {
-                    c.column = "failed".to_string();
-                    c.agent_chat_id = None;
-                    c.assignee = None;
-                }
-                Ok(())
-            })
+            restore_card_after_restart_failure(
+                gcx.clone(),
+                task_id,
+                original_card,
+                agent_chat_id.clone(),
+            )
             .await;
             return Err(e);
         }
@@ -830,15 +870,53 @@ mod tests {
 
     #[test]
     fn restart_agent_fresh_rollback_resets_card_to_failed() {
-        let mut card = failed_card("T-7", None, None);
-        mark_card_restarted_fresh(&mut card, "new-agent", "agent-T-7-new", None, None, None);
+        let original = failed_card("T-7", Some("/tmp/old-wt".to_string()), Some("old-branch".to_string()));
+        let mut board = TaskBoard::default();
+        let mut restarted = original.clone();
+        mark_card_restarted_fresh(
+            &mut restarted,
+            "new-agent",
+            "agent-T-7-new",
+            Some("new-branch".to_string()),
+            Some("/tmp/new-wt".to_string()),
+            Some("new-wt".to_string()),
+        );
+        board.cards.push(restarted);
+
+        assert!(restore_original_card_if_current_agent(
+            &mut board,
+            &original,
+            "agent-T-7-new"
+        ));
+
+        let card = board.get_card("T-7").unwrap();
+        assert_eq!(card.column, original.column);
+        assert_eq!(card.agent_chat_id, original.agent_chat_id);
+        assert_eq!(card.assignee, original.assignee);
+        assert_eq!(card.agent_worktree, original.agent_worktree);
+        assert_eq!(card.agent_branch, original.agent_branch);
+        assert_eq!(card.final_report, original.final_report);
+        assert_eq!(card.completed_at, original.completed_at);
+    }
+
+    #[test]
+    fn restart_agent_rollback_guard_keeps_newer_agent() {
+        let original = failed_card("T-8", None, None);
+        let mut board = TaskBoard::default();
+        let mut newer = original.clone();
+        mark_card_restarted_fresh(&mut newer, "newer-agent", "agent-T-8-newer", None, None, None);
+        board.cards.push(newer.clone());
+
+        assert!(!restore_original_card_if_current_agent(
+            &mut board,
+            &original,
+            "agent-T-8-stale"
+        ));
+
+        let card = board.get_card("T-8").unwrap();
+        assert_eq!(card.agent_chat_id, newer.agent_chat_id);
+        assert_eq!(card.assignee, newer.assignee);
         assert_eq!(card.column, "doing");
-        card.column = "failed".to_string();
-        card.agent_chat_id = None;
-        card.assignee = None;
-        assert_eq!(card.column, "failed");
-        assert!(card.agent_chat_id.is_none());
-        assert!(card.assignee.is_none());
     }
 
     #[test]

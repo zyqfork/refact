@@ -420,6 +420,11 @@ impl Tool for ToolTaskBoardUpdateCard {
                         "string",
                         "Comma-separated list of new dependencies (e.g., \"T-1, T-2\")",
                     ),
+                    (
+                        "target_files",
+                        "string",
+                        "Comma-separated target file paths this card is expected to touch",
+                    ),
                 ],
                 &["card_id"],
             ),
@@ -699,5 +704,17 @@ impl Tool for ToolTaskReadyCards {
             output_schema: None,
             annotations: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_card_schema_includes_target_files() {
+        let schema = ToolTaskBoardUpdateCard::new().tool_description().input_schema;
+        assert!(schema["properties"].get("target_files").is_some());
+        assert_eq!(schema["properties"]["target_files"]["type"], serde_json::json!("string"));
     }
 }

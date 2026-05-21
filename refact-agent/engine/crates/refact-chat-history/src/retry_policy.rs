@@ -106,8 +106,8 @@ const CONTEXT_LIMIT_PATTERNS: &[&str] = &[
     "request too large",
     "payload too large",
     "payload exceeds size limit",
-    "maximum number of tokens",
-    "max tokens",
+    "exceeds the maximum number of tokens",
+    "exceed the maximum number of tokens",
 ];
 
 const AUTHENTICATION_PATTERNS: &[&str] = &[
@@ -188,7 +188,6 @@ const MODEL_UNAVAILABLE_PATTERNS: &[&str] = &[
     "no endpoints found",
     "no endpoint found",
     "model is deprecated",
-    "not found",
 ];
 
 const RATE_LIMIT_PATTERNS: &[&str] = &[
@@ -322,6 +321,7 @@ const INVALID_REQUEST_PATTERNS: &[&str] = &[
     "field required",
     "invalid parameter",
     "invalid value",
+    "must be positive",
     "no route",
 ];
 
@@ -334,18 +334,165 @@ fn contains_status(lower: &str, codes: &[&str]) -> bool {
 }
 
 fn contains_status_code(lower: &str, code: &str) -> bool {
-    lower.contains(&format!("http {code}"))
-        || lower.contains(&format!("status {code}"))
-        || lower.contains(&format!("status_code:{code}"))
-        || lower.contains(&format!("status_code: {code}"))
-        || lower.contains(&format!("code: {code}"))
-        || lower.contains(&format!("error {code}"))
-        || lower.contains(&format!("({code}"))
-        || lower.contains(&format!("[{code}"))
-        || lower.contains(&format!("{code} "))
-        || lower.contains(&format!("{code}:"))
-        || lower.contains(&format!("{code})"))
-        || lower.ends_with(code)
+    let explicit_prefixes = [
+        "http ",
+        "http status ",
+        "status ",
+        "status: ",
+        "status_code:",
+        "status_code: ",
+        "code:",
+        "code: ",
+        "code=",
+        "error code ",
+        "error code:",
+        "error code: ",
+        "api error ",
+    ];
+    if explicit_prefixes
+        .iter()
+        .any(|prefix| contains_code_token(lower, &format!("{prefix}{code}"), prefix.len()))
+    {
+        return true;
+    }
+
+    contains_parenthesized_status_code(lower, code)
+        || contains_provider_prefixed_status_code(lower, code)
+}
+
+fn contains_code_token(lower: &str, pattern: &str, code_offset: usize) -> bool {
+    let mut start = 0usize;
+    while let Some(pos) = lower[start..].find(pattern) {
+        let idx = start + pos + code_offset;
+        let end = idx + pattern.len() - code_offset;
+        if is_status_code_boundary(lower, idx, end) {
+            return true;
+        }
+        start += pos + 1;
+    }
+    false
+}
+
+fn is_status_code_boundary(text: &str, start: usize, end: usize) -> bool {
+    let before_ok = start == 0
+        || text[..start]
+            .chars()
+            .next_back()
+            .map(|c| !c.is_ascii_digit())
+            .unwrap_or(true);
+    let after_ok = end >= text.len()
+        || text[end..]
+            .chars()
+            .next()
+            .map(|c| !c.is_ascii_digit())
+            .unwrap_or(true);
+    before_ok && after_ok
+}
+
+fn contains_parenthesized_status_code(lower: &str, code: &str) -> bool {
+    let pattern = format!("({code}");
+    let mut start = 0usize;
+    while let Some(pos) = lower[start..].find(&pattern) {
+        let idx = start + pos + 1;
+        let end = idx + code.len();
+        if is_status_code_boundary(lower, idx, end) {
+            let before = window_before(lower, start + pos, 40);
+            if contains_any(before, &["api", "error", "http", "status"]) {
+                return true;
+            }
+        }
+        start += pos + 1;
+    }
+    false
+}
+
+fn contains_provider_prefixed_status_code(lower: &str, code: &str) -> bool {
+    let provider_context = [
+        "openai",
+        "anthropic",
+        "gemini",
+        "ollama",
+        "openrouter",
+        "deepseek",
+        "groq",
+        "xai",
+        "provider",
+        "llm",
+    ];
+    let status_reasons = [
+        ":",
+        " internal server error",
+        " service unavailable",
+        " bad gateway",
+        " gateway timeout",
+        " rate",
+        " unauthorized",
+        " forbidden",
+        " not found",
+        " invalid",
+        " bad request",
+        " payment required",
+        " too many",
+        " payload",
+        " request",
+    ];
+    let mut start = 0usize;
+    while let Some(pos) = lower[start..].find(code) {
+        let idx = start + pos;
+        let end = idx + code.len();
+        if is_status_code_boundary(lower, idx, end) {
+            let before = window_before(lower, idx, 40);
+            let after = window_after(lower, end, 32);
+            if contains_any(before, &provider_context)
+                && status_reasons.iter().any(|reason| after.starts_with(reason))
+            {
+                return true;
+            }
+        }
+        start += pos + 1;
+    }
+    false
+}
+
+fn contains_model_unavailable(lower: &str) -> bool {
+    contains_any(lower, MODEL_UNAVAILABLE_PATTERNS) || contains_model_not_found(lower)
+}
+
+fn contains_model_not_found(lower: &str) -> bool {
+    let mut start = 0usize;
+    while let Some(pos) = lower[start..].find("not found") {
+        let idx = start + pos;
+        let after_start = idx + "not found".len();
+        let before = window_before(lower, idx, 48);
+        let after = window_after(lower, after_start, 48);
+        if contains_any(before, &["model", "endpoint", "route"])
+            || contains_any(after, &["model", "endpoint", "route"])
+        {
+            return true;
+        }
+        start += pos + 1;
+    }
+    false
+}
+
+fn window_before(text: &str, end: usize, max_chars: usize) -> &str {
+    let mut start = 0usize;
+    for (count, (idx, _)) in text[..end].char_indices().rev().enumerate() {
+        if count + 1 == max_chars {
+            start = idx;
+            break;
+        }
+    }
+    &text[start..end]
+}
+
+fn window_after(text: &str, start: usize, max_chars: usize) -> &str {
+    let end = text[start..]
+        .char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| start + idx)
+        .unwrap_or(text.len());
+    &text[start..end]
 }
 
 fn contains_retryable_status(lower: &str) -> bool {
@@ -383,9 +530,7 @@ fn classify_user_error_from_lower(lower: &str) -> UserErrorCategory {
         return UserErrorCategory::ContentPolicy;
     }
 
-    if contains_status(lower, MODEL_UNAVAILABLE_STATUS_CODES)
-        || contains_any(lower, MODEL_UNAVAILABLE_PATTERNS)
-    {
+    if contains_status(lower, MODEL_UNAVAILABLE_STATUS_CODES) || contains_model_unavailable(lower) {
         return UserErrorCategory::ModelUnavailable;
     }
 
@@ -1045,6 +1190,29 @@ mod tests {
         assert_eq!(
             classify_user_error("LLM error (429): insufficient_quota"),
             UserErrorCategory::BillingQuota
+        );
+    }
+
+    #[test]
+    fn classifier_avoids_broad_status_and_context_patterns() {
+        assert_eq!(
+            classify_llm_error_for_retry("OpenAI invalid_request_error: max tokens must be positive"),
+            RetryDecision::DoNotRetry {
+                reason: "non_retryable_error",
+            }
+        );
+        assert_eq!(
+            classify_user_error("OpenAI invalid_request_error: max tokens must be positive"),
+            UserErrorCategory::InvalidRequest
+        );
+
+        assert_eq!(
+            classify_user_error("File not found: src/main.rs"),
+            UserErrorCategory::Unknown
+        );
+        assert_eq!(
+            classify_user_error("operation failed after 500 attempts"),
+            UserErrorCategory::Unknown
         );
     }
 
