@@ -32,7 +32,7 @@ use crate::http::routers::v1::graceful_shutdown::handle_v1_graceful_shutdown;
 use crate::http::routers::v1::links::handle_v1_links;
 use crate::http::routers::v1::lsp_like_handlers::{
     handle_v1_lsp_did_change, handle_v1_lsp_add_folder, handle_v1_lsp_initialize,
-    handle_v1_lsp_remove_folder, handle_v1_set_active_document,
+    handle_v1_lsp_remove_folder, handle_v1_set_active_document, handle_v1_git_branch_changed,
 };
 use crate::http::routers::v1::status::handle_v1_rag_status;
 use crate::http::routers::v1::customization::handle_v1_customization;
@@ -239,6 +239,7 @@ pub fn make_v1_router(app_state: AppState) -> Router<AppState> {
         .route("/lsp-did-changed", post(handle_v1_lsp_did_change))
         .route("/lsp-add-folder", post(handle_v1_lsp_add_folder))
         .route("/lsp-remove-folder", post(handle_v1_lsp_remove_folder))
+        .route("/git-branch-changed", post(handle_v1_git_branch_changed))
         .route(
             "/lsp-set-active-document",
             post(handle_v1_set_active_document),

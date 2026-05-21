@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Weak, Mutex as StdMutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use indexmap::IndexSet;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -143,6 +144,8 @@ pub struct DocumentsState {
     pub cache_dirty: Arc<AMutex<f64>>,
     pub cache_correction: Arc<StdMutex<Arc<CacheCorrection>>>,
     pub fs_watcher: Arc<StdMutex<Option<Arc<ARwLock<RecommendedWatcher>>>>>,
+    pub git_branch_heads: Arc<StdMutex<HashMap<PathBuf, String>>>,
+    pub branch_reindex_last_ts: Arc<AtomicU64>,
 }
 
 async fn mem_overwrite_or_create_document(
@@ -179,6 +182,8 @@ impl DocumentsState {
             cache_dirty: Arc::new(AMutex::<f64>::new(0.0)),
             cache_correction: Arc::new(StdMutex::new(Arc::new(CacheCorrection::new()))),
             fs_watcher: Arc::new(StdMutex::new(None)),
+            git_branch_heads: Arc::new(StdMutex::new(HashMap::new())),
+            branch_reindex_last_ts: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -1010,6 +1015,98 @@ pub async fn remove_folder(gcx: Arc<GlobalContext>, path: &PathBuf) {
     }
 }
 
+fn read_git_head(repo_path: &Path) -> Option<String> {
+    let head_path = repo_path.join(".git").join("HEAD");
+    std::fs::read_to_string(&head_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+fn is_git_head_path(p: &Path) -> bool {
+    p.file_name().map(|n| n == "HEAD").unwrap_or(false)
+        && p.parent()
+            .and_then(|pp| pp.file_name())
+            .map(|n| n == ".git")
+            .unwrap_or(false)
+}
+
+async fn on_git_head_change(gcx_weak: Weak<GlobalContext>, event: Event) {
+    let gcx = match gcx_weak.upgrade() {
+        Some(gcx) => gcx,
+        None => return,
+    };
+
+    let repo_paths: Vec<PathBuf> = event
+        .paths
+        .iter()
+        .filter(|p| is_git_head_path(p))
+        .filter_map(|p| p.parent()?.parent())
+        .map(|p| canonical_path(p.to_string_lossy()))
+        .collect();
+
+    if repo_paths.is_empty() {
+        return;
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let last_ms = gcx.documents_state.branch_reindex_last_ts.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(last_ms) < 2000 {
+        return;
+    }
+
+    let mut any_changed = false;
+    {
+        let mut heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+        for repo_path in &repo_paths {
+            let new_head = read_git_head(repo_path);
+            let old_head = heads.get(repo_path).cloned();
+            if new_head != old_head {
+                tracing::info!(
+                    "git HEAD changed in {}: {:?} -> {:?}",
+                    repo_path.display(),
+                    old_head,
+                    new_head
+                );
+                match &new_head {
+                    Some(h) => { heads.insert(repo_path.clone(), h.clone()); }
+                    None => { heads.remove(repo_path); }
+                }
+                any_changed = true;
+            }
+        }
+    }
+
+    if any_changed {
+        gcx.documents_state.branch_reindex_last_ts.store(now_ms, Ordering::Relaxed);
+        tracing::info!("Branch switch detected, triggering full workspace reindex");
+        enqueue_all_files_from_workspace_folders(gcx, true, false).await;
+    }
+}
+
+pub async fn on_explicit_branch_change(gcx: Arc<GlobalContext>, repo_path: &PathBuf) {
+    let new_head = read_git_head(repo_path);
+    {
+        let mut heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+        match &new_head {
+            Some(h) => { heads.insert(repo_path.clone(), h.clone()); }
+            None => { heads.remove(repo_path); }
+        }
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    gcx.documents_state.branch_reindex_last_ts.store(now_ms, Ordering::Relaxed);
+    tracing::info!(
+        "Explicit branch change notification for {}, triggering full workspace reindex",
+        repo_path.display()
+    );
+    enqueue_all_files_from_workspace_folders(gcx, true, false).await;
+}
+
 pub async fn file_watcher_event(event: Event, gcx_weak: Weak<GlobalContext>) {
     async fn on_file_change(gcx_weak: Weak<GlobalContext>, event: Event) {
         let mut docs = vec![];
@@ -1125,6 +1222,12 @@ pub async fn file_watcher_event(event: Event, gcx_weak: Weak<GlobalContext>) {
             if event.paths.iter().any(|p| p.ends_with(".git")) =>
         {
             on_dot_git_dir_change(gcx_weak, event).await
+        }
+
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+            if event.paths.iter().any(|p| is_git_head_path(p)) =>
+        {
+            on_git_head_change(gcx_weak.clone(), event).await
         }
 
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
@@ -1376,6 +1479,126 @@ mod tests {
         assert!(has_doc);
         assert_eq!(active_file_path, Some(path));
         assert!(cache_dirty_value(&gcx).await > 0.0);
+    }
+
+    fn write_head(repo_path: &Path, content: &str) {
+        let git_dir = repo_path.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), content).unwrap();
+    }
+
+    #[test]
+    fn is_git_head_path_detects_head() {
+        assert!(is_git_head_path(Path::new("/project/.git/HEAD")));
+        assert!(!is_git_head_path(Path::new("/project/.git/config")));
+        assert!(!is_git_head_path(Path::new("/project/src/HEAD")));
+        assert!(!is_git_head_path(Path::new("/project/.git")));
+    }
+
+    #[test]
+    fn read_git_head_returns_trimmed_content() {
+        let temp = tempfile::tempdir().unwrap();
+        write_head(temp.path(), "ref: refs/heads/main\n");
+        let head = read_git_head(temp.path());
+        assert_eq!(head, Some("ref: refs/heads/main".to_string()));
+    }
+
+    #[test]
+    fn read_git_head_returns_none_for_missing_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        let head = read_git_head(temp.path());
+        assert!(head.is_none());
+    }
+
+    #[tokio::test]
+    async fn branch_head_change_triggers_reindex() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let temp = tempfile::tempdir().unwrap();
+        let canonical_repo = normalized(temp.path());
+
+        write_head(temp.path(), "ref: refs/heads/main\n");
+        {
+            let mut heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+            heads.insert(canonical_repo.clone(), "ref: refs/heads/main".to_string());
+        }
+
+        write_head(temp.path(), "ref: refs/heads/dev\n");
+
+        let head_path = temp.path().join(".git").join("HEAD");
+        let event = notify::Event::new(notify::EventKind::Modify(
+            notify::event::ModifyKind::Any,
+        ))
+        .add_path(head_path);
+
+        on_git_head_change(Arc::downgrade(&gcx), event).await;
+
+        let heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+        assert_eq!(
+            heads.get(&canonical_repo),
+            Some(&"ref: refs/heads/dev".to_string())
+        );
+        let ts = gcx.documents_state.branch_reindex_last_ts.load(Ordering::Relaxed);
+        assert!(ts > 0, "reindex timestamp should be set after branch change");
+    }
+
+    #[tokio::test]
+    async fn no_reindex_when_head_unchanged() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let temp = tempfile::tempdir().unwrap();
+        let canonical_repo = normalized(temp.path());
+
+        write_head(temp.path(), "ref: refs/heads/main\n");
+        {
+            let mut heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+            heads.insert(canonical_repo.clone(), "ref: refs/heads/main".to_string());
+        }
+
+        let head_path = temp.path().join(".git").join("HEAD");
+        let event = notify::Event::new(notify::EventKind::Modify(
+            notify::event::ModifyKind::Any,
+        ))
+        .add_path(head_path);
+
+        on_git_head_change(Arc::downgrade(&gcx), event).await;
+
+        let ts = gcx.documents_state.branch_reindex_last_ts.load(Ordering::Relaxed);
+        assert_eq!(ts, 0, "no reindex should occur when HEAD content is unchanged");
+    }
+
+    #[tokio::test]
+    async fn debounce_rapid_head_changes() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let temp = tempfile::tempdir().unwrap();
+        let canonical_repo = normalized(temp.path());
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        gcx.documents_state
+            .branch_reindex_last_ts
+            .store(now_ms, Ordering::Relaxed);
+
+        write_head(temp.path(), "ref: refs/heads/dev\n");
+        {
+            let mut heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+            heads.insert(canonical_repo.clone(), "ref: refs/heads/main".to_string());
+        }
+
+        let head_path = temp.path().join(".git").join("HEAD");
+        let event = notify::Event::new(notify::EventKind::Modify(
+            notify::event::ModifyKind::Any,
+        ))
+        .add_path(head_path);
+
+        on_git_head_change(Arc::downgrade(&gcx), event).await;
+
+        let heads = gcx.documents_state.git_branch_heads.lock().unwrap();
+        assert_eq!(
+            heads.get(&canonical_repo),
+            Some(&"ref: refs/heads/main".to_string()),
+            "debounce should prevent head update during rapid changes"
+        );
     }
 
     #[test]

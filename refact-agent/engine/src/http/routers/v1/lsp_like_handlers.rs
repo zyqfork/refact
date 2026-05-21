@@ -166,6 +166,32 @@ pub async fn handle_v1_lsp_add_folder(
         .unwrap())
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct LspLikeGitBranchChanged {
+    pub project_root: Url,
+}
+
+pub async fn handle_v1_git_branch_changed(
+    State(app): State<AppState>,
+    body_bytes: hyper::body::Bytes,
+) -> Result<Response<Body>, ScratchError> {
+    let global_context = app.gcx.clone();
+    let post = serde_json::from_slice::<LspLikeGitBranchChanged>(&body_bytes)
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, format!("JSON problem: {}", e)))?;
+    let file_path = post.project_root.to_file_path().map_err(|_| {
+        ScratchError::new(
+            StatusCode::BAD_REQUEST,
+            format!("not a file:// URI: {}", post.project_root),
+        )
+    })?;
+    let cpath = crate::files_correction::canonical_path(file_path.to_string_lossy().into_owned());
+    files_in_workspace::on_explicit_branch_change(global_context.clone(), &cpath).await;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from(json!({"success": 1}).to_string()))
+        .unwrap())
+}
+
 pub async fn handle_v1_lsp_remove_folder(
     State(app): State<AppState>,
     body_bytes: hyper::body::Bytes,
