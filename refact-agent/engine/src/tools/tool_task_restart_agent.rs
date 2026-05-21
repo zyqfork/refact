@@ -136,6 +136,7 @@ fn mark_card_restarted_fresh(
             message: format!("Previous failure: {}", preview),
         });
     }
+    card.final_report_structured = None;
     card.column = "doing".to_string();
     card.completed_at = None;
     mark_card_agent_started(
@@ -163,6 +164,7 @@ fn mark_card_restarted_resume(
             message: format!("Previous failure: {}", preview),
         });
     }
+    card.final_report_structured = None;
     card.column = "doing".to_string();
     card.completed_at = None;
     card.assignee = Some(new_agent_id.to_string());
@@ -731,6 +733,7 @@ mod tests {
                 message: "Agent started".to_string(),
             }],
             final_report: Some("FAILED: network error after 3 retries".to_string()),
+            final_report_structured: None,
             created_at: Utc::now().to_rfc3339(),
             started_at: Some(Utc::now().to_rfc3339()),
             last_heartbeat_at: None,
@@ -806,6 +809,7 @@ mod tests {
             agent_chat_id: Some("agent-T-3-active".to_string()),
             status_updates: vec![],
             final_report: None,
+            final_report_structured: None,
             created_at: Utc::now().to_rfc3339(),
             started_at: Some(Utc::now().to_rfc3339()),
             last_heartbeat_at: None,

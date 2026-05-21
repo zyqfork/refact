@@ -1,22 +1,21 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
-use std::path::{Path, PathBuf};
-use serde_json::Value;
-use tokio::sync::Mutex as AMutex;
 use async_trait::async_trait;
 use chrono::Utc;
+use serde_json::{json, Value};
+use tokio::sync::Mutex as AMutex;
 
-use crate::global_context::GlobalContext;
 use crate::agentic::generate_commit_message::generate_commit_message_by_diff;
-
-use crate::tools::tools_description::{
-    Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params,
-};
-use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
 use crate::at_commands::at_commands::AtCommandsContext;
+use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
+use crate::global_context::GlobalContext;
 use crate::tasks::storage;
-use crate::tasks::types::{BoardCard, StatusUpdate};
+use crate::tasks::types::{
+    BoardCard, FinalReport, StatusUpdate, SuggestedCard, VerificationResult,
+};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::worktrees::types::WorktreeMeta;
 
 async fn get_task_id(ccx: &Arc<AMutex<AtCommandsContext>>) -> Result<String, String> {
@@ -170,14 +169,223 @@ async fn validate_git_worktree(worktree_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParsedFinishReport {
+    markdown: String,
+    structured: Option<FinalReport>,
+}
+
+fn task_agent_finish_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "success": {
+                "type": "boolean",
+                "description": "true if the card was completed successfully, false if it failed"
+            },
+            "report": {
+                "description": "Legacy markdown string or structured final report object",
+                "anyOf": [
+                    { "type": "string" },
+                    final_report_schema()
+                ]
+            },
+            "files_changed": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Relative paths changed by this card"
+            },
+            "tests_added": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Test names or paths added or updated"
+            },
+            "tests_added_or_updated": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Test names or paths added or updated"
+            },
+            "verification": {
+                "type": "array",
+                "items": verification_schema(),
+                "description": "Verification commands and results"
+            },
+            "followup_cards": {
+                "type": "array",
+                "items": suggested_card_schema(),
+                "description": "Suggested follow-up task cards"
+            },
+            "risks": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Risks or caveats"
+            },
+            "assumptions": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Assumptions made while completing the card"
+            }
+        },
+        "required": ["success", "report"]
+    })
+}
+
+fn final_report_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "summary": { "type": "string" },
+            "success": { "type": "boolean" },
+            "files_changed": { "type": "array", "items": { "type": "string" } },
+            "tests_added_or_updated": { "type": "array", "items": { "type": "string" } },
+            "verification": { "type": "array", "items": verification_schema() },
+            "followup_cards": { "type": "array", "items": suggested_card_schema() },
+            "risks": { "type": "array", "items": { "type": "string" } },
+            "assumptions": { "type": "array", "items": { "type": "string" } }
+        }
+    })
+}
+
+fn verification_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "command": { "type": "string" },
+            "exit_code": { "type": ["integer", "null"] },
+            "passed": { "type": "boolean" },
+            "output_tail": { "type": "string" }
+        }
+    })
+}
+
+fn suggested_card_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "instructions": { "type": "string" },
+            "priority": { "type": "string" },
+            "target_files": { "type": "array", "items": { "type": "string" } }
+        }
+    })
+}
+
+fn parse_finish_report(
+    args: &HashMap<String, Value>,
+    success: bool,
+) -> Result<ParsedFinishReport, String> {
+    let report_value = args
+        .get("report")
+        .ok_or_else(|| "Missing 'report' parameter".to_string())?;
+
+    match report_value {
+        Value::String(report) => {
+            if has_structured_report_fields(args) {
+                let structured = structured_report_from_args(report.clone(), success, args)?;
+                let markdown = structured.to_markdown();
+                Ok(ParsedFinishReport {
+                    markdown,
+                    structured: Some(structured),
+                })
+            } else {
+                Ok(ParsedFinishReport {
+                    markdown: report.clone(),
+                    structured: None,
+                })
+            }
+        }
+        Value::Object(_) => {
+            let mut structured: FinalReport = serde_json::from_value(report_value.clone())
+                .map_err(|e| format!("Invalid structured 'report' parameter: {}", e))?;
+            structured.success = success;
+            apply_optional_structured_fields(&mut structured, args)?;
+            let markdown = structured.to_markdown();
+            Ok(ParsedFinishReport {
+                markdown,
+                structured: Some(structured),
+            })
+        }
+        _ => Err("Invalid 'report' parameter (must be string or object)".to_string()),
+    }
+}
+
+fn has_structured_report_fields(args: &HashMap<String, Value>) -> bool {
+    [
+        "files_changed",
+        "tests_added",
+        "tests_added_or_updated",
+        "verification",
+        "followup_cards",
+        "risks",
+        "assumptions",
+    ]
+    .iter()
+    .any(|key| args.contains_key(*key))
+}
+
+fn structured_report_from_args(
+    summary: String,
+    success: bool,
+    args: &HashMap<String, Value>,
+) -> Result<FinalReport, String> {
+    let mut report = FinalReport {
+        summary,
+        success,
+        ..Default::default()
+    };
+    apply_optional_structured_fields(&mut report, args)?;
+    Ok(report)
+}
+
+fn apply_optional_structured_fields(
+    report: &mut FinalReport,
+    args: &HashMap<String, Value>,
+) -> Result<(), String> {
+    if let Some(value) = args.get("files_changed") {
+        report.files_changed = parse_string_vec(value, "files_changed")?;
+    }
+    if let Some(value) = args
+        .get("tests_added_or_updated")
+        .or_else(|| args.get("tests_added"))
+    {
+        report.tests_added_or_updated = parse_string_vec(value, "tests_added_or_updated")?;
+    }
+    if let Some(value) = args.get("verification") {
+        report.verification = parse_json_field::<Vec<VerificationResult>>(value, "verification")?;
+    }
+    if let Some(value) = args.get("followup_cards") {
+        report.followup_cards = parse_json_field::<Vec<SuggestedCard>>(value, "followup_cards")?;
+    }
+    if let Some(value) = args.get("risks") {
+        report.risks = parse_string_vec(value, "risks")?;
+    }
+    if let Some(value) = args.get("assumptions") {
+        report.assumptions = parse_string_vec(value, "assumptions")?;
+    }
+    Ok(())
+}
+
+fn parse_string_vec(value: &Value, field: &str) -> Result<Vec<String>, String> {
+    parse_json_field::<Vec<String>>(value, field)
+}
+
+fn parse_json_field<T>(value: &Value, field: &str) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(value.clone())
+        .map_err(|e| format!("Invalid '{}' parameter: {}", field, e))
+}
+
 fn mark_finished_card(
     card: &mut BoardCard,
     success: bool,
-    report: &str,
+    report: &ParsedFinishReport,
     commit_hash: Option<&str>,
 ) {
     if success {
-        card.final_report = Some(report.to_string());
+        card.final_report = Some(report.markdown.clone());
+        card.final_report_structured = report.structured.clone();
         card.column = "done".to_string();
         card.completed_at = Some(Utc::now().to_rfc3339());
         if let Some(hash) = commit_hash {
@@ -191,12 +399,13 @@ fn mark_finished_card(
             message: "Agent completed successfully".to_string(),
         });
     } else {
-        card.final_report = Some(format!("FAILED: {}", report));
+        card.final_report = Some(format!("FAILED: {}", report.markdown));
+        card.final_report_structured = report.structured.clone();
         card.column = "failed".to_string();
         card.completed_at = Some(Utc::now().to_rfc3339());
         card.status_updates.push(StatusUpdate {
             timestamp: Utc::now().to_rfc3339(),
-            message: format!("Agent failed: {}", report),
+            message: format!("Agent failed: {}", report.markdown),
         });
     }
 }
@@ -317,7 +526,7 @@ impl Tool for ToolTaskAgentFinish {
             experimental: false,
             allow_parallel: false,
             description: "Mark the current card as completed or failed. Task agents MUST call this exactly once when finished. This updates the task board and notifies the planner.".to_string(),
-            input_schema: json_schema_from_params(&[("success", "boolean", "true if the card was completed successfully, false if it failed"), ("report", "string", "Summary of what was done (if success) or why it failed (if failure)")], &["success", "report"]),
+            input_schema: task_agent_finish_schema(),
             output_schema: None,
             annotations: None,
         }
@@ -344,11 +553,7 @@ impl Tool for ToolTaskAgentFinish {
             _ => return Err("Missing or invalid 'success' parameter (must be boolean)".to_string()),
         };
 
-        let report = args
-            .get("report")
-            .and_then(|v| v.as_str())
-            .ok_or("Missing 'report' parameter")?
-            .to_string();
+        let report = parse_finish_report(args, success)?;
 
         let gcx = ccx.lock().await.app.gcx.clone();
         let finish_lock = get_finish_lock(&task_id, &card_id).await;
@@ -441,24 +646,24 @@ impl Tool for ToolTaskAgentFinish {
             if all_finished {
                 format!(
                     "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nAll agents have completed. Planner notified.",
-                    card_title, report
+                    card_title, report.markdown
                 )
             } else {
                 format!(
                     "✅ **Card Completed: {}**\n\n**Report:**\n{}\n\nPlanner notified. Other agents are still running.",
-                    card_title, report
+                    card_title, report.markdown
                 )
             }
         } else {
             if all_finished {
                 format!(
                     "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nAll agents have completed. Planner notified.",
-                    card_title, report
+                    card_title, report.markdown
                 )
             } else {
                 format!(
                     "❌ **Card Failed: {}**\n\n**Reason:**\n{}\n\nPlanner notified. Other agents are still running.",
-                    card_title, report
+                    card_title, report.markdown
                 )
             }
         };
@@ -467,7 +672,7 @@ impl Tool for ToolTaskAgentFinish {
             "Agent finished card {} ({}): {}",
             card_id,
             if success { "success" } else { "failed" },
-            report.chars().take(100).collect::<String>()
+            report.markdown.chars().take(100).collect::<String>()
         );
 
         let notify_error = crate::chat::task_agent_monitor::notify_planner_agents_finished(
@@ -572,6 +777,7 @@ mod tests {
             agent_chat_id: Some("agent-chat-1".to_string()),
             status_updates: vec![],
             final_report: None,
+            final_report_structured: None,
             created_at: Utc::now().to_rfc3339(),
             started_at: Some(Utc::now().to_rfc3339()),
             last_heartbeat_at: None,
@@ -637,8 +843,12 @@ mod tests {
         let mut card = test_card(Some(worktree.clone()));
         let branch = card.agent_branch.clone();
         let name = card.agent_worktree_name.clone();
+        let report = ParsedFinishReport {
+            markdown: "agent failed".to_string(),
+            structured: None,
+        };
 
-        mark_finished_card(&mut card, false, "agent failed", None);
+        mark_finished_card(&mut card, false, &report, None);
         clear_finished_agent_session(&mut card);
 
         assert_eq!(card.column, "failed");
@@ -647,6 +857,83 @@ mod tests {
         assert_eq!(card.agent_worktree.as_deref(), Some(worktree.as_str()));
         assert_eq!(card.agent_branch, branch);
         assert_eq!(card.agent_worktree_name, name);
+    }
+
+    #[test]
+    fn tool_agent_finish_structured_object_populates_both_report_shapes() {
+        let args = HashMap::from_iter([
+            ("success".to_string(), json!(true)),
+            (
+                "report".to_string(),
+                json!({
+                    "summary": "Implemented structured finish reports.",
+                    "success": false,
+                    "files_changed": ["refact-agent/engine/src/tools/tool_task_agent_finish.rs"],
+                    "tests_added_or_updated": ["tool_agent_finish_structured_object_populates_both_report_shapes"],
+                    "verification": [{
+                        "command": "cargo test --lib -p refact-lsp -- tool_task_agent_finish",
+                        "exit_code": 0,
+                        "passed": true,
+                        "output_tail": "ok"
+                    }],
+                    "followup_cards": [{
+                        "title": "GUI structured report rendering",
+                        "instructions": "Render final_report_structured when present.",
+                        "priority": "P2",
+                        "target_files": ["refact-agent/gui/src/features/Tasks"]
+                    }],
+                    "risks": ["Planner still reads legacy markdown."],
+                    "assumptions": ["Markdown fallback remains populated."]
+                }),
+            ),
+        ]);
+        let parsed = parse_finish_report(&args, true).unwrap();
+        let mut card = test_card(None);
+
+        mark_finished_card(&mut card, true, &parsed, None);
+
+        let structured = card.final_report_structured.unwrap();
+        assert!(structured.success);
+        assert_eq!(structured.summary, "Implemented structured finish reports.");
+        assert_eq!(
+            structured.files_changed,
+            vec!["refact-agent/engine/src/tools/tool_task_agent_finish.rs"]
+        );
+        let markdown = card.final_report.unwrap();
+        assert!(markdown.contains("## Summary\nImplemented structured finish reports."));
+        assert!(markdown.contains("## Files Changed"));
+        assert!(markdown.contains("## Tests Added or Updated"));
+        assert!(markdown.contains("## Verification"));
+        assert!(markdown.contains("## Follow-up Cards"));
+        assert!(markdown.contains("## Risks"));
+        assert!(markdown.contains("## Assumptions"));
+    }
+
+    #[test]
+    fn tool_agent_finish_string_with_optional_fields_builds_structured_report() {
+        let args = HashMap::from_iter([
+            ("success".to_string(), json!(true)),
+            ("report".to_string(), json!("Summary from legacy field")),
+            ("files_changed".to_string(), json!(["src/lib.rs"])),
+            ("tests_added".to_string(), json!(["unit test"])),
+            (
+                "verification".to_string(),
+                json!([{
+                    "command": "cargo test",
+                    "exit_code": 0,
+                    "passed": true,
+                    "output_tail": "ok"
+                }]),
+            ),
+        ]);
+
+        let parsed = parse_finish_report(&args, true).unwrap();
+        let structured = parsed.structured.unwrap();
+
+        assert_eq!(structured.summary, "Summary from legacy field");
+        assert_eq!(structured.files_changed, vec!["src/lib.rs"]);
+        assert_eq!(structured.tests_added_or_updated, vec!["unit test"]);
+        assert!(parsed.markdown.contains("## Verification"));
     }
 
     #[tokio::test]

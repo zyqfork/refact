@@ -638,6 +638,7 @@ mod tests {
                         message: "failure reason with details".to_string(),
                     }],
                     final_report: None,
+                    final_report_structured: None,
                     created_at: now.clone(),
                     started_at: None,
                     last_heartbeat_at: None,

@@ -1003,6 +1003,7 @@ mod tests {
             agent_chat_id: None,
             status_updates: vec![],
             final_report: None,
+            final_report_structured: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             started_at: None,
             last_heartbeat_at: None,

@@ -96,6 +96,158 @@ pub struct BoardColumn {
     pub title: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct FinalReport {
+    pub summary: String,
+    pub success: bool,
+    pub files_changed: Vec<String>,
+    pub tests_added_or_updated: Vec<String>,
+    pub verification: Vec<VerificationResult>,
+    pub followup_cards: Vec<SuggestedCard>,
+    pub risks: Vec<String>,
+    pub assumptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct VerificationResult {
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub passed: bool,
+    pub output_tail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SuggestedCard {
+    pub title: String,
+    pub instructions: String,
+    pub priority: String,
+    pub target_files: Vec<String>,
+}
+
+impl FinalReport {
+    pub fn to_markdown(&self) -> String {
+        let mut output = String::new();
+
+        output.push_str("# Final Report\n\n");
+        output.push_str("## Summary\n");
+        push_text_or_empty(&mut output, &self.summary);
+        output.push('\n');
+
+        output.push_str("## Result\n");
+        output.push_str(if self.success {
+            "- Success: true\n\n"
+        } else {
+            "- Success: false\n\n"
+        });
+
+        push_string_list(&mut output, "Files Changed", &self.files_changed);
+        push_string_list(
+            &mut output,
+            "Tests Added or Updated",
+            &self.tests_added_or_updated,
+        );
+        push_verification(&mut output, &self.verification);
+        push_followup_cards(&mut output, &self.followup_cards);
+        push_string_list(&mut output, "Risks", &self.risks);
+        push_string_list(&mut output, "Assumptions", &self.assumptions);
+
+        while output.ends_with('\n') {
+            output.pop();
+        }
+        output.push('\n');
+        output
+    }
+}
+
+fn push_text_or_empty(output: &mut String, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        output.push_str("_None provided._\n");
+    } else {
+        output.push_str(text);
+        output.push('\n');
+    }
+}
+
+fn push_string_list(output: &mut String, title: &str, items: &[String]) {
+    output.push_str("## ");
+    output.push_str(title);
+    output.push('\n');
+    if items.is_empty() {
+        output.push_str("- _None._\n\n");
+        return;
+    }
+    for item in items {
+        output.push_str("- ");
+        output.push_str(item);
+        output.push('\n');
+    }
+    output.push('\n');
+}
+
+fn push_verification(output: &mut String, verification: &[VerificationResult]) {
+    output.push_str("## Verification\n");
+    if verification.is_empty() {
+        output.push_str("- _None._\n\n");
+        return;
+    }
+    for result in verification {
+        output.push_str("- `");
+        output.push_str(&result.command);
+        output.push_str("` — ");
+        output.push_str(if result.passed { "passed" } else { "failed" });
+        if let Some(exit_code) = result.exit_code {
+            output.push_str(&format!(" (exit code {})", exit_code));
+        }
+        output.push('\n');
+        let tail = result.output_tail.trim();
+        if !tail.is_empty() {
+            output.push_str("\n```text\n");
+            output.push_str(tail);
+            output.push_str("\n```\n");
+        }
+    }
+    output.push('\n');
+}
+
+fn push_followup_cards(output: &mut String, cards: &[SuggestedCard]) {
+    output.push_str("## Follow-up Cards\n");
+    if cards.is_empty() {
+        output.push_str("- _None._\n\n");
+        return;
+    }
+    for card in cards {
+        output.push_str("### ");
+        output.push_str(if card.title.trim().is_empty() {
+            "Untitled"
+        } else {
+            card.title.trim()
+        });
+        output.push('\n');
+        output.push_str("- Priority: ");
+        output.push_str(if card.priority.trim().is_empty() {
+            "unspecified"
+        } else {
+            card.priority.trim()
+        });
+        output.push('\n');
+        if !card.target_files.is_empty() {
+            output.push_str("- Target files: ");
+            output.push_str(&card.target_files.join(", "));
+            output.push('\n');
+        }
+        if !card.instructions.trim().is_empty() {
+            output.push('\n');
+            output.push_str(card.instructions.trim());
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardCard {
     pub id: String,
@@ -111,7 +263,10 @@ pub struct BoardCard {
     pub agent_chat_id: Option<String>,
     #[serde(default)]
     pub status_updates: Vec<StatusUpdate>,
+    #[serde(default)]
     pub final_report: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_report_structured: Option<FinalReport>,
     pub created_at: String,
     pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +399,7 @@ mod tests {
             agent_chat_id: None,
             status_updates: vec![],
             final_report: None,
+            final_report_structured: None,
             created_at: "2026-05-16T00:00:00Z".into(),
             started_at: None,
             last_heartbeat_at: None,
@@ -300,6 +456,98 @@ mod tests {
         assert_eq!(board.schema_version, 1);
         assert_eq!(board.rev, 0);
         assert_eq!(board.columns.len(), 4);
+    }
+
+    #[test]
+    fn deserialize_old_card_json_without_structured_report() {
+        let card: BoardCard = serde_json::from_str(
+            r#"{
+                "id": "T-1",
+                "title": "Legacy card",
+                "column": "done",
+                "depends_on": [],
+                "instructions": "",
+                "assignee": null,
+                "agent_chat_id": null,
+                "status_updates": [],
+                "final_report": "legacy markdown report",
+                "created_at": "2026-05-16T00:00:00Z",
+                "started_at": null,
+                "completed_at": "2026-05-16T01:00:00Z"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(card.final_report.as_deref(), Some("legacy markdown report"));
+        assert!(card.final_report_structured.is_none());
+    }
+
+    #[test]
+    fn final_report_round_trips_json() {
+        let report = FinalReport {
+            summary: "Implemented structured reports".into(),
+            success: true,
+            files_changed: vec!["refact-agent/engine/src/tools/tool_task_agent_finish.rs".into()],
+            tests_added_or_updated: vec!["final_report_round_trips_json".into()],
+            verification: vec![VerificationResult {
+                command: "cargo test --lib -p refact-tasks".into(),
+                exit_code: Some(0),
+                passed: true,
+                output_tail: "test result: ok".into(),
+            }],
+            followup_cards: vec![SuggestedCard {
+                title: "Render structured reports in GUI".into(),
+                instructions: "Prefer final_report_structured when present.".into(),
+                priority: "P2".into(),
+                target_files: vec!["refact-agent/gui/src/features/Tasks".into()],
+            }],
+            risks: vec!["Older consumers still read markdown.".into()],
+            assumptions: vec!["Legacy report remains populated.".into()],
+        };
+
+        let encoded = serde_json::to_string(&report).unwrap();
+        let decoded: FinalReport = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, report);
+    }
+
+    #[test]
+    fn final_report_to_markdown_renders_all_sections() {
+        let report = FinalReport {
+            summary: "Summary text".into(),
+            success: false,
+            files_changed: vec!["src/lib.rs".into()],
+            tests_added_or_updated: vec!["report test".into()],
+            verification: vec![VerificationResult {
+                command: "cargo test".into(),
+                exit_code: Some(1),
+                passed: false,
+                output_tail: "failure tail".into(),
+            }],
+            followup_cards: vec![SuggestedCard {
+                title: "Fix follow-up".into(),
+                instructions: "Do the next thing.".into(),
+                priority: "P1".into(),
+                target_files: vec!["src/followup.rs".into()],
+            }],
+            risks: vec!["Risk item".into()],
+            assumptions: vec!["Assumption item".into()],
+        };
+
+        let markdown = report.to_markdown();
+
+        assert!(markdown.contains("## Summary\nSummary text"));
+        assert!(markdown.contains("## Result\n- Success: false"));
+        assert!(markdown.contains("## Files Changed\n- src/lib.rs"));
+        assert!(markdown.contains("## Tests Added or Updated\n- report test"));
+        assert!(markdown.contains("## Verification\n- `cargo test` — failed (exit code 1)"));
+        assert!(markdown.contains("failure tail"));
+        assert!(markdown.contains("## Follow-up Cards\n### Fix follow-up"));
+        assert!(markdown.contains("- Priority: P1"));
+        assert!(markdown.contains("- Target files: src/followup.rs"));
+        assert!(markdown.contains("Do the next thing."));
+        assert!(markdown.contains("## Risks\n- Risk item"));
+        assert!(markdown.contains("## Assumptions\n- Assumption item"));
     }
 
     #[test]

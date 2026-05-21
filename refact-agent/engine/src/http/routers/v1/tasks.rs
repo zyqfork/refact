@@ -187,6 +187,7 @@ pub async fn handle_create_task(
             agent_chat_id: None,
             status_updates: vec![],
             final_report: None,
+            final_report_structured: None,
             created_at: now,
             started_at: None,
             last_heartbeat_at: None,
@@ -296,6 +297,7 @@ pub async fn handle_patch_board(
                 agent_chat_id: None,
                 status_updates: vec![],
                 final_report: None,
+                final_report_structured: None,
                 created_at: now.clone(),
                 started_at: None,
                 last_heartbeat_at: None,
@@ -380,6 +382,7 @@ pub async fn handle_patch_board(
                 .get_card_mut(&card_id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Card {} not found", card_id)))?;
             card.final_report = Some(report);
+            card.final_report_structured = None;
         }
         BoardPatch::DeleteCard { id } => {
             board.cards.retain(|c| c.id != id);

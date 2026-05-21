@@ -417,6 +417,7 @@ async fn mark_agent_as_failed(
             let card_title = card.title.clone();
 
             card.final_report = Some(format!("FAILED (automatic): {}", reason_clone));
+            card.final_report_structured = None;
             card.column = "failed".to_string();
             card.completed_at = Some(Utc::now().to_rfc3339());
             card.status_updates.push(StatusUpdate {
@@ -1136,6 +1137,7 @@ mod tests {
             agent_chat_id,
             status_updates: vec![],
             final_report: None,
+            final_report_structured: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             last_heartbeat_at: None,

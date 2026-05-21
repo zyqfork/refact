@@ -94,6 +94,7 @@ impl Tool for ToolTaskMarkCardDone {
                 }
 
                 card.final_report = Some(report_owned.clone());
+                card.final_report_structured = None;
                 card.column = "done".to_string();
                 card.completed_at = Some(Utc::now().to_rfc3339());
                 card.status_updates.push(StatusUpdate {
@@ -184,6 +185,7 @@ impl Tool for ToolTaskMarkCardFailed {
                 }
 
                 card.final_report = Some(format!("FAILED: {}", reason_owned));
+                card.final_report_structured = None;
                 card.column = "failed".to_string();
                 card.completed_at = Some(Utc::now().to_rfc3339());
                 card.status_updates.push(StatusUpdate {

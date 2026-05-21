@@ -764,6 +764,7 @@ mod worktree_merge_tool_tests {
             agent_chat_id: Some("agent-chat-1".to_string()),
             status_updates: vec![],
             final_report: Some("done".to_string()),
+            final_report_structured: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             started_at: None,
             last_heartbeat_at: None,
