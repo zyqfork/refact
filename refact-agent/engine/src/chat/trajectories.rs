@@ -699,6 +699,8 @@ pub async fn load_trajectory_for_chat(
         buddy_meta: t
             .get("buddy_meta")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
+
+        auto_compact_enabled: t.get("auto_compact_enabled").and_then(|v| v.as_bool()),
     };
 
     let auto_approve_editing_tools_present = t
@@ -3295,6 +3297,7 @@ mod tests {
                 active_skill: None,
                 auto_enrichment_enabled: None,
                 buddy_meta: None,
+                auto_compact_enabled: None,
             },
             messages: vec![ChatMessage::new("user".to_string(), "Hello".to_string())],
             runtime: super::super::types::RuntimeState::default(),

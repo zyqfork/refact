@@ -336,6 +336,7 @@ pub(crate) fn build_agent_thread_params(
         active_skill: None,
         auto_enrichment_enabled: None,
         buddy_meta: None,
+        auto_compact_enabled: None,
     }
 }
 

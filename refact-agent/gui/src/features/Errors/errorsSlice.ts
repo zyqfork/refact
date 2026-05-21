@@ -1,5 +1,8 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
-import type { UserErrorCategory, UserErrorInfo } from "../../services/refact/types";
+import type {
+  UserErrorCategory,
+  UserErrorInfo,
+} from "../../services/refact/types";
 
 export type ErrorPayload =
   | string

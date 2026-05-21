@@ -6,6 +6,7 @@ mod generation;
 mod handlers;
 pub mod history_limit;
 pub mod linearize;
+pub mod summarization;
 mod openai_merge;
 pub mod prepare;
 pub mod prompt_snippets;

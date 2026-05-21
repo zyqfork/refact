@@ -36,7 +36,7 @@ const CATEGORY_COLORS: Record<
   Unknown: "red",
 };
 
-const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Partial<Record<string, string>> = {
   retry: "Retry",
   compact: "Compact chat",
   check_auth: "Check auth",
@@ -84,7 +84,8 @@ function parseStructuredError(error: ErrorMessage): ParsedError {
 
   try {
     const parsed = JSON.parse(error.content) as unknown;
-    if (!parsed || typeof parsed !== "object") return { message: error.content };
+    if (!parsed || typeof parsed !== "object")
+      return { message: error.content };
     const record = parsed as Record<string, unknown>;
     const nested = record.error;
     if (nested && typeof nested === "object") {
@@ -115,7 +116,7 @@ function parseStructuredError(error: ErrorMessage): ParsedError {
 }
 
 function errorActionLabel(action: string): string {
-  return ACTION_LABELS[action] ?? ACTION_LABELS.none;
+  return ACTION_LABELS[action] ?? ACTION_LABELS.none ?? "Review error";
 }
 
 const ClassifiedError: React.FC<{ error: ParsedError }> = ({ error }) => {

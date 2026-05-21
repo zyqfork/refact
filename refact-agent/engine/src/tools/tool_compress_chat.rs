@@ -14,6 +14,7 @@ use crate::tools::tools_description::{
 };
 use refact_chat_history::history_limit::{
     compress_duplicate_context_files, remove_invalid_tool_calls_and_tool_calls_results,
+    compute_context_budget,
 };
 use refact_chat_history::trajectory_ops::TOOLS_TO_PRESERVE;
 use refact_runtime_api::{ChatSessionUpdate, SessionState};
@@ -23,6 +24,21 @@ const TOOL_OUTPUT_TRUNCATE_LIMIT: usize = 200;
 const MAX_PER_MESSAGE_ENTRIES: usize = 200;
 const MAX_CONTEXT_ENTRIES: usize = 200;
 const MAX_TOOL_OUTPUT_ENTRIES: usize = 200;
+
+fn find_preserve_cutoff(messages: &[crate::call_validation::ChatMessage], turns: usize) -> usize {
+    let mut turn_count = 0usize;
+    let mut idx = messages.len();
+    while idx > 0 {
+        idx -= 1;
+        if messages[idx].role == "user" {
+            turn_count += 1;
+            if turn_count >= turns {
+                return idx;
+            }
+        }
+    }
+    0
+}
 
 fn should_preserve_tool(name: &str) -> bool {
     TOOLS_TO_PRESERVE.iter().any(|t| *t == name)
@@ -118,9 +134,9 @@ impl Tool for ToolCompressChatProbe {
         tool_call_id: &String,
         _args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let (chat_facade, chat_id) = {
+        let (chat_facade, chat_id, n_ctx) = {
             let ccx_lock = ccx.lock().await;
-            (ccx_lock.app.chat.facade.clone(), ccx_lock.chat_id.clone())
+            (ccx_lock.app.chat.facade.clone(), ccx_lock.chat_id.clone(), ccx_lock.n_ctx)
         };
 
         let messages = chat_facade.session_snapshot(&chat_id).await?.messages;
@@ -298,10 +314,22 @@ impl Tool for ToolCompressChatProbe {
 
         let role_tokens_json = serde_json::to_value(&role_tokens).unwrap_or_else(|_| json!({}));
 
+        let budget = compute_context_budget(&messages, n_ctx);
+        let pressure_label = match budget.pressure {
+            refact_chat_history::history_limit::ContextPressure::Low => "low",
+            refact_chat_history::history_limit::ContextPressure::Medium => "medium",
+            refact_chat_history::history_limit::ContextPressure::High => "high",
+            refact_chat_history::history_limit::ContextPressure::Critical => "critical",
+        };
+        let pct_used = if n_ctx > 0 { total_tokens.saturating_mul(100) / n_ctx } else { 0 };
+
         let result = json!({
-            "type": "compress_chat_probe",
+            "type": "ctx_probe",
             "messages_count": messages.len(),
             "total_tokens": total_tokens,
+            "n_ctx": n_ctx,
+            "pct_used": pct_used,
+            "context_pressure": pressure_label,
             "role_tokens": role_tokens_json,
             "per_message": per_message,
             "context_files": context_files,
@@ -380,6 +408,23 @@ impl Tool for ToolCompressChatApply {
                 "drop_project_information": {
                     "type": "boolean",
                     "description": "Drop system/project info messages"
+                },
+                "target_tokens": {
+                    "type": "integer",
+                    "description": "Target total token count after compression"
+                },
+                "strength": {
+                    "type": "string",
+                    "enum": ["conservative", "balanced", "aggressive"],
+                    "description": "conservative=explicit ops only, balanced=+auto dedup, aggressive=+dedup+tier0 truncation"
+                },
+                "preserve_last_turns": {
+                    "type": "integer",
+                    "description": "Number of recent user/assistant turns to keep unmodified"
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Preview compression stats without applying changes"
                 }
             },
             "required": []
@@ -415,6 +460,10 @@ impl Tool for ToolCompressChatApply {
         let drop_context_messages = parse_string_list(args, "drop_context_messages");
         let dedup_context_files = parse_bool(args, "dedup_context_files");
         let drop_project_information = parse_bool(args, "drop_project_information");
+        let dry_run = parse_bool(args, "dry_run");
+        let strength = args.get("strength").and_then(|v| v.as_str()).unwrap_or("conservative").to_string();
+        let preserve_last_turns = args.get("preserve_last_turns").and_then(|v| v.as_u64()).map(|n| n as usize);
+        let target_tokens = args.get("target_tokens").and_then(|v| v.as_u64()).map(|n| n as usize);
 
         let (chat_facade, chat_id) = {
             let ccx_lock = ccx.lock().await;
@@ -611,38 +660,77 @@ impl Tool for ToolCompressChatApply {
             }
         }
 
+        let preserve_cutoff = preserve_last_turns
+            .map(|t| find_preserve_cutoff(&head_messages, t))
+            .unwrap_or(head_messages.len());
+
+        if (strength == "balanced" || strength == "aggressive") && !dedup_context_files {
+            let cur_tokens: usize = head_messages.iter().map(approx_tokens_for_message).sum();
+            let needs_more = target_tokens.map_or(true, |t| cur_tokens > t);
+            if needs_more {
+                let mut modifiable = head_messages[..preserve_cutoff.min(head_messages.len())].to_vec();
+                if let Ok((count, _)) = compress_duplicate_context_files(&mut modifiable) {
+                    if count > 0 {
+                        dedup_count += count;
+                        head_messages.splice(..preserve_cutoff.min(head_messages.len()), modifiable);
+                    }
+                }
+            }
+        }
+
+        if strength == "aggressive" {
+            let cur_tokens: usize = head_messages.iter().map(approx_tokens_for_message).sum();
+            let needs_more = target_tokens.map_or(true, |t| cur_tokens > t);
+            if needs_more {
+                let preserve_n = head_messages.len().saturating_sub(preserve_cutoff);
+                let report = refact_chat_history::history_limit::tier0_deterministic_compact(
+                    &mut head_messages,
+                    preserve_n,
+                );
+                tool_truncated += report.tool_outputs_truncated;
+                dedup_count += report.context_files_deduped;
+            }
+        }
+
         let after_tokens = head_messages
             .iter()
             .map(approx_tokens_for_message)
             .sum::<usize>();
         let after_count = head_messages.len();
+        let target_met = target_tokens.map_or(true, |t| after_tokens <= t);
 
         if head_messages.first().map(|m| m.role.as_str()).unwrap_or("") != "system"
             && head_messages.first().map(|m| m.role.as_str()).unwrap_or("") != "user"
         {
             return Err(format!(
-                "compress_chat_apply would produce an invalid chat history: first message has role '{}', expected 'system' or 'user'. Compression aborted.",
+                "ctx_apply would produce an invalid chat history: first message has role '{}', expected 'system' or 'user'. Compression aborted.",
                 head_messages.first().map(|m| m.role.as_str()).unwrap_or("(empty)")
             ));
         }
 
-        chat_facade
-            .update_session(
-                &chat_id,
-                ChatSessionUpdate {
-                    messages: head_messages,
-                },
-            )
-            .await?;
+        if !dry_run {
+            chat_facade
+                .update_session(
+                    &chat_id,
+                    ChatSessionUpdate {
+                        messages: head_messages,
+                    },
+                )
+                .await?;
 
-        chat_facade.maybe_save_session(&chat_id).await?;
+            chat_facade.maybe_save_session(&chat_id).await?;
+        }
 
         let result = json!({
-            "type": "compress_chat_apply",
+            "type": "ctx_apply",
+            "dry_run": dry_run,
             "before_message_count": before_count,
             "after_message_count": after_count,
             "before_tokens": before_tokens,
             "after_tokens": after_tokens,
+            "target_tokens": target_tokens,
+            "target_met": target_met,
+            "strength": strength,
             "context_files_dropped": context_files_dropped,
             "context_messages_dropped": context_messages_dropped,
             "memories_dropped": memory_dropped,

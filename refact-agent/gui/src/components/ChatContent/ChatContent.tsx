@@ -19,6 +19,8 @@ import {
   isErrorMessage,
   isToolMessage,
   isSystemMessage,
+  isSummarizationMessage,
+  SummarizationMessage,
   UserMessage,
 } from "../../services/refact";
 import { UserInput } from "./UserInput";
@@ -68,6 +70,7 @@ import { useCollapsibleStoreProvider } from "./useCollapsibleStoreProvider";
 import { CollapsibleStoreProvider } from "./useStoredOpen";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { ErrorMessageCard } from "./ErrorMessage";
+import { SummarizationMessage as SummarizationMessageCard } from "./SummarizationMessage";
 
 export type ChatContentProps = {
   onRetry: (index: number, question: UserMessage["content"]) => void;
@@ -357,6 +360,11 @@ export const ChatContent: React.FC<ChatContentProps> = ({
             />
           );
 
+        case "summarization":
+          return (
+            <SummarizationMessageCard key={item.key} message={item.message} />
+          );
+
         default:
           return null;
       }
@@ -582,6 +590,13 @@ type DisplayItemSkillReport = {
   report: string;
 };
 
+type DisplayItemSummarization = {
+  type: "summarization";
+  key: string;
+  messageIndex: number;
+  message: SummarizationMessage;
+};
+
 type DisplayItem =
   | DisplayItemAssistant
   | DisplayItemUser
@@ -591,7 +606,8 @@ type DisplayItem =
   | DisplayItemPlainText
   | DisplayItemError
   | DisplayItemSkillActivated
-  | DisplayItemSkillReport;
+  | DisplayItemSkillReport
+  | DisplayItemSummarization;
 
 function updateAssistantStreamingFlags(
   items: DisplayItem[],
@@ -919,6 +935,16 @@ function buildDisplayItemsFromIndex(
           ...parsed,
         });
       }
+      continue;
+    }
+
+    if (isSummarizationMessage(head)) {
+      items.push({
+        type: "summarization",
+        key: getMessageKey(head, i),
+        messageIndex: i,
+        message: head,
+      });
       continue;
     }
 
@@ -1257,6 +1283,16 @@ function buildDisplayItems(
           ...parsed,
         });
       }
+      continue;
+    }
+
+    if (isSummarizationMessage(head)) {
+      items.push({
+        type: "summarization",
+        key: getMessageKey(head, i),
+        messageIndex: i,
+        message: head,
+      });
       continue;
     }
 

@@ -12,7 +12,8 @@ export type ChatRole =
   | "tool"
   | "diff"
   | "plain_text"
-  | "cd_instruction";
+  | "cd_instruction"
+  | "summarization";
 
 export type ChatContextFile = {
   file_name: string;
@@ -288,6 +289,20 @@ export interface CDInstructionMessage extends BaseMessage {
   content: string;
 }
 
+export interface SummarizationMessage extends BaseMessage {
+  role: "summarization";
+  content: string;
+  summarized_range?: [number, number];
+  summarization_tier?: string;
+  summarized_token_estimate?: number;
+}
+
+export function isSummarizationMessage(
+  message: ChatMessage,
+): message is SummarizationMessage {
+  return message.role === "summarization";
+}
+
 export type ChatMessage =
   | UserMessage
   | AssistantMessage
@@ -297,7 +312,8 @@ export type ChatMessage =
   | ToolMessage
   | DiffMessage
   | PlainTextMessage
-  | CDInstructionMessage;
+  | CDInstructionMessage
+  | SummarizationMessage;
 
 export type ChatMessages = ChatMessage[];
 

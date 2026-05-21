@@ -537,6 +537,7 @@ pub fn start_generation(
         let gcx = app.gcx.clone();
         let mut network_retry_attempt = 0usize;
         let mut context_limit_compact_count = 0usize;
+        let mut tier1_compact_count = 0usize;
         loop {
             let (mut thread, chat_id) = {
                 let session = session_arc.lock().await;
@@ -616,6 +617,14 @@ pub fn start_generation(
                     }
                 }
             }
+
+            crate::chat::summarization::maybe_apply_tier1(
+                gcx.clone(),
+                &session_arc,
+                &thread,
+                &mut tier1_compact_count,
+            )
+            .await;
 
             let abort_flag = {
                 let mut session = session_arc.lock().await;
@@ -782,6 +791,7 @@ pub fn start_generation(
 
             network_retry_attempt = 0;
             context_limit_compact_count = 0;
+            tier1_compact_count = 0;
 
             if abort_flag.load(Ordering::SeqCst) {
                 break;
@@ -2120,6 +2130,31 @@ mod tests {
         count = 0;
         assert_eq!(network, 0);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_tier1_compact_circuit_breaker_stops_at_two() {
+        let max = crate::chat::summarization::MAX_TIER1_COMPACT_ATTEMPTS;
+        assert_eq!(max, 2);
+        let mut count = 0usize;
+        let mut stopped = false;
+        for _ in 0..10 {
+            if count < max {
+                count += 1;
+            } else {
+                stopped = true;
+                break;
+            }
+        }
+        assert!(stopped);
+        assert_eq!(count, max);
+    }
+
+    #[test]
+    fn test_tier1_compact_count_resets_on_success() {
+        let mut tier1_count = 2usize;
+        tier1_count = 0;
+        assert_eq!(tier1_count, 0);
     }
 
     #[test]

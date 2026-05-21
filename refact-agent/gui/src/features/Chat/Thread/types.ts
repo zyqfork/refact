@@ -139,6 +139,7 @@ export type ChatThread = {
   active_skill?: string | null;
 
   auto_enrichment_enabled?: boolean;
+  auto_compact_enabled?: boolean;
   worktree?: WorktreeMeta | null;
 
   parent_id?: string;
