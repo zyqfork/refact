@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { render } from "../../utils/test-utils";
 import { VirtualizedChatList } from "./VirtualizedChatList";
@@ -10,12 +10,33 @@ type VirtuosoCall = {
   skipAnimationFrameInResizeObserver?: boolean;
 };
 
+type ResizeObserverCallback = ConstructorParameters<typeof ResizeObserver>[0];
+
+type ResizeObserverInstance = {
+  callback: ResizeObserverCallback;
+  disconnect: () => void;
+};
+
 function getVirtuosoCalls(): VirtuosoCall[] {
   return (
     ((globalThis as Record<string, unknown>).__VIRTUOSO_CALLS__ as
       | VirtuosoCall[]
       | undefined) ?? []
   );
+}
+
+function setElementHeight(height: number) {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    width: 1024,
+    height,
+    top: 0,
+    right: 1024,
+    bottom: height,
+    left: 0,
+    toJSON: () => ({}),
+  });
 }
 
 type Item = { key: string; text: string };
@@ -28,6 +49,8 @@ const items: Item[] = Array.from({ length: 4 }, (_, i) => ({
 describe("VirtualizedChatList", () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>).__VIRTUOSO_CALLS__ = [];
+    vi.restoreAllMocks();
+    setElementHeight(768);
     vi.useRealTimers();
   });
 
@@ -72,6 +95,64 @@ describe("VirtualizedChatList", () => {
 
     const call = getVirtuosoCalls().at(-1);
     expect(call?.skipAnimationFrameInResizeObserver).toBe(true);
+  });
+
+  test("waits for a non-zero wrapper height before mounting Virtuoso", async () => {
+    setElementHeight(0);
+    const previousResizeObserver = globalThis.ResizeObserver;
+    const resizeObservers: ResizeObserverInstance[] = [];
+    const ResizeObserverMock = vi.fn((callback: ResizeObserverCallback) => {
+      const instance = {
+        callback,
+        disconnect: vi.fn(),
+        observe: vi.fn(),
+        unobserve: vi.fn(),
+      };
+      resizeObservers.push(instance);
+      return instance;
+    });
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+
+    const { unmount } = render(
+      <div style={{ height: 400 }}>
+        <VirtualizedChatList
+          items={items}
+          isStreaming
+          renderItem={(item) => <div>{item.text}</div>}
+        />
+      </div>,
+    );
+
+    expect(
+      screen.getByTestId("chat-virtualized-list-wrapper"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("chat-virtuoso-scroller"),
+    ).not.toBeInTheDocument();
+
+    setElementHeight(400);
+    await act(async () => {
+      resizeObservers[0]?.callback([], resizeObservers[0] as ResizeObserver);
+    });
+
+    expect(screen.getByTestId("chat-virtuoso-scroller")).toBeInTheDocument();
+    unmount();
+    expect(resizeObservers[0]?.disconnect).toHaveBeenCalled();
+    vi.stubGlobal("ResizeObserver", previousResizeObserver);
+  });
+
+  test("keeps empty-rendering rows measurable", () => {
+    render(
+      <div style={{ height: 400 }}>
+        <VirtualizedChatList
+          items={items}
+          isStreaming
+          renderItem={() => null}
+        />
+      </div>,
+    );
+
+    expect(screen.getAllByTestId("chat-virtuoso-item")).toHaveLength(items.length);
   });
 
   test("re-arms auto-follow when keyboard users scroll back down", async () => {

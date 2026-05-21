@@ -444,14 +444,22 @@ export const buddyApi = createApi({
         return { data: { dismissed: data?.dismissed ?? true } };
       },
     }),
-    reportError: builder.mutation<undefined, BuddyErrorReport>({
+    reportError: builder.mutation<null, BuddyErrorReport>({
       queryFn: async (body, api) => {
         const state = api.getState() as BuddyApiState;
         const port: number = state.config.lspPort;
         const apiKey: string | undefined = state.config.apiKey ?? undefined;
+        if (!Number.isFinite(port) || port <= 0) {
+          return {
+            error: {
+              status: "CUSTOM_ERROR",
+              error: "Missing lspPort in config",
+            },
+          };
+        }
         try {
           await postBuddyErrorRequest(port, apiKey, body);
-          return { data: undefined };
+          return { data: null };
         } catch (error) {
           return {
             error: {
@@ -727,11 +735,19 @@ export const buddyApi = createApi({
         return { data: result.data as UserActivityResponse };
       },
     }),
-    reportFrontendError: builder.mutation<undefined, FrontendErrorReport>({
+    reportFrontendError: builder.mutation<null, FrontendErrorReport>({
       queryFn: async (body, api) => {
         const state = api.getState() as BuddyApiState;
         const port: number = state.config.lspPort;
         const apiKey: string | undefined = state.config.apiKey ?? undefined;
+        if (!Number.isFinite(port) || port <= 0) {
+          return {
+            error: {
+              status: "CUSTOM_ERROR",
+              error: "Missing lspPort in config",
+            },
+          };
+        }
         try {
           const headers = new Headers({ "Content-Type": "application/json" });
           if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
@@ -752,7 +768,7 @@ export const buddyApi = createApi({
             },
           );
           await parseBuddyResponse<unknown>(response);
-          return { data: undefined };
+          return { data: null };
         } catch (error) {
           return {
             error: {

@@ -1,5 +1,11 @@
 /* eslint-disable react/prop-types */
-import React, { useCallback, useRef, useState, useMemo } from "react";
+import React, {
+  useCallback,
+  useRef,
+  useState,
+  useMemo,
+  useLayoutEffect,
+} from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { Flex, Container, Box } from "@radix-ui/themes";
 import classNames from "classnames";
@@ -8,6 +14,7 @@ import styles from "./ChatContent.module.css";
 
 const SCROLL_INTENT_MS = 500;
 const PASSIVE_SCROLL_GRACE_MS = 250;
+const MIN_MEASURED_LIST_HEIGHT = 1;
 
 export type VirtualizedChatListProps<T extends { key: string }> = {
   items: T[];
@@ -34,6 +41,8 @@ export function VirtualizedChatList<T extends { key: string }>({
   const pointerDownRef = useRef(false);
   const suppressPassiveScrollUntilRef = useRef(0);
   const recentlyChangedOutputUntilRef = useRef(0);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [hasMeasuredHeight, setHasMeasuredHeight] = useState(false);
   // Timestamp of the last active user input that should scroll downward.
   // Used to distinguish real user scroll-down from Virtuoso measurement
   // adjustments that passively change scrollTop.
@@ -41,6 +50,22 @@ export function VirtualizedChatList<T extends { key: string }>({
 
   const markUserInput = useCallback(() => {
     lastUserInputTsRef.current = performance.now();
+  }, []);
+
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    const updateMeasuredHeight = () => {
+      setHasMeasuredHeight(
+        wrapper.getBoundingClientRect().height >= MIN_MEASURED_LIST_HEIGHT,
+      );
+    };
+
+    updateMeasuredHeight();
+    const resizeObserver = new ResizeObserver(updateMeasuredHeight);
+    resizeObserver.observe(wrapper);
+    return () => resizeObserver.disconnect();
   }, []);
 
   const lastItemKey = items.length > 0 ? items[items.length - 1].key : "";
@@ -103,7 +128,11 @@ export function VirtualizedChatList<T extends { key: string }>({
   const computeItemKey = useCallback((_index: number, item: T) => item.key, []);
 
   const itemContent = useCallback(
-    (_index: number, item: T) => <Container>{renderItem(item)}</Container>,
+    (_index: number, item: T) => (
+      <Container className={styles.virtuosoItem} data-testid="chat-virtuoso-item">
+        {renderItem(item)}
+      </Container>
+    ),
     [renderItem],
   );
 
@@ -307,24 +336,30 @@ export function VirtualizedChatList<T extends { key: string }>({
   );
 
   return (
-    <Box style={{ flexGrow: 1, height: "100%", position: "relative" }}>
-      <Virtuoso
-        ref={virtuosoRef}
-        data={items}
-        computeItemKey={computeItemKey}
-        itemContent={itemContent}
-        components={components}
-        atBottomStateChange={handleAtBottomChange}
-        followOutput={followOutput}
-        initialTopMostItemIndex={
-          initialScrollIndex !== undefined
-            ? { index: initialScrollIndex, align: "end" }
-            : undefined
-        }
-        atBottomThreshold={20}
-        increaseViewportBy={viewportPadding}
-        skipAnimationFrameInResizeObserver={true}
-      />
+    <Box
+      ref={wrapperRef}
+      style={{ flexGrow: 1, height: "100%", position: "relative" }}
+      data-testid="chat-virtualized-list-wrapper"
+    >
+      {hasMeasuredHeight && (
+        <Virtuoso
+          ref={virtuosoRef}
+          data={items}
+          computeItemKey={computeItemKey}
+          itemContent={itemContent}
+          components={components}
+          atBottomStateChange={handleAtBottomChange}
+          followOutput={followOutput}
+          initialTopMostItemIndex={
+            initialScrollIndex !== undefined
+              ? { index: initialScrollIndex, align: "end" }
+              : undefined
+          }
+          atBottomThreshold={20}
+          increaseViewportBy={viewportPadding}
+          skipAnimationFrameInResizeObserver={true}
+        />
+      )}
       {showFollowButton && <ScrollToBottomButton onClick={handleFollowClick} />}
     </Box>
   );

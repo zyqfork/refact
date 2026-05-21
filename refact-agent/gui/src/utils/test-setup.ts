@@ -55,6 +55,17 @@ vi.mock("react-virtuoso", async () => {
 (globalThis as Record<string, unknown>).__REFACT_LSP_PORT__ = 8001;
 
 beforeAll(() => {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    width: 1024,
+    height: 768,
+    top: 0,
+    right: 1024,
+    bottom: 768,
+    left: 0,
+    toJSON: () => ({}),
+  });
   stubResizeObserver();
   stubIntersectionObserver();
   Element.prototype.scrollIntoView = vi.fn();

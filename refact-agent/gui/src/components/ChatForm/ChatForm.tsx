@@ -99,7 +99,7 @@ import { AttachImagesButton } from "../Dropzone";
 import { MicrophoneButton, MicrophoneButtonRef } from "./MicrophoneButton";
 import { useAttachedImages } from "../../hooks/useAttachedImages";
 import {
-  selectChatError,
+  selectChatErrorById,
   selectCurrentThreadId,
   selectIsStreaming,
   selectIsWaiting,
@@ -142,8 +142,10 @@ export const ChatForm: React.FC<ChatFormProps> = ({
   const host = useAppSelector(selectHost);
   const { queryPathThenOpenFile } = useEventsBusForIDE();
   const globalError = useAppSelector(getErrorMessage);
-  const chatError = useAppSelector(selectChatError);
   const chatId = useAppSelector(selectCurrentThreadId);
+  const chatError = useAppSelector((state) =>
+    selectChatErrorById(state, chatId),
+  );
   const isBuddyChat = useAppSelector((state) =>
     selectIsBuddyChat(state, chatId),
   );

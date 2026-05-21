@@ -278,3 +278,7 @@
   /* Keep gutter stable so content doesn't shift when thumb appears. */
   scrollbar-gutter: stable;
 }
+
+.virtuosoItem {
+  min-height: 1px;
+}

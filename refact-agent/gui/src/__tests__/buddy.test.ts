@@ -1349,6 +1349,71 @@ describe("Buddy frontend error reporting helpers", () => {
     }
   });
 
+  test("reportError mutation returns RTK Query data on successful void response", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response("null", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const store = configureStore({
+      reducer: {
+        config: () => ({ apiKey: "key", lspPort: 8001 }),
+        [buddyApi.reducerPath]: buddyApi.reducer,
+      },
+      middleware: (getDefault) => getDefault().concat(buddyApi.middleware),
+    });
+
+    try {
+      const result = await store.dispatch(
+        buddyApi.endpoints.reportError.initiate({
+          error: "chat failed",
+          chat_id: "chat-a",
+        }),
+      );
+
+      expect("data" in result).toBe(true);
+      expect("data" in result ? result.data : undefined).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+  });
+
+  test("reportError mutation returns RTK Query error when lspPort is missing", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const store = configureStore({
+      reducer: {
+        config: () => ({ apiKey: "key", lspPort: 0 }),
+        [buddyApi.reducerPath]: buddyApi.reducer,
+      },
+      middleware: (getDefault) => getDefault().concat(buddyApi.middleware),
+    });
+
+    try {
+      const result = await store.dispatch(
+        buddyApi.endpoints.reportError.initiate({
+          error: "chat failed",
+          chat_id: "chat-a",
+        }),
+      );
+
+      expect("error" in result).toBe(true);
+      expect(JSON.stringify("error" in result ? result.error : null)).toContain(
+        "Missing lspPort",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+  });
+
   test("dedupe key includes chat id and tool name", () => {
     const left = buildBuddyFrontendErrorDedupeKey(
       {
