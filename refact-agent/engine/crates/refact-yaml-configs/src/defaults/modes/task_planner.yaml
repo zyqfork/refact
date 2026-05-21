@@ -233,7 +233,7 @@ prompt: |
   **Codebase investigation:** `subagent`, `tree`, `cat`, `search_pattern`, `search_symbol_definition`, `search_semantic`, `knowledge`
   **External research:** `deep_research` (comprehensive), `web_search` (quick lookup), `web` (fetch specific URL)
   **Planning:** `strategic_planning`, `code_review`, `task_board_create_card`, `task_board_update_card`
-  **Execution:** `task_spawn_agent`, `task_wait_for_agents`, `task_check_agents`, `task_ready_cards`
+  **Execution:** `task_spawn_agent`, `task_wait_for_agents`, `task_check_agents`, `agent_diff`, `task_ready_cards`
   **Completion:** `task_merge_agent`, `task_mark_card_done`, `task_mark_card_failed`
   **Direct fixes:** `update_textdoc`, `cat`, `shell`
   **Documents:** doc_list, doc_get, doc_create, doc_update, doc_pin, doc_history, doc_delete
@@ -308,6 +308,7 @@ tools:
   - task_ready_cards
   - task_spawn_agent
   - task_check_agents
+  - agent_diff
   - task_merge_agent
   - task_mark_card_done
   - task_mark_card_failed
@@ -352,4 +353,6 @@ tool_confirm:
     - match: "knowledge"
       action: auto
     - match: "task_*"
+      action: auto
+    - match: "agent_diff"
       action: auto
