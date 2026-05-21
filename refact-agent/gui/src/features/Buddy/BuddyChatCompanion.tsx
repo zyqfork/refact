@@ -13,9 +13,11 @@ import {
   selectRuntimeQueue,
   selectBuddySuggestions,
   selectActiveSpeech,
+  selectSeenNotificationIds,
   dismissBuddySuggestion,
   dismissRuntimeEvent,
   clearActiveSpeech,
+  markBuddyNotificationSeen,
 } from "./buddySlice";
 import { selectChatErrorById } from "../Chat/Thread";
 import { startBuddyInvestigation } from "../Chat/Thread";
@@ -98,7 +100,14 @@ function createdAtMs(value: string): number {
 
 function runtimeNotificationText(event: BuddyRuntimeEvent): string {
   const speechText = event.speech_text?.trim();
-  return speechText || event.title;
+  return speechText && speechText.length > 0 ? speechText : event.title;
+}
+
+function speechMatchesChat(
+  activeSpeech: { chat_id?: string } | null,
+  chatId: string,
+): boolean {
+  return !activeSpeech?.chat_id || activeSpeech.chat_id === chatId;
 }
 
 function speechExpiryDelayMs(
@@ -150,6 +159,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
   const diagnostics = useAppSelector(selectBuddyDiagnostics);
   const suggestions = useAppSelector(selectBuddySuggestions);
   const activeSpeech = useAppSelector(selectActiveSpeech);
+  const seenNotificationIds = useAppSelector(selectSeenNotificationIds);
   const threadError = useAppSelector((state) =>
     selectChatErrorById(state, chatId),
   );
@@ -160,9 +170,6 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
   const [dismissMutation] = useDismissBuddySuggestionMutation();
   const [dismissRuntimeMutation] = useDismissBuddyRuntimeEventMutation();
 
-  const [seenNotificationIds, setSeenNotificationIds] = useState<Set<string>>(
-    new Set(),
-  );
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<
     Set<string>
   >(new Set());
@@ -171,14 +178,13 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
   >(null);
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [speechExpiryTick, refreshSpeechExpiry] = useState(0);
+  const [, refreshSpeechExpiry] = useState(0);
   const pendingRef = useRef(false);
   const prevChatIdRef = useRef(chatId);
 
   useEffect(() => {
     if (prevChatIdRef.current !== chatId) {
       prevChatIdRef.current = chatId;
-      setSeenNotificationIds(new Set());
       setDismissedNotificationIds(new Set());
       setActiveNotificationId(null);
       setActionError(null);
@@ -230,15 +236,28 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
     [],
   );
 
+  const dismissNotification = useCallback(
+    (id: string) => {
+      dispatch(markBuddyNotificationSeen(id));
+      setDismissedNotificationIds((prev) => new Set(prev).add(id));
+      setActiveNotificationId((current) => (current === id ? null : current));
+    },
+    [dispatch],
+  );
+
   const notification = useMemo<NotificationItem | null>(() => {
     const isEligible = (id: string) =>
       !dismissedNotificationIds.has(id) &&
-      (!seenNotificationIds.has(id) || activeNotificationId === id);
+      (!(id in seenNotificationIds) || activeNotificationId === id);
 
     const chatDiagnostic =
       diagnostics.find((d) => d.chat_id === chatId) ?? null;
 
-    if (activeSpeech && !isBuddySpeechExpired(activeSpeech)) {
+    if (
+      activeSpeech &&
+      !isBuddySpeechExpired(activeSpeech) &&
+      speechMatchesChat(activeSpeech, chatId)
+    ) {
       const id = notificationIdentity("speech", activeSpeech.id);
       if (isEligible(id)) {
         return {
@@ -362,20 +381,19 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
       .sort(
         (left, right) =>
           createdAtMs(right.created_at) - createdAtMs(left.created_at),
-      )[0];
-    if (activeOpportunity) {
-      return {
-        id: notificationIdentity("opportunity", activeOpportunity.id),
-        sourceId: activeOpportunity.id,
-        text: opportunitySpeechText(activeOpportunity),
-        source: "opportunity",
-        controls: opportunityActionControls(activeOpportunity),
-        diagnostic: null,
-        opportunity: activeOpportunity,
-      };
-    }
-
-    return null;
+      )
+      .at(0);
+    return activeOpportunity === undefined
+      ? null
+      : {
+          id: notificationIdentity("opportunity", activeOpportunity.id),
+          sourceId: activeOpportunity.id,
+          text: opportunitySpeechText(activeOpportunity),
+          source: "opportunity",
+          controls: opportunityActionControls(activeOpportunity),
+          diagnostic: null,
+          opportunity: activeOpportunity,
+        };
   }, [
     activeNotificationId,
     activeSpeech,
@@ -386,7 +404,6 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
     nowPlaying,
     runtimeQueue,
     seenNotificationIds,
-    speechExpiryTick,
     suggestionControls,
     suggestions,
     threadError,
@@ -404,17 +421,20 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
     }
     if (activeNotificationId === notification.id) return;
     setActiveNotificationId(notification.id);
-    setSeenNotificationIds((prev) => new Set(prev).add(notification.id));
   }, [activeNotificationId, notification]);
+
+  useEffect(() => {
+    if (!activeNotificationId) return;
+    if (activeNotificationId in seenNotificationIds) return;
+    dispatch(markBuddyNotificationSeen(activeNotificationId));
+  }, [activeNotificationId, dispatch, seenNotificationIds]);
 
   const handleControl = useCallback(
     async (ctrl: BuddyControl) => {
       if (!notification) return;
 
       if (notification.source === "opportunity") {
-        setDismissedNotificationIds((prev) =>
-          new Set(prev).add(notification.id),
-        );
+        dismissNotification(notification.id);
         if (pendingRef.current || !notification.opportunity) return;
         const actionIndex = getOpportunityActionIndexFromControl(ctrl);
         if (actionIndex == null) return;
@@ -444,13 +464,9 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
               result.status === "fulfilled" ? [result.value] : [],
             );
             if (dismissedOpportunityIds.length > 0) {
-              setDismissedNotificationIds((prev) => {
-                const next = new Set(prev);
-                for (const oppId of dismissedOpportunityIds) {
-                  next.add(notificationIdentity("opportunity", oppId));
-                }
-                return next;
-              });
+              for (const oppId of dismissedOpportunityIds) {
+                dismissNotification(notificationIdentity("opportunity", oppId));
+              }
             }
             const failed = results.find(
               (result) => result.status === "rejected",
@@ -466,9 +482,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
             notification.opportunity,
             actionIndex,
           );
-          setDismissedNotificationIds((prev) =>
-            new Set(prev).add(notification.id),
-          );
+          dismissNotification(notification.id);
         } catch (error) {
           setActionError(formatOpportunityActionError(error));
         } finally {
@@ -479,9 +493,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
       }
 
       if (ctrl.action === "dismiss" || ctrl.action === "dismiss_speech") {
-        setDismissedNotificationIds((prev) =>
-          new Set(prev).add(notification.id),
-        );
+        dismissNotification(notification.id);
         if (notification.source === "speech") {
           dispatch(clearActiveSpeech());
         } else if (notification.source === "suggestion") {
@@ -502,9 +514,14 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
         const runtimeEventId = ctrl.action_param?.trim()
           ? ctrl.action_param.trim()
           : notification.sourceId;
-        setDismissedNotificationIds((prev) =>
-          new Set(prev).add(notificationIdentity("runtime", runtimeEventId)),
+        const runtimeNotificationId = notificationIdentity(
+          "runtime",
+          runtimeEventId,
         );
+        dismissNotification(notification.id);
+        if (notification.id !== runtimeNotificationId) {
+          dismissNotification(runtimeNotificationId);
+        }
         dispatch(dismissRuntimeEvent(runtimeEventId));
         try {
           await dismissRuntimeMutation(runtimeEventId).unwrap();
@@ -515,18 +532,14 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
       }
 
       if (ctrl.action === "open_buddy") {
-        setDismissedNotificationIds((prev) =>
-          new Set(prev).add(notification.id),
-        );
+        dismissNotification(notification.id);
         dispatch(push({ name: "buddy" }));
         return;
       }
 
       if (ctrl.action.startsWith("care_")) {
         await executeBuddyAction(ctrl, dispatch);
-        setDismissedNotificationIds((prev) =>
-          new Set(prev).add(notification.id),
-        );
+        dismissNotification(notification.id);
         return;
       }
 
@@ -540,9 +553,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
         if (notification.source === "suggestion") {
           dispatch(dismissBuddySuggestion(notification.sourceId));
         }
-        setDismissedNotificationIds((prev) =>
-          new Set(prev).add(notification.id),
-        );
+        dismissNotification(notification.id);
         return;
       }
 
@@ -571,9 +582,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
               diagnostic: notification.diagnostic,
             }),
           );
-          setDismissedNotificationIds((prev) =>
-            new Set(prev).add(notification.id),
-          );
+          dismissNotification(notification.id);
         } catch (error) {
           setActionError(formatOpportunityActionError(error));
         } finally {
@@ -588,6 +597,7 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
       executeOpportunityAction,
       dismissMutation,
       dismissRuntimeMutation,
+      dismissNotification,
       dispatch,
       chatId,
     ],

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import React from "react";
-import { fireEvent, render, screen } from "../utils/test-utils";
+import { http, HttpResponse } from "msw";
+import { fireEvent, render, screen, waitFor } from "../utils/test-utils";
 import {
   executeBuddyAction,
   executeBuddyNavigation,
@@ -34,6 +35,7 @@ import {
   consumeDraft,
   removeDraft,
   selectUnreadOpportunities,
+  selectSeenNotificationIds,
   defaultBuddyPulse,
 } from "../features/Buddy/buddySlice";
 import { registerBuddySpeechTtlListener } from "../features/Buddy/buddySpeechTtl";
@@ -47,6 +49,7 @@ import {
 import { buildColorMap } from "../features/Buddy/canvas/colorMap";
 import { updateSceneAnimation } from "../features/Buddy/canvas/animLoop";
 import { createInitialAnimState } from "../features/Buddy/state";
+import { setUpStore } from "../app/store";
 import { buddyApi, type BuddyErrorReport } from "../services/refact/buddy";
 import type {
   BuddySnapshot,
@@ -85,6 +88,8 @@ import {
   buildBuddySceneSpeech,
   isBuddySpeechExpired,
 } from "../features/Buddy/buddySceneSpeech";
+import { BuddyChatCompanion } from "../features/Buddy/BuddyChatCompanion";
+import { server } from "../utils/mockServer";
 const reducer = buddySlice.reducer;
 const buddyDir = path.join(__dirname, "../features/Buddy");
 
@@ -130,6 +135,8 @@ function makeThunkDispatch() {
 
 beforeEach(() => {
   resetBuddyFrontendErrorReportCache();
+  localStorage.clear();
+  vi.restoreAllMocks();
 });
 
 function makeState(): BuddyState {
@@ -304,7 +311,81 @@ function makeChatSpeech(overrides?: Partial<BuddySpeechItem>): BuddySpeechItem {
   };
 }
 
+const noopCanvasContext = {
+  clearRect: vi.fn(),
+  fillRect: vi.fn(),
+  fillText: vi.fn(),
+  getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) }) as ImageData),
+  putImageData: vi.fn(),
+  restore: vi.fn(),
+  save: vi.fn(),
+  scale: vi.fn(),
+  translate: vi.fn(),
+  beginPath: vi.fn(),
+  moveTo: vi.fn(),
+  lineTo: vi.fn(),
+  stroke: vi.fn(),
+  imageSmoothingEnabled: false,
+  globalAlpha: 1,
+  fillStyle: "#000000",
+  strokeStyle: "#000000",
+  lineWidth: 1,
+  font: "",
+  textAlign: "center" as CanvasTextAlign,
+  textBaseline: "top" as CanvasTextBaseline,
+} satisfies Partial<CanvasRenderingContext2D>;
+
+const noopContext = noopCanvasContext as unknown as CanvasRenderingContext2D;
+
+type BuddyTestStore = ReturnType<typeof setUpStore>;
+
+function setupBuddyCompanionHandlers() {
+  server.use(
+    http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+      HttpResponse.json({ opportunities: [] }),
+    ),
+    http.post("http://127.0.0.1:8001/v1/buddy/runtime/:id/dismiss", () =>
+      HttpResponse.json({ dismissed: true }),
+    ),
+  );
+}
+
+function renderBuddyChatCompanion(store: BuddyTestStore, chatId: string) {
+  return render(React.createElement(BuddyChatCompanion, { chatId }), { store });
+}
+
+function notificationElement(container: HTMLElement, id: string) {
+  return container.querySelector(`[data-notification-id="${id}"]`);
+}
+
+async function expectCompanionNotification(container: HTMLElement, id: string) {
+  await waitFor(() =>
+    expect(notificationElement(container, id)).not.toBeNull(),
+  );
+}
+
+async function expectNoCompanionNotification(
+  container: HTMLElement,
+  id: string,
+) {
+  await waitFor(() => expect(notificationElement(container, id)).toBeNull());
+}
+
 describe("Buddy chat notification freshness", () => {
+  beforeEach(() => {
+    setupBuddyCompanionHandlers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      window.setTimeout(() => callback(0), 0);
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {
+      return undefined;
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      noopContext,
+    );
+  });
+
   test("expired active speech is ignored by scene selection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-01-01T00:01:00Z"));
@@ -358,8 +439,9 @@ describe("Buddy chat notification freshness", () => {
     );
 
     expect(source).toContain("seenNotificationIds");
-    expect(source).toContain("setSeenNotificationIds");
-    expect(source).toContain("!seenNotificationIds.has(id)");
+    expect(source).toContain("markBuddyNotificationSeen");
+    expect(source).toContain("!(id in seenNotificationIds)");
+    expect(source).not.toContain("setSeenNotificationIds");
     expect(source).not.toContain("setInterval");
     expect(source).not.toContain("12_000");
     expect(source).not.toContain("15_000");
@@ -379,14 +461,137 @@ describe("Buddy chat notification freshness", () => {
     expect(source).toContain('event.priority === "critical"');
   });
 
+  test("active speech from another chat is ignored", async () => {
+    const store = setUpStore();
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot({
+          active_speech: makeChatSpeech({
+            id: "other-chat-speech",
+            text: "Other chat only",
+            chat_id: "chat-other",
+          }),
+        }),
+      ),
+    );
+
+    const { container } = renderBuddyChatCompanion(store, "chat-a");
+
+    await expectNoCompanionNotification(container, "speech:other-chat-speech");
+  });
+
+  test("global active speech still renders", async () => {
+    const store = setUpStore();
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot({
+          active_speech: makeChatSpeech({
+            id: "global-speech",
+            text: "Global Buddy notice",
+            chat_id: undefined,
+          }),
+        }),
+      ),
+    );
+
+    const { container } = renderBuddyChatCompanion(store, "chat-a");
+
+    await expectCompanionNotification(container, "speech:global-speech");
+  });
+
+  test("same runtime notification does not reappear after BuddyChatCompanion unmount/remount", async () => {
+    const store = setUpStore();
+    const runtime = makeChatRuntimeEvent({
+      id: "runtime-remount",
+      title: "Runtime remount notice",
+      controls: [
+        {
+          id: "dismiss-runtime-remount",
+          label: "Dismiss",
+          action: "dismiss_runtime_event",
+          action_param: "runtime-remount",
+          style: "ghost",
+        },
+      ],
+    });
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ runtime_queue: [runtime] })),
+    );
+
+    const rendered = renderBuddyChatCompanion(store, "chat-a");
+    await expectCompanionNotification(
+      rendered.container,
+      "runtime:runtime-remount",
+    );
+    await waitFor(() => {
+      expect(
+        "runtime:runtime-remount" in
+          selectSeenNotificationIds(store.getState()),
+      ).toBe(true);
+    });
+
+    rendered.unmount();
+    const remounted = renderBuddyChatCompanion(store, "chat-a");
+
+    await expectNoCompanionNotification(
+      remounted.container,
+      "runtime:runtime-remount",
+    );
+  });
+
+  test("replayed snapshot/runtime event does not respawn an already-seen chat companion notification", async () => {
+    const store = setUpStore();
+    const runtime = makeChatRuntimeEvent({
+      id: "runtime-replay",
+      title: "Runtime replay notice",
+      controls: [
+        {
+          id: "dismiss-runtime-replay",
+          label: "Dismiss",
+          action: "dismiss_runtime_event",
+          action_param: "runtime-replay",
+          style: "ghost",
+        },
+      ],
+    });
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ runtime_queue: [runtime] })),
+    );
+
+    const rendered = renderBuddyChatCompanion(store, "chat-a");
+    await expectCompanionNotification(
+      rendered.container,
+      "runtime:runtime-replay",
+    );
+    const dismissButton = rendered.container.querySelector("button");
+    expect(dismissButton).not.toBeNull();
+    if (!dismissButton) throw new Error("expected dismiss button");
+    fireEvent.click(dismissButton);
+    await expectNoCompanionNotification(
+      rendered.container,
+      "runtime:runtime-replay",
+    );
+
+    store.dispatch(
+      setBuddySnapshot(makeSnapshot({ runtime_queue: [runtime] })),
+    );
+    store.dispatch(enqueueRuntimeEvent(runtime));
+
+    await expectNoCompanionNotification(
+      rendered.container,
+      "runtime:runtime-replay",
+    );
+  });
+
   test("dismissing a chat notification hides only that notification", () => {
     const source = fs.readFileSync(
       path.join(buddyDir, "BuddyChatCompanion.tsx"),
       "utf8",
     );
 
+    expect(source).toContain("const dismissNotification = useCallback");
     expect(source).toContain("setDismissedNotificationIds((prev) =>");
-    expect(source).toContain("new Set(prev).add(notification.id)");
+    expect(source).toContain("new Set(prev).add(id)");
     expect(source).toContain(
       "dispatch(dismissRuntimeEvent(notification.sourceId))",
     );
