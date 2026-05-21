@@ -237,6 +237,8 @@ pub async fn resolve_scope_with_execution_scope(
 
 fn escape_path_for_scope_filter(path: &str) -> String {
     path.replace('"', "")
+        .replace('%', r"\%")
+        .replace('_', r"\_")
 }
 
 async fn create_scope_filter_legacy(
@@ -266,7 +268,7 @@ async fn create_scope_filter_legacy(
         } else {
             format!("{}{}", dir_path, std::path::MAIN_SEPARATOR)
         };
-        return Ok(Some(format!(r#"(scope LIKE "{}%")"#, escape_path_for_scope_filter(&dir_path_with_sep))));
+        return Ok(Some(format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escape_path_for_scope_filter(&dir_path_with_sep))));
     }
 
     match return_one_candidate_or_a_good_error(
@@ -295,7 +297,7 @@ async fn create_scope_filter_legacy(
                     } else {
                         format!("{}{}", dir_path, std::path::MAIN_SEPARATOR)
                     };
-                    Ok(Some(format!(r#"(scope LIKE "{}%")"#, escape_path_for_scope_filter(&dir_path_with_sep))))
+                    Ok(Some(format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escape_path_for_scope_filter(&dir_path_with_sep))))
                 }
                 Err(_) => Err(file_err),
             }
@@ -355,7 +357,8 @@ pub async fn create_scope_filter_with_execution_scope(
     if is_worktree_root_alias(scope) {
         return Ok(ScopedScopeFilter {
             filter: Some(format!(
-                r#"(scope LIKE "{}%")"#,
+
+                r#"(scope LIKE "{}%" ESCAPE '\')"#,
                 escape_path_for_scope_filter(&path_with_sep(execution_scope.source_workspace_root()))
             )),
             notices: vec![],
@@ -369,7 +372,8 @@ pub async fn create_scope_filter_with_execution_scope(
     }
     let indexed_path = indexed_path_for_scoped_path(execution_scope, &scoped.path);
     let filter = if scoped.path.is_dir() || scope_is_dir {
-        Some(format!(r#"(scope LIKE "{}%")"#, escape_path_for_scope_filter(&path_with_sep(&indexed_path))))
+
+        Some(format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escape_path_for_scope_filter(&path_with_sep(&indexed_path))))
     } else {
         Some(format!("(scope = \"{}\")", escape_path_for_scope_filter(&indexed_path.to_string_lossy())))
     };
@@ -1458,7 +1462,7 @@ mod worktree_scope_read_tools {
     fn scope_filter_construction_handles_special_chars() {
         let apostrophe = "/home/user's project/src/";
         let filter = format!(
-            r#"(scope LIKE "{}%")"#,
+            r#"(scope LIKE "{}%" ESCAPE '\')"#,
             escape_path_for_scope_filter(apostrophe)
         );
         assert!(filter.starts_with(r#"(scope LIKE ""#), "{filter}");
@@ -1466,16 +1470,28 @@ mod worktree_scope_read_tools {
 
         let percent = "/home/user/50%/src/";
         let filter = format!(
-            r#"(scope LIKE "{}%")"#,
+            r#"(scope LIKE "{}%" ESCAPE '\')"#,
             escape_path_for_scope_filter(percent)
         );
-        assert!(filter.contains("50%/"), "{filter}");
+        assert!(filter.contains(r"50\%/"), "{filter}");
 
         let underscore = "/home/user/my_project/src/";
         let filter = format!(
-            r#"(scope LIKE "{}%")"#,
+            r#"(scope LIKE "{}%" ESCAPE '\')"#,
             escape_path_for_scope_filter(underscore)
         );
-        assert!(filter.contains("my_project"), "{filter}");
+        assert!(filter.contains(r"my\_project"), "{filter}");
+    }
+
+    #[test]
+    fn scope_filter_percent_and_underscore_match_literally() {
+        let escaped = escape_path_for_scope_filter("/path/50%/a_b/");
+        assert!(escaped.contains(r"\%"), "percent should be escaped: {escaped}");
+        assert!(escaped.contains(r"\_"), "underscore should be escaped: {escaped}");
+
+        let filter = format!(r#"(scope LIKE "{}%" ESCAPE '\')"#, escaped);
+        assert!(filter.contains("ESCAPE"), "filter should include ESCAPE clause: {filter}");
+        assert!(filter.contains(r"\%/"), "escaped percent should appear in filter: {filter}");
+        assert!(filter.contains(r"\_"), "escaped underscore should appear in filter: {filter}");
     }
 }

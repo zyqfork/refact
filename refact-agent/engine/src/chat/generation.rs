@@ -96,7 +96,7 @@ fn maybe_inject_token_budget_instruction(
                     .unwrap_or(false)
         })
         .unwrap_or(false);
-    if last_has_tool_calls && !below_ten_percent_left {
+    if last_has_tool_calls {
         return false;
     }
 
@@ -1893,7 +1893,7 @@ mod tests {
     }
 
     #[test]
-    fn test_token_budget_injects_after_tool_call_when_below_ten_percent_left() {
+    fn test_token_budget_skips_after_tool_call_even_when_below_ten_percent_left() {
         let mut session = ChatSession::new("test".to_string());
         session.messages.push(make_long_user_msg(920));
         for idx in 0..TOKEN_BUDGET_CADENCE {
@@ -1903,12 +1903,12 @@ mod tests {
             .messages
             .push(make_assistant_with_tool_call("call_123", "cat"));
 
-        assert!(maybe_inject_token_budget_instruction(
+        assert!(!maybe_inject_token_budget_instruction(
             &mut session,
             1_000,
             TOKEN_BUDGET_CADENCE,
         ));
-        assert!(session
+        assert!(!session
             .messages
             .iter()
             .any(|msg| msg.role == "cd_instruction" && msg.tool_call_id == TOKEN_BUDGET_MARKER));

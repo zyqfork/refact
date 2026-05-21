@@ -209,6 +209,13 @@ pub async fn maybe_apply_tier1(
 
     let (effective_n_ctx_opt, messages_clone) = {
         let session = session_arc.lock().await;
+        let last_has_pending_tool_calls = session.messages.last().map(|msg| {
+            msg.role == "assistant"
+                && msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty())
+        }).unwrap_or(false);
+        if last_has_pending_tool_calls {
+            return;
+        }
         let caps_res = crate::global_context::try_load_caps_quickly_if_not_present(gcx.clone(), 0).await;
         let effective_n_ctx = caps_res.ok().and_then(|caps| {
             crate::caps::resolve_chat_model(caps, &thread.model).ok().map(|rec| {

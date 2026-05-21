@@ -412,16 +412,21 @@ impl VecDBSqlite {
 
         fn parse_scope_filter(filter: &str) -> Option<ScopeFilter> {
             let filter = filter.trim();
-            // Accept: (scope LIKE '...%') — single-quoted (paths without apostrophes)
-            let like_sq = Regex::new(r"(?i)\bscope\s+like\s+'([^']*)'\s*\)?\s*$").ok()?;
+            fn unescape_like_prefix(raw: &str) -> String {
+                raw.trim_end_matches('%')
+                    .replace(r"\%", "%")
+                    .replace(r"\_", "_")
+            }
+            // Accept: (scope LIKE '...%') or (scope LIKE '...%' ESCAPE '\') — single-quoted
+            let like_sq = Regex::new(r"(?i)\bscope\s+like\s+'([^']*)'(?:\s+ESCAPE\s+'[^']*')?\s*\)?\s*$").ok()?;
             if let Some(caps) = like_sq.captures(filter) {
-                let prefix = caps.get(1)?.as_str().trim_end_matches('%').to_string();
+                let prefix = unescape_like_prefix(caps.get(1)?.as_str());
                 return Some(ScopeFilter::RustPrefix(prefix));
             }
-            // Accept: (scope LIKE "...%") — double-quoted (handles apostrophes in paths)
-            let like_dq = Regex::new(r#"(?i)\bscope\s+like\s+"([^"]*)"\s*\)?\s*$"#).ok()?;
+            // Accept: (scope LIKE "...%") or (scope LIKE "...%" ESCAPE '\') — double-quoted (handles apostrophes in paths)
+            let like_dq = Regex::new(r#"(?i)\bscope\s+like\s+"([^"]*)"(?:\s+ESCAPE\s+'[^']*')?\s*\)?\s*$"#).ok()?;
             if let Some(caps) = like_dq.captures(filter) {
-                let prefix = caps.get(1)?.as_str().trim_end_matches('%').to_string();
+                let prefix = unescape_like_prefix(caps.get(1)?.as_str());
                 return Some(ScopeFilter::RustPrefix(prefix));
             }
             // Accept: (scope = '...') — single-quoted equality
