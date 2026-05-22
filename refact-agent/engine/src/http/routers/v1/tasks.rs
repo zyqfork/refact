@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::http::{Response, StatusCode};
 use axum::response::Json;
 use axum::extract::State;
@@ -18,12 +19,36 @@ use crate::chat::trajectories::TrajectoryEvent;
 use crate::chat::types::SessionState;
 use crate::tasks::events::{TaskEvent, TaskEventEnvelope};
 use crate::tasks::storage;
+use crate::tools::tool_task_memory::{
+    MemoryKind, MemoryNamespace, TaskMemoriesApiResponse, TaskMemoryArchiveApiResponse,
+    TaskMemoryListFilters, TaskMemoryPinApiResponse, TaskMemoryTriageApiResponse,
+    archive_task_memory_for_api, list_task_memories_for_api, mark_task_memories_triaged_for_api,
+    set_task_memory_pinned_for_api,
+};
 
 #[derive(Deserialize)]
 pub struct CreateTaskRequest {
     pub name: String,
     #[serde(default)]
     pub target_files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TaskMemoriesQuery {
+    pub since: Option<String>,
+    pub kind: Option<String>,
+    pub namespace: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PinTaskMemoryRequest {
+    pub pinned: bool,
+}
+
+#[derive(Deserialize)]
+pub struct TriageDoneRequest {
+    pub cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -239,6 +264,87 @@ pub async fn handle_delete_task(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(json!({"deleted": true})))
+}
+
+pub async fn handle_list_task_memories(
+    State(app): State<AppState>,
+    Path(task_id): Path<String>,
+    Query(query): Query<TaskMemoriesQuery>,
+) -> Result<Json<TaskMemoriesApiResponse>, (StatusCode, String)> {
+    let since = query
+        .since
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(crate::tools::tool_task_memory::parse_rfc3339_utc)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let kind = query
+        .kind
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::parse::<MemoryKind>)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let namespace = query
+        .namespace
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::parse::<MemoryNamespace>)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let search = query.search.filter(|value| !value.trim().is_empty());
+    let result = list_task_memories_for_api(
+        app.gcx.clone(),
+        &task_id,
+        TaskMemoryListFilters {
+            since,
+            kind,
+            namespace,
+            search,
+        },
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(result))
+}
+
+pub async fn handle_pin_task_memory(
+    State(app): State<AppState>,
+    Path((task_id, filename)): Path<(String, String)>,
+    Json(req): Json<PinTaskMemoryRequest>,
+) -> Result<Json<TaskMemoryPinApiResponse>, (StatusCode, String)> {
+    let result = set_task_memory_pinned_for_api(app.gcx.clone(), &task_id, &filename, req.pinned)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(result))
+}
+
+pub async fn handle_archive_task_memory(
+    State(app): State<AppState>,
+    Path((task_id, filename)): Path<(String, String)>,
+) -> Result<Json<TaskMemoryArchiveApiResponse>, (StatusCode, String)> {
+    let result = archive_task_memory_for_api(app.gcx.clone(), &task_id, &filename)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(result))
+}
+
+pub async fn handle_task_memories_triage_done(
+    State(app): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(req): Json<TriageDoneRequest>,
+) -> Result<Json<TaskMemoryTriageApiResponse>, (StatusCode, String)> {
+    let cursor = req
+        .cursor
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(crate::tools::tool_task_memory::parse_rfc3339_utc)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let result = mark_task_memories_triaged_for_api(app.gcx.clone(), &task_id, cursor)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(result))
 }
 
 pub async fn handle_get_board(

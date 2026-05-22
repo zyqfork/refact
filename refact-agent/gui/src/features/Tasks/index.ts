@@ -1,6 +1,8 @@
 export { TaskList } from "./TaskList";
 export { TaskWorkspace } from "./TaskWorkspace";
 export { KanbanBoard } from "./KanbanBoard";
+export { MemoryInboxPanel } from "./TaskMemories/MemoryInboxPanel";
+export { MemoryCard } from "./TaskMemories/MemoryCard";
 export {
   tasksSlice,
   openTask,

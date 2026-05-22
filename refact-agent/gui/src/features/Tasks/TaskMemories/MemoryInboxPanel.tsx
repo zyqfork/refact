@@ -1,0 +1,307 @@
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  Badge,
+  Box,
+  Button,
+  Callout,
+  Flex,
+  Select,
+  Spinner,
+  Text,
+  TextField,
+} from "@radix-ui/themes";
+import { ExclamationTriangleIcon, MagnifyingGlassIcon } from "@radix-ui/react-icons";
+import classNames from "classnames";
+import {
+  taskMemoriesApi,
+  type TaskMemoryEntry,
+  useArchiveTaskMemoryMutation,
+  useListTaskMemoriesQuery,
+  usePinTaskMemoryMutation,
+  useTriageTaskMemoriesMutation,
+} from "../../../services/refact/taskMemoriesApi";
+import { useAppDispatch } from "../../../hooks";
+import { MemoryCard } from "./MemoryCard";
+import styles from "./MemoryInboxPanel.module.css";
+
+const ALL_VALUE = "all";
+
+const MEMORY_KINDS = [
+  "decision",
+  "spec",
+  "finding",
+  "gotcha",
+  "risk",
+  "handoff",
+  "progress",
+  "postmortem",
+  "brief",
+  "freeform",
+] as const;
+
+type MemoryInboxPanelProps = {
+  taskId: string;
+};
+
+function clientMatches(memory: TaskMemoryEntry, query: string): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+  return [memory.filename, memory.title, memory.content, memory.namespace]
+    .concat(memory.tags)
+    .some((value) => value.toLowerCase().includes(normalized));
+}
+
+function formatSince(value?: string): string {
+  if (!value) return "last cursor";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) => {
+  const dispatch = useAppDispatch();
+  const [kind, setKind] = useState(ALL_VALUE);
+  const [namespace, setNamespace] = useState(ALL_VALUE);
+  const [selectedTags, setSelectedTags] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [search, setSearch] = useState("");
+  const [optimisticPinned, setOptimisticPinned] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
+  const [archived, setArchived] = useState<ReadonlySet<string>>(() => new Set());
+
+  const serverSearch = search.trim();
+  const query = useMemo(
+    () => ({
+      taskId,
+      kind: kind === ALL_VALUE ? undefined : kind,
+      namespace: namespace === ALL_VALUE ? undefined : namespace,
+      search: serverSearch || undefined,
+    }),
+    [kind, namespace, serverSearch, taskId],
+  );
+  const { data, isFetching, error } = useListTaskMemoriesQuery(query);
+  const [pinMemory, pinState] = usePinTaskMemoryMutation();
+  const [archiveMemory, archiveState] = useArchiveTaskMemoryMutation();
+  const [triageDone, triageState] = useTriageTaskMemoriesMutation();
+
+  const memoriesWithOptimisticState = useMemo(() => {
+    return (data?.memories ?? [])
+      .filter((memory) => !archived.has(memory.filename))
+      .map((memory) => ({
+        ...memory,
+        pinned: optimisticPinned.get(memory.filename) ?? memory.pinned,
+      }));
+  }, [archived, data?.memories, optimisticPinned]);
+
+  const namespaces = useMemo(() => {
+    const values = new Set<string>();
+    for (const memory of data?.memories ?? []) values.add(memory.namespace);
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [data?.memories]);
+
+  const tags = useMemo(() => {
+    const values = new Set<string>();
+    for (const memory of data?.memories ?? []) {
+      for (const tag of memory.tags) values.add(tag);
+    }
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [data?.memories]);
+
+  const visibleMemories = useMemo(() => {
+    return memoriesWithOptimisticState.filter((memory) => {
+      if (!clientMatches(memory, search)) return false;
+      for (const tag of selectedTags) {
+        if (!memory.tags.includes(tag)) return false;
+      }
+      return true;
+    });
+  }, [memoriesWithOptimisticState, search, selectedTags]);
+
+  const handleToggleTag = useCallback((tag: string) => {
+    setSelectedTags((previous) => {
+      const next = new Set(previous);
+      if (next.has(tag)) {
+        next.delete(tag);
+      } else {
+        next.add(tag);
+      }
+      return next;
+    });
+  }, []);
+
+  const handlePin = useCallback(
+    async (filename: string, pinned: boolean) => {
+      setOptimisticPinned((previous) => new Map(previous).set(filename, pinned));
+      try {
+        await pinMemory({ taskId, filename, pinned }).unwrap();
+      } catch {
+        setOptimisticPinned((previous) => new Map(previous).set(filename, !pinned));
+      }
+    },
+    [pinMemory, taskId],
+  );
+
+  const handleArchive = useCallback(
+    async (filename: string) => {
+      setArchived((previous) => new Set(previous).add(filename));
+      try {
+        await archiveMemory({ taskId, filename }).unwrap();
+      } catch {
+        setArchived((previous) => {
+          const next = new Set(previous);
+          next.delete(filename);
+          return next;
+        });
+      }
+    },
+    [archiveMemory, taskId],
+  );
+
+  const handleTriageDone = useCallback(async () => {
+    const cursor = new Date().toISOString();
+    const patch = dispatch(
+      taskMemoriesApi.util.updateQueryData(
+        "listTaskMemories",
+        query,
+        (draft) => {
+          draft.since = cursor;
+          draft.new_count = 0;
+        },
+      ),
+    );
+    try {
+      await triageDone({ taskId, cursor }).unwrap();
+    } catch {
+      patch.undo();
+    }
+  }, [dispatch, query, taskId, triageDone]);
+
+  const busy = pinState.isLoading || archiveState.isLoading || triageState.isLoading;
+
+  return (
+    <Box className={styles.root}>
+      <Flex justify="between" align="start" gap="3" className={styles.header}>
+        <Box>
+          <Text weight="bold" size="3" as="div">
+            {data?.new_count ?? 0} new since {formatSince(data?.since)}
+          </Text>
+          <Text size="1" color="gray" as="div">
+            {visibleMemories.length} memories shown
+            {isFetching ? " · refreshing" : ""}
+          </Text>
+        </Box>
+        <Button
+          size="2"
+          variant="soft"
+          onClick={() => void handleTriageDone()}
+          disabled={triageState.isLoading}
+        >
+          {triageState.isLoading ? <Spinner size="1" /> : "Mark all triaged"}
+        </Button>
+      </Flex>
+
+      <Flex direction="column" gap="2" className={styles.filters}>
+        <Flex gap="2" wrap="wrap" align="center">
+          <Select.Root value={kind} onValueChange={setKind} size="1">
+            <Select.Trigger aria-label="Memory kind filter" className={styles.filterControl} />
+            <Select.Content>
+              <Select.Item value={ALL_VALUE}>All kinds</Select.Item>
+              {MEMORY_KINDS.map((item) => (
+                <Select.Item key={item} value={item}>
+                  {item}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+
+          <Select.Root value={namespace} onValueChange={setNamespace} size="1">
+            <Select.Trigger
+              aria-label="Memory namespace filter"
+              className={styles.filterControl}
+            />
+            <Select.Content>
+              <Select.Item value={ALL_VALUE}>All namespaces</Select.Item>
+              {namespaces.map((item) => (
+                <Select.Item key={item} value={item}>
+                  {item}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+
+          <Box className={styles.searchBox}>
+            <TextField.Root
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search memories"
+              aria-label="Search memories"
+            >
+              <TextField.Slot>
+                <MagnifyingGlassIcon />
+              </TextField.Slot>
+            </TextField.Root>
+          </Box>
+        </Flex>
+
+        {tags.length > 0 && (
+          <Flex gap="1" wrap="wrap" className={styles.tagChips}>
+            {tags.map((tag) => {
+              const active = selectedTags.has(tag);
+              return (
+                <Badge
+                  key={tag}
+                  asChild
+                  color={active ? "blue" : "gray"}
+                  variant={active ? "solid" : "outline"}
+                  className={classNames(
+                    styles.tagChip,
+                    active && styles.tagChipActive,
+                  )}
+                >
+                  <button type="button" onClick={() => handleToggleTag(tag)}>
+                    {tag}
+                  </button>
+                </Badge>
+              );
+            })}
+          </Flex>
+        )}
+      </Flex>
+
+      {error && (
+        <Callout.Root color="red" size="1">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>Failed to load task memories.</Callout.Text>
+        </Callout.Root>
+      )}
+
+      <Flex direction="column" gap="2" className={styles.list}>
+        {isFetching && !data ? (
+          <Flex justify="center" p="4">
+            <Spinner />
+          </Flex>
+        ) : visibleMemories.length > 0 ? (
+          visibleMemories.map((memory) => (
+            <MemoryCard
+              key={memory.filename}
+              memory={memory}
+              onPin={handlePin}
+              onArchive={handleArchive}
+              disabled={busy}
+            />
+          ))
+        ) : (
+          <Text color="gray" size="2" className={styles.emptyState}>
+            No memories match the current filters.
+          </Text>
+        )}
+      </Flex>
+    </Box>
+  );
+};
+
+export default MemoryInboxPanel;

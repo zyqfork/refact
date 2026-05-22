@@ -739,7 +739,7 @@ async fn write_memory_inbox_cursor(task_dir: &Path, cursor: DateTime<Utc>) -> Re
     atomic_write_text(&task_memory_cursor_path(task_dir), &cursor.to_rfc3339()).await
 }
 
-fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, String> {
+pub fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(value.trim())
         .map(|value| value.with_timezone(&Utc))
         .map_err(|e| format!("Invalid rfc3339 timestamp `{}`: {}", value, e))
@@ -799,6 +799,68 @@ struct DuplicateMemoryPair {
 struct SkippedMemoryWarning {
     path: PathBuf,
     error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemoryApiEntry {
+    pub filename: String,
+    pub created_at: String,
+    pub created_at_known: bool,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub kind: MemoryKind,
+    pub namespace: MemoryNamespace,
+    pub pinned: bool,
+    pub status: MemoryStatus,
+    pub role: Option<String>,
+    pub agent_id: Option<String>,
+    pub card_id: Option<String>,
+    pub supersedes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemoryApiWarning {
+    pub filename: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemoriesApiResponse {
+    pub task_id: String,
+    pub since: String,
+    pub new_count: usize,
+    pub memories: Vec<TaskMemoryApiEntry>,
+    pub warnings: Vec<TaskMemoryApiWarning>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskMemoryListFilters {
+    pub since: Option<DateTime<Utc>>,
+    pub kind: Option<MemoryKind>,
+    pub namespace: Option<MemoryNamespace>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemoryPinApiResponse {
+    pub ok: bool,
+    pub filename: String,
+    pub pinned: bool,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemoryArchiveApiResponse {
+    pub ok: bool,
+    pub filename: String,
+    pub archived_filename: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemoryTriageApiResponse {
+    pub ok: bool,
+    pub cursor: String,
 }
 
 async fn memory_file_mtime(path: &Path) -> Option<DateTime<Utc>> {
@@ -1102,6 +1164,153 @@ fn render_memory_inbox(
         "\n## Actions\n- task_mem_pin(memory_id) to keep one forever\n- task_mem_archive(memory_id) to hide from auto-inject\n- task_mem_save(content=\"...\", supersedes=\"<old>\") to replace\n- task_mem_triage_done() when finished\n",
     );
     output
+}
+
+fn memory_matches_search(memory: &TaskMemoryInboxEntry, query: &str) -> bool {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    let filename = memory.memory_id().to_ascii_lowercase();
+    let title = memory.title().to_ascii_lowercase();
+    let body = memory.body.to_ascii_lowercase();
+    let tags = memory
+        .frontmatter
+        .tags
+        .iter()
+        .any(|tag| tag.to_ascii_lowercase().contains(&query));
+    filename.contains(&query) || title.contains(&query) || body.contains(&query) || tags
+}
+
+fn memory_to_api_entry(memory: TaskMemoryInboxEntry) -> TaskMemoryApiEntry {
+    TaskMemoryApiEntry {
+        filename: memory.memory_id(),
+        created_at: memory.created_at.to_rfc3339(),
+        created_at_known: memory.created_at_known,
+        title: memory.title(),
+        content: memory.body,
+        tags: memory.frontmatter.tags,
+        kind: memory.frontmatter.kind,
+        namespace: memory.frontmatter.namespace,
+        pinned: memory.frontmatter.pinned,
+        status: memory.frontmatter.status,
+        role: memory.frontmatter.role,
+        agent_id: memory.frontmatter.agent_id,
+        card_id: memory.frontmatter.card_id,
+        supersedes: memory.frontmatter.supersedes,
+    }
+}
+
+pub async fn list_task_memories_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    filters: TaskMemoryListFilters,
+) -> Result<TaskMemoriesApiResponse, String> {
+    let task_dir = find_task_dir(gcx, task_id).await?;
+    let now = Utc::now();
+    let since = filters
+        .since
+        .or(read_memory_inbox_cursor(&task_dir).await?)
+        .unwrap_or_else(|| now - Duration::hours(24));
+    let (mut memories, warnings) = load_task_memory_inbox_entries(&task_dir.join(MEMORIES_DIR)).await?;
+    let new_count = memories
+        .iter()
+        .filter(|memory| memory.created_at_known && memory.created_at > since)
+        .count();
+
+    memories.retain(|memory| {
+        if let Some(kind) = filters.kind {
+            if memory.frontmatter.kind != kind {
+                return false;
+            }
+        }
+        if let Some(namespace) = &filters.namespace {
+            if &memory.frontmatter.namespace != namespace {
+                return false;
+            }
+        }
+        if let Some(search) = &filters.search {
+            if !memory_matches_search(memory, search) {
+                return false;
+            }
+        }
+        true
+    });
+
+    Ok(TaskMemoriesApiResponse {
+        task_id: task_id.to_string(),
+        since: since.to_rfc3339(),
+        new_count,
+        memories: memories.into_iter().map(memory_to_api_entry).collect(),
+        warnings: warnings
+            .into_iter()
+            .map(|warning| TaskMemoryApiWarning {
+                filename: warning
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                error: warning.error,
+            })
+            .collect(),
+    })
+}
+
+pub async fn set_task_memory_pinned_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    filename: &str,
+    pinned: bool,
+) -> Result<TaskMemoryPinApiResponse, String> {
+    let memories_dir = get_task_memories_dir(gcx, task_id).await?;
+    let (path, changed) = set_task_memory_pinned(&memories_dir, filename, pinned).await?;
+    Ok(TaskMemoryPinApiResponse {
+        ok: true,
+        filename: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(filename)
+            .to_string(),
+        pinned,
+        changed,
+    })
+}
+
+pub async fn archive_task_memory_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    filename: &str,
+) -> Result<TaskMemoryArchiveApiResponse, String> {
+    let memories_dir = get_task_memories_dir(gcx, task_id).await?;
+    let (source_path, dest_path) = archive_task_memory(&memories_dir, filename).await?;
+    Ok(TaskMemoryArchiveApiResponse {
+        ok: true,
+        filename: source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(filename)
+            .to_string(),
+        archived_filename: dest_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(filename)
+            .to_string(),
+    })
+}
+
+pub async fn mark_task_memories_triaged_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    cursor: Option<DateTime<Utc>>,
+) -> Result<TaskMemoryTriageApiResponse, String> {
+    let task_dir = find_task_dir(gcx, task_id).await?;
+    let cursor = cursor.unwrap_or_else(Utc::now);
+    write_memory_inbox_cursor(&task_dir, cursor).await?;
+    Ok(TaskMemoryTriageApiResponse {
+        ok: true,
+        cursor: cursor.to_rfc3339(),
+    })
 }
 
 async fn find_task_memory_path(
