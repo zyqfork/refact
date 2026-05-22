@@ -1403,31 +1403,33 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
             </Tabs.List>
           </div>
           <Box className={styles.chatContent}>
-            <Tabs.Content value="chat" className={styles.workspaceTabContent}>
-              {activeChat ? (
-                <InternalLinkProvider onInternalLink={handleInternalLink}>
-                  <Chat
-                    host={config.host}
-                    tabbed={false}
-                    backFromChat={handleBack}
-                  />
-                </InternalLinkProvider>
-              ) : (
-                <Flex
-                  align="center"
-                  justify="center"
-                  style={{ height: "100%" }}
-                >
-                  <Text color="gray">Create a planner chat to get started</Text>
-                </Flex>
-              )}
-            </Tabs.Content>
-            <Tabs.Content
-              value="memories"
-              className={styles.workspaceTabContent}
-            >
-              <MemoryInboxPanel taskId={taskId} />
-            </Tabs.Content>
+            {workspaceTab === "chat" ? (
+              <Box className={styles.workspaceTabContent}>
+                {activeChat ? (
+                  <InternalLinkProvider onInternalLink={handleInternalLink}>
+                    <Chat
+                      host={config.host}
+                      tabbed={false}
+                      backFromChat={handleBack}
+                    />
+                  </InternalLinkProvider>
+                ) : (
+                  <Flex
+                    align="center"
+                    justify="center"
+                    style={{ height: "100%" }}
+                  >
+                    <Text color="gray">
+                      Create a planner chat to get started
+                    </Text>
+                  </Flex>
+                )}
+              </Box>
+            ) : (
+              <Box className={styles.workspaceTabContent}>
+                <MemoryInboxPanel taskId={taskId} />
+              </Box>
+            )}
           </Box>
         </Tabs.Root>
       </Box>
