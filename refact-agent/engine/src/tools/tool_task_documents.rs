@@ -25,7 +25,7 @@ const HISTORY_CAP: usize = 20;
 const VALID_KINDS: [&str; 6] = ["plan", "design", "runbook", "brief", "postmortem", "spec"];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-struct DocumentFrontmatter {
+pub(crate) struct DocumentFrontmatter {
     name: String,
     slug: String,
     kind: String,
@@ -39,9 +39,9 @@ struct DocumentFrontmatter {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TaskDocument {
-    frontmatter: DocumentFrontmatter,
-    content: String,
+pub(crate) struct TaskDocument {
+    pub(crate) frontmatter: DocumentFrontmatter,
+    pub(crate) content: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,7 +91,7 @@ fn validate_kind(kind: &str) -> Result<(), String> {
     }
 }
 
-fn document_path(documents_dir: &Path, slug: &str) -> PathBuf {
+pub(crate) fn document_path(documents_dir: &Path, slug: &str) -> PathBuf {
     documents_dir.join(format!("{}.md", slug))
 }
 
@@ -292,7 +292,7 @@ async fn snapshot_existing(documents_dir: &Path, slug: &str) -> Result<(), Strin
     cap_history(documents_dir, slug).await
 }
 
-async fn create_document_at(
+pub(crate) async fn create_document_at(
     documents_dir: &Path,
     slug: &str,
     name: &str,
@@ -328,6 +328,26 @@ async fn create_document_at(
     };
     write_document(&path, &document).await?;
     Ok(document)
+}
+
+pub(crate) async fn next_available_slug_at(
+    documents_dir: &Path,
+    base_slug: &str,
+) -> Result<String, String> {
+    validate_slug(base_slug)?;
+    if !document_path(documents_dir, base_slug).exists() {
+        return Ok(base_slug.to_string());
+    }
+    for index in 2..=999 {
+        let slug = format!("{}-{}", base_slug, index);
+        if !document_path(documents_dir, &slug).exists() {
+            return Ok(slug);
+        }
+    }
+    Err(format!(
+        "could not allocate an available slug for `{}`",
+        base_slug
+    ))
 }
 
 async fn list_documents_at(documents_dir: &Path) -> Result<Vec<TaskDocument>, String> {
@@ -528,7 +548,10 @@ async fn task_context(
     Ok((gcx, task_id, author_role))
 }
 
-async fn documents_dir_for_task(gcx: Arc<GlobalContext>, task_id: &str) -> Result<PathBuf, String> {
+pub(crate) async fn documents_dir_for_task(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+) -> Result<PathBuf, String> {
     let task_dir = storage::find_task_dir(gcx, task_id).await?;
     Ok(task_dir.join(DOCUMENTS_DIR))
 }
@@ -1054,6 +1077,39 @@ mod tests {
         let table = format_doc_list(&docs);
         assert!(table.contains("| slug | name | kind | pinned | version | updated_at |"));
         assert!(table.contains("| main-plan | Main Plan | plan | true | 1 |"));
+    }
+
+    #[tokio::test]
+    async fn next_available_slug_appends_version_for_collision() {
+        let (_temp, dir) = temp_documents_dir().await;
+        create_document_at(
+            &dir,
+            "initial-plan",
+            "Initial Plan",
+            "plan",
+            "v1",
+            true,
+            Vec::new(),
+            "planner",
+        )
+        .await
+        .unwrap();
+        create_document_at(
+            &dir,
+            "initial-plan-2",
+            "Initial Plan",
+            "plan",
+            "v2",
+            true,
+            Vec::new(),
+            "planner",
+        )
+        .await
+        .unwrap();
+
+        let slug = next_available_slug_at(&dir, "initial-plan").await.unwrap();
+
+        assert_eq!(slug, "initial-plan-3");
     }
 
     #[tokio::test]

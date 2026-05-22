@@ -23,6 +23,10 @@ lazy_static! {
     static ref DIFF_GIT_REGEX: Regex = Regex::new(
         r"(?m)^(?:diff --git [ab]/(\S+)|[+]{3} [ab]/(\S+))"
     ).expect("Invalid diff git regex");
+
+    static ref TASK_CARD_MARKER_REGEX: Regex = Regex::new(
+        r"\bT-\d+\b"
+    ).expect("Invalid task card marker regex");
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +53,8 @@ pub struct ParsedDecisions {
     pub tool_outputs_to_include: Vec<String>,
     pub pending_tasks: Vec<String>,
     pub handoff_message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_plan: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,7 +344,36 @@ fn parse_list_tag(content: &str, tag: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn has_substantive_plan_markers(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let mut markers = 0;
+    for marker in ["wave", "card", "acceptance criteria"] {
+        if lower.contains(marker) {
+            markers += 1;
+        }
+    }
+    if TASK_CARD_MARKER_REGEX.is_match(text) {
+        markers += 1;
+    }
+    text_symbols(text) > 500 && markers >= 2
+}
+
+pub fn extract_initial_plan_text(source_content: &str, handoff_message: &str) -> Option<String> {
+    if let Some(plan) = parse_xml_tag(source_content, "plan") {
+        if !plan.trim().is_empty() {
+            return Some(plan);
+        }
+    }
+    let handoff_message = handoff_message.trim();
+    if has_substantive_plan_markers(handoff_message) {
+        Some(handoff_message.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn parse_llm_response(response: &str) -> ParsedDecisions {
+    let handoff_message = parse_xml_tag(response, "handoff_message").unwrap_or_default();
     ParsedDecisions {
         summary: parse_xml_tag(response, "summary").unwrap_or_default(),
         files_to_open: parse_list_tag(response, "files_to_open"),
@@ -346,7 +381,8 @@ pub fn parse_llm_response(response: &str) -> ParsedDecisions {
         memories_to_include: parse_list_tag(response, "memories_to_include"),
         tool_outputs_to_include: parse_list_tag(response, "tool_outputs_to_include"),
         pending_tasks: parse_list_tag(response, "pending_tasks"),
-        handoff_message: parse_xml_tag(response, "handoff_message").unwrap_or_default(),
+        initial_plan: extract_initial_plan_text(response, &handoff_message),
+        handoff_message,
     }
 }
 
@@ -864,10 +900,7 @@ pub async fn assemble_new_chat(
     Ok(new_messages)
 }
 
-async fn read_file_content_safe(
-    path: &str,
-    workspace_dirs: &[PathBuf],
-) -> Result<String, String> {
+async fn read_file_content_safe(path: &str, workspace_dirs: &[PathBuf]) -> Result<String, String> {
     let full_path = if std::path::Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else if let Some(workspace) = workspace_dirs.first() {
@@ -1020,6 +1053,51 @@ Continue with refresh token implementation.
         assert_eq!(decisions.tool_outputs_to_include[0], "MSG_ID:7");
         assert_eq!(decisions.pending_tasks.len(), 2);
         assert!(decisions.handoff_message.contains("refresh token"));
+        assert!(decisions.initial_plan.is_none());
+    }
+
+    #[test]
+    fn test_parse_plan_tag_for_initial_plan() {
+        let response = r#"
+<summary>Move this to a task plan.</summary>
+<plan>
+Wave 0
+- Card T-1: Build storage
+- Acceptance Criteria: tests pass
+</plan>
+<handoff_message>Continue with setup.</handoff_message>
+"#;
+
+        let decisions = parse_llm_response(response);
+
+        let plan = decisions.initial_plan.unwrap();
+        assert!(plan.contains("Wave 0"));
+        assert!(plan.contains("Card T-1"));
+        assert!(!plan.contains("<plan>"));
+    }
+
+    #[test]
+    fn test_heuristic_initial_plan_from_substantive_handoff() {
+        let handoff = format!(
+            "Wave 0 ready. Card T-1 implements storage. Acceptance Criteria: cargo test passes. {}",
+            "Create follow-up cards and preserve dependencies. ".repeat(20)
+        );
+        assert!(text_symbols(&handoff) > 500);
+
+        let plan = extract_initial_plan_text("", &handoff).unwrap();
+
+        assert!(plan.contains("Wave 0"));
+        assert!(plan.contains("Acceptance Criteria"));
+    }
+
+    #[test]
+    fn test_heuristic_initial_plan_is_conservative() {
+        let handoff = format!(
+            "Continue the conversation with these implementation details. {}",
+            "No structured planning markers here. ".repeat(30)
+        );
+
+        assert!(extract_initial_plan_text("", &handoff).is_none());
     }
 
     #[test]
@@ -1379,7 +1457,7 @@ MSG_ID:2
         let messages = vec![
             ChatMessage {
                 role: "user".to_string(),
-                content: ChatContent::SimpleText("current request".to_string()),
+                content: ChatContent::SimpleText("current request ".repeat(2000)),
                 ..Default::default()
             },
             ChatMessage {

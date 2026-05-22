@@ -91,6 +91,12 @@ messages:
     A brief message to start the new chat, telling the assistant what to continue working on.
     </handoff_message>
 
+    If TARGET MODE is task_planner and the conversation contains a complete implementation plan, also include it verbatim:
+
+    <plan>
+    Full plan text, including waves, cards, dependencies, files, tests, and acceptance criteria.
+    </plan>
+
     Be thorough but selective. The goal is to preserve everything important while keeping the new chat focused. Do not select more than one image-bearing message unless it is absolutely necessary; only one image can be carried over.
 
 tools: []

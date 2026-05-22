@@ -8,6 +8,7 @@ pub use refact_agentic::mode_transition::{
     context_file_rendered_symbols,
     count_images_in_messages,
     extract_conversation_metadata,
+    extract_initial_plan_text,
     format_annotated_messages,
     format_budget_summary,
     format_file_list,

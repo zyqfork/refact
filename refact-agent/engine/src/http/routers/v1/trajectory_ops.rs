@@ -21,6 +21,45 @@ use crate::chat::get_or_create_session_with_trajectory;
 use refact_chat_history::trajectory_snapshot::TrajectorySnapshot;
 use crate::custom_error::ScratchError;
 
+async fn create_initial_plan_document_for_transition(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    plan_text: Option<&str>,
+) {
+    let Some(plan_text) = plan_text.map(str::trim).filter(|text| !text.is_empty()) else {
+        return;
+    };
+    let result = async {
+        let documents_dir = crate::tools::tool_task_documents::documents_dir_for_task(gcx.clone(), task_id)
+            .await?;
+        let slug = crate::tools::tool_task_documents::next_available_slug_at(
+            &documents_dir,
+            "initial-plan",
+        )
+        .await?;
+        crate::tools::tool_task_documents::create_document_at(
+            &documents_dir,
+            &slug,
+            "Initial Plan",
+            "plan",
+            plan_text,
+            true,
+            Vec::new(),
+            "planner",
+        )
+        .await?;
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(
+            "failed to create initial-plan document for task {}: {}",
+            task_id,
+            error
+        );
+    }
+}
+
 #[derive(Deserialize)]
 pub struct TransformRequest {
     pub options: CompressOptions,
@@ -607,6 +646,13 @@ pub async fn handle_planner_from_transition(
     .await
     .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    create_initial_plan_document_for_transition(
+        gcx.clone(),
+        &task_id,
+        decisions.initial_plan.as_deref(),
+    )
+    .await;
+
     let response = ModeTransitionApplyResponse {
         new_chat_id,
         messages_count: new_messages.len(),
@@ -710,5 +756,21 @@ mod tests {
             raw["worktree"]["root"],
             dir.path().join("worktree").display().to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn transition_initial_plan_document_failure_is_non_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx_with_dirs(
+            dir.path().join("cache"),
+            std::env::temp_dir().join(format!("refact-cfg-{}", uuid::Uuid::new_v4())),
+        )
+        .await;
+        create_initial_plan_document_for_transition(
+            gcx,
+            "missing-task",
+            Some("Wave 0\n- Card T-1\n- Acceptance Criteria: tests pass"),
+        )
+        .await;
     }
 }
