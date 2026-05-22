@@ -9,6 +9,7 @@ use tokio::sync::Mutex as AMutex;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::tasks::storage;
+use crate::tasks::types::{BoardCard, TaskBoard};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use refact_runtime_api::{ChatSessionFacade, SessionState};
 
@@ -404,55 +405,102 @@ pub(crate) async fn get_agent_statuses(
     task_id: &str,
 ) -> Result<Vec<AgentStatus>, String> {
     let board = storage::load_board(gcx, task_id).await?;
+    statuses_from_board(&board, chat_facade).await
+}
 
+async fn statuses_from_board(
+    board: &TaskBoard,
+    chat_facade: Arc<dyn ChatSessionFacade>,
+) -> Result<Vec<AgentStatus>, String> {
     let mut statuses = Vec::new();
 
     for card in &board.cards {
+        if !should_report_card(card) {
+            continue;
+        }
+
+        let mut session_state = None;
+        let mut last_tool_name = None;
         if let Some(agent_chat_id) = &card.agent_chat_id {
+            let live_state = chat_facade.session_state(agent_chat_id).await?;
             let snapshot = chat_facade.session_snapshot(agent_chat_id).await.ok();
-            let session_state = match snapshot.as_ref() {
-                Some(snapshot) => Some(snapshot.session_state),
-                None => chat_facade.session_state(agent_chat_id).await?,
+            let empty_snapshot_without_live = live_state.is_none()
+                && snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.messages.is_empty())
+                    .unwrap_or(false);
+            session_state = if empty_snapshot_without_live {
+                None
+            } else {
+                live_state.or_else(|| snapshot.as_ref().map(|snapshot| snapshot.session_state))
             };
-            let last_tool_name = snapshot
+            last_tool_name = snapshot
                 .as_ref()
                 .and_then(|snapshot| last_tool_name_from_messages(&snapshot.messages));
-            let last_update = card.status_updates.last();
-            let last_status_update_at =
-                last_update.and_then(|update| parse_timestamp(&update.timestamp));
-            let last_heartbeat_at = card.last_heartbeat_at.as_deref().and_then(parse_timestamp);
-            let completed_at = card.completed_at.as_deref().and_then(parse_timestamp);
-            let started_at = card.started_at.as_deref().and_then(parse_timestamp);
-            let created_at = parse_timestamp(&card.created_at);
-            let last_activity_at = latest_timestamp([
-                last_heartbeat_at,
-                last_status_update_at,
-                completed_at,
-                started_at,
-                created_at,
-            ]);
-            let change_seq = last_activity_at
-                .map(|ts| ts.timestamp().max(0) as u64)
-                .unwrap_or(board.rev);
-            let last_status_update = last_update.map(|u| format!("{}: {}", u.timestamp, u.message));
-
-            statuses.push(AgentStatus {
-                card_id: card.id.clone(),
-                card_title: card.title.clone(),
-                agent_chat_id: agent_chat_id.clone(),
-                column: card.column.clone(),
-                priority: card.priority.clone(),
-                session_state,
-                last_status_update,
-                last_activity_at,
-                final_report: card.final_report.clone(),
-                last_tool_name,
-                change_seq,
-            });
         }
+
+        statuses.push(agent_status_from_card(
+            card,
+            board.rev,
+            session_state,
+            last_tool_name,
+        ));
     }
 
     Ok(statuses)
+}
+
+fn should_report_card(card: &BoardCard) -> bool {
+    card.agent_chat_id.is_some() || matches!(card.column.as_str(), "done" | "failed")
+}
+
+fn agent_status_from_card(
+    card: &BoardCard,
+    board_rev: u64,
+    session_state: Option<SessionState>,
+    last_tool_name: Option<String>,
+) -> AgentStatus {
+    let last_update = card.status_updates.last();
+    let last_status_update_at = last_update.and_then(|update| parse_timestamp(&update.timestamp));
+    let last_heartbeat_at = card.last_heartbeat_at.as_deref().and_then(parse_timestamp);
+    let completed_at = card.completed_at.as_deref().and_then(parse_timestamp);
+    let started_at = card.started_at.as_deref().and_then(parse_timestamp);
+    let created_at = parse_timestamp(&card.created_at);
+    let last_activity_at = latest_timestamp([
+        last_heartbeat_at,
+        last_status_update_at,
+        completed_at,
+        started_at,
+        created_at,
+    ]);
+    let change_seq = change_seq_from_activity(board_rev, last_activity_at);
+    let last_status_update = last_update.map(|u| format!("{}: {}", u.timestamp, u.message));
+
+    AgentStatus {
+        card_id: card.id.clone(),
+        card_title: card.title.clone(),
+        agent_chat_id: card
+            .agent_chat_id
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+        column: card.column.clone(),
+        priority: card.priority.clone(),
+        session_state,
+        last_status_update,
+        last_activity_at,
+        final_report: card.final_report.clone(),
+        last_tool_name,
+        change_seq,
+    }
+}
+
+fn change_seq_from_activity(board_rev: u64, last_activity_at: Option<DateTime<Utc>>) -> u64 {
+    if board_rev > 0 {
+        return board_rev;
+    }
+    last_activity_at
+        .map(|timestamp| timestamp.timestamp_millis().max(0) as u64)
+        .unwrap_or_default()
 }
 
 fn last_tool_name_from_messages(messages: &[ChatMessage]) -> Option<String> {

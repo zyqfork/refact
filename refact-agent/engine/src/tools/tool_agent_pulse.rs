@@ -96,7 +96,7 @@ async fn fetch_session_snapshot(
                     ),
                 )
             } else {
-                let state = Some(snapshot.session_state);
+                let state = live_state.or(Some(snapshot.session_state));
                 (Some(snapshot), state, None)
             }
         }
