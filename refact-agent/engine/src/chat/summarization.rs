@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::global_context::GlobalContext;
+use crate::chat::diagnostics::{filter_ui_only_messages, is_ui_only_message};
 use crate::chat::history_limit::{compute_context_budget, ContextPressure};
 use crate::chat::trajectory_ops::approx_token_count;
 use crate::subchat::{SubchatConfig, ToolsPolicy, run_subchat};
@@ -66,11 +67,29 @@ fn range_contains_preserved(messages: &[ChatMessage], start: usize, end: usize) 
         .any(|msg| msg.preserve == Some(true))
 }
 
+fn is_real_summarization_anchor(message: &ChatMessage) -> bool {
+    message.role == "summarization"
+        && message
+            .summarization_tier
+            .as_deref()
+            .is_some_and(|tier| tier != "tier2_reactive")
+        && !is_ui_only_message(message)
+}
+
+fn visible_tier1_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    filter_ui_only_messages(messages.to_vec())
+}
+
 pub fn find_summarization_boundary(messages: &[ChatMessage]) -> (usize, usize) {
+    let visible_messages = visible_tier1_messages(messages);
+    find_summarization_boundary_visible(&visible_messages)
+}
+
+fn find_summarization_boundary_visible(messages: &[ChatMessage]) -> (usize, usize) {
     let start = messages
         .iter()
         .enumerate()
-        .filter(|(_, m)| m.role == "summarization")
+        .filter(|(_, m)| is_real_summarization_anchor(m))
         .last()
         .map(|(i, _)| i + 1)
         .unwrap_or(0);
@@ -105,12 +124,15 @@ pub async fn tier1_summarize(
     messages: &[ChatMessage],
     n_ctx: usize,
 ) -> Result<ChatMessage, String> {
+    let visible_messages = visible_tier1_messages(messages);
+    let messages = visible_messages.as_slice();
+
     let budget = compute_context_budget(messages, n_ctx);
     if !matches!(budget.pressure, ContextPressure::High | ContextPressure::Critical) {
         return Err("context pressure not high enough".to_string());
     }
 
-    let (start, end) = find_summarization_boundary(messages);
+    let (start, end) = find_summarization_boundary_visible(messages);
     if end <= start {
         return Err("no messages to summarize".to_string());
     }
@@ -258,6 +280,11 @@ pub async fn maybe_apply_tier1(
         None => return,
     };
 
+    let messages_clone = visible_tier1_messages(&messages_clone);
+    if messages_clone.is_empty() {
+        return;
+    }
+
     let budget = compute_context_budget(&messages_clone, effective_n_ctx);
     if !matches!(budget.pressure, ContextPressure::High | ContextPressure::Critical) {
         return;
@@ -319,6 +346,18 @@ mod tests {
         }
     }
 
+    fn make_ui_only_reactive_report(content: &str) -> ChatMessage {
+        let mut extra = serde_json::Map::new();
+        extra.insert("_ui_only".to_string(), serde_json::Value::Bool(true));
+        ChatMessage {
+            role: "summarization".to_string(),
+            content: ChatContent::SimpleText(content.to_string()),
+            summarization_tier: Some("tier2_reactive".to_string()),
+            extra,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_find_boundary_no_previous_summary() {
         let messages: Vec<ChatMessage> = (0..10)
@@ -358,6 +397,50 @@ mod tests {
         let (start, end) = find_summarization_boundary(&messages);
         assert_eq!(start, 7, "should start after the summarization message");
         assert!(end >= start, "end should be >= start");
+    }
+
+    #[test]
+    fn find_summarization_boundary_ignores_ui_only_reactive_report() {
+        let mut messages: Vec<ChatMessage> = (0..6)
+            .map(|i| {
+                if i % 2 == 0 {
+                    make_user_msg(&format!("user {}", i))
+                } else {
+                    make_assistant_msg(&format!("assistant {}", i))
+                }
+            })
+            .collect();
+        messages.push(make_ui_only_reactive_report("Reactive compaction report"));
+        for i in 0..6 {
+            if i % 2 == 0 {
+                messages.push(make_user_msg("new user"));
+            } else {
+                messages.push(make_assistant_msg("new asst"));
+            }
+        }
+
+        let (start, end) = find_summarization_boundary(&messages);
+
+        assert_eq!(start, 0);
+        assert!(end > 0);
+    }
+
+    #[test]
+    fn tier1_summarize_filters_ui_only_messages_from_prompt_boundary() {
+        let hidden = make_ui_only_reactive_report("context_length_exceeded diagnostic");
+        let messages = vec![
+            make_user_msg("visible 1"),
+            hidden,
+            make_assistant_msg("visible 2"),
+            make_user_msg("visible 3"),
+        ];
+
+        let filtered = visible_tier1_messages(&messages);
+
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered
+            .iter()
+            .all(|msg| !msg.content.content_text_only().contains("context_length_exceeded")));
     }
 
     #[test]

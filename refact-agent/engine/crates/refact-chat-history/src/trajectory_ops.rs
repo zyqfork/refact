@@ -4,7 +4,19 @@ use uuid::Uuid;
 
 use refact_core::chat_types::{ChatContent, ChatMessage, ContextFile};
 
+const UI_ONLY_MARKER: &str = "_ui_only";
+
+pub fn is_ui_only_message(msg: &ChatMessage) -> bool {
+    msg.extra.get(UI_ONLY_MARKER).and_then(|v| v.as_bool()) == Some(true)
+}
+
 pub fn sanitize_message_for_new_thread(m: &ChatMessage) -> ChatMessage {
+    let extra = if is_ui_only_message(m) {
+        m.extra.clone()
+    } else {
+        serde_json::Map::new()
+    };
+
     ChatMessage {
         message_id: m.message_id.clone(),
         role: m.role.clone(),
@@ -23,13 +35,16 @@ pub fn sanitize_message_for_new_thread(m: &ChatMessage) -> ChatMessage {
         summarized_range: m.summarized_range,
         summarization_tier: m.summarization_tier.clone(),
         summarized_token_estimate: m.summarized_token_estimate,
-        extra: serde_json::Map::new(),
+        extra,
         output_filter: None,
     }
 }
 
 pub fn sanitize_messages_for_new_thread(msgs: &[ChatMessage]) -> Vec<ChatMessage> {
-    msgs.iter().map(sanitize_message_for_new_thread).collect()
+    msgs.iter()
+        .filter(|msg| !is_ui_only_message(msg))
+        .map(sanitize_message_for_new_thread)
+        .collect()
 }
 
 fn is_valid_tool_id(id: &str) -> bool {
@@ -46,7 +61,9 @@ fn generate_valid_tool_id() -> String {
     )
 }
 
-pub fn sanitize_messages_for_model_switch(msgs: &mut [ChatMessage]) {
+pub fn sanitize_messages_for_model_switch(msgs: &mut Vec<ChatMessage>) {
+    msgs.retain(|msg| !is_ui_only_message(msg));
+
     for msg in msgs.iter_mut() {
         msg.thinking_blocks = None;
         msg.server_content_blocks = Vec::new();
@@ -538,6 +555,51 @@ mod tests {
             content: ChatContent::SimpleText(content.to_string()),
             ..Default::default()
         }
+    }
+
+    fn make_ui_only_msg(content: &str) -> ChatMessage {
+        let mut extra = serde_json::Map::new();
+        extra.insert(UI_ONLY_MARKER.to_string(), serde_json::Value::Bool(true));
+        ChatMessage {
+            role: "error".to_string(),
+            content: ChatContent::SimpleText(content.to_string()),
+            extra,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sanitize_messages_for_model_switch_drops_ui_only_messages() {
+        let mut messages = vec![
+            make_user_msg("visible"),
+            make_ui_only_msg("context_length_exceeded"),
+            make_assistant_msg("response"),
+        ];
+
+        sanitize_messages_for_model_switch(&mut messages);
+
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|msg| !is_ui_only_message(msg)));
+        assert!(messages
+            .iter()
+            .all(|msg| !msg.content.content_text_only().contains("context_length_exceeded")));
+    }
+
+    #[test]
+    fn sanitize_messages_for_new_thread_does_not_make_ui_only_model_visible() {
+        let messages = vec![
+            make_user_msg("visible"),
+            make_ui_only_msg("reactive compaction report"),
+            make_assistant_msg("response"),
+        ];
+
+        let sanitized = sanitize_messages_for_new_thread(&messages);
+
+        assert_eq!(sanitized.len(), 2);
+        assert!(sanitized.iter().all(|msg| !is_ui_only_message(msg)));
+        assert!(sanitized
+            .iter()
+            .all(|msg| !msg.content.content_text_only().contains("reactive compaction report")));
     }
 
     #[test]

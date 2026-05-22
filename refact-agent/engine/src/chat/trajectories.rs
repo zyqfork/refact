@@ -1509,8 +1509,15 @@ fn count_user_messages(messages: &[serde_json::Value]) -> usize {
         .count()
 }
 
+fn json_message_is_ui_only(msg: &serde_json::Value) -> bool {
+    msg.get("_ui_only").and_then(|v| v.as_bool()) == Some(true)
+}
+
 fn extract_first_user_message(messages: &[serde_json::Value]) -> Option<String> {
     for msg in messages {
+        if json_message_is_ui_only(msg) {
+            continue;
+        }
         if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
             continue;
         }
@@ -1572,6 +1579,12 @@ fn build_title_generation_context(messages: &[serde_json::Value]) -> String {
             .get("role")
             .and_then(|r| r.as_str())
             .unwrap_or("unknown");
+        if json_message_is_ui_only(msg) {
+            continue;
+        }
+        if role == "error" {
+            continue;
+        }
         if role == "system" || role == "tool" || role == "context_file" || role == "cd_instruction"
         {
             continue;
@@ -2993,6 +3006,33 @@ mod tests {
         let context = build_title_generation_context(&messages);
         assert!(context.contains("Question"));
         assert!(!context.contains("File contents"));
+    }
+
+    #[test]
+    fn build_title_generation_context_skips_ui_only_error() {
+        let messages = vec![
+            json!({"role": "error", "content": "context_length_exceeded", "_ui_only": true}),
+            json!({"role": "user", "content": "Implement title filtering"}),
+        ];
+        let context = build_title_generation_context(&messages);
+        assert!(context.contains("Implement title filtering"));
+        assert!(!context.contains("context_length_exceeded"));
+    }
+
+    #[test]
+    fn build_title_generation_context_skips_ui_only_reactive_compaction_report() {
+        let messages = vec![
+            json!({
+                "role": "summarization",
+                "content": "Reactive compaction report",
+                "summarization_tier": "tier2_reactive",
+                "_ui_only": true
+            }),
+            json!({"role": "user", "content": "Fix sanitizers"}),
+        ];
+        let context = build_title_generation_context(&messages);
+        assert!(context.contains("Fix sanitizers"));
+        assert!(!context.contains("Reactive compaction report"));
     }
 
     #[test]
