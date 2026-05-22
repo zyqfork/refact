@@ -8,6 +8,7 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
+use crate::global_context::GlobalContext;
 use crate::tasks::storage;
 use crate::tasks::types::StatusUpdate;
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
@@ -61,9 +62,11 @@ struct BroadcastResult {
     status: BroadcastStatus,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum BroadcastStatus {
     Notified,
     SkippedExcluded,
+    Skipped(String),
     Failed(String),
 }
 
@@ -171,6 +174,7 @@ fn format_output(results: &[BroadcastResult], notified_count: usize, message: &s
         let status = match &result.status {
             BroadcastStatus::Notified => "notified".to_string(),
             BroadcastStatus::SkippedExcluded => "skipped (in exclude_cards)".to_string(),
+            BroadcastStatus::Skipped(reason) => format!("skipped ({})", reason),
             BroadcastStatus::Failed(error) => format!("failed ({})", error),
         };
         lines.push(format!(
@@ -181,6 +185,153 @@ fn format_output(results: &[BroadcastResult], notified_count: usize, message: &s
     lines.push(String::new());
     lines.push(format!("Message: \"{}\"", message));
     lines.join("\n")
+}
+
+const BROADCAST_SKIP_PREFIX: &str = "broadcast_skip:";
+
+async fn reserve_broadcast_target(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    target: &BroadcastTarget,
+    message: &str,
+) -> Result<Option<String>, String> {
+    let card_id_for_update = target.card_id.clone();
+    let chat_id_for_update = target.chat_id.clone();
+    let status_message = format!("Broadcast pending: {}", truncate_chars(message, 80));
+    let heartbeat = Utc::now().to_rfc3339();
+    let result = storage::update_board_atomic(gcx, task_id, move |board| {
+        let Some(card) = board.get_card_mut(&card_id_for_update) else {
+            return Err(format!(
+                "{}Card {} not found",
+                BROADCAST_SKIP_PREFIX, card_id_for_update
+            ));
+        };
+        if card.column != "doing" {
+            let reason = format!("no longer doing; current column is '{}'", card.column);
+            return Err(format!("{}{}", BROADCAST_SKIP_PREFIX, reason));
+        }
+        if card.agent_chat_id.as_deref() != Some(chat_id_for_update.as_str()) {
+            return Err(format!("{}agent_chat_id changed", BROADCAST_SKIP_PREFIX));
+        }
+        card.last_heartbeat_at = Some(heartbeat.clone());
+        card.status_updates.push(StatusUpdate {
+            timestamp: heartbeat.clone(),
+            message: status_message.clone(),
+        });
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok((_, ())) => Ok(None),
+        Err(error) => match error.strip_prefix(BROADCAST_SKIP_PREFIX) {
+            Some(reason) => Ok(Some(reason.to_string())),
+            None => Err(error),
+        },
+    }
+}
+
+async fn record_broadcast_delivery_failed(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    target: &BroadcastTarget,
+    error: &str,
+) -> Result<(), String> {
+    let card_id_for_update = target.card_id.clone();
+    let chat_id_for_update = target.chat_id.clone();
+    let status_message = format!(
+        "Broadcast delivery failed: {}",
+        truncate_chars(error, 120)
+    );
+    let timestamp = Utc::now().to_rfc3339();
+    storage::update_board_atomic(gcx, task_id, move |board| {
+        let card = board
+            .get_card_mut(&card_id_for_update)
+            .ok_or_else(|| format!("Card {} not found", card_id_for_update))?;
+        if card.agent_chat_id.as_deref() != Some(chat_id_for_update.as_str()) {
+            return Ok(());
+        }
+        card.status_updates.push(StatusUpdate {
+            timestamp: timestamp.clone(),
+            message: status_message.clone(),
+        });
+        Ok(())
+    })
+    .await
+    .map(|_| ())
+}
+
+async fn broadcast_to_target(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    target: BroadcastTarget,
+    message: &str,
+    broadcast_message: &str,
+    chat_facade: Arc<dyn refact_runtime_api::ChatSessionFacade>,
+) -> (BroadcastResult, bool) {
+    match reserve_broadcast_target(gcx.clone(), task_id, &target, message).await {
+        Ok(None) => {}
+        Ok(Some(reason)) => {
+            return (
+                BroadcastResult {
+                    card_id: target.card_id,
+                    title: target.title,
+                    status: BroadcastStatus::Skipped(reason),
+                },
+                false,
+            );
+        }
+        Err(error) => {
+            return (
+                BroadcastResult {
+                    card_id: target.card_id,
+                    title: target.title,
+                    status: BroadcastStatus::Failed(format!("status update failed: {}", error)),
+                },
+                false,
+            );
+        }
+    }
+
+    match chat_facade
+        .push_command(
+            &target.chat_id,
+            user_message_command(broadcast_message.to_string()),
+        )
+        .await
+    {
+        Ok(()) => (
+            BroadcastResult {
+                card_id: target.card_id,
+                title: target.title,
+                status: BroadcastStatus::Notified,
+            },
+            true,
+        ),
+        Err(error) => {
+            let status = match record_broadcast_delivery_failed(
+                gcx,
+                task_id,
+                &target,
+                &error,
+            )
+            .await
+            {
+                Ok(()) => BroadcastStatus::Failed(error),
+                Err(record_error) => BroadcastStatus::Failed(format!(
+                    "{}; status update failed: {}",
+                    error, record_error
+                )),
+            };
+            (
+                BroadcastResult {
+                    card_id: target.card_id,
+                    title: target.title,
+                    status,
+                },
+                false,
+            )
+        }
+    }
 }
 
 #[async_trait]
@@ -268,72 +419,19 @@ impl Tool for ToolTaskBroadcast {
                 continue;
             }
 
-            let push_result = chat_facade
-                .push_command(
-                    &target.chat_id,
-                    user_message_command(broadcast_message.clone()),
-                )
-                .await;
-            match push_result {
-                Ok(()) => {
-                    let card_id_for_update = target.card_id.clone();
-                    let chat_id_for_update = target.chat_id.clone();
-                    let status_message =
-                        format!("Broadcast from planner: {}", truncate_chars(&message, 80));
-                    let heartbeat = Utc::now().to_rfc3339();
-                    let update_result = storage::update_board_atomic(
-                        gcx.clone(),
-                        &task_id,
-                        move |board| {
-                            let card = board
-                                .get_card_mut(&card_id_for_update)
-                                .ok_or_else(|| format!("Card {} not found", card_id_for_update))?;
-                            if card.column != "doing" {
-                                return Err(format!(
-                                    "Card {} is no longer in 'doing' column.",
-                                    card_id_for_update
-                                ));
-                            }
-                            if card.agent_chat_id.as_deref() != Some(chat_id_for_update.as_str()) {
-                                return Err(format!(
-                                    "Card {} agent_chat_id changed before broadcast could be recorded.",
-                                    card_id_for_update
-                                ));
-                            }
-                            card.last_heartbeat_at = Some(heartbeat.clone());
-                            card.status_updates.push(StatusUpdate {
-                                timestamp: heartbeat.clone(),
-                                message: status_message.clone(),
-                            });
-                            Ok(())
-                        },
-                    )
-                    .await;
-                    match update_result {
-                        Ok((_, ())) => {
-                            notified_count += 1;
-                            results.push(BroadcastResult {
-                                card_id: target.card_id,
-                                title: target.title,
-                                status: BroadcastStatus::Notified,
-                            });
-                        }
-                        Err(error) => results.push(BroadcastResult {
-                            card_id: target.card_id,
-                            title: target.title,
-                            status: BroadcastStatus::Failed(format!(
-                                "status update failed: {}",
-                                error
-                            )),
-                        }),
-                    }
-                }
-                Err(error) => results.push(BroadcastResult {
-                    card_id: target.card_id,
-                    title: target.title,
-                    status: BroadcastStatus::Failed(error),
-                }),
+            let (result, delivered) = broadcast_to_target(
+                gcx.clone(),
+                &task_id,
+                target,
+                &message,
+                &broadcast_message,
+                chat_facade.clone(),
+            )
+            .await;
+            if delivered {
+                notified_count += 1;
             }
+            results.push(result);
         }
 
         Ok((
@@ -638,13 +736,13 @@ mod tests {
         let board = storage::load_board(gcx, "task-1").await.unwrap();
         assert_eq!(
             board.get_card("T-22").unwrap().status_updates[0].message,
-            "Broadcast from planner: API X is now deprecated, use Y in all new code"
+            "Broadcast pending: API X is now deprecated, use Y in all new code"
         );
         assert!(board.get_card("T-22").unwrap().last_heartbeat_at.is_some());
         assert!(board.get_card("T-23").unwrap().status_updates.is_empty());
         assert_eq!(
             board.get_card("T-29").unwrap().status_updates[0].message,
-            "Broadcast from planner: API X is now deprecated, use Y in all new code"
+            "Broadcast pending: API X is now deprecated, use Y in all new code"
         );
         assert!(output.contains("📢 Broadcast sent to 2 agents"));
         assert!(output.contains("- T-23 (documents): skipped (in exclude_cards)"));
@@ -682,6 +780,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_task_broadcast_skips_card_finished_before_push() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = write_task(
+            temp.path(),
+            vec![test_card("T-22", "auto-nudge", "doing", Some("chat-22"))],
+        )
+        .await;
+        storage::update_board_atomic(gcx.clone(), "task-1", |board| {
+            let card = board.get_card_mut("T-22").unwrap();
+            card.column = "done".to_string();
+            card.completed_at = Some(Utc::now().to_rfc3339());
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let mock = Arc::new(MockChatFacade::new(&[]));
+        let target = BroadcastTarget {
+            card_id: "T-22".to_string(),
+            title: "auto-nudge".to_string(),
+            chat_id: "chat-22".to_string(),
+        };
+
+        let (result, delivered) = broadcast_to_target(
+            gcx.clone(),
+            "task-1",
+            target,
+            "Use API Y",
+            &BroadcastPriority::Steer.format_message("Use API Y"),
+            mock.clone(),
+        )
+        .await;
+        let output = format_output(&[result], 0, "Use API Y");
+
+        assert!(!delivered);
+
+        assert!(mock.pushed_commands().is_empty());
+        assert!(output.contains("📢 Broadcast sent to 0 agents"));
+        assert!(output.contains("- T-22 (auto-nudge): skipped (no longer doing"));
+        let board = storage::load_board(gcx, "task-1").await.unwrap();
+        let card = board.get_card("T-22").unwrap();
+        assert_eq!(card.column, "done");
+        assert!(card.status_updates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tool_task_broadcast_skips_agent_chat_id_changed_before_push() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = write_task(
+            temp.path(),
+            vec![test_card("T-22", "auto-nudge", "doing", Some("chat-22"))],
+        )
+        .await;
+        storage::update_board_atomic(gcx.clone(), "task-1", |board| {
+            let card = board.get_card_mut("T-22").unwrap();
+            card.agent_chat_id = Some("replacement-chat".to_string());
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let mock = Arc::new(MockChatFacade::new(&[]));
+        let target = BroadcastTarget {
+            card_id: "T-22".to_string(),
+            title: "auto-nudge".to_string(),
+            chat_id: "chat-22".to_string(),
+        };
+
+        let (result, delivered) = broadcast_to_target(
+            gcx.clone(),
+            "task-1",
+            target,
+            "Use API Y",
+            &BroadcastPriority::Steer.format_message("Use API Y"),
+            mock.clone(),
+        )
+        .await;
+        let output = format_output(&[result], 0, "Use API Y");
+
+        assert!(!delivered);
+
+        assert!(mock.pushed_commands().is_empty());
+        assert!(output.contains("📢 Broadcast sent to 0 agents"));
+        assert!(output.contains("- T-22 (auto-nudge): skipped (agent_chat_id changed)"));
+        let board = storage::load_board(gcx, "task-1").await.unwrap();
+        let card = board.get_card("T-22").unwrap();
+        assert_eq!(card.agent_chat_id.as_deref(), Some("replacement-chat"));
+        assert!(card.status_updates.is_empty());
+    }
+
+    #[tokio::test]
     async fn tool_task_broadcast_reports_push_failures_without_aborting() {
         let temp = tempfile::tempdir().unwrap();
         let gcx = write_task(
@@ -715,6 +902,14 @@ mod tests {
 
         let board = storage::load_board(gcx, "task-1").await.unwrap();
         assert_eq!(board.get_card("T-22").unwrap().status_updates.len(), 1);
-        assert!(board.get_card("T-29").unwrap().status_updates.is_empty());
+        assert_eq!(board.get_card("T-29").unwrap().status_updates.len(), 2);
+        assert_eq!(
+            board.get_card("T-29").unwrap().status_updates[0].message,
+            "Broadcast pending: Use API Y"
+        );
+        assert_eq!(
+            board.get_card("T-29").unwrap().status_updates[1].message,
+            "Broadcast delivery failed: queue unavailable"
+        );
     }
 }
