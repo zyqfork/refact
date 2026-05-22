@@ -80,6 +80,7 @@ import {
 import { AgentStatusView } from "./AgentStatusView";
 import { AgentPulseView } from "./AgentPulseView";
 import { AgentDiffView } from "./AgentDiffView";
+import { TaskDocumentsView } from "./TaskDocumentsView";
 
 function parseProgressEntry(entry: string): { step?: string; text: string } {
   const m = entry.match(/^(\d+\/\d+):\s*([\s\S]+)$/);
@@ -893,6 +894,25 @@ function processToolCalls(
       <AgentDiffView
         key={`agent-diff-tool-${head.id ?? processed.length}`}
         toolCall={normalizedHead}
+      />
+    );
+    return processToolCalls(
+      tail,
+      toolResults,
+      features,
+      [...processed, elem],
+      contextFilesByToolId,
+      diffsByToolId,
+      activeToolCallId,
+    );
+  }
+
+  if (headName === "doc_list" || headName === "doc_get") {
+    const elem = (
+      <TaskDocumentsView
+        key={`task-documents-tool-${head.id ?? processed.length}`}
+        toolCall={normalizedHead}
+        toolType={headName}
       />
     );
     return processToolCalls(
