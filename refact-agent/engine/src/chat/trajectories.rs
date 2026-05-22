@@ -3861,6 +3861,7 @@ mod tests {
                 agent_worktree: Some(agent_worktree.to_string_lossy().to_string()),
                 agent_worktree_name: Some("wt-legacy".to_string()),
                 target_files: Vec::new(),
+                scope_guard_mode: Default::default(),
             }],
         };
         tokio::fs::write(
@@ -3991,6 +3992,7 @@ mod tests {
                 agent_worktree: Some(agent_worktree.to_string_lossy().to_string()),
                 agent_worktree_name: Some("wt-legacy-mismatch".to_string()),
                 target_files: Vec::new(),
+                scope_guard_mode: Default::default(),
             }],
         };
         tokio::fs::write(

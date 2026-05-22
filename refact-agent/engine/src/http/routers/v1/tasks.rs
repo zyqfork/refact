@@ -196,6 +196,7 @@ pub async fn handle_create_task(
             agent_worktree: None,
             agent_worktree_name: None,
             target_files: req.target_files,
+            scope_guard_mode: Default::default(),
         });
         storage::save_board(gcx, &meta.id, &board)
             .await
@@ -306,6 +307,7 @@ pub async fn handle_patch_board(
                 agent_worktree: None,
                 agent_worktree_name: None,
                 target_files,
+                scope_guard_mode: Default::default(),
             });
         }
         BoardPatch::UpdateCard {

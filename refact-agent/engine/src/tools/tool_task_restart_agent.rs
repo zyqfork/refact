@@ -771,6 +771,7 @@ mod tests {
             agent_worktree: worktree,
             agent_worktree_name: None,
             target_files: vec![],
+            scope_guard_mode: Default::default(),
         }
     }
 
@@ -856,6 +857,7 @@ mod tests {
             agent_worktree: None,
             agent_worktree_name: None,
             target_files: vec![],
+            scope_guard_mode: Default::default(),
         };
         board.cards.push(doing_card);
 

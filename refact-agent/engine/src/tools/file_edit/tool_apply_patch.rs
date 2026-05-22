@@ -7,7 +7,7 @@ use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::privacy::{check_file_privacy, load_privacy_if_needed, FilePrivacyLevel};
 use crate::worktrees::scope::ExecutionScope;
 use crate::tools::file_edit::auxiliary::{
-    await_ast_indexing, convert_edit_to_diffchunks, normalize_line_endings,
+    await_ast_indexing, check_scope_guard, convert_edit_to_diffchunks, normalize_line_endings,
     resolve_path_with_scope, restore_line_endings, sync_documents_ast, write_file,
     ResolvedToolPath,
 };
@@ -187,6 +187,7 @@ pub async fn tool_apply_patch_exec(
     args: &HashMap<String, Value>,
     dry: bool,
     execution_scope: Option<&ExecutionScope>,
+    scope_guard_context: Option<&Arc<AMutex<AtCommandsContext>>>,
 ) -> Result<ApplyPatchResult, String> {
     let parsed = parse_patch_arg(args)?;
     await_ast_indexing(gcx.clone()).await?;
@@ -203,6 +204,9 @@ pub async fn tool_apply_patch_exec(
                     resolve_patch_path(gcx.clone(), &path, false, execution_scope).await?;
                 warnings.extend(resolved_path.warnings);
                 let full_path = resolved_path.path;
+                if let Some(ccx) = scope_guard_context {
+                    check_scope_guard(ccx, &full_path).await?;
+                }
 
                 let exists = match overlay.get(&full_path) {
                     Some(OverlayState::Present(_)) => true,
@@ -237,6 +241,9 @@ pub async fn tool_apply_patch_exec(
                     resolve_patch_path(gcx.clone(), &path, true, execution_scope).await?;
                 warnings.extend(resolved_path.warnings);
                 let full_path = resolved_path.path;
+                if let Some(ccx) = scope_guard_context {
+                    check_scope_guard(ccx, &full_path).await?;
+                }
 
                 let file_content = match overlay.get(&full_path) {
                     Some(OverlayState::Present(content)) => content.clone(),
@@ -296,6 +303,9 @@ pub async fn tool_apply_patch_exec(
                     resolve_patch_path(gcx.clone(), &path, true, execution_scope).await?;
                 warnings.extend(resolved_path.warnings);
                 let full_path = resolved_path.path;
+                if let Some(ccx) = scope_guard_context {
+                    check_scope_guard(ccx, &full_path).await?;
+                }
 
                 let file_content = match overlay.get(&full_path) {
                     Some(OverlayState::Present(content)) => content.clone(),
@@ -320,6 +330,9 @@ pub async fn tool_apply_patch_exec(
                         resolve_patch_path(gcx.clone(), &move_path, false, execution_scope).await?;
                     warnings.extend(resolved_dest.warnings);
                     let dest_path = resolved_dest.path;
+                    if let Some(ccx) = scope_guard_context {
+                        check_scope_guard(ccx, &dest_path).await?;
+                    }
 
                     let dest_exists = match overlay.get(&dest_path) {
                         Some(OverlayState::Present(_)) => true,
@@ -418,8 +431,14 @@ impl Tool for ToolApplyPatch {
             (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
 
-        let result =
-            tool_apply_patch_exec(gcx.clone(), args, false, execution_scope.as_ref()).await?;
+        let result = tool_apply_patch_exec(
+            gcx.clone(),
+            args,
+            false,
+            execution_scope.as_ref(),
+            Some(&ccx),
+        )
+        .await?;
 
         let related_section = {
             let idx_arc = { gcx.knowledge_index.clone() };

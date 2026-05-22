@@ -266,6 +266,7 @@ impl Tool for ToolTaskBoardCreateCard {
             agent_worktree: None,
             agent_worktree_name: None,
             target_files,
+            scope_guard_mode: Default::default(),
         });
         board.rev += 1;
 

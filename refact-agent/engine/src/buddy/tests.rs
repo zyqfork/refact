@@ -3361,6 +3361,7 @@ fn make_board_card(
         agent_worktree: None,
         agent_worktree_name: None,
         target_files: vec![],
+        scope_guard_mode: Default::default(),
     }
 }
 
@@ -7212,6 +7213,7 @@ async fn task_abandoned_not_emitted_when_only_session_missing() {
         agent_worktree: None,
         agent_worktree_name: None,
         target_files: vec![],
+        scope_guard_mode: Default::default(),
     });
     save_board(gcx.clone(), &task_meta.id, &board)
         .await
@@ -7272,6 +7274,7 @@ async fn task_cluster_duplicate_emits_with_real_touched_files() {
             agent_worktree: None,
             agent_worktree_name: None,
             target_files: vec!["src/auth.rs".to_string()],
+            scope_guard_mode: Default::default(),
         });
         save_board(gcx.clone(), task_id, &board).await.unwrap();
     }

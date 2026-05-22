@@ -46,6 +46,15 @@ pub enum TaskStatus {
     Abandoned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeGuardMode {
+    #[default]
+    Off,
+    Warn,
+    Reject,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskBoard {
     #[serde(default = "default_schema_version")]
@@ -280,6 +289,8 @@ pub struct BoardCard {
     pub agent_worktree_name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_files: Vec<String>,
+    #[serde(default)]
+    pub scope_guard_mode: ScopeGuardMode,
 }
 
 fn default_priority() -> String {
@@ -408,6 +419,7 @@ mod tests {
             agent_worktree: None,
             agent_worktree_name: None,
             target_files: vec![],
+            scope_guard_mode: ScopeGuardMode::Off,
         }
     }
 
@@ -480,6 +492,30 @@ mod tests {
 
         assert_eq!(card.final_report.as_deref(), Some("legacy markdown report"));
         assert!(card.final_report_structured.is_none());
+    }
+
+    #[test]
+    fn scope_guard_mode_defaults_to_off() {
+        assert_eq!(ScopeGuardMode::default(), ScopeGuardMode::Off);
+    }
+
+    #[test]
+    fn board_card_without_scope_guard_field_deserializes() {
+        let card: BoardCard = serde_json::from_str(
+            r#"{
+                "id": "T-1",
+                "title": "Legacy card",
+                "column": "planned",
+                "created_at": "2026-05-16T00:00:00Z",
+                "started_at": null,
+                "completed_at": null,
+                "assignee": null,
+                "agent_chat_id": null
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(card.scope_guard_mode, ScopeGuardMode::Off);
     }
 
     #[test]
@@ -558,7 +594,12 @@ mod tests {
                 card("dep-failed", "Dependency failed", "failed", vec![]),
                 card("ready", "Ready", "planned", vec!["dep-done"]),
                 card("blocked", "Blocked", "planned", vec!["dep-failed"]),
-                card("blocked-missing", "Blocked missing", "planned", vec!["missing"]),
+                card(
+                    "blocked-missing",
+                    "Blocked missing",
+                    "planned",
+                    vec!["missing"],
+                ),
                 card("in-progress", "In progress", "doing", vec![]),
             ],
             ..TaskBoard::default()

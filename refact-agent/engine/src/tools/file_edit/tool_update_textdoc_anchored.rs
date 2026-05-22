@@ -5,8 +5,8 @@ use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::privacy::load_privacy_if_needed;
 use crate::tools::file_edit::auxiliary::{
     append_scope_warnings, await_ast_indexing, convert_edit_to_diffchunks, edit_result_summary,
-    parse_bool_arg, parse_path_for_update, parse_string_arg, scope_warnings_to_tool_message,
-    str_replace_anchored, sync_documents_ast, AnchorMode,
+    check_scope_guard, parse_bool_arg, parse_path_for_update, parse_string_arg,
+    scope_warnings_to_tool_message, str_replace_anchored, sync_documents_ast, AnchorMode,
 };
 use crate::tools::tools_description::{
     MatchConfirmDeny, MatchConfirmDenyResult, Tool, ToolDesc, ToolSource, ToolSourceType,
@@ -101,9 +101,13 @@ pub async fn tool_update_text_doc_anchored_exec(
     args: &HashMap<String, Value>,
     dry: bool,
     execution_scope: Option<&ExecutionScope>,
+    scope_guard_context: Option<&Arc<AMutex<AtCommandsContext>>>,
 ) -> Result<(String, String, Vec<DiffChunk>, String), String> {
     let a = parse_args(gcx.clone(), args, execution_scope).await?;
     await_ast_indexing(gcx.clone()).await?;
+    if let Some(ccx) = scope_guard_context {
+        check_scope_guard(ccx, &a.path).await?;
+    }
     let (before, after) = str_replace_anchored(
         gcx.clone(),
         &a.path,
@@ -136,9 +140,14 @@ impl Tool for ToolUpdateTextDocAnchored {
             let cgcx = ccx.lock().await;
             (cgcx.app.gcx.clone(), cgcx.execution_scope.clone())
         };
-        let (_, _, chunks, summary) =
-            tool_update_text_doc_anchored_exec(gcx.clone(), args, false, execution_scope.as_ref())
-                .await?;
+        let (_, _, chunks, summary) = tool_update_text_doc_anchored_exec(
+            gcx.clone(),
+            args,
+            false,
+            execution_scope.as_ref(),
+            Some(&ccx),
+        )
+        .await?;
 
         let related_section = {
             let idx_arc = { gcx.knowledge_index.clone() };

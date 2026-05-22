@@ -604,6 +604,7 @@ mod tests {
             agent_worktree: None,
             agent_worktree_name: None,
             target_files: Vec::new(),
+            scope_guard_mode: Default::default(),
         }
     }
 

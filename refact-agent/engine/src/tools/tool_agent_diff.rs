@@ -423,6 +423,7 @@ mod tests {
             agent_worktree: worktree,
             agent_worktree_name: None,
             target_files: vec![],
+            scope_guard_mode: Default::default(),
         }
     }
 

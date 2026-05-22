@@ -1,4 +1,5 @@
 use crate::ast::ast_indexer_thread::{ast_indexer_block_until_finished, ast_indexer_enqueue_files};
+use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_file::{file_repair_candidates, return_one_candidate_or_a_good_error};
 use crate::call_validation::DiffChunk;
 use crate::files_correction::{
@@ -8,12 +9,14 @@ use crate::files_correction::{
 use crate::files_in_workspace::get_file_text_from_memory_or_disk;
 use crate::global_context::GlobalContext;
 use crate::privacy::{check_file_privacy, FilePrivacyLevel, PrivacySettings};
+use crate::tasks::types::ScopeGuardMode;
 use crate::worktrees::scope::ExecutionScope;
 use regex::{Match, Regex};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Mutex as AMutex;
 use tracing::warn;
 
 pub use refact_file_edit_core::text_edit::{
@@ -75,6 +78,73 @@ pub fn resolve_path_with_scope(
         path: scoped.path,
         warnings,
     }))
+}
+
+pub async fn check_scope_guard(
+    ccx: &Arc<AMutex<AtCommandsContext>>,
+    edit_path: &Path,
+) -> Result<(), String> {
+    let (gcx, task_id, card_id) = {
+        let ccx_lock = ccx.lock().await;
+        let meta = match ccx_lock.task_meta.as_ref() {
+            Some(meta) if meta.role == "agents" => meta.clone(),
+            _ => return Ok(()),
+        };
+        let card_id = match meta.card_id.as_ref() {
+            Some(card_id) => card_id.clone(),
+            None => return Ok(()),
+        };
+        (ccx_lock.app.gcx.clone(), meta.task_id, card_id)
+    };
+
+    let board = crate::tasks::storage::load_board(gcx, &task_id).await?;
+    let card = match board.get_card(&card_id) {
+        Some(card) => card,
+        None => return Ok(()),
+    };
+
+    if matches!(card.scope_guard_mode, ScopeGuardMode::Off) {
+        return Ok(());
+    }
+    if card.target_files.is_empty() {
+        return Ok(());
+    }
+
+    let canon = match dunce::canonicalize(edit_path) {
+        Ok(path) => path.to_string_lossy().to_string(),
+        Err(_) => edit_path.to_string_lossy().to_string(),
+    };
+    let allowed = card
+        .target_files
+        .iter()
+        .any(|target| canon.ends_with(target.trim_start_matches('/')));
+    if allowed {
+        return Ok(());
+    }
+
+    let is_test = canon.contains("/tests/")
+        || canon.ends_with("_test.rs")
+        || canon.ends_with(".test.ts")
+        || canon.ends_with(".test.tsx");
+    if is_test {
+        return Ok(());
+    }
+
+    match card.scope_guard_mode {
+        ScopeGuardMode::Warn => {
+            tracing::warn!(
+                "Scope warning: edited {} not in target_files for card {}",
+                canon,
+                card_id
+            );
+            Ok(())
+        }
+        ScopeGuardMode::Reject => Err(format!(
+            "Path {} is outside the card's target_files scope. Add it to target_files or change scope_guard_mode to 'warn'.",
+            canon
+        )),
+        ScopeGuardMode::Off => Ok(()),
+    }
 }
 
 pub async fn parse_path_for_update(
@@ -670,10 +740,13 @@ mod tests {
     mod worktree_scope_tools {
         use crate::at_commands::at_commands::AtCommandsContext;
         use crate::call_validation::{ChatContent, ContextEnum};
+        use crate::chat::types::TaskMeta;
         use crate::global_context::GlobalContext;
         use crate::privacy::{FilePrivacySettings, PrivacySettings};
+        use crate::tasks::types::{BoardCard, ScopeGuardMode, TaskBoard};
         use crate::tools::file_edit::tool_apply_patch::tool_apply_patch_exec;
         use crate::tools::file_edit::tool_create_textdoc::tool_create_text_doc_exec;
+        use crate::tools::file_edit::auxiliary::check_scope_guard;
         use crate::tools::file_edit::tool_undo_textdoc::tool_undo_text_doc_exec;
         use crate::tools::file_edit::tool_update_textdoc::tool_update_text_doc_exec;
         use crate::tools::file_edit::tool_update_textdoc_anchored::tool_update_text_doc_anchored_exec;
@@ -747,6 +820,7 @@ mod tests {
             };
             let scope = ExecutionScope::from_worktree(&worktree);
             let gcx = crate::global_context::tests::make_test_gcx().await;
+            *gcx.documents_state.workspace_folders.lock().unwrap() = vec![source.clone()];
             set_privacy(gcx.clone(), Vec::new()).await;
             Fixture {
                 _temp: temp,
@@ -810,6 +884,74 @@ mod tests {
             }
         }
 
+        fn scope_guard_card(mode: ScopeGuardMode) -> BoardCard {
+            BoardCard {
+                id: "card".to_string(),
+                title: "Card".to_string(),
+                column: "doing".to_string(),
+                priority: "P1".to_string(),
+                depends_on: vec![],
+                instructions: String::new(),
+                assignee: None,
+                agent_chat_id: Some("chat".to_string()),
+                status_updates: vec![],
+                final_report: None,
+                final_report_structured: None,
+                created_at: "2026-05-22T00:00:00Z".to_string(),
+                started_at: None,
+                last_heartbeat_at: None,
+                completed_at: None,
+                agent_branch: None,
+                agent_worktree: None,
+                agent_worktree_name: None,
+                target_files: vec!["src/allowed.rs".to_string()],
+                scope_guard_mode: mode,
+            }
+        }
+
+        async fn scope_guard_ccx(
+            f: &Fixture,
+            mode: ScopeGuardMode,
+            target_files: Vec<String>,
+            role: &str,
+        ) -> Arc<AMutex<AtCommandsContext>> {
+            let mut card = scope_guard_card(mode);
+            card.target_files = target_files;
+            let board = TaskBoard {
+                cards: vec![card],
+                ..TaskBoard::default()
+            };
+            let task_dir = f.source.join(".refact").join("tasks").join("task");
+            tokio::fs::create_dir_all(&task_dir).await.unwrap();
+            tokio::fs::write(
+                task_dir.join("board.yaml"),
+                serde_yaml::to_string(&board).unwrap(),
+            )
+            .await
+            .unwrap();
+            Arc::new(AMutex::new(
+                AtCommandsContext::new_from_app(
+                    crate::app_state::AppState::from_gcx(f.gcx.clone()).await,
+                    4096,
+                    20,
+                    false,
+                    Vec::new(),
+                    "chat".to_string(),
+                    None,
+                    "model".to_string(),
+                    Some(TaskMeta {
+                        task_id: "task".to_string(),
+                        role: role.to_string(),
+                        agent_id: Some("agent".to_string()),
+                        card_id: Some("card".to_string()),
+                        planner_chat_id: None,
+                    }),
+                    Some(f.worktree.clone()),
+                )
+                .await,
+            ))
+        }
+
         #[tokio::test]
         async fn worktree_scope_tools_edit_helpers_modify_scoped_files() {
             let f = fixture().await;
@@ -822,7 +964,7 @@ mod tests {
                 ("old_str", json!("old")),
                 ("replacement", json!("new")),
             ]);
-            tool_update_text_doc_exec(f.gcx.clone(), &update_args, false, Some(&f.scope))
+            tool_update_text_doc_exec(f.gcx.clone(), &update_args, false, Some(&f.scope), None)
                 .await
                 .unwrap();
             assert_eq!(
@@ -842,11 +984,13 @@ mod tests {
                 ("old_str", json!("new")),
                 ("replacement", json!("mapped")),
             ]);
+
             let (_, _, _, summary) = tool_update_text_doc_exec(
                 f.gcx.clone(),
                 &update_source_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -864,7 +1008,8 @@ mod tests {
                 ("path", json!("src/create_relative.txt")),
                 ("content", json!("created")),
             ]);
-            tool_create_text_doc_exec(f.gcx.clone(), &create_args, false, Some(&f.scope))
+
+            tool_create_text_doc_exec(f.gcx.clone(), &create_args, false, Some(&f.scope), None)
                 .await
                 .unwrap();
             assert_eq!(
@@ -875,9 +1020,16 @@ mod tests {
                 ("path", json!("new_dir/deep/file.rs")),
                 ("content", json!("nested")),
             ]);
-            tool_create_text_doc_exec(f.gcx.clone(), &nested_create_args, false, Some(&f.scope))
-                .await
-                .unwrap();
+
+            tool_create_text_doc_exec(
+                f.gcx.clone(),
+                &nested_create_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 fs::read_to_string(f.root.join("new_dir/deep/file.rs")).unwrap(),
                 "nested\n"
@@ -886,11 +1038,13 @@ mod tests {
                 ("path", json!("../escaped/file.rs")),
                 ("content", json!("escaped")),
             ]);
+
             assert!(tool_create_text_doc_exec(
                 f.gcx.clone(),
                 &escaped_create_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .is_err());
@@ -898,11 +1052,13 @@ mod tests {
                 ("path", path_value(&f.source.join("src/create_source.txt"))),
                 ("content", json!("created source")),
             ]);
+
             let (_, _, _, summary) = tool_create_text_doc_exec(
                 f.gcx.clone(),
                 &create_source_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -921,11 +1077,13 @@ mod tests {
                 ("anchor", json!("anchor")),
                 ("content", json!("\nrelative")),
             ]);
+
             tool_update_text_doc_anchored_exec(
                 f.gcx.clone(),
                 &anchored_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -935,11 +1093,13 @@ mod tests {
                 ("anchor", json!("anchor")),
                 ("content", json!("source\n")),
             ]);
+
             let (_, _, _, summary) = tool_update_text_doc_anchored_exec(
                 f.gcx.clone(),
                 &anchored_source_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -959,19 +1119,28 @@ mod tests {
                 ("pattern", json!("alpha")),
                 ("replacement", json!("beta")),
             ]);
-            tool_update_text_doc_regex_exec(f.gcx.clone(), &regex_args, false, Some(&f.scope))
-                .await
-                .unwrap();
+
+            tool_update_text_doc_regex_exec(
+                f.gcx.clone(),
+                &regex_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap();
             let regex_source_args = args(vec![
                 ("path", path_value(&f.source.join("src/regex.txt"))),
                 ("pattern", json!("beta")),
                 ("replacement", json!("gamma")),
             ]);
+
             let (_, _, _, summary) = tool_update_text_doc_regex_exec(
                 f.gcx.clone(),
                 &regex_source_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -992,19 +1161,28 @@ mod tests {
                 ("content", json!("TWO")),
                 ("ranges", json!("2")),
             ]);
-            tool_update_text_doc_by_lines_exec(f.gcx.clone(), &lines_args, false, Some(&f.scope))
-                .await
-                .unwrap();
+
+            tool_update_text_doc_by_lines_exec(
+                f.gcx.clone(),
+                &lines_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap();
             let lines_source_args = args(vec![
                 ("path", path_value(&f.source.join("src/lines.txt"))),
                 ("content", json!("ONE")),
                 ("ranges", json!("1")),
             ]);
+
             let (_, _, _, summary) = tool_update_text_doc_by_lines_exec(
                 f.gcx.clone(),
                 &lines_source_args,
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -1025,9 +1203,16 @@ mod tests {
                 ("old_str", json!("base")),
                 ("replacement", json!("changed")),
             ]);
-            tool_update_text_doc_exec(f.gcx.clone(), &undo_update_args, false, Some(&f.scope))
-                .await
-                .unwrap();
+
+            tool_update_text_doc_exec(
+                f.gcx.clone(),
+                &undo_update_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap();
             let undo_args = args(vec![("path", path_value(&f.source.join("src/undo.txt")))]);
             let (_, _, _, summary) =
                 tool_undo_text_doc_exec(f.gcx.clone(), &undo_args, Some(&f.scope))
@@ -1053,10 +1238,15 @@ mod tests {
                 ("old_str", json!("old")),
                 ("replacement", json!("absolute")),
             ]);
-            let (_, _, _, summary) =
-                tool_update_text_doc_exec(f.gcx.clone(), &absolute_args, false, Some(&f.scope))
-                    .await
-                    .unwrap();
+            let (_, _, _, summary) = tool_update_text_doc_exec(
+                f.gcx.clone(),
+                &absolute_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap();
             assert!(summary.contains("absolute path was used"));
             assert_eq!(
                 fs::read_to_string(f.root.join("src/absolute.txt")).unwrap(),
@@ -1070,10 +1260,16 @@ mod tests {
                 ("old_str", json!("old")),
                 ("replacement", json!("outside")),
             ]);
-            let (_, _, _, summary) =
-                tool_update_text_doc_exec(f.gcx.clone(), &outside_args, false, Some(&f.scope))
-                    .await
-                    .unwrap();
+
+            let (_, _, _, summary) = tool_update_text_doc_exec(
+                f.gcx.clone(),
+                &outside_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap();
             assert!(summary.contains("outside active worktree"));
             assert_eq!(fs::read_to_string(&outside_file).unwrap(), "outside\n");
 
@@ -1089,10 +1285,16 @@ mod tests {
                 ("old_str", json!("old")),
                 ("replacement", json!("blocked")),
             ]);
-            let error =
-                tool_update_text_doc_exec(f.gcx.clone(), &blocked_args, false, Some(&f.scope))
-                    .await
-                    .unwrap_err();
+
+            let error = tool_update_text_doc_exec(
+                f.gcx.clone(),
+                &blocked_args,
+                false,
+                Some(&f.scope),
+                None,
+            )
+            .await
+            .unwrap_err();
             assert!(error.contains("blocked by privacy"));
         }
 
@@ -1105,11 +1307,13 @@ mod tests {
                 "*** Begin Patch\n*** Update File: {}\n@@\n-old\n+mapped\n*** End Patch",
                 f.source.join("src/patch_source.txt").display()
             );
+
             let result = tool_apply_patch_exec(
                 f.gcx.clone(),
                 &args(vec![("patch", json!(patch))]),
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -1130,11 +1334,13 @@ mod tests {
                 "*** Begin Patch\n*** Add File: {}\n+absolute\n*** End Patch",
                 f.root.join("src/patch_absolute.txt").display()
             );
+
             let result = tool_apply_patch_exec(
                 f.gcx.clone(),
                 &args(vec![("patch", json!(patch))]),
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -1154,11 +1360,13 @@ mod tests {
                 f.source.join("src/patch_move.txt").display(),
                 f.source.join("src/patch_moved.txt").display()
             );
+
             let result = tool_apply_patch_exec(
                 f.gcx.clone(),
                 &args(vec![("patch", json!(patch))]),
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -1183,11 +1391,13 @@ mod tests {
                 "*** Begin Patch\n*** Update File: {}\n@@\n-outside old\n+outside new\n*** End Patch",
                 outside_file.display()
             );
+
             let result = tool_apply_patch_exec(
                 f.gcx.clone(),
                 &args(vec![("patch", json!(patch))]),
                 false,
                 Some(&f.scope),
+                None,
             )
             .await
             .unwrap();
@@ -1196,6 +1406,110 @@ mod tests {
                 .join("\n")
                 .contains("outside active worktree"));
             assert_eq!(fs::read_to_string(&outside_file).unwrap(), "outside new\n");
+        }
+
+        #[tokio::test]
+        async fn scope_guard_off_allows_outside_target_files() {
+            let f = fixture().await;
+            let ccx = scope_guard_ccx(
+                &f,
+                ScopeGuardMode::Off,
+                vec!["src/allowed.rs".to_string()],
+                "agents",
+            )
+            .await;
+            fs::write(f.root.join("src/outside.rs"), "old\n").unwrap();
+
+            check_scope_guard(&ccx, &f.root.join("src/outside.rs"))
+                .await
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn scope_guard_reject_errors_outside_target_files() {
+            let f = fixture().await;
+            let ccx = scope_guard_ccx(
+                &f,
+                ScopeGuardMode::Reject,
+                vec!["src/allowed.rs".to_string()],
+                "agents",
+            )
+            .await;
+            fs::write(f.root.join("src/outside.rs"), "old\n").unwrap();
+
+            let error = check_scope_guard(&ccx, &f.root.join("src/outside.rs"))
+                .await
+                .unwrap_err();
+
+            assert!(error.contains("outside the card's target_files scope"));
+        }
+
+        #[tokio::test]
+        async fn scope_guard_warn_allows_outside_target_files() {
+            let f = fixture().await;
+            let ccx = scope_guard_ccx(
+                &f,
+                ScopeGuardMode::Warn,
+                vec!["src/allowed.rs".to_string()],
+                "agents",
+            )
+            .await;
+            fs::write(f.root.join("src/outside.rs"), "old\n").unwrap();
+
+            check_scope_guard(&ccx, &f.root.join("src/outside.rs"))
+                .await
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn scope_guard_reject_allows_inside_target_files() {
+            let f = fixture().await;
+            let ccx = scope_guard_ccx(
+                &f,
+                ScopeGuardMode::Reject,
+                vec!["src/allowed.rs".to_string()],
+                "agents",
+            )
+            .await;
+            fs::write(f.root.join("src/allowed.rs"), "old\n").unwrap();
+
+            check_scope_guard(&ccx, &f.root.join("src/allowed.rs"))
+                .await
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn scope_guard_reject_allows_test_files() {
+            let f = fixture().await;
+            let ccx = scope_guard_ccx(
+                &f,
+                ScopeGuardMode::Reject,
+                vec!["src/allowed.rs".to_string()],
+                "agents",
+            )
+            .await;
+            fs::write(f.root.join("src/allowed_test.rs"), "old\n").unwrap();
+
+            check_scope_guard(&ccx, &f.root.join("src/allowed_test.rs"))
+                .await
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn scope_guard_skips_non_agent_context() {
+            let f = fixture().await;
+            let ccx = scope_guard_ccx(
+                &f,
+                ScopeGuardMode::Reject,
+                vec!["src/allowed.rs".to_string()],
+                "planner",
+            )
+            .await;
+            fs::write(f.root.join("src/outside.rs"), "old\n").unwrap();
+
+            check_scope_guard(&ccx, &f.root.join("src/outside.rs"))
+                .await
+                .unwrap();
         }
 
         #[tokio::test]

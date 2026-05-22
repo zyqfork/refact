@@ -784,6 +784,7 @@ mod tests {
             agent_worktree: worktree,
             agent_worktree_name: Some("legacy-id".to_string()),
             target_files: vec![],
+            scope_guard_mode: Default::default(),
         }
     }
 
