@@ -261,7 +261,11 @@ function parseJsonRow(value: unknown): AgentStatusRow | null {
     emoji: stateEmoji(state, emoji ?? ""),
     age: age ?? (ageMinutes === null ? "unknown" : `${ageMinutes}m ago`),
     ageMinutes,
-    lastTool: getStringField(value, ["last_tool", "lastTool", "last_tool_name"]),
+    lastTool: getStringField(value, [
+      "last_tool",
+      "lastTool",
+      "last_tool_name",
+    ]),
     lastStatusUpdate: getStringField(value, [
       "last_status_update",
       "lastStatusUpdate",
@@ -329,7 +333,9 @@ function parseMarkdownReport(content: string): AgentStatusReport | null {
   };
 }
 
-export function parseAgentStatusOutput(content: string): AgentStatusReport | null {
+export function parseAgentStatusOutput(
+  content: string,
+): AgentStatusReport | null {
   return parseJsonReport(content) ?? parseMarkdownReport(content);
 }
 
@@ -364,7 +370,9 @@ export function formatAgentActionCommand(
     case "diff":
       return `agent_diff(card_id=${card})`;
     case "steer":
-      return `agent_steer(card_id=${card}, message=${JSON.stringify(value ?? "")})`;
+      return `agent_steer(card_id=${card}, message=${JSON.stringify(
+        value ?? "",
+      )})`;
     case "cancel":
       return `cancel_agent(card_id=${card}, reason=${JSON.stringify(
         value ?? DEFAULT_CANCEL_REASON,

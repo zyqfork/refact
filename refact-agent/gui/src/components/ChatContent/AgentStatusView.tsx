@@ -125,7 +125,10 @@ function tabCount(rows: AgentStatusRow[], tab: AgentStatusTab): number {
   return rows.filter((row) => row.state === tab).length;
 }
 
-function renderDetailValue(value: string | null, empty: string): React.ReactNode {
+function renderDetailValue(
+  value: string | null,
+  empty: string,
+): React.ReactNode {
   if (!value) return <Text color="gray">{empty}</Text>;
   return value;
 }
@@ -170,7 +173,12 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
   }, []);
 
   const handleAgeChange = useCallback((value: string) => {
-    if (value === "all" || value === "15" || value === "60" || value === "240") {
+    if (
+      value === "all" ||
+      value === "15" ||
+      value === "60" ||
+      value === "240"
+    ) {
       setAgeFilter(value);
     }
   }, []);
@@ -229,7 +237,11 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
     if (!dialog || dialog.kind !== "cancel") return;
     void submitCommand(
       `Cancel ${dialog.row.cardId}`,
-      formatAgentActionCommand("cancel", dialog.row.cardId, cancelReason.trim()),
+      formatAgentActionCommand(
+        "cancel",
+        dialog.row.cardId,
+        cancelReason.trim(),
+      ),
     );
   }, [cancelReason, dialog, submitCommand]);
 
@@ -246,7 +258,8 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
               <ExclamationTriangleIcon />
             </Callout.Icon>
             <Callout.Text>
-              {alerts.stuck} stuck, {alerts.failed} failed, {alerts.paused} needing approval
+              {alerts.stuck} stuck, {alerts.failed} failed, {alerts.paused}{" "}
+              needing approval
             </Callout.Text>
           </Callout.Root>
         </Box>
@@ -267,7 +280,11 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
           <Text size="1" color="gray">
             Priority
           </Text>
-          <Select.Root value={priority} onValueChange={handlePriorityChange} size="1">
+          <Select.Root
+            value={priority}
+            onValueChange={handlePriorityChange}
+            size="1"
+          >
             <Select.Trigger aria-label="Priority filter" />
             <Select.Content>
               <Select.Item value="all">All priorities</Select.Item>
@@ -280,7 +297,11 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
           <Text size="1" color="gray">
             Age
           </Text>
-          <Select.Root value={ageFilter} onValueChange={handleAgeChange} size="1">
+          <Select.Root
+            value={ageFilter}
+            onValueChange={handleAgeChange}
+            size="1"
+          >
             <Select.Trigger aria-label="Age filter" />
             <Select.Content>
               <Select.Item value="all">Any age</Select.Item>
@@ -311,20 +332,33 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
                   <React.Fragment key={row.cardId}>
                     <Table.Row>
                       <Table.Cell>
-                        <Badge color={priorityBadgeColor(row.priority)} variant="soft">
+                        <Badge
+                          color={priorityBadgeColor(row.priority)}
+                          variant="soft"
+                        >
                           {row.priority}
                         </Badge>
                       </Table.Cell>
                       <Table.Cell>
                         <Text asChild size="1" weight="medium">
-                          <a href={`#${row.cardId}`} className={styles.cardLink}>
+                          <a
+                            href={`#${row.cardId}`}
+                            className={styles.cardLink}
+                          >
                             {row.cardId}
                           </a>
                         </Text>
                       </Table.Cell>
-                      <Table.Cell className={styles.titleCell}>{row.title}</Table.Cell>
+                      <Table.Cell className={styles.titleCell}>
+                        {row.title}
+                      </Table.Cell>
                       <Table.Cell>
-                        <Text className={classNames(styles.stateText, stateClass(row.state))}>
+                        <Text
+                          className={classNames(
+                            styles.stateText,
+                            stateClass(row.state),
+                          )}
+                        >
                           {row.emoji} {row.stateText}
                         </Text>
                       </Table.Cell>
@@ -393,7 +427,11 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
                     {isExpanded && (
                       <Table.Row>
                         <Table.Cell colSpan={7} className={styles.detailsCell}>
-                          <Flex direction="column" gap="2" className={styles.details}>
+                          <Flex
+                            direction="column"
+                            gap="2"
+                            className={styles.details}
+                          >
                             <Box>
                               <Text size="1" color="gray" as="div">
                                 Last status update
@@ -411,7 +449,9 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
                               </Text>
                               <Text size="2" as="div">
                                 {renderDetailValue(
-                                  row.finalReport ? truncateText(row.finalReport, 300) : null,
+                                  row.finalReport
+                                    ? truncateText(row.finalReport, 300)
+                                    : null,
                                   "No final report in this output.",
                                 )}
                               </Text>
@@ -434,7 +474,10 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
         )}
       </Flex>
 
-      <Dialog.Root open={dialog !== null} onOpenChange={(open) => !open && closeDialog()}>
+      <Dialog.Root
+        open={dialog !== null}
+        onOpenChange={(open) => !open && closeDialog()}
+      >
         <Dialog.Content className={styles.dialogContent}>
           {dialog?.kind === "queued" && (
             <>
@@ -486,16 +529,28 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
           )}
 
           <Flex gap="2" justify="end" mt="3">
-            <Button variant="soft" color="gray" onClick={closeDialog} disabled={isSubmitting}>
+            <Button
+              variant="soft"
+              color="gray"
+              onClick={closeDialog}
+              disabled={isSubmitting}
+            >
               {dialog?.kind === "queued" ? "Close" : "Cancel"}
             </Button>
             {dialog?.kind === "steer" && (
-              <Button onClick={submitSteer} disabled={isSubmitting || !steerMessage.trim()}>
+              <Button
+                onClick={submitSteer}
+                disabled={isSubmitting || !steerMessage.trim()}
+              >
                 {isSubmitting ? <Spinner size="1" /> : "Send steer"}
               </Button>
             )}
             {dialog?.kind === "cancel" && (
-              <Button color="red" onClick={submitCancel} disabled={isSubmitting}>
+              <Button
+                color="red"
+                onClick={submitCancel}
+                disabled={isSubmitting}
+              >
                 {isSubmitting ? <Spinner size="1" /> : "Confirm cancel"}
               </Button>
             )}
@@ -506,7 +561,9 @@ export const AgentStatusContent: React.FC<AgentStatusContentProps> = ({
   );
 };
 
-export const AgentStatusView: React.FC<AgentStatusViewProps> = ({ toolCall }) => {
+export const AgentStatusView: React.FC<AgentStatusViewProps> = ({
+  toolCall,
+}) => {
   const storeKey = toolCall.id ? `tc:${toolCall.id}` : undefined;
   const [isOpen, handleToggle] = useStoredOpen(storeKey, true);
   const isStreaming = useAppSelector(selectIsStreaming);
@@ -537,7 +594,9 @@ export const AgentStatusView: React.FC<AgentStatusViewProps> = ({ toolCall }) =>
     ? mergeAgentAlerts(report.alerts, countAgentAlerts(report.rows))
     : EMPTY_ALERTS;
   const alertCount = alerts.stuck + alerts.failed + alerts.paused;
-  const summary = report ? `Check agents: ${report.rows.length} agents` : "Check agents";
+  const summary = report
+    ? `Check agents: ${report.rows.length} agents`
+    : "Check agents";
   const meta = report && alertCount > 0 ? `${alertCount} alerts` : undefined;
 
   const handleSubmitCommand = useCallback(
