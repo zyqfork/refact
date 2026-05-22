@@ -147,6 +147,44 @@ describe("MemoryInboxPanel", () => {
     });
   });
 
+  it("keeps stale selected tags visible and removable when filters change", async () => {
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/task/:taskId/memories", ({ request }) => {
+        const url = new URL(request.url);
+        const response =
+          url.searchParams.get("kind") === "risk"
+            ? { ...memoriesResponse, memories: [memoriesResponse.memories[1]] }
+            : memoriesResponse;
+        return HttpResponse.json(response);
+      }),
+    );
+
+    const { user } = render(<MemoryInboxPanel taskId="task-1" />, {
+      preloadedState: CONFIG_STATE,
+    });
+
+    await screen.findByText("Use scoped memory index");
+    await user.click(screen.getByRole("button", { name: "planner" }));
+    await user.click(screen.getByRole("combobox", { name: "Memory kind filter" }));
+    await user.click(await screen.findByRole("option", { name: "risk" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "planner" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
+      expect(screen.getByText("No memories match the current filters.")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "planner" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Archive stale notes")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "planner" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Clear filters" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("search filters client-side", async () => {
     mockMemories();
 

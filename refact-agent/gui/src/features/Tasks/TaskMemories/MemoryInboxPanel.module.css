@@ -41,6 +41,11 @@
   box-shadow: 0 0 0 1px var(--accent-8);
 }
 
+.tagChipStale {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
 .list {
   composes: scrollbarThin from "../../../components/shared/scrollbar.module.css";
   flex: 1;

@@ -32,6 +32,29 @@ const DIFF_OUTPUT = [
   FENCE,
 ].join("\n");
 
+const RENAME_ONLY_DIFF_OUTPUT = [
+  "# Agent Diff for T-30",
+  "",
+  "**Card:** rename-only card",
+  "**Branch:** refact/task/T-30-agent",
+  "**Base:** commit def456",
+  "",
+  `${FENCE}diff`,
+  "diff --git a/src/old-name.ts b/src/new-name.ts",
+  "similarity index 100%",
+  "rename from src/old-name.ts",
+  "rename to src/new-name.ts",
+  "",
+  "diff --git a/src/changed.ts b/src/changed.ts",
+  "index 1111111..2222222 100644",
+  "--- a/src/changed.ts",
+  "+++ b/src/changed.ts",
+  "@@ -1 +1 @@",
+  "-old value",
+  "+new value",
+  FENCE,
+].join("\n");
+
 describe("AgentDiffView parsing", () => {
   it("parses unified agent diff markdown", () => {
     const report = parseAgentDiffOutput(DIFF_OUTPUT);
@@ -92,5 +115,17 @@ describe("AgentDiffContent", () => {
       screen.getByText("export const AgentPulseView = true;"),
     ).toBeInTheDocument();
     expect(screen.queryByText("new line")).not.toBeInTheDocument();
+  });
+
+  it("renders a selected file with no hunks without throwing and shows empty diff message", () => {
+    const report = parseAgentDiffOutput(RENAME_ONLY_DIFF_OUTPUT);
+    if (!report) throw new Error("expected diff report");
+
+    render(<AgentDiffContent report={report} />);
+
+    fireEvent.click(screen.getByText("src/new-name.ts"));
+
+    expect(screen.getByText("No diff hunks for this file.")).toBeInTheDocument();
+    expect(screen.queryByText("old value")).not.toBeInTheDocument();
   });
 });

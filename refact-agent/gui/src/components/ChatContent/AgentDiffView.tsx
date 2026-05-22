@@ -30,8 +30,18 @@ function countLines(text: string): number {
   return text.split("\n").filter((line) => line.trim()).length;
 }
 
-function groupDiffChunks(chunks: DiffChunk[]): Record<string, DiffChunk[]> {
+type GroupedDiffChunks = Record<string, DiffChunk[] | undefined>;
+
+function groupDiffChunks(chunks: DiffChunk[]): GroupedDiffChunks {
   return groupBy(chunks, (chunk) => chunk.file_name);
+}
+
+function normalizeGroupedDiffs(
+  groupedDiffs: GroupedDiffChunks,
+): Record<string, DiffChunk[]> {
+  return Object.fromEntries(
+    Object.entries(groupedDiffs).map(([file, diffs]) => [file, diffs ?? []]),
+  );
 }
 
 export const AgentDiffContent: React.FC<AgentDiffContentProps> = ({
@@ -43,12 +53,14 @@ export const AgentDiffContent: React.FC<AgentDiffContentProps> = ({
     [report.diffChunks],
   );
   const selectedDiffs = useMemo(() => {
-    if (!selectedFile) return groupedDiffs;
-    return { [selectedFile]: groupedDiffs[selectedFile] };
+    if (!selectedFile) return normalizeGroupedDiffs(groupedDiffs);
+    return { [selectedFile]: groupedDiffs[selectedFile] ?? [] };
   }, [groupedDiffs, selectedFile]);
 
   const showDiffForm = report.diffChunks.length > 0;
   const shouldShowFileTree = report.files.length > 1;
+  const selectedFileHasNoDiffs =
+    selectedFile !== null && (groupedDiffs[selectedFile]?.length ?? 0) === 0;
 
   return (
     <Box className={styles.root}>
@@ -150,7 +162,11 @@ export const AgentDiffContent: React.FC<AgentDiffContentProps> = ({
               !shouldShowFileTree && styles.diffPaneFull,
             )}
           >
-            {showDiffForm ? (
+            {selectedFileHasNoDiffs ? (
+              <Text as="div" size="2" className={styles.emptyDiffMessage}>
+                No diff hunks for this file.
+              </Text>
+            ) : showDiffForm ? (
               <DiffForm diffs={selectedDiffs} />
             ) : (
               <Box className={styles.rawDiff}>

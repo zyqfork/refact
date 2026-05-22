@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "../../utils/test-utils";
+import { fireEvent, render, screen, waitFor, within } from "../../utils/test-utils";
 import {
   filterAgentStatusRows,
   formatAgentActionCommand,
@@ -8,13 +8,14 @@ import {
 } from "./AgentStatusModel";
 import { AgentStatusContent } from "./AgentStatusView";
 
-const COMPACT_OUTPUT = `⚠️  Alerts: 1 stuck (>15min), 1 failed, 0 needing approval
+const COMPACT_OUTPUT = `⚠️  Alerts: 1 stuck (>15min), 1 failed, 1 needing approval
 
 P0 🔄  T-1   implement-render       | generating |  3m ago | last: cat
 P1 🔴  T-2   fix-tests              | STUCK 18m   | needs attention
 P2 ❌  T-3   broken-card            | failed     | 2h ago
 P1 ✅  T-4   done-card              | done       | 4m ago
-showing 4 of 4; no more pages
+P1 ⏸️  T-5   paused-card            | paused     | 10m ago
+showing 5 of 5; no more pages
 `;
 
 function parsedReport(): AgentStatusReport {
@@ -27,8 +28,8 @@ describe("AgentStatusView parsing", () => {
   it("parses compact one-line agent rows", () => {
     const report = parsedReport();
 
-    expect(report.alerts).toEqual({ stuck: 1, failed: 1, paused: 0 });
-    expect(report.rows).toHaveLength(4);
+    expect(report.alerts).toEqual({ stuck: 1, failed: 1, paused: 1 });
+    expect(report.rows).toHaveLength(5);
     expect(report.rows[0]).toMatchObject({
       priority: "P0",
       cardId: "T-1",
@@ -81,8 +82,20 @@ describe("AgentStatusContent", () => {
     render(<AgentStatusContent report={parsedReport()} />);
 
     expect(
-      screen.getByText("1 stuck, 1 failed, 0 needing approval"),
+      screen.getByText("1 stuck, 1 failed, 1 needing approval"),
     ).toBeInTheDocument();
+  });
+
+  it("shows paused row under the Paused tab", async () => {
+    const { user } = render(<AgentStatusContent report={parsedReport()} />);
+
+    await user.click(screen.getByRole("tab", { name: /Paused 1/u }));
+
+    await waitFor(() => {
+      const table = screen.getByRole("table");
+      expect(within(table).getByText("paused-card")).toBeInTheDocument();
+      expect(within(table).queryByText("implement-render")).not.toBeInTheDocument();
+    });
   });
 
   it("dispatches action commands on button clicks", async () => {

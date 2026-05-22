@@ -51,6 +51,7 @@ export const STATUS_TABS: AgentStatusTab[] = [
   "all",
   "running",
   "stuck",
+  "paused",
   "failed",
   "done",
 ];

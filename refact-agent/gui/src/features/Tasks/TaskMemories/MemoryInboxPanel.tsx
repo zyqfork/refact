@@ -109,6 +109,18 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
     return [...values].sort((a, b) => a.localeCompare(b));
   }, [data?.memories]);
 
+  const selectedTagList = useMemo(
+    () => [...selectedTags].sort((a, b) => a.localeCompare(b)),
+    [selectedTags],
+  );
+
+  const staleSelectedTags = useMemo(() => {
+    const currentTags = new Set(tags);
+    return selectedTagList.filter((tag) => !currentTags.has(tag));
+  }, [selectedTagList, tags]);
+
+  const hasSelectedTags = selectedTagList.length > 0;
+
   const visibleMemories = useMemo(() => {
     return memoriesWithOptimisticState.filter((memory) => {
       if (!clientMatches(memory, search)) return false;
@@ -129,6 +141,10 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
       }
       return next;
     });
+  }, []);
+
+  const handleClearFilters = useCallback(() => {
+    setSelectedTags(new Set());
   }, []);
 
   const handlePin = useCallback(
@@ -245,8 +261,8 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
           </Box>
         </Flex>
 
-        {tags.length > 0 && (
-          <Flex gap="1" wrap="wrap" className={styles.tagChips}>
+        {(tags.length > 0 || hasSelectedTags) && (
+          <Flex gap="1" wrap="wrap" align="center" className={styles.tagChips}>
             {tags.map((tag) => {
               const active = selectedTags.has(tag);
               return (
@@ -266,6 +282,24 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
                 </Badge>
               );
             })}
+            {staleSelectedTags.map((tag) => (
+              <Badge
+                key={tag}
+                asChild
+                color="gray"
+                variant="outline"
+                className={classNames(styles.tagChip, styles.tagChipStale)}
+              >
+                <button type="button" onClick={() => handleToggleTag(tag)}>
+                  {tag}
+                </button>
+              </Badge>
+            ))}
+            {hasSelectedTags && (
+              <Button size="1" variant="ghost" onClick={handleClearFilters}>
+                Clear filters
+              </Button>
+            )}
           </Flex>
         )}
       </Flex>
