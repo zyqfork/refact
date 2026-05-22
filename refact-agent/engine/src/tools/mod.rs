@@ -57,6 +57,7 @@ mod tool_create_knowledge;
 pub(crate) mod tool_mcp_call;
 mod tool_task_agent;
 mod tool_task_agent_finish;
+mod tool_task_batch;
 mod tool_task_board;
 mod tool_task_broadcast;
 pub(crate) mod tool_task_check_agents;
