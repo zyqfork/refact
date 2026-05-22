@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "../../utils/test-utils";
+import {
+  createDefaultChatState,
+  fireEvent,
+  render,
+  screen,
+} from "../../utils/test-utils";
 import { FinalReportView } from "./FinalReportView";
+import { ToolContent } from "./ToolsContent";
+import type {
+  ChatMessages,
+  ToolCall,
+  ToolMessage,
+} from "../../services/refact/types";
 
 const structuredPayload = JSON.stringify({
   summary: "Implemented **structured** final report rendering.",
@@ -46,6 +57,37 @@ const unsafeStructuredPayload = JSON.stringify({
   risks: [],
   assumptions: [],
 });
+
+function makeToolCall(): ToolCall {
+  return {
+    id: "call-task-agent-finish",
+    index: 0,
+    type: "function",
+    function: {
+      name: "task_agent_finish",
+      arguments: "{}",
+    },
+  };
+}
+
+function makeToolMessage(content: string): ToolMessage {
+  return {
+    role: "tool",
+    tool_call_id: "call-task-agent-finish",
+    content,
+    tool_failed: false,
+  };
+}
+
+function renderFinalReportTool(content: string) {
+  const chat = createDefaultChatState();
+  const runtime = chat.threads[chat.current_thread_id];
+  if (!runtime) throw new Error("missing test thread");
+  runtime.thread.messages = [makeToolMessage(content)] as ChatMessages;
+  return render(<ToolContent toolCalls={[makeToolCall()]} />, {
+    preloadedState: { chat },
+  });
+}
 
 describe("FinalReportView", () => {
   it("renders structured payload sections", () => {
@@ -142,9 +184,30 @@ describe("FinalReportView", () => {
   });
 
   it("keeps verification output tails expandable", () => {
-    render(<FinalReportView content={structuredPayload} />);
+    const { container } = render(<FinalReportView content={structuredPayload} />);
+    const details = screen
+      .getByText("npm run test -- FinalReportView --run")
+      .closest("details");
+
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    const summary = details?.querySelector("summary");
+    expect(summary).not.toBeNull();
+    if (!summary) throw new Error("missing verification summary");
+    fireEvent.click(summary);
+    expect(details).toHaveAttribute("open");
     expect(screen.getByText("test passed")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("npm run test -- FinalReportView --run"));
-    expect(screen.getByText("test passed")).toBeInTheDocument();
+    fireEvent.click(summary);
+    expect(details).not.toHaveAttribute("open");
+    expect(container.querySelector("details")).toBe(details);
+  });
+
+  it("renders task_agent_finish reports inside a ToolCard wrapper", () => {
+    renderFinalReportTool(structuredPayload);
+
+    expect(screen.getByTestId("final-report-tool")).toBeInTheDocument();
+    expect(screen.getByText("Task agent final report")).toBeInTheDocument();
+    expect(screen.getByTestId("final-report-view")).toBeInTheDocument();
+    expect(screen.getByText("Final Report")).toBeInTheDocument();
   });
 });

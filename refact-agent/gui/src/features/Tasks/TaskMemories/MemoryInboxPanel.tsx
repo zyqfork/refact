@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Badge,
   Box,
@@ -58,6 +58,21 @@ function formatSince(value?: string): string {
   return date.toLocaleString();
 }
 
+function useDebouncedValue(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timeout);
+  }, [delayMs, value]);
+
+  return debounced;
+}
+
+function optimisticKey(taskId: string, filename: string): string {
+  return `${taskId}:${filename}`;
+}
+
 export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) => {
   const dispatch = useAppDispatch();
   const [kind, setKind] = useState(ALL_VALUE);
@@ -70,8 +85,14 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
     ReadonlyMap<string, boolean>
   >(() => new Map());
   const [archived, setArchived] = useState<ReadonlySet<string>>(() => new Set());
+  const debouncedSearch = useDebouncedValue(search, 200);
 
-  const serverSearch = search.trim();
+  useEffect(() => {
+    setOptimisticPinned(new Map());
+    setArchived(new Set());
+  }, [taskId]);
+
+  const serverSearch = debouncedSearch.trim();
   const query = useMemo(
     () => ({
       taskId,
@@ -88,12 +109,14 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
 
   const memoriesWithOptimisticState = useMemo(() => {
     return (data?.memories ?? [])
-      .filter((memory) => !archived.has(memory.filename))
+      .filter((memory) => !archived.has(optimisticKey(taskId, memory.filename)))
       .map((memory) => ({
         ...memory,
-        pinned: optimisticPinned.get(memory.filename) ?? memory.pinned,
+        pinned:
+          optimisticPinned.get(optimisticKey(taskId, memory.filename)) ??
+          memory.pinned,
       }));
-  }, [archived, data?.memories, optimisticPinned]);
+  }, [archived, data?.memories, optimisticPinned, taskId]);
 
   const namespaces = useMemo(() => {
     const values = new Set<string>();
@@ -149,11 +172,12 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
 
   const handlePin = useCallback(
     async (filename: string, pinned: boolean) => {
-      setOptimisticPinned((previous) => new Map(previous).set(filename, pinned));
+      const key = optimisticKey(taskId, filename);
+      setOptimisticPinned((previous) => new Map(previous).set(key, pinned));
       try {
         await pinMemory({ taskId, filename, pinned }).unwrap();
       } catch {
-        setOptimisticPinned((previous) => new Map(previous).set(filename, !pinned));
+        setOptimisticPinned((previous) => new Map(previous).set(key, !pinned));
       }
     },
     [pinMemory, taskId],
@@ -161,13 +185,14 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
 
   const handleArchive = useCallback(
     async (filename: string) => {
-      setArchived((previous) => new Set(previous).add(filename));
+      const key = optimisticKey(taskId, filename);
+      setArchived((previous) => new Set(previous).add(key));
       try {
         await archiveMemory({ taskId, filename }).unwrap();
       } catch {
         setArchived((previous) => {
           const next = new Set(previous);
-          next.delete(filename);
+          next.delete(key);
           return next;
         });
       }
@@ -189,6 +214,11 @@ export const MemoryInboxPanel: React.FC<MemoryInboxPanelProps> = ({ taskId }) =>
     );
     try {
       await triageDone({ taskId, cursor }).unwrap();
+      dispatch(
+        taskMemoriesApi.util.invalidateTags([
+          { type: "TaskMemories", id: taskId },
+        ]),
+      );
     } catch {
       patch.undo();
     }

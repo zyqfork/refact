@@ -60,6 +60,41 @@ function parsePinned(value: string): boolean {
   return ["true", "yes", "1", "★", "⭐"].includes(value.trim().toLowerCase());
 }
 
+function headerKey(cell: string): keyof Row | null {
+  const normalized = cell
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+  switch (normalized) {
+    case "slug":
+      return "slug";
+    case "name":
+    case "title":
+      return "name";
+    case "kind":
+      return "kind";
+    case "pinned":
+      return "pinned";
+    case "version":
+      return "version";
+    case "updated":
+    case "updated at":
+      return "updated_at";
+    default:
+      return null;
+  }
+}
+
+function columnIndex(header: string[], key: keyof Row): number {
+  return header.findIndex((cell) => headerKey(cell) === key);
+}
+
+function cellValue(cells: string[], index: number, fallback: string): string {
+  if (index < 0) return fallback;
+  return cells[index] ?? fallback;
+}
+
 function kindColor(kind: string): BadgeColor {
   return kind in KIND_COLORS ? KIND_COLORS[kind as Kind] : "gray";
 }
@@ -69,7 +104,7 @@ function parseRows(markdown: string): Row[] {
     .split(/\r?\n/)
     .filter((line) => line.trim().startsWith("|"));
   const headerIndex = lines.findIndex((line) => {
-    const header = tableCells(line).map((cell) => cell.toLowerCase());
+    const header = tableCells(line).map(headerKey);
     return (
       header.includes("slug") &&
       header.includes("name") &&
@@ -78,23 +113,26 @@ function parseRows(markdown: string): Row[] {
   });
   if (headerIndex < 0) return [];
 
-  const header = tableCells(lines[headerIndex]).map((cell) =>
-    cell.toLowerCase(),
-  );
-  const index = (name: keyof Row) => header.indexOf(name);
+  const header = tableCells(lines[headerIndex]);
+  const slugIndex = columnIndex(header, "slug");
+  const nameIndex = columnIndex(header, "name");
+  const kindIndex = columnIndex(header, "kind");
+  const pinnedIndex = columnIndex(header, "pinned");
+  const versionIndex = columnIndex(header, "version");
+  const updatedAtIndex = columnIndex(header, "updated_at");
   return lines.slice(headerIndex + 1).flatMap((line) => {
     const cells = tableCells(line);
     if (cells.every((cell) => /^:?-+:?$/.test(cell))) return [];
-    const slug = cells[index("slug")] ?? "";
+    const slug = cellValue(cells, slugIndex, "").trim();
     if (!slug) return [];
     return [
       {
         slug,
-        name: cells[index("name")] ?? slug,
-        kind: cells[index("kind")] ?? "document",
-        pinned: parsePinned(cells[index("pinned")] ?? "false"),
-        version: cells[index("version")] ?? "0",
-        updated_at: cells[index("updated_at")] ?? "",
+        name: cellValue(cells, nameIndex, slug) || slug,
+        kind: cellValue(cells, kindIndex, "document") || "document",
+        pinned: parsePinned(cellValue(cells, pinnedIndex, "false")),
+        version: cellValue(cells, versionIndex, "0") || "0",
+        updated_at: cellValue(cells, updatedAtIndex, ""),
       },
     ];
   });

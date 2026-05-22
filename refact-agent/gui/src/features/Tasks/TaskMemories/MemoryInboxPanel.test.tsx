@@ -201,6 +201,38 @@ describe("MemoryInboxPanel", () => {
     });
   });
 
+  it("isolates optimistic pin state across task ids", async () => {
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/task/:taskId/memories", ({ params }) =>
+        HttpResponse.json({
+          ...memoriesResponse,
+          task_id: String(params.taskId),
+          memories: [
+            {
+              ...memoriesResponse.memories[0],
+              pinned: false,
+            },
+          ],
+        }),
+      ),
+      http.post("http://127.0.0.1:8001/v1/task/:taskId/memories/:filename/pin", () =>
+        new Promise<HttpResponse>(() => undefined),
+      ),
+    );
+
+    const { rerender, user } = render(<MemoryInboxPanel taskId="task-1" />, {
+      preloadedState: CONFIG_STATE,
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Pin" }));
+    expect(await screen.findByRole("button", { name: "Unpin" })).toBeInTheDocument();
+
+    rerender(<MemoryInboxPanel taskId="task-2" />);
+
+    expect(await screen.findByRole("button", { name: "Pin" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Unpin" })).not.toBeInTheDocument();
+  });
+
   it("mark all triaged calls triage mutation", async () => {
     const triageRequests: unknown[] = [];
     mockMemories();

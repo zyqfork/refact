@@ -49,6 +49,41 @@ describe("TaskDocumentsContent", () => {
     expect(screen.getByText("3 documents")).toBeInTheDocument();
   });
 
+  it("parses doc_list alias column names and skips rows without slugs", () => {
+    render(
+      <TaskDocumentsContent
+        toolType="doc_list"
+        content={[
+          "| slug | title | kind | pinned | version | updated at |",
+          "|---|---|---|---|---:|---|",
+          "| aliased-plan | Aliased Plan | plan | yes | 4 | 2026-05-22T13:00:00Z |",
+          "|  | Missing Slug | brief | true | 1 | 2026-05-22T14:00:00Z |",
+        ].join("\n")}
+      />,
+    );
+
+    expect(screen.getByText("Aliased Plan")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-22T13:00:00Z")).toBeInTheDocument();
+    expect(screen.getByText("1 documents")).toBeInTheDocument();
+    expect(screen.queryByText("Missing Slug")).not.toBeInTheDocument();
+  });
+
+  it("parses updated alias in doc_list markdown", () => {
+    render(
+      <TaskDocumentsContent
+        toolType="doc_list"
+        content={[
+          "| slug | name | kind | pinned | version | updated |",
+          "|---|---|---|---|---:|---|",
+          "| updated-plan | Updated Plan | plan | no | 1 | 2026-05-22T15:00:00Z |",
+        ].join("\n")}
+      />,
+    );
+
+    expect(screen.getByText("Updated Plan")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-22T15:00:00Z")).toBeInTheDocument();
+  });
+
   it("renders raw doc_list markdown when no rows parse", () => {
     render(
       <TaskDocumentsContent toolType="doc_list" content="No documents found" />,

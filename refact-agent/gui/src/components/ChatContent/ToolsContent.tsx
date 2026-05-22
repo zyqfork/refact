@@ -39,11 +39,17 @@ import {
   normalizeToolName,
   formatToolDisplayName,
 } from "../../utils/toolNameAliases";
-import { useCollapsibleStore } from "./useStoredOpen";
+import { useCollapsibleStore, useStoredOpen } from "./useStoredOpen";
 import { ShikiCodeBlock } from "../Markdown/ShikiCodeBlock";
 import { Markdown } from "../Markdown";
 import classNames from "classnames";
-import { FileIcon, GearIcon, RowsIcon } from "@radix-ui/react-icons";
+import {
+  CheckCircledIcon,
+  CrossCircledIcon,
+  FileIcon,
+  GearIcon,
+  RowsIcon,
+} from "@radix-ui/react-icons";
 import { AnimatedText } from "../Text";
 import {
   ReadTool,
@@ -76,12 +82,58 @@ import {
   OpenAIMcpCallTool,
   OpenAIMcpListToolsTool,
   CompressReportTool,
+  ToolCard,
 } from "./ToolCard";
 import { AgentStatusView } from "./AgentStatusView";
 import { AgentPulseView } from "./AgentPulseView";
 import { AgentDiffView } from "./AgentDiffView";
 import { TaskDocumentsView } from "./TaskDocumentsView";
 import { FinalReportView } from "./FinalReportView";
+
+function finalReportSuccess(content: string): boolean | null {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    if (!("success" in parsed)) return null;
+    return typeof parsed.success === "boolean" ? parsed.success : null;
+  } catch {
+    return null;
+  }
+}
+
+type FinalReportToolCardProps = {
+  toolCall: ToolCall;
+  content: string;
+  toolFailed?: boolean;
+};
+
+const FinalReportToolCard: React.FC<FinalReportToolCardProps> = ({
+  toolCall,
+  content,
+  toolFailed,
+}) => {
+  const storeKey = toolCall.id ? `tc:${toolCall.id}` : undefined;
+  const [isOpen, handleToggle] = useStoredOpen(storeKey, true);
+  const success = finalReportSuccess(content);
+
+  return (
+    <div data-testid="final-report-tool" style={{ display: "contents" }}>
+      <ToolCard
+        icon={success === false ? <CrossCircledIcon /> : <CheckCircledIcon />}
+        summary="Task agent final report"
+        meta={
+          success === false ? "failed" : success === true ? "success" : undefined
+        }
+        status={toolFailed ? "error" : "success"}
+        isOpen={isOpen}
+        onToggle={handleToggle}
+        toolCall={toolCall}
+      >
+        <FinalReportView content={content} />
+      </ToolCard>
+    </div>
+  );
+};
 
 function parseProgressEntry(entry: string): { step?: string; text: string } {
   const m = entry.match(/^(\d+\/\d+):\s*([\s\S]+)$/);
@@ -930,9 +982,11 @@ function processToolCalls(
   if (headName === "task_agent_finish") {
     const elem =
       result && typeof result.content === "string" ? (
-        <FinalReportView
+        <FinalReportToolCard
           key={`final-report-tool-${head.id ?? processed.length}`}
+          toolCall={normalizedHead}
           content={result.content}
+          toolFailed={result.tool_failed}
         />
       ) : (
         <GenericTool

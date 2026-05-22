@@ -133,7 +133,7 @@ describe("ToolsContent routing", () => {
     ["agent_diff", AGENT_DIFF_OUTPUT, "agent-diff-view"],
     ["doc_list", DOC_LIST_OUTPUT, "task-documents-view"],
     ["doc_get", DOC_GET_OUTPUT, "task-documents-view"],
-    ["task_agent_finish", STRUCTURED_FINAL_REPORT, "final-report-view"],
+    ["task_agent_finish", STRUCTURED_FINAL_REPORT, "final-report-tool"],
     ["task_done", TASK_DONE_OUTPUT, "task-done-tool"],
     ["unknown_tool", "unknown result", "generic-tool"],
   ])("routes %s to %s", (name, content, testId) => {
@@ -149,6 +149,7 @@ describe("ToolsContent routing", () => {
     // so we expect no structured testid but the GenericTool fallback should not show either.
     expect(screen.queryByTestId("generic-tool")).not.toBeInTheDocument();
     expect(screen.queryByTestId("final-report-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("final-report-tool")).toBeInTheDocument();
     expect(screen.getByText("Plain legacy report")).toBeInTheDocument();
   });
 });
