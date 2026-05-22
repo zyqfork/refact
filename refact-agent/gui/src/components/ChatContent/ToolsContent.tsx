@@ -77,6 +77,7 @@ import {
   OpenAIMcpListToolsTool,
   CompressReportTool,
 } from "./ToolCard";
+import { AgentStatusView } from "./AgentStatusView";
 
 function parseProgressEntry(entry: string): { step?: string; text: string } {
   const m = entry.match(/^(\d+\/\d+):\s*([\s\S]+)$/);
@@ -835,6 +836,24 @@ function processToolCalls(
     const elem = (
       <TasksTool
         key={`tasks-tool-${head.id ?? processed.length}`}
+        toolCall={normalizedHead}
+      />
+    );
+    return processToolCalls(
+      tail,
+      toolResults,
+      features,
+      [...processed, elem],
+      contextFilesByToolId,
+      diffsByToolId,
+      activeToolCallId,
+    );
+  }
+
+  if (headName === "task_check_agents") {
+    const elem = (
+      <AgentStatusView
+        key={`agent-status-tool-${head.id ?? processed.length}`}
         toolCall={normalizedHead}
       />
     );
