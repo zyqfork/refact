@@ -32,6 +32,8 @@ const MEMORY_INBOX_CURSOR_FILE: &str = ".mem_inbox_cursor";
 const DEFAULT_INBOX_LIMIT: usize = 20;
 const STALE_PROGRESS_DAYS: i64 = 7;
 const MAX_MEMORIES_CHARS: usize = 120_000;
+const MAX_DUPLICATE_MEMORIES: usize = 500;
+const MAX_DUPLICATE_COMPARISONS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryKind {
@@ -677,7 +679,10 @@ fn validate_memory_reference(reference: &str) -> Result<String, String> {
 }
 
 fn is_memory_markdown_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|ext| ext.to_str()), Some("md" | "mdx"))
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("md" | "mdx")
+    )
 }
 
 fn memory_slug_from_path(path: &Path) -> Option<String> {
@@ -753,6 +758,7 @@ struct TaskMemoryInboxEntry {
     frontmatter: TaskMemoryFrontmatter,
     body: String,
     created_at: DateTime<Utc>,
+    created_at_known: bool,
 }
 
 impl TaskMemoryInboxEntry {
@@ -789,47 +795,94 @@ struct DuplicateMemoryPair {
     overlap_percent: usize,
 }
 
+#[derive(Debug, Clone)]
+struct SkippedMemoryWarning {
+    path: PathBuf,
+    error: String,
+}
+
+async fn memory_file_mtime(path: &Path) -> Option<DateTime<Utc>> {
+    fs::metadata(path)
+        .await
+        .ok()?
+        .modified()
+        .ok()
+        .map(DateTime::<Utc>::from)
+}
+
+async fn memory_entry_timestamp(
+    path: &Path,
+    frontmatter: &TaskMemoryFrontmatter,
+) -> (DateTime<Utc>, bool) {
+    if let Some(created_at) = memory_created_at(frontmatter) {
+        return (created_at, true);
+    }
+    if let Some(modified_at) = memory_file_mtime(path).await {
+        return (modified_at, true);
+    }
+    (DateTime::<Utc>::from(std::time::UNIX_EPOCH), false)
+}
+
 async fn load_task_memory_inbox_entries(
     memories_dir: &Path,
-) -> Result<Vec<TaskMemoryInboxEntry>, String> {
+) -> Result<(Vec<TaskMemoryInboxEntry>, Vec<SkippedMemoryWarning>), String> {
     if !memories_dir.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     let mut memories = Vec::new();
+    let mut warnings = Vec::new();
     for entry in WalkDir::new(memories_dir)
         .max_depth(1)
         .into_iter()
         .filter_map(|entry| entry.ok())
     {
-        let path = entry.path();
-        if !path.is_file() || !is_memory_markdown_file(path) {
+        let path = entry.path().to_path_buf();
+        if !path.is_file() || !is_memory_markdown_file(&path) {
             continue;
         }
-        let content = fs::read_to_string(path)
-            .await
-            .map_err(|e| format!("Failed to read memory {}: {}", path.display(), e))?;
-        let (frontmatter, body) = parse_memory_file(&content)?;
+        let content = match fs::read_to_string(&path).await {
+            Ok(content) => content,
+            Err(error) => {
+                warnings.push(SkippedMemoryWarning {
+                    path: path.clone(),
+                    error: format!("Failed to read memory: {}", error),
+                });
+                continue;
+            }
+        };
+        let (frontmatter, body) = match parse_memory_file(&content) {
+            Ok(memory) => memory,
+            Err(error) => {
+                warnings.push(SkippedMemoryWarning {
+                    path: path.clone(),
+                    error,
+                });
+                continue;
+            }
+        };
         if matches!(
             frontmatter.status,
             MemoryStatus::Archived | MemoryStatus::Superseded
         ) {
             continue;
         }
-        let created_at = memory_created_at(&frontmatter).unwrap_or_else(Utc::now);
+        let (created_at, created_at_known) = memory_entry_timestamp(&path, &frontmatter).await;
         memories.push(TaskMemoryInboxEntry {
-            path: path.to_path_buf(),
+            path,
             frontmatter,
             body,
             created_at,
+            created_at_known,
         });
     }
     memories.sort_by(|a, b| {
         b.created_at
             .cmp(&a.created_at)
+            .then_with(|| b.created_at_known.cmp(&a.created_at_known))
             .then_with(|| b.path.cmp(&a.path))
     });
-    Ok(memories)
+    Ok((memories, warnings))
 }
 
 fn new_memories_since(
@@ -839,7 +892,7 @@ fn new_memories_since(
 ) -> Vec<TaskMemoryInboxEntry> {
     memories
         .iter()
-        .filter(|memory| memory.created_at > cursor)
+        .filter(|memory| memory.created_at_known && memory.created_at > cursor)
         .take(limit)
         .cloned()
         .collect()
@@ -852,7 +905,8 @@ fn stale_memory_candidates(
     memories
         .iter()
         .filter(|memory| {
-            memory.frontmatter.kind == MemoryKind::Progress
+            memory.created_at_known
+                && memory.frontmatter.kind == MemoryKind::Progress
                 && now.signed_duration_since(memory.created_at)
                     > Duration::days(STALE_PROGRESS_DAYS)
                 && memory.frontmatter.namespace != MemoryNamespace::Global
@@ -875,9 +929,7 @@ fn content_tokens(content: &str) -> HashSet<String> {
         .collect()
 }
 
-fn token_overlap_percent(left: &str, right: &str) -> usize {
-    let left = content_tokens(left);
-    let right = content_tokens(right);
+fn token_overlap_percent_from_sets(left: &HashSet<String>, right: &HashSet<String>) -> usize {
     if left.is_empty() || right.is_empty() {
         return 0;
     }
@@ -887,15 +939,25 @@ fn token_overlap_percent(left: &str, right: &str) -> usize {
 }
 
 fn duplicate_memory_pairs(memories: &[TaskMemoryInboxEntry]) -> Vec<DuplicateMemoryPair> {
+    let token_sets = memories
+        .iter()
+        .take(MAX_DUPLICATE_MEMORIES)
+        .map(|memory| (memory.path.clone(), content_tokens(&memory.body)))
+        .collect::<Vec<_>>();
     let mut pairs = Vec::new();
-    for left_idx in 0..memories.len() {
-        for right_idx in (left_idx + 1)..memories.len() {
+    let mut comparisons = 0usize;
+    'outer: for left_idx in 0..token_sets.len() {
+        for right_idx in (left_idx + 1)..token_sets.len() {
+            if comparisons >= MAX_DUPLICATE_COMPARISONS {
+                break 'outer;
+            }
+            comparisons += 1;
             let overlap_percent =
-                token_overlap_percent(&memories[left_idx].body, &memories[right_idx].body);
+                token_overlap_percent_from_sets(&token_sets[left_idx].1, &token_sets[right_idx].1);
             if overlap_percent > 70 {
                 pairs.push(DuplicateMemoryPair {
-                    left_path: memories[left_idx].path.clone(),
-                    right_path: memories[right_idx].path.clone(),
+                    left_path: token_sets[left_idx].0.clone(),
+                    right_path: token_sets[right_idx].0.clone(),
                     overlap_percent,
                 });
             }
@@ -944,12 +1006,17 @@ fn render_memory_entry_line(memory: &TaskMemoryInboxEntry, now: DateTime<Utc>) -
     let short_id = memory_short_id_from_path(&memory.path)
         .or_else(|| memory_slug_from_path(&memory.path))
         .unwrap_or_else(|| memory.memory_id());
+    let age = if memory.created_at_known {
+        format_memory_age(now, memory.created_at)
+    } else {
+        "unknown age".to_string()
+    };
     format!(
         "- {} | {}-{} | {} | \"{}\" [{}]",
         memory.frontmatter.kind,
         card,
         short_id,
-        format_memory_age(now, memory.created_at),
+        age,
         memory.title().replace('"', "'"),
         memory.path.display()
     )
@@ -961,6 +1028,7 @@ fn render_memory_inbox(
     new_memories: &[TaskMemoryInboxEntry],
     stale_candidates: &[TaskMemoryInboxEntry],
     duplicate_pairs: &[DuplicateMemoryPair],
+    warnings: &[SkippedMemoryWarning],
 ) -> String {
     let mut output = String::from("# Memory Inbox\n\n");
     output.push_str(&format!(
@@ -985,11 +1053,16 @@ fn render_memory_inbox(
         output.push_str("- No stale candidates.\n");
     } else {
         for memory in stale_candidates {
+            let age = if memory.created_at_known {
+                format_memory_age(now, memory.created_at)
+            } else {
+                "unknown age".to_string()
+            };
             output.push_str(&format!(
                 "- {} | {} | {} — consider archive [{}]\n",
                 memory.frontmatter.kind,
                 memory.memory_id(),
-                format_memory_age(now, memory.created_at),
+                age,
                 memory.path.display()
             ));
         }
@@ -1008,6 +1081,19 @@ fn render_memory_inbox(
                 pair.left_path.display(),
                 pair.right_path.display(),
                 pair.overlap_percent
+            ));
+        }
+    }
+
+    output.push_str(&format!("\n## Warnings ({} skipped)\n", warnings.len()));
+    if warnings.is_empty() {
+        output.push_str("- No inbox warnings.\n");
+    } else {
+        for warning in warnings {
+            output.push_str(&format!(
+                "- [{}] — {}\n",
+                warning.path.display(),
+                warning.error
             ));
         }
     }
@@ -1630,7 +1716,8 @@ impl Tool for ToolTaskMemoryInbox {
                 .unwrap_or_else(|| now - Duration::hours(24))
         };
         let limit = optional_usize_arg(args, "limit", DEFAULT_INBOX_LIMIT)?.min(100);
-        let memories = load_task_memory_inbox_entries(&task_dir.join(MEMORIES_DIR)).await?;
+        let (memories, warnings) =
+            load_task_memory_inbox_entries(&task_dir.join(MEMORIES_DIR)).await?;
         let new_memories = new_memories_since(&memories, cursor, limit);
         let stale_candidates = stale_memory_candidates(&memories, now);
         let duplicate_pairs = duplicate_memory_pairs(&memories);
@@ -1640,6 +1727,7 @@ impl Tool for ToolTaskMemoryInbox {
             &new_memories,
             &stale_candidates,
             &duplicate_pairs,
+            &warnings,
         );
 
         Ok((
@@ -2266,6 +2354,7 @@ mod tests {
     use crate::at_commands::at_commands::AtCommandsContext;
     use crate::chat::types::TaskMeta;
     use crate::tools::tools_description::Tool;
+    use chrono::TimeZone;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex as AMutex;
@@ -2369,6 +2458,7 @@ mod tests {
             },
             body: body.to_string(),
             created_at,
+            created_at_known: true,
         }
     }
 
@@ -2820,6 +2910,108 @@ mod tests {
             .unwrap_err();
 
         assert!(err.contains("can only be called by the task planner"));
+    }
+
+    #[tokio::test]
+    async fn memory_without_created_at_uses_mtime_and_respects_cursor() {
+        let temp = tempfile::tempdir().unwrap();
+        let memories_dir = temp.path().join(MEMORIES_DIR);
+        tokio::fs::create_dir_all(&memories_dir).await.unwrap();
+        let path = memories_dir.join("missing-created-at.md");
+        tokio::fs::write(
+            &path,
+            render_memory_file(
+                &TaskMemoryFrontmatter {
+                    title: Some("Missing Created At".to_string()),
+                    ..Default::default()
+                },
+                "Body",
+            ),
+        )
+        .await
+        .unwrap();
+        let mtime = Utc.with_ymd_and_hms(2026, 5, 22, 1, 0, 0).single().unwrap();
+        filetime::set_file_mtime(
+            &path,
+            filetime::FileTime::from_unix_time(mtime.timestamp(), 0),
+        )
+        .unwrap();
+
+        let (memories, warnings) = load_task_memory_inbox_entries(&memories_dir).await.unwrap();
+
+        assert!(warnings.is_empty());
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].created_at, mtime);
+        assert!(memories[0].created_at_known);
+        assert_eq!(
+            new_memories_since(&memories, mtime - Duration::seconds(1), 10).len(),
+            1
+        );
+        assert!(new_memories_since(&memories, mtime, 10).is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_memory_warns_and_inbox_continues() {
+        let temp = tempfile::tempdir().unwrap();
+        let memories_dir = temp.path().join(MEMORIES_DIR);
+        tokio::fs::create_dir_all(&memories_dir).await.unwrap();
+        tokio::fs::write(
+            memories_dir.join("valid.md"),
+            render_memory_file(
+                &TaskMemoryFrontmatter {
+                    created_at: Some("2026-05-22T00:00:00Z".to_string()),
+                    title: Some("Valid".to_string()),
+                    ..Default::default()
+                },
+                "valid body",
+            ),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            memories_dir.join("malformed.md"),
+            "---\ntags: [unterminated\n---\n\nbad body",
+        )
+        .await
+        .unwrap();
+
+        let (memories, warnings) = load_task_memory_inbox_entries(&memories_dir).await.unwrap();
+        let output = render_memory_inbox(
+            parse_rfc3339_utc("2026-05-21T00:00:00Z").unwrap(),
+            parse_rfc3339_utc("2026-05-22T01:00:00Z").unwrap(),
+            &memories,
+            &[],
+            &[],
+            &warnings,
+        );
+
+        assert_eq!(memories.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(output.contains("Valid"));
+        assert!(output.contains("## Warnings (1 skipped)"));
+        assert!(output.contains("malformed.md"));
+        assert!(output.contains("Failed to parse memory frontmatter"));
+    }
+
+    #[test]
+    fn duplicate_detection_caps_large_memory_sets() {
+        let now = parse_rfc3339_utc("2026-05-22T00:00:00Z").unwrap();
+        let memories = (0..600)
+            .map(|idx| {
+                inbox_memory(
+                    &format!("memory-{idx}.md"),
+                    now,
+                    MemoryKind::Finding,
+                    MemoryNamespace::Task,
+                    "shared alpha beta gamma delta epsilon zeta",
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let pairs = duplicate_memory_pairs(&memories);
+
+        assert_eq!(pairs.len(), MAX_DUPLICATE_COMPARISONS);
+        assert!(pairs.iter().all(|pair| pair.overlap_percent == 100));
     }
 
     #[test]

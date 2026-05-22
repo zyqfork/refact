@@ -52,7 +52,12 @@ pub struct KnowledgeSearchHit {
     pub score: f32,
 }
 
-fn path_has_any_component(path: &Path, components: &[&str]) -> bool {
+fn path_has_any_relative_component(path: &Path, root: &Path, components: &[&str]) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    path_components_match(relative, components)
+}
+
+fn path_components_match(path: &Path, components: &[&str]) -> bool {
     path.components().any(|c| {
         let candidate = c.as_os_str().to_string_lossy();
         components.iter().any(|component| candidate == *component)
@@ -768,7 +773,7 @@ async fn scan_knowledge_dirs(index: &mut KnowledgeIndex, knowledge_dirs: Vec<Pat
             if ext != "md" && ext != "mdx" {
                 continue;
             }
-            if path_has_any_component(path, &["archive", "archived", ".history"])
+            if path_has_any_relative_component(path, &dir, &["archive", "archived", ".history"])
                 || is_tmp_path(path)
             {
                 continue;
@@ -817,8 +822,11 @@ async fn scan_task_dirs(index: &mut KnowledgeIndex, task_roots: Vec<PathBuf>) {
                     if ext != "md" && ext != "mdx" {
                         continue;
                     }
-                    if path_has_any_component(path, &[".history", "archived", "archive"])
-                        || is_tmp_path(path)
+                    if path_has_any_relative_component(
+                        path,
+                        &scan_dir,
+                        &[".history", "archived", "archive"],
+                    ) || is_tmp_path(path)
                     {
                         continue;
                     }
@@ -997,6 +1005,101 @@ mod tests {
         };
 
         let hits = index.search("needle", &filters, 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].card.title, "Active");
+    }
+
+    #[tokio::test]
+    async fn indexes_workspace_under_absolute_archive_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("archive/project");
+        let knowledge_dir = workspace.join(KNOWLEDGE_FOLDER_NAME);
+        let memories_dir = workspace.join(".refact/tasks/task-1/memories");
+        tokio::fs::create_dir_all(&knowledge_dir).await.unwrap();
+        tokio::fs::create_dir_all(&memories_dir).await.unwrap();
+        tokio::fs::write(
+            knowledge_dir.join("knowledge.md"),
+            "---\ntitle: Absolute Archive Knowledge\ntags: [absolute-archive]\n---\n\nknowledge needle",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            memories_dir.join("memory.md"),
+            "---\ntitle: Absolute Archive Memory\ntask_id: task-1\nkind: finding\n---\n\nmemory needle",
+        )
+        .await
+        .unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![workspace];
+
+        let index = build_knowledge_index(gcx).await;
+
+        assert_eq!(
+            index
+                .search("knowledge", &KnowledgeSearchFilters::default(), 10)
+                .len(),
+            1
+        );
+        assert_eq!(
+            index
+                .search(
+                    "memory",
+                    &KnowledgeSearchFilters {
+                        scope: Some("task".to_string()),
+                        task_id: Some("task-1".to_string()),
+                        ..Default::default()
+                    },
+                    10,
+                )
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn task_index_skips_relative_archive_and_history_document_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_dir = dir.path().join(".refact/tasks/task-1");
+        let memories_dir = task_dir.join("memories");
+        let documents_dir = task_dir.join("documents");
+        tokio::fs::create_dir_all(memories_dir.join("archived"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(documents_dir.join(".history"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            memories_dir.join("active.md"),
+            "---\ntitle: Active\ntask_id: task-1\nkind: finding\n---\n\nneedle active",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            memories_dir.join("archived/old.md"),
+            "---\ntitle: Archived\ntask_id: task-1\nkind: finding\n---\n\nneedle archived",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            documents_dir.join(".history/old.md"),
+            "---\ntitle: History\nkind: spec\n---\n\nneedle history",
+        )
+        .await
+        .unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![dir.path().to_path_buf()];
+
+        let index = build_knowledge_index(gcx).await;
+        let hits = index.search(
+            "needle",
+            &KnowledgeSearchFilters {
+                scope: Some("task".to_string()),
+                task_id: Some("task-1".to_string()),
+                ..Default::default()
+            },
+            10,
+        );
+
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].card.title, "Active");
     }
