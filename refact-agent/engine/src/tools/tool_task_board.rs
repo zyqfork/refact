@@ -1294,6 +1294,7 @@ mod tests {
             status_updates: vec![],
             final_report: None,
             final_report_structured: None,
+            verifier_report: None,
             created_at: "2026-05-16T00:00:00Z".to_string(),
             started_at: None,
             last_heartbeat_at: None,

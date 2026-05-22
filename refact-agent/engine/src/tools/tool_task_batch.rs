@@ -1168,6 +1168,7 @@ mod tests {
     use super::*;
     use crate::app_state::AppState;
     use crate::tasks::types::{TaskMeta as StoredTaskMeta, TaskStatus};
+    use chrono::Utc;
     use refact_chat_api::TaskMeta as ThreadTaskMeta;
 
     fn card(id: &str, column: &str, deps: Vec<&str>) -> BoardCard {
@@ -1183,6 +1184,7 @@ mod tests {
             status_updates: vec![],
             final_report: None,
             final_report_structured: None,
+            verifier_report: None,
             created_at: Utc::now().to_rfc3339(),
             started_at: None,
             last_heartbeat_at: None,
