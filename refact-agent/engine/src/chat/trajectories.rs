@@ -3573,6 +3573,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trajectory_save_removes_malformed_worktree_extra_from_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let app = AppState::from_gcx(gcx.clone()).await;
+        {
+            *app.workspace.documents_state.workspace_folders.lock().unwrap() =
+                vec![dir.path().to_path_buf()];
+        }
+        let chat_id = "malformed-worktree-save";
+        let payload = json!({
+            "id": chat_id,
+            "title": "Malformed Worktree",
+            "model": "m",
+            "mode": "agent",
+            "tool_use": "agent",
+            "messages": [],
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "include_project_info": true,
+            "checkpoints_enabled": true,
+            "worktree": {"root":"/tmp/untrusted"}
+        });
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{}.json", chat_id));
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert!(saved.get("worktree").is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_preserves_valid_worktree_extra_in_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("repo");
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let gcx = crate::global_context::tests::make_test_gcx_with_dirs(
+            cache.clone(),
+            std::env::temp_dir().join(format!("refact-cfg-{}", uuid::Uuid::new_v4())),
+        )
+        .await;
+        {
+            *gcx.documents_state.workspace_folders.lock().unwrap() = vec![source.clone()];
+        }
+        let app = AppState::from_gcx(gcx.clone()).await;
+        let service = WorktreeService::new(cache, source.clone()).unwrap();
+        let created = service
+            .create_worktree(crate::worktrees::types::CreateWorktreeRequest {
+                branch: Some("refact/chat/save-preserve".to_string()),
+                kind: Some("chat".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let worktree = created.worktree.meta.clone();
+        let chat_id = "valid-worktree-save";
+        let payload = json!({
+            "id": chat_id,
+            "title": "Valid Worktree",
+            "model": "m",
+            "mode": "agent",
+            "tool_use": "agent",
+            "messages": [],
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "include_project_info": true,
+            "checkpoints_enabled": true,
+            "worktree": serde_json::to_value(&worktree).unwrap()
+        });
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let path = source
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{}.json", chat_id));
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(saved["worktree"]["id"], worktree.id);
+        assert_eq!(saved["worktree"]["branch"], "refact/chat/save-preserve");
+    }
+
+    #[tokio::test]
     async fn trajectory_worktree_save_load_roundtrips_top_level_field() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("repo");

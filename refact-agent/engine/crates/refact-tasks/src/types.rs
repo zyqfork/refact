@@ -213,9 +213,9 @@ fn push_verification(output: &mut String, verification: &[VerificationResult]) {
         return;
     }
     for result in verification {
-        output.push_str("- `");
-        output.push_str(&result.command);
-        output.push_str("` — ");
+        output.push_str("- ");
+        output.push_str(&markdown_inline_code(&result.command));
+        output.push_str(" — ");
         output.push_str(if result.passed { "passed" } else { "failed" });
         if let Some(exit_code) = result.exit_code {
             output.push_str(&format!(" (exit code {})", exit_code));
@@ -223,12 +223,44 @@ fn push_verification(output: &mut String, verification: &[VerificationResult]) {
         output.push('\n');
         let tail = result.output_tail.trim();
         if !tail.is_empty() {
-            output.push_str("\n```text\n");
+            let fence = markdown_code_fence(tail);
+            output.push('\n');
+            output.push_str(&fence);
+            output.push_str("text\n");
             output.push_str(tail);
-            output.push_str("\n```\n");
+            output.push('\n');
+            output.push_str(&fence);
+            output.push('\n');
         }
     }
     output.push('\n');
+}
+
+fn markdown_inline_code(text: &str) -> String {
+    let max_run = max_backtick_run(text);
+    if max_run == 0 {
+        return format!("`{}`", text);
+    }
+    let fence = "`".repeat(max_run + 1);
+    format!("{} {} {}", fence, text, fence)
+}
+
+fn markdown_code_fence(text: &str) -> String {
+    "`".repeat(max_backtick_run(text).max(2) + 1)
+}
+
+fn max_backtick_run(text: &str) -> usize {
+    let mut max_run = 0;
+    let mut current = 0;
+    for c in text.chars() {
+        if c == '`' {
+            current += 1;
+            max_run = max_run.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    max_run
 }
 
 fn push_followup_cards(output: &mut String, cards: &[SuggestedCard]) {
@@ -617,6 +649,44 @@ mod tests {
         assert!(markdown.contains("Do the next thing."));
         assert!(markdown.contains("## Risks\n- Risk item"));
         assert!(markdown.contains("## Assumptions\n- Assumption item"));
+    }
+
+    #[test]
+    fn final_report_to_markdown_escapes_command_backticks() {
+        let report = FinalReport {
+            verification: vec![VerificationResult {
+                command: "cargo test -- --exact `final_report`".into(),
+                exit_code: Some(0),
+                passed: true,
+                output_tail: String::new(),
+            }],
+            ..Default::default()
+        };
+
+        let markdown = report.to_markdown();
+
+        assert!(markdown.contains("- `` cargo test -- --exact `final_report` `` — passed"));
+        assert!(!markdown.contains("- `cargo test -- --exact `final_report`` — passed"));
+    }
+
+    #[test]
+    fn final_report_to_markdown_uses_safe_output_fence() {
+        let report = FinalReport {
+            verification: vec![VerificationResult {
+                command: "cargo test".into(),
+                exit_code: Some(1),
+                passed: false,
+                output_tail: "before\n```\n## Fake Section\n```\nafter".into(),
+            }],
+            ..Default::default()
+        };
+
+        let markdown = report.to_markdown();
+
+        assert!(markdown.contains(
+            "\n````text\nbefore\n```\n## Fake Section\n```\nafter\n````\n"
+        ));
+        assert!(!markdown.contains("\n```text\nbefore\n```\n## Fake Section"));
     }
 
     #[test]
