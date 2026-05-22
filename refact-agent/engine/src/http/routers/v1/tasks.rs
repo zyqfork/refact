@@ -777,19 +777,34 @@ pub async fn handle_delete_planner_chat(
     Path((task_id, chat_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let gcx = app.gcx.clone();
+    crate::chat::trajectories::validate_trajectory_id(&chat_id)
+        .map_err(|e| (e.status_code, e.message))?;
     storage::load_task_meta(gcx.clone(), &task_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;
-    let file_path = crate::chat::trajectories::find_trajectory_path(gcx.clone(), &chat_id)
+    let task_dir = storage::find_task_dir(gcx.clone(), &task_id)
         .await
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Planner chat not found".to_string()))?;
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    let planner_dir = storage::get_task_trajectory_dir(&task_dir, "planner", None);
+    let expected_file_path = planner_dir.join(format!("{}.json", chat_id));
+    let file_path = if expected_file_path.exists() {
+        expected_file_path
+    } else {
+        match crate::chat::trajectories::find_trajectory_path(gcx.clone(), &chat_id).await {
+            Some(found_path) if found_path.exists() => found_path,
+            _ => return Err((StatusCode::NOT_FOUND, "Planner chat not found".to_string())),
+        }
+    };
+    let canon_dir = tokio::fs::canonicalize(&planner_dir)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let canon_file = tokio::fs::canonicalize(&file_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    if !file_path
-        .components()
-        .any(|component| component.as_os_str() == std::ffi::OsStr::new(&task_id))
-    {
+    if !canon_file.starts_with(&canon_dir) || canon_file.parent() != Some(canon_dir.as_path()) {
         return Err((
-            StatusCode::BAD_REQUEST,
+            StatusCode::FORBIDDEN,
             "Planner chat does not belong to this task".to_string(),
         ));
     }
@@ -941,4 +956,218 @@ pub async fn handle_tasks_subscribe(
         .header("Connection", "keep-alive")
         .body(Body::wrap_stream(stream))
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::trajectories::save_trajectory_snapshot;
+    use refact_chat_api::{ChatMessage, TaskMeta as ChatTaskMeta};
+    use refact_chat_history::trajectory_snapshot::TrajectorySnapshot;
+
+    async fn setup_task(root: &std::path::Path, task_id: &str) -> Arc<GlobalContext> {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![root.to_path_buf()];
+        let task_dir = root.join(".refact/tasks").join(task_id);
+        tokio::fs::create_dir_all(task_dir.join("trajectories/planner"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(task_dir.join("trajectories/agents/agent-1"))
+            .await
+            .unwrap();
+        let now = Utc::now().to_rfc3339();
+        let meta = TaskMeta {
+            schema_version: 1,
+            id: task_id.to_string(),
+            name: task_id.to_string(),
+            status: TaskStatus::Planning,
+            created_at: now.clone(),
+            updated_at: now,
+            cards_total: 0,
+            cards_done: 0,
+            cards_failed: 0,
+            agents_active: 0,
+            base_branch: None,
+            base_commit: None,
+            default_agent_model: None,
+            is_name_generated: false,
+            last_agents_summary_at: None,
+            planner_session_state: None,
+        };
+        storage::save_task_meta(gcx.clone(), task_id, &meta).await.unwrap();
+        storage::save_board(gcx.clone(), task_id, &TaskBoard::default())
+            .await
+            .unwrap();
+        gcx
+    }
+
+    fn app(gcx: Arc<GlobalContext>) -> AppState {
+        gcx.app_state(gcx.clone())
+    }
+
+    fn snapshot(
+        chat_id: &str,
+        task_id: &str,
+        role: &str,
+        agent_id: Option<&str>,
+    ) -> TrajectorySnapshot {
+        TrajectorySnapshot {
+            chat_id: chat_id.to_string(),
+            title: chat_id.to_string(),
+            model: "test-model".to_string(),
+            mode: "task_planner".to_string(),
+            tool_use: "agent".to_string(),
+            messages: vec![ChatMessage::new("user".to_string(), "hello".to_string())],
+            created_at: Utc::now().to_rfc3339(),
+            boost_reasoning: false,
+            checkpoints_enabled: false,
+            context_tokens_cap: None,
+            include_project_info: false,
+            is_title_generated: false,
+            auto_approve_editing_tools: false,
+            auto_approve_dangerous_commands: false,
+            autonomous_no_confirm: false,
+            version: 1,
+            task_meta: Some(ChatTaskMeta {
+                task_id: task_id.to_string(),
+                role: role.to_string(),
+                agent_id: agent_id.map(str::to_string),
+                card_id: None,
+                planner_chat_id: (role == "planner").then(|| chat_id.to_string()),
+            }),
+            worktree: None,
+            parent_id: None,
+            link_type: None,
+            root_chat_id: None,
+            reasoning_effort: None,
+            thinking_budget: None,
+            temperature: None,
+            frequency_penalty: None,
+            max_tokens: None,
+            parallel_tool_calls: None,
+            previous_response_id: None,
+            active_skill: None,
+            auto_enrichment_enabled: None,
+            buddy_meta: None,
+            auto_compact_enabled: None,
+        }
+    }
+
+    async fn save_snapshot(gcx: Arc<GlobalContext>, snapshot: TrajectorySnapshot) {
+        save_trajectory_snapshot(gcx, snapshot).await.unwrap();
+    }
+
+    fn status<T>(result: Result<Json<T>, (StatusCode, String)>) -> StatusCode {
+        match result {
+            Ok(_) => panic!("expected request to fail"),
+            Err((status, _)) => status,
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_planner_chat_rejects_agent_trajectory() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-1").await;
+        save_snapshot(
+            gcx.clone(),
+            snapshot("shared-chat", "task-1", "agents", Some("agent-1")),
+        )
+        .await;
+
+        let result = handle_delete_planner_chat(
+            State(app(gcx)),
+            Path(("task-1".to_string(), "shared-chat".to_string())),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::FORBIDDEN);
+        assert!(temp
+            .path()
+            .join(".refact/tasks/task-1/trajectories/agents/agent-1/shared-chat.json")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn delete_planner_chat_rejects_other_task() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-1").await;
+        storage::create_task(gcx.clone(), "other task").await.unwrap();
+        let task_2_path = temp.path().join(".refact/tasks/task-2");
+        let created_task_path = std::fs::read_dir(temp.path().join(".refact/tasks"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name().and_then(|name| name.to_str()) != Some("task-1")
+                    && path.join("meta.yaml").exists()
+            })
+            .unwrap();
+        std::fs::rename(&created_task_path, &task_2_path).unwrap();
+        let meta_path = task_2_path.join("meta.yaml");
+        let mut meta: TaskMeta =
+            serde_yaml::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+        meta.id = "task-2".to_string();
+        std::fs::write(&meta_path, serde_yaml::to_string(&meta).unwrap()).unwrap();
+        save_snapshot(gcx.clone(), snapshot("shared-chat", "task-2", "planner", None)).await;
+
+        let result = handle_delete_planner_chat(
+            State(app(gcx)),
+            Path(("task-1".to_string(), "shared-chat".to_string())),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::FORBIDDEN);
+        assert!(temp
+            .path()
+            .join(".refact/tasks/task-2/trajectories/planner/shared-chat.json")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn delete_planner_chat_rejects_traversal() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-1").await;
+
+        let result = handle_delete_planner_chat(
+            State(app(gcx)),
+            Path(("task-1".to_string(), "../../etc/passwd".to_string())),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn delete_planner_chat_rejects_invalid_chat_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-1").await;
+
+        let result = handle_delete_planner_chat(
+            State(app(gcx)),
+            Path(("task-1".to_string(), "bad.chat".to_string())),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn delete_planner_chat_happy_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-1").await;
+        save_snapshot(gcx.clone(), snapshot("planner-chat", "task-1", "planner", None)).await;
+        let planner_path = temp
+            .path()
+            .join(".refact/tasks/task-1/trajectories/planner/planner-chat.json");
+        assert!(planner_path.exists());
+
+        let result = handle_delete_planner_chat(
+            State(app(gcx)),
+            Path(("task-1".to_string(), "planner-chat".to_string())),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert!(!planner_path.exists());
+    }
 }
