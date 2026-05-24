@@ -35,6 +35,34 @@ pub async fn atomic_write_file(tmp_path: &Path, dest_path: &Path) -> Result<(), 
         .map_err(|e| format!("Failed to rename: {}", e))
 }
 
+fn unique_trajectory_tmp_path(file_path: &Path) -> PathBuf {
+    let random = Uuid::new_v4().simple().to_string();
+    file_path.with_extension(format!("json.tmp.{}", &random[..8]))
+}
+
+async fn atomic_write_json_with_tmp_path(
+    path: &Path,
+    tmp_path: &Path,
+    json_result: Result<String, String>,
+    write_error_prefix: Option<&str>,
+) -> Result<(), String> {
+    let result = async {
+        let json = json_result?;
+        fs::write(tmp_path, &json).await.map_err(|e| {
+            write_error_prefix
+                .map(|prefix| format!("{}: {}", prefix, e))
+                .unwrap_or_else(|| e.to_string())
+        })?;
+        atomic_write_file(tmp_path, path).await?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_file(tmp_path).await;
+    }
+    result
+}
+
 use super::types::{ThreadParams, SessionState, ChatSession};
 use super::session::has_displayable_assistant_content;
 use super::config::timeouts;
@@ -1003,13 +1031,16 @@ pub async fn save_trajectory_snapshot(
     };
     trajectory["updated_at"] = serde_json::Value::String(updated_at.clone());
 
-    let tmp_path = file_path.with_extension("json.tmp");
-    let json_str = serde_json::to_string_pretty(&trajectory)
-        .map_err(|e| format!("Failed to serialize trajectory: {}", e))?;
-    tokio::fs::write(&tmp_path, &json_str)
-        .await
-        .map_err(|e| format!("Failed to write trajectory: {}", e))?;
-    atomic_write_file(&tmp_path, &file_path).await?;
+    let tmp_path = unique_trajectory_tmp_path(&file_path);
+    let json_result = serde_json::to_string_pretty(&trajectory)
+        .map_err(|e| format!("Failed to serialize trajectory: {}", e));
+    atomic_write_json_with_tmp_path(
+        &file_path,
+        &tmp_path,
+        json_result,
+        Some("Failed to write trajectory"),
+    )
+    .await?;
 
     info!(
         "Saved trajectory for chat {} ({} messages) to {:?}",
@@ -1478,13 +1509,9 @@ pub fn validate_trajectory_id(id: &str) -> Result<(), ScratchError> {
 }
 
 async fn atomic_write_json(path: &PathBuf, data: &impl Serialize) -> Result<(), String> {
-    let tmp_path = path.with_extension("json.tmp");
-    let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, &json)
-        .await
-        .map_err(|e| e.to_string())?;
-    atomic_write_file(&tmp_path, path).await?;
-    Ok(())
+    let tmp_path = unique_trajectory_tmp_path(path);
+    let json_result = serde_json::to_string(data).map_err(|e| e.to_string());
+    atomic_write_json_with_tmp_path(path, &tmp_path, json_result, None).await
 }
 
 fn is_placeholder_title(title: &str) -> bool {
@@ -3843,6 +3870,61 @@ mod tests {
             changed_raw["updated_at"].as_str().unwrap(),
             first_updated_at
         );
+    }
+
+    #[test]
+    fn trajectory_save_uses_unique_tmp() {
+        let file_path = PathBuf::from("chat.json");
+        let first = unique_trajectory_tmp_path(&file_path);
+        let second = unique_trajectory_tmp_path(&file_path);
+
+        assert_ne!(first, second);
+        assert_eq!(
+            first.file_name().and_then(|name| name.to_str()).unwrap().len(),
+            22
+        );
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap()
+            .starts_with("chat.json.tmp."));
+        assert!(second
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap()
+            .starts_with("chat.json.tmp."));
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_cleans_up_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("chat.json");
+        let tmp_path = unique_trajectory_tmp_path(&file_path);
+        tokio::fs::write(&tmp_path, "stale").await.unwrap();
+
+        let err = atomic_write_json_with_tmp_path(
+            &file_path,
+            &tmp_path,
+            Err("Failed to serialize trajectory: injected".to_string()),
+            Some("Failed to write trajectory"),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, "Failed to serialize trajectory: injected");
+        assert!(!tmp_path.exists());
+        let leftovers = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| name.contains(".tmp"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(leftovers, 0);
     }
 
     #[tokio::test]
