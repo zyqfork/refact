@@ -22,6 +22,7 @@ pub struct PostMergeCheckRequest {
     pub workspace_root: PathBuf,
     pub enabled: bool,
     pub timeout: Duration,
+    pub expected_merge_commit: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +36,7 @@ pub struct PostMergeCheckResult {
     pub revert_commit: Option<String>,
     pub fix_card_id: Option<String>,
     pub skipped_reason: Option<String>,
+    pub revert_skipped_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,10 +209,16 @@ pub async fn post_merge_check_with_runner<R: PostMergeCommandRunner>(
             revert_commit: None,
             fix_card_id: None,
             skipped_reason: None,
+            revert_skipped_reason: None,
         });
     }
 
-    let merge_commit = git_text(
+    let expected_merge_commit = request.expected_merge_commit.trim().to_string();
+    if expected_merge_commit.is_empty() {
+        return Ok(skipped_result("missing expected merge commit"));
+    }
+
+    let current_head = git_text(
         runner
             .run(
                 &request.workspace_root,
@@ -219,13 +227,121 @@ pub async fn post_merge_check_with_runner<R: PostMergeCommandRunner>(
             )
             .await,
     );
+    let Some(current_head) = current_head else {
+        let reason = "unable to verify HEAD before revert";
+        let diagnostic = format!("Expected merge commit: {}", expected_merge_commit);
+        let fix_card_id = store_regression_result(
+            gcx,
+            &request.task_id,
+            &request.card_id,
+            &command,
+            &output_tail,
+            &expected_merge_commit,
+            "not reverted",
+            &first_error_line(&output_tail),
+            Some(reason),
+            Some(&diagnostic),
+        )
+        .await?;
+        return Ok(PostMergeCheckResult {
+            checked: true,
+            auto_reverted: false,
+            command: Some(command),
+            exit_code,
+            output_tail,
+            merge_commit: Some(expected_merge_commit),
+            revert_commit: None,
+            fix_card_id: Some(fix_card_id),
+            skipped_reason: None,
+            revert_skipped_reason: Some(reason.to_string()),
+        });
+    };
+    if current_head != expected_merge_commit {
+        let reason = "HEAD changed since merge";
+        let diagnostic = format!(
+            "Expected merge commit: {}\nCurrent HEAD: {}",
+            expected_merge_commit, current_head
+        );
+        let fix_card_id = store_regression_result(
+            gcx,
+            &request.task_id,
+            &request.card_id,
+            &command,
+            &output_tail,
+            &expected_merge_commit,
+            "not reverted",
+            &first_error_line(&output_tail),
+            Some(reason),
+            Some(&diagnostic),
+        )
+        .await?;
+        return Ok(PostMergeCheckResult {
+            checked: true,
+            auto_reverted: false,
+            command: Some(command),
+            exit_code,
+            output_tail,
+            merge_commit: Some(expected_merge_commit),
+            revert_commit: None,
+            fix_card_id: Some(fix_card_id),
+            skipped_reason: None,
+            revert_skipped_reason: Some(reason.to_string()),
+        });
+    }
+
+    let status_output = runner
+        .run(
+            &request.workspace_root,
+            PostMergeCommand::Git(vec!["status".to_string(), "--porcelain".to_string()]),
+            request.timeout,
+        )
+        .await;
+    if !status_output.success || !status_output.output.trim().is_empty() {
+        let reason = if status_output.success {
+            "workspace dirty since merge"
+        } else {
+            "unable to verify clean workspace before revert"
+        };
+        let diagnostic = format!(
+            "Expected merge commit: {}\nCurrent HEAD: {}\nGit status --porcelain:\n{}",
+            expected_merge_commit,
+            current_head,
+            status_output.output.trim()
+        );
+        let fix_card_id = store_regression_result(
+            gcx,
+            &request.task_id,
+            &request.card_id,
+            &command,
+            &output_tail,
+            &expected_merge_commit,
+            "not reverted",
+            &first_error_line(&output_tail),
+            Some(reason),
+            Some(&diagnostic),
+        )
+        .await?;
+        return Ok(PostMergeCheckResult {
+            checked: true,
+            auto_reverted: false,
+            command: Some(command),
+            exit_code,
+            output_tail,
+            merge_commit: Some(expected_merge_commit),
+            revert_commit: None,
+            fix_card_id: Some(fix_card_id),
+            skipped_reason: None,
+            revert_skipped_reason: Some(reason.to_string()),
+        });
+    }
+
     let revert_output = runner
         .run(
             &request.workspace_root,
             PostMergeCommand::Git(vec![
                 "revert".to_string(),
                 "--no-edit".to_string(),
-                "HEAD".to_string(),
+                expected_merge_commit.clone(),
             ]),
             request.timeout,
         )
@@ -245,6 +361,7 @@ pub async fn post_merge_check_with_runner<R: PostMergeCommandRunner>(
             )
             .await,
     );
+    let merge_commit = Some(expected_merge_commit);
     let first_error = first_error_line(&output_tail);
     let fix_card_id = store_regression_result(
         gcx,
@@ -255,6 +372,8 @@ pub async fn post_merge_check_with_runner<R: PostMergeCommandRunner>(
         merge_commit.as_deref().unwrap_or("unknown"),
         revert_commit.as_deref().unwrap_or("unknown"),
         &first_error,
+        None,
+        None,
     )
     .await?;
 
@@ -268,6 +387,7 @@ pub async fn post_merge_check_with_runner<R: PostMergeCommandRunner>(
         revert_commit,
         fix_card_id: Some(fix_card_id),
         skipped_reason: None,
+        revert_skipped_reason: None,
     })
 }
 
@@ -282,6 +402,7 @@ fn skipped_result(reason: &str) -> PostMergeCheckResult {
         revert_commit: None,
         fix_card_id: None,
         skipped_reason: Some(reason.to_string()),
+        revert_skipped_reason: None,
     }
 }
 
@@ -296,6 +417,7 @@ fn rejected_result(command: String, reason: String) -> PostMergeCheckResult {
         revert_commit: None,
         fix_card_id: None,
         skipped_reason: None,
+        revert_skipped_reason: None,
     }
 }
 
@@ -404,6 +526,8 @@ async fn store_regression_result(
     merge_commit: &str,
     revert_commit: &str,
     first_error: &str,
+    revert_skipped_reason: Option<&str>,
+    diagnostic: Option<&str>,
 ) -> Result<String, String> {
     let card_id_owned = card_id.to_string();
     let command_owned = command.to_string();
@@ -411,6 +535,8 @@ async fn store_regression_result(
     let merge_commit_owned = merge_commit.to_string();
     let revert_commit_owned = revert_commit.to_string();
     let first_error_owned = first_error.to_string();
+    let revert_skipped_reason_owned = revert_skipped_reason.map(str::to_string);
+    let diagnostic_owned = diagnostic.map(str::to_string);
     let (_, fix_card_id) = storage::update_board_atomic(gcx.clone(), task_id, move |board| {
         ensure_regressed_column(board);
         let source_card = board
@@ -425,7 +551,10 @@ async fn store_regression_result(
         original.column = "regressed".to_string();
         original.status_updates.push(StatusUpdate {
             timestamp: now.clone(),
-            message: format!("Auto-reverted: {}", first_error_owned),
+            message: match revert_skipped_reason_owned.as_deref() {
+                Some(reason) => format!("Auto-revert skipped: {}", reason),
+                None => format!("Auto-reverted: {}", first_error_owned),
+            },
         });
         board.cards.push(build_fix_card(
             &source_card,
@@ -434,6 +563,8 @@ async fn store_regression_result(
             &output_owned,
             &merge_commit_owned,
             &revert_commit_owned,
+            revert_skipped_reason_owned.as_deref(),
+            diagnostic_owned.as_deref(),
             &now,
         ));
         Ok(fix_card_id)
@@ -473,9 +604,28 @@ fn build_fix_card(
     output_tail: &str,
     merge_commit: &str,
     revert_commit: &str,
+    revert_skipped_reason: Option<&str>,
+    diagnostic: Option<&str>,
     now: &str,
 ) -> BoardCard {
     let fence = markdown_code_fence(output_tail);
+    let revert_summary = match revert_skipped_reason {
+        Some(reason) => format!(
+            "Auto-revert was skipped: {}. A human should inspect the current branch before reverting or fixing.",
+            reason
+        ),
+        None => "The merge was automatically reverted after post-merge verification failed.".to_string(),
+    };
+    let diagnostic_section = diagnostic
+        .map(|diagnostic| {
+            format!(
+                "\n## Revert diagnostic\n{}text\n{}\n{}\n",
+                fence,
+                diagnostic.trim(),
+                fence
+            )
+        })
+        .unwrap_or_default();
     BoardCard {
         id: fix_card_id.to_string(),
         title: format!("Fix regression in {}", source_card.id),
@@ -483,14 +633,15 @@ fn build_fix_card(
         priority: source_card.priority.clone(),
         depends_on: Vec::new(),
         instructions: format!(
-            "# Fix regression in {}\n\nThe merge for `{}` was automatically reverted after post-merge verification failed.\n\n- Original card: {} — {}\n- Merge commit: {}\n- Revert commit: {}\n- Failing command: `{}`\n\n## Failing output\n{}text\n{}\n{}\n\nFix the regression and run the verification command before merging again.\n",
+            "# Fix regression in {}\n\n{}\n\n- Original card: {} — {}\n- Merge commit: {}\n- Revert commit: {}\n- Failing command: `{}`\n{}\n## Failing output\n{}text\n{}\n{}\n\nFix the regression and run the verification command before merging again.\n",
             source_card.id,
-            source_card.id,
+            revert_summary,
             source_card.id,
             source_card.title,
             merge_commit,
             revert_commit,
             command,
+            diagnostic_section,
             fence,
             output_tail.trim(),
             fence
@@ -499,7 +650,7 @@ fn build_fix_card(
         agent_chat_id: None,
         status_updates: vec![StatusUpdate {
             timestamp: now.to_string(),
-            message: format!("Created after auto-revert of {}", source_card.id),
+            message: format!("Created after post-merge regression in {}", source_card.id),
         }],
         comments: Vec::new(),
         final_report: None,
@@ -685,6 +836,7 @@ mod tests {
             workspace_root: root.to_path_buf(),
             enabled: true,
             timeout: Duration::from_secs(5),
+            expected_merge_commit: "mergehash".to_string(),
         }
     }
 
@@ -798,7 +950,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_merge_check_reverts_and_marks_card_regressed_when_verification_fails() {
+    async fn post_merge_check_skips_revert_when_head_changed() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        write_task(
+            gcx.clone(),
+            temp.path(),
+            card("## Acceptance Criteria\n- Verify: `cargo test --lib`"),
+        )
+        .await;
+        let mut runner = MockRunner {
+            outputs: VecDeque::from([
+                output(false, Some(1), "running\nerror: regression failed\n"),
+                output(true, Some(0), "newhead\n"),
+            ]),
+            calls: Vec::new(),
+        };
+
+        let result = post_merge_check_with_runner(gcx.clone(), request(temp.path()), &mut runner)
+            .await
+            .unwrap();
+
+        assert!(result.checked);
+        assert!(!result.auto_reverted);
+        assert_eq!(result.merge_commit.as_deref(), Some("mergehash"));
+        assert_eq!(
+            result.revert_skipped_reason.as_deref(),
+            Some("HEAD changed since merge")
+        );
+        assert_eq!(result.fix_card_id.as_deref(), Some("T-1-fix"));
+        assert!(!runner.calls.iter().any(|call| matches!(
+            call,
+            PostMergeCommand::Git(args) if args.first().map(String::as_str) == Some("revert")
+        )));
+        let board = storage::load_board(gcx, "task-1").await.unwrap();
+        let original = board.get_card("T-1").unwrap();
+        assert_eq!(original.column, "regressed");
+        assert!(original
+            .status_updates
+            .iter()
+            .any(|update| update.message == "Auto-revert skipped: HEAD changed since merge"));
+        let fix = board.get_card("T-1-fix").unwrap();
+        assert!(fix.instructions.contains("Current HEAD: newhead"));
+    }
+
+    #[tokio::test]
+    async fn post_merge_check_skips_revert_when_dirty_workspace() {
         let temp = tempfile::tempdir().unwrap();
         let gcx = crate::global_context::tests::make_test_gcx().await;
         write_task(
@@ -811,6 +1008,54 @@ mod tests {
             outputs: VecDeque::from([
                 output(false, Some(1), "running\nerror: regression failed\n"),
                 output(true, Some(0), "mergehash\n"),
+                output(true, Some(0), " M src/lib.rs\n"),
+            ]),
+            calls: Vec::new(),
+        };
+
+        let result = post_merge_check_with_runner(gcx.clone(), request(temp.path()), &mut runner)
+            .await
+            .unwrap();
+
+        assert!(result.checked);
+        assert!(!result.auto_reverted);
+        assert_eq!(result.merge_commit.as_deref(), Some("mergehash"));
+        assert_eq!(
+            result.revert_skipped_reason.as_deref(),
+            Some("workspace dirty since merge")
+        );
+        assert_eq!(result.fix_card_id.as_deref(), Some("T-1-fix"));
+        assert!(!runner.calls.iter().any(|call| matches!(
+            call,
+            PostMergeCommand::Git(args) if args.first().map(String::as_str) == Some("revert")
+        )));
+        let board = storage::load_board(gcx, "task-1").await.unwrap();
+        let original = board.get_card("T-1").unwrap();
+        assert_eq!(original.column, "regressed");
+        assert!(original
+            .status_updates
+            .iter()
+            .any(|update| update.message == "Auto-revert skipped: workspace dirty since merge"));
+        let fix = board.get_card("T-1-fix").unwrap();
+        assert!(fix.instructions.contains("Git status --porcelain"));
+        assert!(fix.instructions.contains("M src/lib.rs"));
+    }
+
+    #[tokio::test]
+    async fn post_merge_check_reverts_when_head_matches_and_clean() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        write_task(
+            gcx.clone(),
+            temp.path(),
+            card("## Acceptance Criteria\n- Verify: `cargo test --lib`"),
+        )
+        .await;
+        let mut runner = MockRunner {
+            outputs: VecDeque::from([
+                output(false, Some(1), "running\nerror: regression failed\n"),
+                output(true, Some(0), "mergehash\n"),
+                output(true, Some(0), ""),
                 output(true, Some(0), "revert ok\n"),
                 output(true, Some(0), "reverthash\n"),
             ]),
@@ -828,7 +1073,7 @@ mod tests {
         assert!(runner.calls.contains(&PostMergeCommand::Git(vec![
             "revert".to_string(),
             "--no-edit".to_string(),
-            "HEAD".to_string()
+            "mergehash".to_string()
         ])));
         let board = storage::load_board(gcx, "task-1").await.unwrap();
         let original = board.get_card("T-1").unwrap();
@@ -850,17 +1095,20 @@ mod tests {
             card("## Acceptance Criteria\n- Verify: `npm test`"),
         )
         .await;
+        let mut req = request(temp.path());
+        req.expected_merge_commit = "abc123".to_string();
         let mut runner = MockRunner {
             outputs: VecDeque::from([
                 output(false, Some(1), "FAIL test_a\nexpected true\n"),
                 output(true, Some(0), "abc123\n"),
+                output(true, Some(0), ""),
                 output(true, Some(0), "reverted\n"),
                 output(true, Some(0), "def456\n"),
             ]),
             calls: Vec::new(),
         };
 
-        post_merge_check_with_runner(gcx.clone(), request(temp.path()), &mut runner)
+        post_merge_check_with_runner(gcx.clone(), req, &mut runner)
             .await
             .unwrap();
 

@@ -71,6 +71,19 @@ fn append_post_merge_check_message(
             result.fix_card_id.as_deref().unwrap_or("created"),
             crate::chat::post_merge_check::first_error_line(&result.output_tail)
         ));
+    } else if let Some(reason) = result.revert_skipped_reason.as_deref() {
+        message.push_str(&format!(
+            "\n\n## Post-merge regression detected\n\n**Verification:** `{}` failed{}\n**Auto-reverted:** false ({})\n**Merge commit:** {}\n**Fix card:** {}\n\n{}",
+            result.command.as_deref().unwrap_or("unknown"),
+            result
+                .exit_code
+                .map(|code| format!(" with exit code {}", code))
+                .unwrap_or_default(),
+            reason,
+            result.merge_commit.as_deref().unwrap_or("unknown"),
+            result.fix_card_id.as_deref().unwrap_or("created"),
+            crate::chat::post_merge_check::first_error_line(&result.output_tail)
+        ));
     } else {
         message.push_str(&format!(
             "\n\n**Post-merge check:** `{}` passed",
@@ -335,8 +348,8 @@ async fn merge_registered_task_worktree(
         .await;
     }
     clear_board_mirrors_after_registered_merge(gcx.clone(), task_id, card_id, &response).await?;
-    let post_merge_check = if response.merged && auto_revert {
-        Some(
+    let post_merge_check = match response.merge_commit.as_ref() {
+        Some(merge_commit) if response.merged && auto_revert => Some(
             crate::chat::post_merge_check::post_merge_check(
                 gcx,
                 crate::chat::post_merge_check::PostMergeCheckRequest {
@@ -345,12 +358,12 @@ async fn merge_registered_task_worktree(
                     workspace_root: workspace_root.to_path_buf(),
                     enabled: auto_revert,
                     timeout: auto_revert_timeout,
+                    expected_merge_commit: merge_commit.clone(),
                 },
             )
             .await?,
-        )
-    } else {
-        None
+        ),
+        _ => None,
     };
     let mut message = merge_response_message(card_id, &response, post_merge_check.as_ref());
     append_verifier_warning(&mut message, verifier_warning.as_deref());
@@ -800,6 +813,10 @@ Use `cat <file>` to see conflict markers in each file."#,
             }
         }
 
+        let merge_commit = run_git(&["rev-parse", "HEAD"])
+            .map(|head| head.trim().to_string())
+            .unwrap_or_default();
+
         let (worktree_removed, branch_deleted) = if agent_branch != base_branch {
             let wr = run_git(&["worktree", "remove", agent_worktree, "--force"]).is_ok();
             let bd = run_git(&["branch", "-D", agent_branch]).is_ok();
@@ -810,7 +827,7 @@ Use `cat <file>` to see conflict markers in each file."#,
 
         drop(_guard);
 
-        let post_merge_check = if auto_revert {
+        let post_merge_check = if auto_revert && !merge_commit.is_empty() {
             Some(
                 crate::chat::post_merge_check::post_merge_check(
                     gcx.clone(),
@@ -820,6 +837,7 @@ Use `cat <file>` to see conflict markers in each file."#,
                         workspace_root: workspace_root.to_path_buf(),
                         enabled: true,
                         timeout: auto_revert_timeout,
+                        expected_merge_commit: merge_commit,
                     },
                 )
                 .await?,
