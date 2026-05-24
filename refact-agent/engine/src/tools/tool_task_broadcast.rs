@@ -198,7 +198,7 @@ async fn reserve_broadcast_target(
     let card_id_for_update = target.card_id.clone();
     let chat_id_for_update = target.chat_id.clone();
     let status_message = format!("Broadcast pending: {}", truncate_chars(message, 80));
-    let heartbeat = Utc::now().to_rfc3339();
+    let timestamp = Utc::now().to_rfc3339();
     let result = storage::update_board_atomic(gcx, task_id, move |board| {
         let Some(card) = board.get_card_mut(&card_id_for_update) else {
             return Err(format!(
@@ -213,9 +213,8 @@ async fn reserve_broadcast_target(
         if card.agent_chat_id.as_deref() != Some(chat_id_for_update.as_str()) {
             return Err(format!("{}agent_chat_id changed", BROADCAST_SKIP_PREFIX));
         }
-        card.last_heartbeat_at = Some(heartbeat.clone());
         card.status_updates.push(StatusUpdate {
-            timestamp: heartbeat.clone(),
+            timestamp: timestamp.clone(),
             message: status_message.clone(),
         });
         Ok(())
@@ -228,6 +227,33 @@ async fn reserve_broadcast_target(
             None => Err(error),
         },
     }
+}
+
+async fn record_broadcast_delivered(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    target: &BroadcastTarget,
+    message: &str,
+) -> Result<(), String> {
+    let card_id_for_update = target.card_id.clone();
+    let chat_id_for_update = target.chat_id.clone();
+    let status_message = format!("Broadcast delivered: {}", truncate_chars(message, 80));
+    let timestamp = Utc::now().to_rfc3339();
+    storage::update_board_atomic(gcx, task_id, move |board| {
+        let card = board
+            .get_card_mut(&card_id_for_update)
+            .ok_or_else(|| format!("Card {} not found", card_id_for_update))?;
+        if card.agent_chat_id.as_deref() != Some(chat_id_for_update.as_str()) {
+            return Ok(());
+        }
+        card.status_updates.push(StatusUpdate {
+            timestamp: timestamp.clone(),
+            message: status_message.clone(),
+        });
+        Ok(())
+    })
+    .await
+    .map(|_| ())
 }
 
 async fn record_broadcast_delivery_failed(
@@ -299,14 +325,27 @@ async fn broadcast_to_target(
         )
         .await
     {
-        Ok(()) => (
-            BroadcastResult {
-                card_id: target.card_id,
-                title: target.title,
-                status: BroadcastStatus::Notified,
-            },
-            true,
-        ),
+        Ok(()) => match record_broadcast_delivered(gcx, task_id, &target, message).await {
+            Ok(()) => (
+                BroadcastResult {
+                    card_id: target.card_id,
+                    title: target.title,
+                    status: BroadcastStatus::Notified,
+                },
+                true,
+            ),
+            Err(error) => (
+                BroadcastResult {
+                    card_id: target.card_id,
+                    title: target.title,
+                    status: BroadcastStatus::Failed(format!(
+                        "delivery status update failed: {}",
+                        error
+                    )),
+                },
+                true,
+            ),
+        },
         Err(error) => {
             let status = match record_broadcast_delivery_failed(
                 gcx,
@@ -562,6 +601,19 @@ mod tests {
         }
     }
 
+    fn test_card_with_heartbeat(
+        id: &str,
+        title: &str,
+        column: &str,
+        agent_chat_id: Option<&str>,
+        last_heartbeat_at: &str,
+    ) -> BoardCard {
+        BoardCard {
+            last_heartbeat_at: Some(last_heartbeat_at.to_string()),
+            ..test_card(id, title, column, agent_chat_id)
+        }
+    }
+
     fn task_meta(cards_total: usize, agents_active: usize) -> TaskMeta {
         let now = Utc::now().to_rfc3339();
         TaskMeta {
@@ -737,20 +789,91 @@ mod tests {
         }
 
         let board = storage::load_board(gcx, "task-1").await.unwrap();
+        assert_eq!(board.get_card("T-22").unwrap().status_updates.len(), 2);
         assert_eq!(
             board.get_card("T-22").unwrap().status_updates[0].message,
             "Broadcast pending: API X is now deprecated, use Y in all new code"
         );
-        assert!(board.get_card("T-22").unwrap().last_heartbeat_at.is_some());
+        assert_eq!(
+            board.get_card("T-22").unwrap().status_updates[1].message,
+            "Broadcast delivered: API X is now deprecated, use Y in all new code"
+        );
+        assert!(board.get_card("T-22").unwrap().last_heartbeat_at.is_none());
         assert!(board.get_card("T-23").unwrap().status_updates.is_empty());
+        assert_eq!(board.get_card("T-29").unwrap().status_updates.len(), 2);
         assert_eq!(
             board.get_card("T-29").unwrap().status_updates[0].message,
             "Broadcast pending: API X is now deprecated, use Y in all new code"
+        );
+        assert_eq!(
+            board.get_card("T-29").unwrap().status_updates[1].message,
+            "Broadcast delivered: API X is now deprecated, use Y in all new code"
         );
         assert!(output.contains("📢 Broadcast sent to 2 agents"));
         assert!(output.contains("- T-23 (documents): skipped (in exclude_cards)"));
         assert!(output.contains("- T-22 (auto-nudge): notified"));
         assert!(output.contains("- T-29 (check_agents): notified"));
+    }
+
+    #[tokio::test]
+    async fn task_broadcast_does_not_update_heartbeat() {
+        let temp = tempfile::tempdir().unwrap();
+        let initial_heartbeat = "2026-05-22T00:00:00+00:00";
+        let gcx = write_task(
+            temp.path(),
+            vec![test_card_with_heartbeat(
+                "T-22",
+                "auto-nudge",
+                "doing",
+                Some("chat-22"),
+                initial_heartbeat,
+            )],
+        )
+        .await;
+        let mock = Arc::new(MockChatFacade::new(&[]));
+        let ccx = planner_ccx(gcx.clone(), mock.clone(), "planner").await;
+
+        ToolTaskBroadcast::new()
+            .tool_execute(
+                ccx,
+                &"call".to_string(),
+                &args(&[("message", json!("Use API Y"))]),
+            )
+            .await
+            .unwrap();
+
+        let board = storage::load_board(gcx, "task-1").await.unwrap();
+        assert_eq!(
+            board.get_card("T-22").unwrap().last_heartbeat_at.as_deref(),
+            Some(initial_heartbeat)
+        );
+    }
+
+    #[tokio::test]
+    async fn task_broadcast_still_records_status_updates() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = write_task(
+            temp.path(),
+            vec![test_card("T-22", "auto-nudge", "doing", Some("chat-22"))],
+        )
+        .await;
+        let mock = Arc::new(MockChatFacade::new(&[]));
+        let ccx = planner_ccx(gcx.clone(), mock.clone(), "planner").await;
+
+        ToolTaskBroadcast::new()
+            .tool_execute(
+                ccx,
+                &"call".to_string(),
+                &args(&[("message", json!("Use API Y"))]),
+            )
+            .await
+            .unwrap();
+
+        let board = storage::load_board(gcx, "task-1").await.unwrap();
+        let status_updates = &board.get_card("T-22").unwrap().status_updates;
+        assert_eq!(status_updates.len(), 2);
+        assert_eq!(status_updates[0].message, "Broadcast pending: Use API Y");
+        assert_eq!(status_updates[1].message, "Broadcast delivered: Use API Y");
     }
 
     #[tokio::test]
@@ -904,7 +1027,15 @@ mod tests {
         assert!(output.contains("- T-29 (check_agents): failed (queue unavailable)"));
 
         let board = storage::load_board(gcx, "task-1").await.unwrap();
-        assert_eq!(board.get_card("T-22").unwrap().status_updates.len(), 1);
+        assert_eq!(board.get_card("T-22").unwrap().status_updates.len(), 2);
+        assert_eq!(
+            board.get_card("T-22").unwrap().status_updates[0].message,
+            "Broadcast pending: Use API Y"
+        );
+        assert_eq!(
+            board.get_card("T-22").unwrap().status_updates[1].message,
+            "Broadcast delivered: Use API Y"
+        );
         assert_eq!(board.get_card("T-29").unwrap().status_updates.len(), 2);
         assert_eq!(
             board.get_card("T-29").unwrap().status_updates[0].message,
