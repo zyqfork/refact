@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::files_correction::get_project_dirs;
@@ -214,14 +214,18 @@ fn mapping_is_inactive(mapping: &YamlMapping) -> bool {
     )
 }
 
+fn component_matches(component: Component<'_>, expected: &str) -> bool {
+    matches!(component, Component::Normal(value) if value.to_str() == Some(expected))
+}
+
 fn extract_task_id_from_path(path: &Path) -> Option<String> {
-    let mut saw_tasks = false;
-    for component in path.components() {
-        let text = component.as_os_str().to_string_lossy();
-        if saw_tasks {
-            return Some(text.to_string());
+    let components = path.components().collect::<Vec<_>>();
+    for window in components.windows(3) {
+        if component_matches(window[0], ".refact") && component_matches(window[1], "tasks") {
+            if let Component::Normal(task_id) = window[2] {
+                return Some(task_id.to_string_lossy().to_string());
+            }
         }
-        saw_tasks = text == "tasks";
     }
     None
 }
@@ -760,47 +764,71 @@ pub async fn build_knowledge_index(gcx: Arc<GlobalContext>) -> KnowledgeIndex {
 }
 
 async fn scan_knowledge_dirs(index: &mut KnowledgeIndex, knowledge_dirs: Vec<PathBuf>) {
-    for dir in knowledge_dirs {
-        for entry in walkdir::WalkDir::new(&dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "md" && ext != "mdx" {
-                continue;
-            }
-            if path_has_any_relative_component(path, &dir, &["archive", "archived", ".history"])
-                || is_tmp_path(path)
-            {
-                continue;
-            }
-
-            let path_buf = path.to_path_buf();
-            let text = match tokio::fs::read_to_string(&path_buf).await {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let (fm, content_start) = KnowledgeFrontmatter::parse(&text);
-            if fm.is_archived() || fm.is_deprecated() {
-                continue;
-            }
-
-            let content_slice = text.get(content_start..).unwrap_or("");
-            index.add_from_frontmatter(path_buf, &fm, Some(content_slice));
+    for path_buf in collect_knowledge_markdown_paths(knowledge_dirs).await {
+        let text = match tokio::fs::read_to_string(&path_buf).await {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let (fm, content_start) = KnowledgeFrontmatter::parse(&text);
+        if fm.is_archived() || fm.is_deprecated() {
+            continue;
         }
+
+        let content_slice = text.get(content_start..).unwrap_or("");
+        index.add_from_frontmatter(path_buf, &fm, Some(content_slice));
     }
 }
 
-async fn scan_task_dirs(index: &mut KnowledgeIndex, task_roots: Vec<PathBuf>) {
+async fn collect_knowledge_markdown_paths(knowledge_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    tokio::task::spawn_blocking(move || collect_knowledge_markdown_paths_blocking(knowledge_dirs))
+        .await
+        .unwrap_or_default()
+}
+
+fn collect_knowledge_markdown_paths_blocking(knowledge_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for dir in knowledge_dirs {
+        for entry in walkdir::WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if should_index_markdown_path(path, &dir, &["archive", "archived", ".history"]) {
+                paths.push(path.to_path_buf());
+            }
+        }
+    }
+    paths
+}
+
+fn should_index_markdown_path(path: &Path, root: &Path, ignored_components: &[&str]) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext != "md" && ext != "mdx" {
+        return false;
+    }
+    !path_has_any_relative_component(path, root, ignored_components) && !is_tmp_path(path)
+}
+
+#[derive(Debug, Clone)]
+struct TaskMarkdownPath {
+    path: PathBuf,
+    directory_kind: &'static str,
+}
+
+async fn collect_task_markdown_paths(task_roots: Vec<PathBuf>) -> Vec<TaskMarkdownPath> {
+    tokio::task::spawn_blocking(move || collect_task_markdown_paths_blocking(task_roots))
+        .await
+        .unwrap_or_default()
+}
+
+fn collect_task_markdown_paths_blocking(task_roots: Vec<PathBuf>) -> Vec<TaskMarkdownPath> {
+    let mut paths = Vec::new();
     for tasks_dir in task_roots {
-        for task_entry in match std::fs::read_dir(&tasks_dir) {
+        let task_entries = match std::fs::read_dir(&tasks_dir) {
             Ok(entries) => entries.filter_map(|entry| entry.ok()).collect::<Vec<_>>(),
             Err(_) => continue,
-        } {
+        };
+        for task_entry in task_entries {
             let task_dir = task_entry.path();
             if !task_dir.is_dir() {
                 continue;
@@ -815,43 +843,63 @@ async fn scan_task_dirs(index: &mut KnowledgeIndex, task_roots: Vec<PathBuf>) {
                     .filter_map(|e| e.ok())
                 {
                     let path = entry.path();
-                    if !path.is_file() {
-                        continue;
-                    }
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if ext != "md" && ext != "mdx" {
-                        continue;
-                    }
-                    if path_has_any_relative_component(
+                    if should_index_markdown_path(
                         path,
                         &scan_dir,
                         &[".history", "archived", "archive"],
-                    ) || is_tmp_path(path)
-                    {
-                        continue;
+                    ) {
+                        paths.push(TaskMarkdownPath {
+                            path: path.to_path_buf(),
+                            directory_kind: subdir,
+                        });
                     }
-
-                    let path_buf = path.to_path_buf();
-                    let text = match tokio::fs::read_to_string(&path_buf).await {
-                        Ok(t) => t,
-                        Err(_) => continue,
-                    };
-                    let (mapping, content_start) = parse_yaml_frontmatter(&text);
-                    if mapping_is_inactive(&mapping) {
-                        continue;
-                    }
-                    let content_slice = text.get(content_start..).unwrap_or("");
-                    let card = task_card_from_mapping(&mapping, &path_buf, subdir, content_slice);
-                    index.add_card_with_content(card, Some(content_slice));
                 }
             }
         }
+    }
+    paths
+}
+
+async fn scan_task_dirs(index: &mut KnowledgeIndex, task_roots: Vec<PathBuf>) {
+    for task_path in collect_task_markdown_paths(task_roots).await {
+        let text = match tokio::fs::read_to_string(&task_path.path).await {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let (mapping, content_start) = parse_yaml_frontmatter(&text);
+        if mapping_is_inactive(&mapping) {
+            continue;
+        }
+        let content_slice = text.get(content_start..).unwrap_or("");
+        let card = task_card_from_mapping(
+            &mapping,
+            &task_path.path,
+            task_path.directory_kind,
+            content_slice,
+        );
+        index.add_card_with_content(card, Some(content_slice));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_task_id_rejects_non_refact_tasks_path() {
+        assert_eq!(
+            extract_task_id_from_path(Path::new("/repo/tasks/examples/x.md")),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_task_id_accepts_refact_tasks_path() {
+        assert_eq!(
+            extract_task_id_from_path(Path::new("/workspace/.refact/tasks/T-1/memories/x.md")),
+            Some("T-1".to_string())
+        );
+    }
 
     #[tokio::test]
     async fn build_index_skips_archived_and_deprecated_memories() {
@@ -960,6 +1008,39 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn build_knowledge_index_uses_spawn_blocking_for_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let memories_dir = dir.path().join(".refact/tasks/T-1/memories");
+        tokio::fs::create_dir_all(&memories_dir).await.unwrap();
+        for idx in 0..200 {
+            tokio::fs::write(
+                memories_dir.join(format!("memory-{idx}.md")),
+                format!(
+                    "---\ntitle: Memory {idx}\nkind: finding\n---\n\nlarge synthetic tree token {idx}"
+                ),
+            )
+            .await
+            .unwrap();
+        }
+
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![dir.path().to_path_buf()];
+
+        let index = build_knowledge_index(gcx).await;
+        let hits = index.search(
+            "synthetic",
+            &KnowledgeSearchFilters {
+                scope: Some("task".to_string()),
+                task_id: Some("T-1".to_string()),
+                ..Default::default()
+            },
+            250,
+        );
+
+        assert_eq!(hits.len(), 200);
     }
 
     #[tokio::test]
