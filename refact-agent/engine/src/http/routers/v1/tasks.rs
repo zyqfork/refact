@@ -10,15 +10,19 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use chrono::Utc;
+use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::global_context::GlobalContext;
 use crate::custom_error::ScratchError;
-use crate::tasks::types::{TaskMeta, TaskBoard, BoardCard, StatusUpdate, TaskStatus, TrajectoryInfo};
+use crate::tasks::types::{
+    BoardCard, CardComment, StatusUpdate, TaskBoard, TaskMeta, TaskStatus, TrajectoryInfo,
+};
 use crate::chat::trajectories::TrajectoryEvent;
 use crate::chat::types::SessionState;
 use crate::tasks::events::{TaskEvent, TaskEventEnvelope};
 use crate::tasks::storage;
+use crate::tools::task_tool_helpers::truncate_chars;
 use crate::tools::tool_task_memory::{
     MemoryKind, MemoryNamespace, TaskMemoriesApiResponse, TaskMemoryArchiveApiResponse,
     TaskMemoryListFilters, TaskMemoryPinApiResponse, TaskMemoryTriageApiResponse,
@@ -99,6 +103,13 @@ pub enum BoardPatch {
         card_id: String,
         message: String,
     },
+    AddComment {
+        card_id: String,
+        body: String,
+        author_role: String,
+        author_id: Option<String>,
+        reply_to: Option<String>,
+    },
     SetFinalReport {
         card_id: String,
         report: String,
@@ -106,6 +117,15 @@ pub enum BoardPatch {
     DeleteCard {
         id: String,
     },
+}
+
+fn short_hex_id() -> String {
+    Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(8)
+        .collect()
 }
 
 async fn enrich_task_with_session_state(gcx: Arc<GlobalContext>, task: &mut TaskMeta) {
@@ -497,6 +517,25 @@ pub async fn handle_patch_board(
                 card.status_updates.push(StatusUpdate {
                     timestamp: now.clone(),
                     message,
+                });
+            }
+            BoardPatch::AddComment {
+                card_id,
+                body,
+                author_role,
+                author_id,
+                reply_to,
+            } => {
+                let card = board
+                    .get_card_mut(&card_id)
+                    .ok_or_else(|| format!("Card {} not found", card_id))?;
+                card.comments.push(CardComment {
+                    id: short_hex_id(),
+                    author_role,
+                    author_id,
+                    timestamp: Utc::now().to_rfc3339(),
+                    body: truncate_chars(&body, 4000),
+                    reply_to,
                 });
             }
             BoardPatch::SetFinalReport { card_id, report } => {
@@ -1184,6 +1223,72 @@ mod tests {
         assert_eq!(stored.cards.len(), 1);
         assert_eq!(stored.get_card("card-a").is_some(), has_card_a);
         assert_eq!(stored.get_card("card-b").is_some(), has_card_b);
+    }
+
+    #[tokio::test]
+    async fn board_patch_add_comment_persists() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-comment").await;
+        let created = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-comment".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(created.get_card("card-a").is_some());
+
+        let board = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-comment".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 1,
+                patch: BoardPatch::AddComment {
+                    card_id: "card-a".to_string(),
+                    body: "Looks good from the tiny chaos desk.".to_string(),
+                    author_role: "planner".to_string(),
+                    author_id: Some("planner-chat".to_string()),
+                    reply_to: Some("12345678".to_string()),
+                },
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(board.rev, 2);
+        let stored = storage::load_board(gcx, "task-comment").await.unwrap();
+        let comment = &stored.get_card("card-a").unwrap().comments[0];
+        assert_eq!(comment.author_role, "planner");
+        assert_eq!(comment.author_id.as_deref(), Some("planner-chat"));
+        assert_eq!(comment.body, "Looks good from the tiny chaos desk.");
+        assert_eq!(comment.reply_to.as_deref(), Some("12345678"));
+        assert_eq!(comment.id.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn board_patch_add_comment_unknown_card_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-comment-missing").await;
+
+        let result = handle_patch_board(
+            State(app(gcx)),
+            Path("task-comment-missing".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 0,
+                patch: BoardPatch::AddComment {
+                    card_id: "missing".to_string(),
+                    body: "Nobody home.".to_string(),
+                    author_role: "planner".to_string(),
+                    author_id: None,
+                    reply_to: None,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
