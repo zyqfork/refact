@@ -84,6 +84,9 @@ use crate::http::routers::v1::tasks::{
     handle_list_task_trajectories, handle_create_planner_chat, handle_delete_planner_chat,
     handle_tasks_subscribe, handle_list_task_memories, handle_pin_task_memory,
     handle_archive_task_memory, handle_task_memories_triage_done,
+    handle_list_task_documents, handle_get_task_document, handle_create_task_document,
+    handle_update_task_document, handle_append_task_document, handle_delete_task_document,
+    handle_pin_task_document, handle_history_task_document,
 };
 use crate::http::routers::v1::trajectory_ops::{
     handle_transform_preview, handle_transform_apply, handle_handoff_preview, handle_handoff_apply,
@@ -473,6 +476,23 @@ pub fn make_v1_router(app_state: AppState) -> Router<AppState> {
         .route(
             "/task/:task_id/memories/:filename/archive",
             post(handle_archive_task_memory),
+        )
+        .route("/task/:task_id/documents", get(handle_list_task_documents))
+        .route("/task/:task_id/documents", post(handle_create_task_document))
+        .route("/task/:task_id/documents/:slug", get(handle_get_task_document))
+        .route("/task/:task_id/documents/:slug", put(handle_update_task_document))
+        .route("/task/:task_id/documents/:slug", delete(handle_delete_task_document))
+        .route(
+            "/task/:task_id/documents/:slug/append",
+            post(handle_append_task_document),
+        )
+        .route(
+            "/task/:task_id/documents/:slug/pin",
+            post(handle_pin_task_document),
+        )
+        .route(
+            "/task/:task_id/documents/:slug/history",
+            get(handle_history_task_document),
         )
         .route("/tasks/:task_id/board", get(handle_get_board))
         .route("/tasks/:task_id/board", post(handle_patch_board))

@@ -23,6 +23,12 @@ use crate::chat::types::SessionState;
 use crate::tasks::events::{TaskEvent, TaskEventEnvelope};
 use crate::tasks::storage;
 use crate::tools::task_tool_helpers::truncate_chars;
+use crate::tools::tool_task_documents::{
+    CreateDocumentRequest, TaskDocumentDetail, TaskDocumentHistoryResponse,
+    TaskDocumentListResponse, append_task_document_for_api, create_task_document_for_api,
+    delete_task_document_for_api, get_task_document_for_api, history_task_document_for_api,
+    list_task_documents_for_api, pin_task_document_for_api, update_task_document_for_api,
+};
 use crate::tools::tool_task_memory::{
     MemoryKind, MemoryNamespace, TaskMemoriesApiResponse, TaskMemoryArchiveApiResponse,
     TaskMemoryListFilters, TaskMemoryPinApiResponse, TaskMemoryTriageApiResponse,
@@ -993,6 +999,125 @@ pub async fn handle_tasks_subscribe(
         .unwrap())
 }
 
+#[derive(Deserialize)]
+pub struct GetDocumentQuery {
+    pub version: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateTaskDocumentRequest {
+    pub content: String,
+}
+
+#[derive(Deserialize)]
+pub struct AppendTaskDocumentRequest {
+    pub section: String,
+}
+
+#[derive(Deserialize)]
+pub struct PinTaskDocumentRequest {
+    pub pinned: bool,
+}
+
+fn map_doc_error(e: String) -> (StatusCode, String) {
+    if e.contains("already exists")
+        || e.contains("invalid kind")
+        || e.contains("slug must")
+        || e.contains("slug cannot")
+    {
+        (StatusCode::BAD_REQUEST, e)
+    } else if e.contains("does not exist") {
+        (StatusCode::NOT_FOUND, e)
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    }
+}
+
+pub async fn handle_list_task_documents(
+    State(app): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<TaskDocumentListResponse>, (StatusCode, String)> {
+    let result = list_task_documents_for_api(app.gcx.clone(), &task_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(result))
+}
+
+pub async fn handle_get_task_document(
+    State(app): State<AppState>,
+    Path((task_id, slug)): Path<(String, String)>,
+    Query(query): Query<GetDocumentQuery>,
+) -> Result<Json<TaskDocumentDetail>, (StatusCode, String)> {
+    let result = get_task_document_for_api(app.gcx.clone(), &task_id, &slug, query.version)
+        .await
+        .map_err(map_doc_error)?;
+    Ok(Json(result))
+}
+
+pub async fn handle_create_task_document(
+    State(app): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(req): Json<CreateDocumentRequest>,
+) -> Result<Json<TaskDocumentDetail>, (StatusCode, String)> {
+    let result = create_task_document_for_api(app.gcx.clone(), &task_id, req)
+        .await
+        .map_err(map_doc_error)?;
+    Ok(Json(result))
+}
+
+pub async fn handle_update_task_document(
+    State(app): State<AppState>,
+    Path((task_id, slug)): Path<(String, String)>,
+    Json(req): Json<UpdateTaskDocumentRequest>,
+) -> Result<Json<TaskDocumentDetail>, (StatusCode, String)> {
+    let result = update_task_document_for_api(app.gcx.clone(), &task_id, &slug, req.content)
+        .await
+        .map_err(map_doc_error)?;
+    Ok(Json(result))
+}
+
+pub async fn handle_append_task_document(
+    State(app): State<AppState>,
+    Path((task_id, slug)): Path<(String, String)>,
+    Json(req): Json<AppendTaskDocumentRequest>,
+) -> Result<Json<TaskDocumentDetail>, (StatusCode, String)> {
+    let result = append_task_document_for_api(app.gcx.clone(), &task_id, &slug, req.section)
+        .await
+        .map_err(map_doc_error)?;
+    Ok(Json(result))
+}
+
+pub async fn handle_delete_task_document(
+    State(app): State<AppState>,
+    Path((task_id, slug)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    delete_task_document_for_api(app.gcx.clone(), &task_id, &slug)
+        .await
+        .map_err(map_doc_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn handle_pin_task_document(
+    State(app): State<AppState>,
+    Path((task_id, slug)): Path<(String, String)>,
+    Json(req): Json<PinTaskDocumentRequest>,
+) -> Result<Json<TaskDocumentDetail>, (StatusCode, String)> {
+    let result = pin_task_document_for_api(app.gcx.clone(), &task_id, &slug, req.pinned)
+        .await
+        .map_err(map_doc_error)?;
+    Ok(Json(result))
+}
+
+pub async fn handle_history_task_document(
+    State(app): State<AppState>,
+    Path((task_id, slug)): Path<(String, String)>,
+) -> Result<Json<TaskDocumentHistoryResponse>, (StatusCode, String)> {
+    let result = history_task_document_for_api(app.gcx.clone(), &task_id, &slug)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,5 +1531,60 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(!planner_path.exists());
+    }
+
+    #[tokio::test]
+    async fn handle_create_task_document_creates_document_and_returns_detail() {
+        use crate::tools::tool_task_documents::CreateDocumentRequest;
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-doc-create").await;
+        let result = handle_create_task_document(
+            State(app(gcx.clone())),
+            Path("task-doc-create".to_string()),
+            Json(CreateDocumentRequest {
+                slug: "my-plan".to_string(),
+                name: "My Plan".to_string(),
+                kind: "plan".to_string(),
+                content: "body text".to_string(),
+                pinned: Some(true),
+                relevant_cards: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0.slug, "my-plan");
+        assert_eq!(result.0.name, "My Plan");
+        assert_eq!(result.0.content, "body text");
+        assert!(result.0.pinned);
+        assert_eq!(result.0.version, 1);
+    }
+
+    #[tokio::test]
+    async fn handle_list_task_documents_returns_empty_when_no_documents() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-docs-empty").await;
+        let result = handle_list_task_documents(
+            State(app(gcx.clone())),
+            Path("task-docs-empty".to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(result.0.documents.is_empty());
+        assert_eq!(result.0.task_id, "task-docs-empty");
+    }
+
+    #[tokio::test]
+    async fn handle_update_task_document_returns_404_for_unknown_slug() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-doc-404").await;
+        let result = handle_update_task_document(
+            State(app(gcx.clone())),
+            Path(("task-doc-404".to_string(), "no-such-slug".to_string())),
+            Json(UpdateTaskDocumentRequest {
+                content: "whatever".to_string(),
+            }),
+        )
+        .await;
+        assert!(matches!(result, Err((StatusCode::NOT_FOUND, _))));
     }
 }

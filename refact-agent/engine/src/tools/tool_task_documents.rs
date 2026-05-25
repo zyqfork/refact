@@ -638,6 +638,222 @@ fn tool_message(tool_call_id: &String, content: String) -> Vec<ContextEnum> {
     })]
 }
 
+
+#[derive(Debug, Serialize)]
+pub struct TaskDocumentSummary {
+    pub slug: String,
+    pub name: String,
+    pub kind: String,
+    pub pinned: bool,
+    pub version: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub author_role: String,
+    pub relevant_cards: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskDocumentDetail {
+    pub slug: String,
+    pub name: String,
+    pub kind: String,
+    pub pinned: bool,
+    pub version: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub author_role: String,
+    pub relevant_cards: Vec<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskDocumentListResponse {
+    pub task_id: String,
+    pub documents: Vec<TaskDocumentSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskDocumentHistoryEntry {
+    pub version: u64,
+    pub updated_at: String,
+    pub author_role: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskDocumentHistoryResponse {
+    pub task_id: String,
+    pub slug: String,
+    pub history: Vec<TaskDocumentHistoryEntry>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateDocumentRequest {
+    pub slug: String,
+    pub name: String,
+    pub kind: String,
+    pub content: String,
+    pub pinned: Option<bool>,
+    pub relevant_cards: Option<Vec<String>>,
+}
+
+fn document_to_summary(doc: &TaskDocument) -> TaskDocumentSummary {
+    let fm = &doc.frontmatter;
+    TaskDocumentSummary {
+        slug: fm.slug.clone(),
+        name: fm.name.clone(),
+        kind: fm.kind.clone(),
+        pinned: fm.pinned,
+        version: fm.version,
+        created_at: fm.created_at.clone(),
+        updated_at: fm.updated_at.clone(),
+        author_role: fm.author_role.clone(),
+        relevant_cards: fm.relevant_cards.clone(),
+    }
+}
+
+fn document_to_detail(doc: TaskDocument) -> TaskDocumentDetail {
+    let fm = doc.frontmatter;
+    TaskDocumentDetail {
+        slug: fm.slug,
+        name: fm.name,
+        kind: fm.kind,
+        pinned: fm.pinned,
+        version: fm.version,
+        created_at: fm.created_at,
+        updated_at: fm.updated_at,
+        author_role: fm.author_role,
+        relevant_cards: fm.relevant_cards,
+        content: doc.content,
+    }
+}
+
+pub async fn list_task_documents_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+) -> Result<TaskDocumentListResponse, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    let mut documents = list_documents_at(&documents_dir).await?;
+    documents.sort_by(|a, b| a.frontmatter.created_at.cmp(&b.frontmatter.created_at));
+    Ok(TaskDocumentListResponse {
+        task_id: task_id.to_string(),
+        documents: documents.iter().map(document_to_summary).collect(),
+    })
+}
+
+pub async fn get_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    slug: &str,
+    version: Option<u64>,
+) -> Result<TaskDocumentDetail, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    if version.is_none() && !document_path(&documents_dir, slug).exists() {
+        return Err(format!("document `{}` does not exist", slug));
+    }
+    let document = get_document_at(&documents_dir, slug, version).await?;
+    Ok(document_to_detail(document))
+}
+
+pub async fn create_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    request: CreateDocumentRequest,
+) -> Result<TaskDocumentDetail, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    let document = create_document_at(
+        &documents_dir,
+        &request.slug,
+        &request.name,
+        &request.kind,
+        &request.content,
+        request.pinned.unwrap_or(false),
+        request.relevant_cards.unwrap_or_default(),
+        "user",
+    )
+    .await?;
+    Ok(document_to_detail(document))
+}
+
+pub async fn update_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    slug: &str,
+    content: String,
+) -> Result<TaskDocumentDetail, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    if !document_path(&documents_dir, slug).exists() {
+        return Err(format!("document `{}` does not exist", slug));
+    }
+    let document = update_document_at(&documents_dir, slug, &content).await?;
+    Ok(document_to_detail(document))
+}
+
+pub async fn append_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    slug: &str,
+    section: String,
+) -> Result<TaskDocumentDetail, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    if !document_path(&documents_dir, slug).exists() {
+        return Err(format!("document `{}` does not exist", slug));
+    }
+    let document = append_document_at(&documents_dir, slug, &section).await?;
+    Ok(document_to_detail(document))
+}
+
+pub async fn delete_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    slug: &str,
+) -> Result<(), String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    delete_document_at(&documents_dir, slug).await?;
+    Ok(())
+}
+
+pub async fn pin_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    slug: &str,
+    pinned: bool,
+) -> Result<TaskDocumentDetail, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    if !document_path(&documents_dir, slug).exists() {
+        return Err(format!("document `{}` does not exist", slug));
+    }
+    let document = pin_document_at(&documents_dir, slug, pinned).await?;
+    Ok(document_to_detail(document))
+}
+
+pub async fn history_task_document_for_api(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    slug: &str,
+) -> Result<TaskDocumentHistoryResponse, String> {
+    let documents_dir = documents_dir_for_task(gcx, task_id).await?;
+    let items = history_document_at(&documents_dir, slug).await?;
+    let mut history = Vec::new();
+    for item in &items {
+        let document = read_document(&item.path).await?;
+        let metadata = fs::metadata(&item.path)
+            .await
+            .map_err(|e| format!("failed to get file metadata: {}", e))?;
+        history.push(TaskDocumentHistoryEntry {
+            version: item.version,
+            updated_at: item.updated_at.clone(),
+            author_role: document.frontmatter.author_role,
+            size_bytes: metadata.len(),
+        });
+    }
+    Ok(TaskDocumentHistoryResponse {
+        task_id: task_id.to_string(),
+        slug: slug.to_string(),
+        history,
+    })
+}
+
 macro_rules! impl_new {
     ($tool:ident) => {
         impl $tool {
@@ -1247,5 +1463,152 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("invalid kind"));
+    }
+
+    use crate::tasks::{storage, types::{TaskMeta, TaskStatus}};
+
+    async fn setup_task_gcx(task_id: &str) -> (TempDir, Arc<GlobalContext>) {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![temp.path().to_path_buf()];
+        let task_dir = temp.path().join(".refact/tasks").join(task_id);
+        fs::create_dir_all(&task_dir).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let meta = TaskMeta {
+            schema_version: 1,
+            id: task_id.to_string(),
+            name: task_id.to_string(),
+            status: TaskStatus::Planning,
+            created_at: now.clone(),
+            updated_at: now,
+            cards_total: 0,
+            cards_done: 0,
+            cards_failed: 0,
+            agents_active: 0,
+            base_branch: None,
+            base_commit: None,
+            default_agent_model: None,
+            is_name_generated: false,
+            last_agents_summary_at: None,
+            planner_session_state: None,
+        };
+        storage::save_task_meta(gcx.clone(), task_id, &meta).await.unwrap();
+        (temp, gcx)
+    }
+
+    #[tokio::test]
+    async fn list_task_documents_for_api_returns_summaries_in_creation_order() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-list").await;
+        let tid = "task-docs-list";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "doc-a".to_string(), name: "A".to_string(), kind: "plan".to_string(),
+            content: "body-a".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "doc-b".to_string(), name: "B".to_string(), kind: "spec".to_string(),
+            content: "body-b".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "doc-c".to_string(), name: "C".to_string(), kind: "brief".to_string(),
+            content: "body-c".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        let result = list_task_documents_for_api(gcx, tid).await.unwrap();
+        assert_eq!(result.task_id, tid);
+        assert_eq!(result.documents.len(), 3);
+        let slugs: Vec<&str> = result.documents.iter().map(|d| d.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["doc-a", "doc-b", "doc-c"]);
+    }
+
+    #[tokio::test]
+    async fn get_task_document_for_api_returns_detail_with_content() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-get").await;
+        let tid = "task-docs-get";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "my-doc".to_string(), name: "My Doc".to_string(), kind: "plan".to_string(),
+            content: "hello content".to_string(), pinned: Some(true),
+            relevant_cards: Some(vec!["T-1".to_string()]),
+        }).await.unwrap();
+        let detail = get_task_document_for_api(gcx, tid, "my-doc", None).await.unwrap();
+        assert_eq!(detail.slug, "my-doc");
+        assert_eq!(detail.name, "My Doc");
+        assert_eq!(detail.content, "hello content");
+        assert!(detail.pinned);
+        assert_eq!(detail.relevant_cards, vec!["T-1"]);
+    }
+
+    #[tokio::test]
+    async fn create_task_document_for_api_rejects_duplicate_slug() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-dup").await;
+        let tid = "task-docs-dup";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "dup".to_string(), name: "Dup".to_string(), kind: "spec".to_string(),
+            content: "first".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        let err = create_task_document_for_api(gcx, tid, CreateDocumentRequest {
+            slug: "dup".to_string(), name: "Dup Again".to_string(), kind: "spec".to_string(),
+            content: "second".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap_err();
+        assert!(err.contains("already exists"), "error was: {}", err);
+    }
+
+    #[tokio::test]
+    async fn update_task_document_for_api_increments_version_and_writes_history() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-upd").await;
+        let tid = "task-docs-upd";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "upd".to_string(), name: "Upd".to_string(), kind: "plan".to_string(),
+            content: "v1".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        let updated = update_task_document_for_api(gcx.clone(), tid, "upd", "v2".to_string()).await.unwrap();
+        assert_eq!(updated.version, 2);
+        assert_eq!(updated.content, "v2");
+        let hist = history_task_document_for_api(gcx, tid, "upd").await.unwrap();
+        assert!(!hist.history.is_empty());
+        assert_eq!(hist.history[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn pin_task_document_for_api_flips_pinned_flag() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-pin").await;
+        let tid = "task-docs-pin";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "pin-doc".to_string(), name: "Pin Doc".to_string(), kind: "brief".to_string(),
+            content: "content".to_string(), pinned: Some(true), relevant_cards: None,
+        }).await.unwrap();
+        let unpinned = pin_task_document_for_api(gcx.clone(), tid, "pin-doc", false).await.unwrap();
+        assert!(!unpinned.pinned);
+        let repinned = pin_task_document_for_api(gcx, tid, "pin-doc", true).await.unwrap();
+        assert!(repinned.pinned);
+    }
+
+    #[tokio::test]
+    async fn delete_task_document_for_api_removes_document() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-del").await;
+        let tid = "task-docs-del";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "del-doc".to_string(), name: "Del Doc".to_string(), kind: "spec".to_string(),
+            content: "content".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        delete_task_document_for_api(gcx.clone(), tid, "del-doc").await.unwrap();
+        let result = list_task_documents_for_api(gcx, tid).await.unwrap();
+        assert!(result.documents.iter().all(|d| d.slug != "del-doc"));
+    }
+
+    #[tokio::test]
+    async fn history_task_document_for_api_returns_entries_for_each_version() {
+        let (_temp, gcx) = setup_task_gcx("task-docs-hist").await;
+        let tid = "task-docs-hist";
+        create_task_document_for_api(gcx.clone(), tid, CreateDocumentRequest {
+            slug: "hist-doc".to_string(), name: "Hist".to_string(), kind: "runbook".to_string(),
+            content: "v1".to_string(), pinned: None, relevant_cards: None,
+        }).await.unwrap();
+        update_task_document_for_api(gcx.clone(), tid, "hist-doc", "v2".to_string()).await.unwrap();
+        update_task_document_for_api(gcx.clone(), tid, "hist-doc", "v3".to_string()).await.unwrap();
+        let hist = history_task_document_for_api(gcx, tid, "hist-doc").await.unwrap();
+        assert_eq!(hist.history.len(), 2);
+        assert_eq!(hist.history[0].version, 1);
+        assert_eq!(hist.history[1].version, 2);
     }
 }
