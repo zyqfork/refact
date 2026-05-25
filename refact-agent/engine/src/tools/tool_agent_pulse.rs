@@ -11,7 +11,7 @@ use crate::call_validation::{ChatContent, ChatMessage, ChatToolCall, ContextEnum
 use crate::tasks::storage;
 use crate::tasks::types::BoardCard;
 use crate::tools::task_tool_helpers::{
-    human_age, required_string, require_bound_planner_task, truncate_chars,
+    human_age_at, required_string, require_bound_planner_task, truncate_chars,
 };
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use refact_core::string_utils::redact_sensitive;
@@ -107,6 +107,7 @@ fn build_agent_pulse(
     session_state: Option<SessionState>,
     session_note: Option<String>,
     fallback_token_cap: usize,
+    live_last_activity: Option<DateTime<Utc>>,
 ) -> AgentPulse {
     let messages = snapshot
         .map(|snapshot| snapshot.messages.as_slice())
@@ -121,7 +122,7 @@ fn build_agent_pulse(
         card_title: card.title.clone(),
         state: session_state,
         card_column: card.column.clone(),
-        last_activity_at: last_activity_timestamp(card),
+        last_activity_at: live_last_activity.or_else(|| last_activity_timestamp(card)),
         tokens_used: tokens_used(messages),
         token_cap,
         currently_editing: last_tool
@@ -140,10 +141,7 @@ fn render_agent_pulse(pulse: &AgentPulse) -> String {
 fn render_agent_pulse_at(pulse: &AgentPulse, now: DateTime<Utc>) -> String {
     let last_activity = pulse
         .last_activity_at
-        .map(|timestamp| {
-            let seconds = now.signed_duration_since(timestamp).num_seconds().max(0);
-            human_age(Utc::now() - chrono::Duration::seconds(seconds))
-        })
+        .map(|timestamp| human_age_at(timestamp, now))
         .unwrap_or_else(|| "unknown".to_string());
     let currently_editing = pulse.currently_editing.as_deref().unwrap_or("unknown");
     let assistant = pulse.last_assistant_preview.as_deref().unwrap_or("(none)");
@@ -429,11 +427,12 @@ impl Tool for ToolAgentPulse {
 
         let card_id = required_string(args, "card_id")?;
         let task_id = require_bound_planner_task(&ccx, args).await?;
-        let (gcx, chat_facade, fallback_token_cap) = {
+        let (gcx, chat_facade, sessions, fallback_token_cap) = {
             let ccx_lock = ccx.lock().await;
             (
                 ccx_lock.app.gcx.clone(),
                 ccx_lock.app.chat.facade.clone(),
+                ccx_lock.app.chat.sessions.clone(),
                 ccx_lock.n_ctx,
             )
         };
@@ -441,6 +440,21 @@ impl Tool for ToolAgentPulse {
         let card = board
             .get_card(&card_id)
             .ok_or_else(|| format!("Card {} not found", card_id))?;
+        let live_last_activity = if let Some(chat_id) = card.agent_chat_id.as_deref() {
+            let session_arc = sessions.read().await.get(chat_id).cloned();
+            if let Some(session_arc) = session_arc {
+                let session = session_arc.lock().await;
+                let elapsed = session.last_activity.elapsed();
+                drop(session);
+                chrono::Duration::from_std(elapsed)
+                    .ok()
+                    .map(|d| Utc::now() - d)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let (snapshot, session_state, session_note) =
             fetch_session_snapshot(chat_facade, card.agent_chat_id.as_deref()).await;
         let pulse = build_agent_pulse(
@@ -449,6 +463,7 @@ impl Tool for ToolAgentPulse {
             session_state,
             session_note,
             fallback_token_cap,
+            live_last_activity,
         );
         let result = render_agent_pulse(&pulse);
 
@@ -823,5 +838,71 @@ mod tests {
         assert!(output.contains('…'));
         assert!(!output.contains("hidden"));
         assert!(!output.contains("supersecret"));
+    }
+
+    #[tokio::test]
+    async fn pulse_uses_live_session_activity_when_session_present() {
+        use crate::chat::types::ChatSession;
+        use std::time::{Duration, Instant};
+
+        let temp = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let heartbeat_at = (now - chrono::Duration::hours(1)).to_rfc3339();
+        let created_at = (now - chrono::Duration::hours(2)).to_rfc3339();
+        let mut card = test_card(Some("agent-chat-1".to_string()));
+        card.last_heartbeat_at = Some(heartbeat_at);
+        card.created_at = created_at.clone();
+        card.started_at = Some(created_at);
+        card.status_updates = vec![];
+        let gcx = write_task(temp.path(), card).await;
+
+        let mut session = ChatSession::new("agent-chat-1".to_string());
+        session.last_activity = Instant::now()
+            .checked_sub(Duration::from_secs(30))
+            .unwrap_or_else(Instant::now);
+        gcx.chat_sessions
+            .write()
+            .await
+            .insert("agent-chat-1".to_string(), Arc::new(AMutex::new(session)));
+
+        let facade = Arc::new(MockChatSessionFacade::default());
+        let ccx = planner_ccx(gcx, "planner", facade).await;
+        let mut tool = ToolAgentPulse::new();
+        let args = HashMap::from([("card_id".to_string(), json!("T-29"))]);
+
+        let output = tool_output_text(
+            tool.tool_execute(ccx, &"call".to_string(), &args)
+                .await
+                .unwrap(),
+        );
+
+        assert!(output.contains("**Last activity:** 30s ago"), "got: {output}");
+        assert!(!output.contains("1h ago"), "should not show stale heartbeat: {output}");
+    }
+
+    #[tokio::test]
+    async fn pulse_falls_back_to_board_when_no_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let five_min_ago = (now - chrono::Duration::minutes(5)).to_rfc3339();
+        let mut card = test_card(Some("agent-chat-1".to_string()));
+        card.last_heartbeat_at = Some(five_min_ago.clone());
+        card.started_at = Some(five_min_ago.clone());
+        card.created_at = five_min_ago;
+        card.status_updates = vec![];
+        let gcx = write_task(temp.path(), card).await;
+
+        let facade = Arc::new(MockChatSessionFacade::default());
+        let ccx = planner_ccx(gcx, "planner", facade).await;
+        let mut tool = ToolAgentPulse::new();
+        let args = HashMap::from([("card_id".to_string(), json!("T-29"))]);
+
+        let output = tool_output_text(
+            tool.tool_execute(ccx, &"call".to_string(), &args)
+                .await
+                .unwrap(),
+        );
+
+        assert!(output.contains("**Last activity:** 5m ago"), "got: {output}");
     }
 }

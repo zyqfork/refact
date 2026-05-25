@@ -39,8 +39,8 @@ pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
     format!("{}…", s.chars().take(take).collect::<String>())
 }
 
-pub(crate) fn human_age(ts: DateTime<Utc>) -> String {
-    let seconds = Utc::now().signed_duration_since(ts).num_seconds().max(0);
+pub(crate) fn human_age_at(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let seconds = now.signed_duration_since(ts).num_seconds().max(0);
     if seconds == 0 {
         "now".to_string()
     } else if seconds < 60 {
@@ -52,6 +52,10 @@ pub(crate) fn human_age(ts: DateTime<Utc>) -> String {
     } else {
         format!("{}d ago", seconds / (60 * 60 * 24))
     }
+}
+
+pub(crate) fn human_age(ts: DateTime<Utc>) -> String {
+    human_age_at(ts, Utc::now())
 }
 
 pub(crate) async fn require_bound_planner_task(
@@ -210,6 +214,17 @@ mod tests {
     #[test]
     fn task_tool_helpers_human_age_clamps_future_timestamps() {
         assert_eq!(human_age(Utc::now() + chrono::Duration::seconds(5)), "now");
+    }
+
+    #[test]
+    fn human_age_at_is_deterministic() {
+        let now = Utc::now();
+        assert_eq!(human_age_at(now - chrono::Duration::seconds(30), now), "30s ago");
+        assert_eq!(human_age_at(now - chrono::Duration::seconds(30), now), "30s ago");
+        assert_eq!(human_age_at(now - chrono::Duration::minutes(5), now), "5m ago");
+        assert_eq!(human_age_at(now - chrono::Duration::hours(2), now), "2h ago");
+        assert_eq!(human_age_at(now - chrono::Duration::days(3), now), "3d ago");
+        assert_eq!(human_age_at(now + chrono::Duration::seconds(10), now), "now");
     }
 
     #[tokio::test]

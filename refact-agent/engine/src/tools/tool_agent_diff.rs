@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -20,6 +20,7 @@ use crate::worktrees::service::WorktreeService;
 
 const DEFAULT_MAX_LINES: usize = 300;
 const GIT_DIFF_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
 const UNTRACKED_PER_FILE_CAP_BYTES: usize = 64 * 1024;
 const UNTRACKED_TOTAL_CAP_BYTES: usize = 256 * 1024;
 const UNTRACKED_BINARY_PROBE_BYTES: usize = 8 * 1024;
@@ -246,113 +247,87 @@ async fn canonical_worktree(
     validate_fallback_worktree_path(&gcx, &card.id, Path::new(worktree))
 }
 
-fn join_reader(
-    handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
-    stream_name: &str,
-) -> Result<Vec<u8>, String> {
-    handle
-        .join()
-        .map_err(|_| format!("Failed to capture git {}", stream_name))?
-        .map_err(|e| format!("Failed to capture git {}: {}", stream_name, e))
-}
+async fn run_git(worktree: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
 
-fn run_git(worktree: &Path, args: &[&str], deadline: Instant) -> Result<String, String> {
-    if Instant::now() >= deadline {
-        return Err(format!(
-            "git {:?} timed out after {} seconds",
-            args,
-            GIT_DIFF_TIMEOUT.as_secs()
-        ));
-    }
-    let mut child = Command::new("git")
+    let mut child = tokio::process::Command::new("git")
         .args(args)
         .current_dir(worktree)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            format!(
-                "Failed to run git {:?} in '{}': {}",
-                args,
-                worktree.display(),
-                e
-            )
-        })?;
+        .map_err(|e| format!("Failed to run git {:?} in '{}': {}", args, worktree.display(), e))?;
 
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture git stdout".to_string())?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to capture git stderr".to_string())?;
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let mut buf = Vec::with_capacity(64 * 1024);
+    let mut chunk = [0u8; 8192];
+    let mut capped = false;
 
-    let stdout_task = std::thread::spawn(move || {
-        let mut stdout_bytes = Vec::new();
-        stdout.read_to_end(&mut stdout_bytes).map(|_| stdout_bytes)
-    });
-    let stderr_task = std::thread::spawn(move || {
-        let mut stderr_bytes = Vec::new();
-        stderr.read_to_end(&mut stderr_bytes).map(|_| stderr_bytes)
-    });
-
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| {
-            format!(
-                "Failed to run git {:?} in '{}': {}",
-                args,
-                worktree.display(),
-                e
-            )
-        })? {
-            break status;
+    let read_result = tokio::time::timeout(timeout, async {
+        loop {
+            let n = stdout
+                .read(&mut chunk)
+                .await
+                .map_err(|e| format!("git stdout read failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            if buf.len() + n > MAX_GIT_OUTPUT_BYTES {
+                let remaining = MAX_GIT_OUTPUT_BYTES - buf.len();
+                buf.extend_from_slice(&chunk[..remaining]);
+                buf.extend_from_slice(b"\n... (truncated by byte cap)\n");
+                capped = true;
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = join_reader(stdout_task, "stdout");
-            let _ = join_reader(stderr_task, "stderr");
+        Ok::<_, String>(())
+    })
+    .await;
+
+    let _ = child.kill().await;
+    let status = child.wait().await.map_err(|e| format!("git wait failed: {e}"))?;
+
+    match read_result {
+        Err(_) => {
             return Err(format!(
                 "git {:?} timed out after {} seconds",
                 args,
-                GIT_DIFF_TIMEOUT.as_secs()
+                timeout.as_secs()
             ));
         }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-
-    let stdout_bytes = join_reader(stdout_task, "stdout")?;
-    let stderr_bytes = join_reader(stderr_task, "stderr")?;
-
-    if !status.success() {
-        let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-        return Err(format!(
-            "git {:?} failed in '{}': {}",
-            args,
-            worktree.display(),
-            if stderr.is_empty() {
-                "unknown git error"
-            } else {
-                stderr.as_str()
-            }
-        ));
+        Ok(Err(e)) => return Err(e),
+        Ok(Ok(())) => {}
     }
 
-    Ok(String::from_utf8_lossy(&stdout_bytes).to_string())
+    if capped {
+        return String::from_utf8(buf).map_err(|e| format!("git output not utf-8: {e}"));
+    }
+
+    if !status.success() {
+        let mut stderr_buf = Vec::new();
+        let _ = stderr.read_to_end(&mut stderr_buf).await;
+        let stderr_text = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+        let msg = if stderr_text.is_empty() {
+            "unknown git error".to_string()
+        } else {
+            stderr_text
+        };
+        return Err(format!("git {:?} failed in '{}': {}", args, worktree.display(), msg));
+    }
+
+    String::from_utf8(buf).map_err(|e| format!("git output not utf-8: {e}"))
 }
 
-fn list_untracked(worktree: &Path, deadline: Instant) -> Result<Vec<String>, String> {
-    Ok(run_git(
-        worktree,
-        &["ls-files", "--others", "--exclude-standard"],
-        deadline,
-    )?
-    .lines()
-    .map(str::trim)
-    .filter(|line| !line.is_empty())
-    .map(str::to_string)
-    .collect())
+async fn list_untracked(worktree: &Path, timeout: Duration) -> Result<Vec<String>, String> {
+    Ok(run_git(worktree, &["ls-files", "--others", "--exclude-standard"], timeout)
+        .await?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 fn append_section(output: &mut String, title: &str, body: &str) {
@@ -493,15 +468,14 @@ fn push_name_only(names: &mut Vec<String>, seen: &mut HashSet<String>, output: &
     }
 }
 
-fn run_git_diff(worktree: &Path, mode: AgentDiffMode, base: &DiffBase) -> Result<String, String> {
+async fn run_git_diff(worktree: &Path, mode: AgentDiffMode, base: &DiffBase) -> Result<String, String> {
     let range = format!("{}...HEAD", base.refish);
-    let deadline = Instant::now() + GIT_DIFF_TIMEOUT;
     match mode {
         AgentDiffMode::Stat => {
-            let committed = run_git(worktree, &["diff", "--stat", &range], deadline)?;
-            let staged = run_git(worktree, &["diff", "--stat", "--cached"], deadline)?;
-            let unstaged = run_git(worktree, &["diff", "--stat"], deadline)?;
-            let untracked = list_untracked(worktree, deadline)?;
+            let committed = run_git(worktree, &["diff", "--stat", &range], GIT_DIFF_TIMEOUT).await?;
+            let staged = run_git(worktree, &["diff", "--stat", "--cached"], GIT_DIFF_TIMEOUT).await?;
+            let unstaged = run_git(worktree, &["diff", "--stat"], GIT_DIFF_TIMEOUT).await?;
+            let untracked = list_untracked(worktree, GIT_DIFF_TIMEOUT).await?;
             if committed.trim().is_empty()
                 && staged.trim().is_empty()
                 && unstaged.trim().is_empty()
@@ -517,10 +491,10 @@ fn run_git_diff(worktree: &Path, mode: AgentDiffMode, base: &DiffBase) -> Result
             Ok(output)
         }
         AgentDiffMode::Unified => {
-            let committed = run_git(worktree, &["diff", &range], deadline)?;
-            let staged = run_git(worktree, &["diff", "--cached"], deadline)?;
-            let unstaged = run_git(worktree, &["diff"], deadline)?;
-            let untracked = list_untracked(worktree, deadline)?;
+            let committed = run_git(worktree, &["diff", &range], GIT_DIFF_TIMEOUT).await?;
+            let staged = run_git(worktree, &["diff", "--cached"], GIT_DIFF_TIMEOUT).await?;
+            let unstaged = run_git(worktree, &["diff"], GIT_DIFF_TIMEOUT).await?;
+            let untracked = list_untracked(worktree, GIT_DIFF_TIMEOUT).await?;
             if committed.trim().is_empty()
                 && staged.trim().is_empty()
                 && unstaged.trim().is_empty()
@@ -540,10 +514,10 @@ fn run_git_diff(worktree: &Path, mode: AgentDiffMode, base: &DiffBase) -> Result
             Ok(output)
         }
         AgentDiffMode::NameOnly => {
-            let committed = run_git(worktree, &["diff", "--name-only", &range], deadline)?;
-            let staged = run_git(worktree, &["diff", "--name-only", "--cached"], deadline)?;
-            let unstaged = run_git(worktree, &["diff", "--name-only"], deadline)?;
-            let untracked = list_untracked(worktree, deadline)?;
+            let committed = run_git(worktree, &["diff", "--name-only", &range], GIT_DIFF_TIMEOUT).await?;
+            let staged = run_git(worktree, &["diff", "--name-only", "--cached"], GIT_DIFF_TIMEOUT).await?;
+            let unstaged = run_git(worktree, &["diff", "--name-only"], GIT_DIFF_TIMEOUT).await?;
+            let untracked = list_untracked(worktree, GIT_DIFF_TIMEOUT).await?;
             let mut names = Vec::new();
             let mut seen = HashSet::new();
             push_name_only(&mut names, &mut seen, &committed);
@@ -689,7 +663,7 @@ impl Tool for ToolAgentDiff {
             .agent_branch
             .as_ref()
             .ok_or_else(|| format!("Card {} has no agent branch", card.id))?;
-        let output = run_git_diff(&worktree, mode, &base)?;
+        let output = run_git_diff(&worktree, mode, &base).await?;
         let result = render_agent_diff(card, branch, &base, mode, &output, max_lines);
 
         Ok((
@@ -1501,5 +1475,55 @@ mod tests {
         assert!(
             rendered.contains("a\nb\n... (2 more lines, use mode='name-only' to see all files)")
         );
+    }
+
+    #[tokio::test]
+    async fn run_git_truncates_output_at_byte_cap() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path();
+        init_repo(repo);
+        let content_a = "a".repeat(600_000);
+        std::fs::write(repo.join("big.txt"), &content_a).unwrap();
+        run_git(repo, &["add", "big.txt"]);
+        run_git(repo, &["commit", "-m", "add big"]);
+        let content_b = "b".repeat(600_000);
+        std::fs::write(repo.join("big.txt"), &content_b).unwrap();
+
+        let output = super::run_git(repo, &["diff", "HEAD", "--text"], GIT_DIFF_TIMEOUT)
+            .await
+            .unwrap();
+
+        assert!(output.contains("truncated by byte cap"), "expected truncation footer");
+        assert!(
+            output.len() <= MAX_GIT_OUTPUT_BYTES + 64,
+            "output {} bytes exceeds cap + overhead",
+            output.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_git_respects_timeout() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path();
+        init_repo(repo);
+
+        let err = super::run_git(repo, &["log", "--all"], Duration::from_nanos(1))
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("timed out"), "expected timeout error, got: {err}");
+    }
+
+    #[tokio::test]
+    async fn agent_diff_is_async_compatible() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path();
+        init_repo(repo);
+
+        let result = super::run_git(repo, &["rev-parse", "--is-inside-work-tree"], GIT_DIFF_TIMEOUT)
+            .await
+            .unwrap();
+
+        assert_eq!(result.trim(), "true");
     }
 }
