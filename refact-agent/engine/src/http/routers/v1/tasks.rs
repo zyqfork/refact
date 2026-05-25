@@ -1214,6 +1214,7 @@ mod tests {
             buddy_meta: None,
             auto_compact_enabled: None,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         }
     }
 

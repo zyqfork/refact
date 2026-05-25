@@ -352,6 +352,7 @@ impl Tool for ToolHandoffToMode {
             buddy_meta: None,
             auto_compact_enabled: thread.auto_compact_enabled,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         };
 
         chat_facade

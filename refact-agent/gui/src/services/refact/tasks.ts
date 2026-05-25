@@ -82,6 +82,7 @@ export interface TrajectoryInfo {
   created_at: string;
   updated_at: string;
   session_state?: string;
+  waiting_for_card_ids?: string[];
 }
 
 export const tasksApi = createApi({

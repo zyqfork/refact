@@ -205,6 +205,7 @@ pub struct LoadedTrajectory {
     pub created_at: String,
     pub updated_at: String,
     pub wake_up_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub waiting_for_card_ids: Vec<String>,
     pub auto_approve_editing_tools_present: bool,
     pub auto_approve_dangerous_commands_present: bool,
 }
@@ -227,6 +228,7 @@ fn trajectory_snapshot_from_session(session: &ChatSession) -> TrajectorySnapshot
         session.trajectory_version,
     );
     snapshot.wake_up_at = session.wake_up_at;
+    snapshot.waiting_for_card_ids = session.waiting_for_card_ids.clone();
     snapshot
 }
 
@@ -620,6 +622,11 @@ pub async fn load_trajectory_for_chat(
         .get("wake_up_at")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
+    let waiting_for_card_ids: Vec<String> = t
+        .get("waiting_for_card_ids")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
     let thread = ThreadParams {
         id: chat_id.to_string(),
         title: t
@@ -756,6 +763,7 @@ pub async fn load_trajectory_for_chat(
         created_at,
         updated_at,
         wake_up_at,
+        waiting_for_card_ids,
         auto_approve_editing_tools_present,
         auto_approve_dangerous_commands_present,
     })
@@ -840,6 +848,7 @@ I'm your **Task Planner**. I handle the complete task lifecycle - from investiga
         buddy_meta: None,
         auto_compact_enabled: None,
         wake_up_at: None,
+        waiting_for_card_ids: Vec::new(),
     };
 
     save_trajectory_snapshot(gcx, snapshot).await
@@ -887,6 +896,7 @@ pub async fn save_trajectory_as(
         buddy_meta: thread.buddy_meta.clone(),
         auto_compact_enabled: thread.auto_compact_enabled,
         wake_up_at: None,
+        waiting_for_card_ids: Vec::new(),
     };
     if let Err(e) = save_trajectory_snapshot(gcx, snapshot).await {
         warn!("Failed to save trajectory: {}", e);
@@ -962,6 +972,9 @@ pub async fn save_trajectory_snapshot(
     }
     if let Some(wake_up_at) = snapshot.wake_up_at {
         trajectory["wake_up_at"] = json!(wake_up_at);
+    }
+    if !snapshot.waiting_for_card_ids.is_empty() {
+        trajectory["waiting_for_card_ids"] = json!(snapshot.waiting_for_card_ids);
     }
     if let Some(ref worktree) = snapshot.worktree {
         trajectory["worktree"] = serde_json::to_value(worktree).unwrap_or_default();
@@ -1190,6 +1203,7 @@ pub async fn check_external_reload_pending(
             session.thread = loaded.thread;
             session.created_at = loaded.created_at;
             session.wake_up_at = loaded.wake_up_at;
+            session.waiting_for_card_ids = loaded.waiting_for_card_ids;
             session.external_reload_pending = false;
             let snapshot = session.snapshot();
             session.emit(snapshot);
@@ -1370,6 +1384,7 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
         session.thread = loaded.thread;
         session.created_at = loaded.created_at;
         session.wake_up_at = loaded.wake_up_at;
+        session.waiting_for_card_ids = loaded.waiting_for_card_ids;
         session.external_reload_pending = false;
         let snapshot = session.snapshot();
         session.emit(snapshot);
@@ -3401,6 +3416,7 @@ mod tests {
             stop_hook_handle: None,
             suppress_auto_enrichment_for_next_turn: false,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         };
 
         let snapshot = trajectory_snapshot_from_session(&session);
@@ -3468,6 +3484,7 @@ mod tests {
             stop_hook_handle: None,
             suppress_auto_enrichment_for_next_turn: false,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         };
 
         let snapshot = trajectory_snapshot_from_session(&session);
@@ -3556,6 +3573,35 @@ mod tests {
             .await
             .unwrap();
         assert!(loaded.wake_up_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_snapshot_roundtrip_preserves_waiting_for_card_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let app = AppState::from_gcx(gcx.clone()).await;
+        {
+            *app.workspace
+                .documents_state
+                .workspace_folders
+                .lock()
+                .unwrap() = vec![dir.path().to_path_buf()];
+        }
+
+        let card_ids = vec!["T-1".to_string(), "T-10".to_string(), "T-2".to_string()];
+        let mut session = ChatSession::new("wait-card-roundtrip".to_string());
+        session.created_at = "2024-01-01T00:00:00Z".to_string();
+        session.waiting_for_card_ids = card_ids.clone();
+        session.add_message(ChatMessage::new("user".to_string(), "waiting".to_string()));
+
+        let snapshot = trajectory_snapshot_from_session(&session);
+        assert_eq!(snapshot.waiting_for_card_ids, card_ids);
+        save_trajectory_snapshot(gcx.clone(), snapshot).await.unwrap();
+
+        let loaded = load_trajectory_for_chat(gcx, "wait-card-roundtrip")
+            .await
+            .unwrap();
+        assert_eq!(loaded.waiting_for_card_ids, card_ids);
     }
 
     #[test]
@@ -3845,6 +3891,7 @@ mod tests {
             buddy_meta: None,
             auto_compact_enabled: None,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         };
 
         save_trajectory_snapshot(gcx.clone(), snapshot)
@@ -3920,6 +3967,7 @@ mod tests {
                 buddy_meta: None,
                 auto_compact_enabled: None,
                 wake_up_at: None,
+                waiting_for_card_ids: Vec::new(),
             }
         }
 

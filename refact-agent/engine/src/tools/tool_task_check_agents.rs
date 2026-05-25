@@ -87,6 +87,10 @@ pub(crate) struct AgentStatusQuery {
 }
 
 impl AgentStatusQuery {
+    pub(crate) fn card_ids(&self) -> Option<&HashSet<String>> {
+        self.card_ids.as_ref()
+    }
+
     fn default_for_format(format: AgentReportFormat) -> Self {
         let default_status_filter = if matches!(
             format,

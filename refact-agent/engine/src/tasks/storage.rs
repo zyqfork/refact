@@ -548,12 +548,17 @@ pub async fn list_task_trajectories(
                             .unwrap_or("")
                             .to_string();
 
+                        let waiting_for_card_ids: Vec<String> = data
+                            .get("waiting_for_card_ids")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok())
+                            .unwrap_or_default();
                         trajectories.push(TrajectoryInfo {
                             id,
                             title,
                             created_at,
                             updated_at,
                             session_state: None,
+                            waiting_for_card_ids,
                         });
                     }
                 }
@@ -568,6 +573,9 @@ pub async fn list_task_trajectories(
         if let Some(session_arc) = sessions.get(&traj.id) {
             let session = session_arc.lock().await;
             traj.session_state = Some(session.runtime.state.to_string());
+            if !session.waiting_for_card_ids.is_empty() {
+                traj.waiting_for_card_ids = session.waiting_for_card_ids.clone();
+            }
         }
     }
 

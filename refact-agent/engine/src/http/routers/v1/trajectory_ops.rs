@@ -379,6 +379,7 @@ pub async fn handle_handoff_apply(
         buddy_meta: None,
         auto_compact_enabled: thread.auto_compact_enabled,
         wake_up_at: None,
+        waiting_for_card_ids: Vec::new(),
     };
 
     save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "handoff")
@@ -534,6 +535,7 @@ pub async fn handle_mode_transition_apply(
         buddy_meta: None,
         auto_compact_enabled: thread.auto_compact_enabled,
         wake_up_at: None,
+        waiting_for_card_ids: Vec::new(),
     };
 
     save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "mode_transition")
@@ -667,6 +669,7 @@ pub async fn handle_planner_from_transition(
         buddy_meta: None,
         auto_compact_enabled: thread.auto_compact_enabled,
         wake_up_at: None,
+        waiting_for_card_ids: Vec::new(),
     };
 
     // task_meta is set, so this saves into the task's planner directory
@@ -769,6 +772,7 @@ mod tests {
             buddy_meta: None,
             auto_compact_enabled: None,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         };
 
         save_trajectory_snapshot_with_parent(gcx, snapshot, "source-chat", "mode_transition")

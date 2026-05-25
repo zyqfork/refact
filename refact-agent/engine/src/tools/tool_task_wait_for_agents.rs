@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -10,13 +10,14 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::tools::task_tool_helpers::require_bound_planner_task;
 use crate::tools::tool_task_check_agents::{
-    agent_status_input_schema, format_agent_statuses, get_agent_statuses,
+    AgentStatus, agent_status_input_schema, format_agent_statuses, get_agent_statuses,
     has_active_agent_statuses, parse_agent_status_query,
 };
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 
 const WAKE_UP_AFTER_SECS_MIN: u64 = 30;
 const WAKE_UP_AFTER_SECS_MAX: u64 = 1800;
+const MAX_WAITING_CARD_IDS: usize = 50;
 
 fn wait_for_agents_input_schema() -> Value {
     let mut schema = agent_status_input_schema();
@@ -64,6 +65,42 @@ pub(crate) fn parse_wake_up_after_secs(
     Ok(Some(secs))
 }
 
+fn natural_card_id_key(id: &str) -> (String, u64) {
+    match id.rfind('-') {
+        Some(pos) => {
+            let prefix = &id[..pos];
+            let suffix = &id[pos + 1..];
+            match suffix.parse::<u64>() {
+                Ok(n) => (prefix.to_string(), n),
+                Err(_) => (id.to_string(), 0),
+            }
+        }
+        None => (id.to_string(), 0),
+    }
+}
+
+pub(crate) fn resolve_waiting_card_ids(
+    statuses: &[AgentStatus],
+    card_ids_filter: Option<&HashSet<String>>,
+) -> Vec<String> {
+    let mut ids: Vec<String> = if let Some(filter) = card_ids_filter {
+        filter
+            .iter()
+            .filter(|id| statuses.iter().any(|s| &s.card_id == *id))
+            .cloned()
+            .collect()
+    } else {
+        statuses
+            .iter()
+            .filter(|s| s.column == "doing")
+            .map(|s| s.card_id.clone())
+            .collect()
+    };
+    ids.sort_by(|a, b| natural_card_id_key(a).cmp(&natural_card_id_key(b)));
+    ids.truncate(MAX_WAITING_CARD_IDS);
+    ids
+}
+
 pub struct ToolTaskWaitForAgents;
 
 impl ToolTaskWaitForAgents {
@@ -76,7 +113,7 @@ impl ToolTaskWaitForAgents {
 impl Tool for ToolTaskWaitForAgents {
     fn tool_description(&self) -> ToolDesc {
         ToolDesc {
-            name: "task_wait_for_agents".to_string(),
+            name: "wait_agents".to_string(),
             display_name: "Task Wait For Agents".to_string(),
             source: ToolSource {
                 source_type: ToolSourceType::Builtin,
@@ -84,7 +121,7 @@ impl Tool for ToolTaskWaitForAgents {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Check spawned task agents using the same compact status view as task_check_agents, then stop the planner turn so it waits for agent completion messages. Pass wake_up_after_secs to set an auto-wake timer (30-1800 s).".to_string(),
+            description: "Check spawned task agents using the same compact status view as check_agents, then stop the planner turn so it waits for agent completion messages. Pass wake_up_after_secs to set an auto-wake timer (30-1800 s).".to_string(),
             input_schema: wait_for_agents_input_schema(),
             output_schema: None,
             annotations: None,
@@ -107,7 +144,7 @@ impl Tool for ToolTaskWaitForAgents {
 
         if !is_planner {
             return Err(
-                "task_wait_for_agents can only be called by the task planner. \
+                "wait_agents can only be called by the task planner. \
                  Switch to the planner chat to check agent status."
                     .to_string(),
             );
@@ -140,12 +177,17 @@ impl Tool for ToolTaskWaitForAgents {
             result.push_str("\nNo agents are currently running.\n");
         }
 
-        if let Some(secs) = wake_up_secs {
-            let wake_at = Utc::now() + chrono::Duration::seconds(secs as i64);
+        let resolved_card_ids = resolve_waiting_card_ids(&statuses, query.card_ids());
+
+        {
             let sessions = app.chat.sessions.read().await;
             if let Some(session_arc) = sessions.get(&chat_id) {
                 let mut session = session_arc.lock().await;
-                session.wake_up_at = Some(wake_at);
+                if let Some(secs) = wake_up_secs {
+                    session.wake_up_at =
+                        Some(Utc::now() + chrono::Duration::seconds(secs as i64));
+                }
+                session.waiting_for_card_ids = resolved_card_ids;
                 session.mark_persisted_runtime_changed();
             }
         }
@@ -180,6 +222,22 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
     use std::sync::Arc;
+
+    fn make_status(card_id: &str, column: &str) -> AgentStatus {
+        AgentStatus {
+            card_id: card_id.to_string(),
+            card_title: format!("{} title", card_id),
+            agent_chat_id: format!("agent-{}", card_id),
+            column: column.to_string(),
+            priority: "P1".to_string(),
+            session_state: None,
+            last_status_update: None,
+            last_activity_at: None,
+            final_report: None,
+            last_tool_name: None,
+            change_seq: 0,
+        }
+    }
 
     #[test]
     fn wait_agents_rejects_wake_up_secs_below_30() {
@@ -247,5 +305,48 @@ mod tests {
         let args: HashMap<String, Value> = HashMap::new();
         let result = parse_wake_up_after_secs(&args).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn wait_agents_populates_waiting_for_card_ids_from_filter() {
+        let statuses = vec![
+            make_status("T-1", "doing"),
+            make_status("T-2", "doing"),
+            make_status("T-3", "doing"),
+        ];
+        let filter: HashSet<String> = ["T-1".to_string(), "T-2".to_string()].into();
+        let ids = resolve_waiting_card_ids(&statuses, Some(&filter));
+        assert_eq!(ids, vec!["T-1", "T-2"]);
+    }
+
+    #[test]
+    fn wait_agents_populates_waiting_for_card_ids_from_all_active_when_no_filter() {
+        let statuses = vec![
+            make_status("T-1", "doing"),
+            make_status("T-2", "doing"),
+            make_status("T-3", "done"),
+        ];
+        let ids = resolve_waiting_card_ids(&statuses, None);
+        assert_eq!(ids, vec!["T-1", "T-2"]);
+    }
+
+    #[test]
+    fn wait_agents_caps_waiting_for_card_ids_at_50() {
+        let statuses: Vec<AgentStatus> = (1..=60)
+            .map(|i| make_status(&format!("T-{}", i), "doing"))
+            .collect();
+        let ids = resolve_waiting_card_ids(&statuses, None);
+        assert_eq!(ids.len(), 50);
+    }
+
+    #[test]
+    fn wait_agents_natural_sorts_card_ids() {
+        let statuses = vec![
+            make_status("T-10", "doing"),
+            make_status("T-2", "doing"),
+            make_status("T-1", "doing"),
+        ];
+        let ids = resolve_waiting_card_ids(&statuses, None);
+        assert_eq!(ids, vec!["T-1", "T-2", "T-10"]);
     }
 }

@@ -17,6 +17,7 @@ export interface PlannerInfo {
   createdAt: string;
   updatedAt: string;
   sessionState?: string;
+  waitingForCardIds?: string[];
   removed?: boolean;
 }
 

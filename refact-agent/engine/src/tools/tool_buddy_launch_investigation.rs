@@ -170,6 +170,7 @@ impl Tool for ToolBuddyLaunchInvestigation {
             }),
             auto_compact_enabled: None,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         };
 
         chat_facade

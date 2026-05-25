@@ -36,6 +36,7 @@ pub struct TrajectorySnapshot {
     pub buddy_meta: Option<BuddyThreadMeta>,
     pub auto_compact_enabled: Option<bool>,
     pub wake_up_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub waiting_for_card_ids: Vec<String>,
 }
 
 impl TrajectorySnapshot {
@@ -80,6 +81,7 @@ impl TrajectorySnapshot {
             buddy_meta: thread.buddy_meta.clone(),
             auto_compact_enabled: thread.auto_compact_enabled,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         }
     }
 }

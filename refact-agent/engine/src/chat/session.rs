@@ -99,6 +99,7 @@ impl ChatSession {
             stop_hook_handle: None,
             suppress_auto_enrichment_for_next_turn: false,
             wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
         }
     }
 
@@ -108,6 +109,7 @@ impl ChatSession {
         mut thread: ThreadParams,
         created_at: String,
         wake_up_at: Option<chrono::DateTime<chrono::Utc>>,
+        waiting_for_card_ids: Vec<String>,
     ) -> Self {
         // active_skill is runtime state — if the server restarted mid-skill, the compaction
         // anchor (started_at_index) is lost. Clear it so the session starts cleanly rather
@@ -151,6 +153,7 @@ impl ChatSession {
             stop_hook_handle: None,
             suppress_auto_enrichment_for_next_turn: false,
             wake_up_at,
+            waiting_for_card_ids,
         }
     }
 
@@ -421,8 +424,16 @@ impl ChatSession {
         }
 
         if old_state == SessionState::WaitingUserInput && state != SessionState::WaitingUserInput {
+            let mut changed = false;
             if self.wake_up_at.is_some() {
                 self.wake_up_at = None;
+                changed = true;
+            }
+            if !self.waiting_for_card_ids.is_empty() {
+                self.waiting_for_card_ids.clear();
+                changed = true;
+            }
+            if changed {
                 self.increment_version();
             }
         }
@@ -902,6 +913,7 @@ pub async fn get_or_create_session_with_trajectory(
                 loaded.thread,
                 loaded.created_at,
                 loaded.wake_up_at,
+                loaded.waiting_for_card_ids,
             ),
             false,
         )
@@ -1133,6 +1145,7 @@ mod tests {
             thread,
             "2024-01-01T00:00:00Z".into(),
             None,
+            Vec::new(),
         );
         assert_eq!(session.chat_id, "traj-1");
         assert_eq!(session.thread.title, "Old Chat");
@@ -1617,6 +1630,19 @@ mod tests {
         session.set_runtime_state(SessionState::Idle, None);
 
         assert!(session.wake_up_at.is_none());
+        assert!(session.trajectory_dirty);
+    }
+
+    #[test]
+    fn leaving_waiting_user_input_clears_waiting_for_card_ids() {
+        let mut session = make_session();
+        session.runtime.state = SessionState::WaitingUserInput;
+        session.waiting_for_card_ids = vec!["T-1".to_string(), "T-2".to_string()];
+        session.trajectory_dirty = false;
+
+        session.set_runtime_state(SessionState::Idle, None);
+
+        assert!(session.waiting_for_card_ids.is_empty());
         assert!(session.trajectory_dirty);
     }
 
@@ -2235,6 +2261,7 @@ mod tests {
             thread,
             "2024-01-01T00:00:00Z".into(),
             None,
+            Vec::new(),
         );
         assert!(session.active_command.context_fork.is_none());
         assert!(session.active_command.model_override.is_none());
@@ -2484,6 +2511,7 @@ mod tests {
             thread,
             "2024-01-01T00:00:00Z".into(),
             None,
+            Vec::new(),
         );
         assert!(
             session.thread.active_skill.is_none(),

@@ -653,6 +653,7 @@ pub async fn handle_v1_buddy_conversations_create(
         }),
         auto_compact_enabled: None,
         wake_up_at: None,
+        waiting_for_card_ids: Vec::new(),
     };
 
     crate::chat::trajectories::save_trajectory_snapshot(gcx.clone(), snapshot)

@@ -71,6 +71,7 @@ pub struct ChatSession {
     pub stop_hook_handle: Option<tokio::task::JoinHandle<()>>,
     pub suppress_auto_enrichment_for_next_turn: bool,
     pub wake_up_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub waiting_for_card_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
