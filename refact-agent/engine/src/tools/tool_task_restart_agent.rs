@@ -494,7 +494,7 @@ impl ToolTaskRestartAgent {
             .await;
 
         if let Err(e) = board_update_result {
-            prepared_worktree.cleanup(gcx.clone()).await;
+            prepared_worktree.cleanup_unlinked(gcx.clone()).await;
             return Err(e);
         }
 
@@ -518,7 +518,7 @@ impl ToolTaskRestartAgent {
             )
             .await
         {
-            prepared_worktree.cleanup(gcx.clone()).await;
+            prepared_worktree.cleanup_unlinked(gcx.clone()).await;
             restore_card_after_restart_failure(
                 gcx.clone(),
                 task_id,

@@ -218,7 +218,7 @@ async fn prepare_ab_worktrees(
     {
         Ok(prepared) => prepared,
         Err(error) => {
-            prepared_a.cleanup(gcx).await;
+            prepared_a.cleanup_unlinked(gcx).await;
             return Err(error);
         }
     };
@@ -566,8 +566,8 @@ impl Tool for ToolSpawnAb {
         })
         .await;
         if let Err(error) = board_update {
-            prepared.a.prepared.cleanup(gcx.clone()).await;
-            prepared.b.prepared.cleanup(gcx.clone()).await;
+            prepared.a.prepared.cleanup_unlinked(gcx.clone()).await;
+            prepared.b.prepared.cleanup_unlinked(gcx.clone()).await;
             return Err(error);
         }
         storage::update_task_stats(gcx.clone(), &task_id).await?;
@@ -612,8 +612,8 @@ impl Tool for ToolSpawnAb {
                 prepared.b.chat_id.clone(),
             )
             .await;
-            prepared.a.prepared.cleanup(gcx.clone()).await;
-            prepared.b.prepared.cleanup(gcx.clone()).await;
+            prepared.a.prepared.cleanup_unlinked(gcx.clone()).await;
+            prepared.b.prepared.cleanup_unlinked(gcx.clone()).await;
             return Err(error);
         }
 
@@ -879,8 +879,8 @@ mod tests {
             .unwrap()
             .ends_with("-b"));
 
-        prepared.a.prepared.cleanup(gcx.clone()).await;
-        prepared.b.prepared.cleanup(gcx).await;
+        prepared.a.prepared.cleanup_unlinked(gcx.clone()).await;
+        prepared.b.prepared.cleanup_unlinked(gcx).await;
     }
 
     #[tokio::test]

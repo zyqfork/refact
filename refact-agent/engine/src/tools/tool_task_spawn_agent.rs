@@ -97,7 +97,7 @@ impl PreparedWorktree {
         self.meta.clone()
     }
 
-    pub(crate) async fn cleanup(&self, gcx: Arc<GlobalContext>) {
+    pub(crate) async fn cleanup_unlinked(self, gcx: Arc<GlobalContext>) {
         let cache_dir = gcx.cache_dir.clone();
         if let Ok(service) =
             WorktreeService::new(cache_dir, self.meta.source_workspace_root.clone())
@@ -113,6 +113,14 @@ impl PreparedWorktree {
         if self.meta.root.exists() {
             let _ = std::fs::remove_dir_all(&self.meta.root);
         }
+    }
+
+    pub(crate) async fn retain(self, _gcx: Arc<GlobalContext>) {
+        tracing::info!(
+            "Retaining worktree '{}' / branch '{}' after spawn failure for inspection.",
+            self.worktree_name(),
+            self.branch_name().unwrap_or_else(|| "<unknown>".to_string())
+        );
     }
 }
 
@@ -329,6 +337,33 @@ pub(crate) fn restore_original_card_if_current_agent(
         }
     }
     false
+}
+
+pub(crate) async fn rollback_retain(
+    gcx: Arc<GlobalContext>,
+    task_id: &str,
+    card_id: &str,
+    guard_chat_id: &str,
+    error_msg: &str,
+) {
+    let card_id = card_id.to_string();
+    let guard_chat_id = guard_chat_id.to_string();
+    let truncated: String = error_msg.chars().take(300).collect();
+    let msg = format!("Spawn rolled back: {}. Worktree retained for inspection.", truncated);
+    let _ = storage::update_board_atomic(gcx.clone(), task_id, move |board| {
+        if let Some(card) = board.get_card_mut(&card_id) {
+            if card.agent_chat_id.as_deref() == Some(&guard_chat_id) {
+                card.column = "failed".to_string();
+                card.status_updates.push(StatusUpdate {
+                    timestamp: Utc::now().to_rfc3339(),
+                    message: msg,
+                });
+            }
+        }
+        Ok(Some(()))
+    })
+    .await;
+    let _ = storage::update_task_stats(gcx, task_id).await;
 }
 
 pub(crate) fn build_agent_thread_params(
@@ -662,7 +697,7 @@ impl Tool for ToolTaskSpawnAgent {
             {
                 Ok(context_files) => context_files,
                 Err(e) => {
-                    prepared_worktree.cleanup(gcx.clone()).await;
+                    prepared_worktree.cleanup_unlinked(gcx.clone()).await;
                     return Err(e);
                 }
             }
@@ -713,8 +748,6 @@ impl Tool for ToolTaskSpawnAgent {
                     ));
                 }
 
-                let original_card = card.clone();
-
                 mark_card_agent_started(
                     card,
                     &agent_id_clone,
@@ -724,63 +757,31 @@ impl Tool for ToolTaskSpawnAgent {
                     worktree_name.clone(),
                 );
 
-                Ok(Some((original_card, agents_active_before == 0)))
+                Ok(Some(agents_active_before == 0))
             },
         )
         .await;
         let (board, commit_info) = match board_update_result {
             Ok(result) => result,
             Err(e) => {
-                prepared_worktree.cleanup(gcx.clone()).await;
+                prepared_worktree.cleanup_unlinked(gcx.clone()).await;
                 return Err(e);
             }
         };
 
-        let (original_card, starting_new_run) = commit_info.unwrap();
-
-        async fn rollback(
-            gcx: Arc<GlobalContext>,
-            task_id: &str,
-            original_card: &crate::tasks::types::BoardCard,
-            guard_chat_id: &str,
-            prepared_worktree: &PreparedWorktree,
-        ) {
-            let original_card = original_card.clone();
-            let guard_chat_id = guard_chat_id.to_string();
-            let cleanup_gcx = gcx.clone();
-            let stats_gcx = gcx.clone();
-            let _ = storage::update_board_atomic(gcx, task_id, move |board| {
-                restore_original_card_if_current_agent(board, &original_card, &guard_chat_id);
-                Ok(Some(()))
-            })
-            .await;
-            prepared_worktree.cleanup(cleanup_gcx).await;
-            let _ = storage::update_task_stats(stats_gcx, task_id).await;
-        }
+        let starting_new_run = commit_info.unwrap();
 
         if let Err(e) = storage::update_task_stats(gcx.clone(), &task_id).await {
-            rollback(
-                gcx.clone(),
-                &task_id,
-                &original_card,
-                &agent_chat_id,
-                &prepared_worktree,
-            )
-            .await;
+            rollback_retain(gcx.clone(), &task_id, card_id, &agent_chat_id, &e).await;
+            prepared_worktree.retain(gcx.clone()).await;
             return Err(e);
         }
 
         let mut meta = match storage::load_task_meta(gcx.clone(), &task_id).await {
             Ok(m) => m,
             Err(e) => {
-                rollback(
-                    gcx.clone(),
-                    &task_id,
-                    &original_card,
-                    &agent_chat_id,
-                    &prepared_worktree,
-                )
-                .await;
+                rollback_retain(gcx.clone(), &task_id, card_id, &agent_chat_id, &e).await;
+                prepared_worktree.retain(gcx.clone()).await;
                 return Err(e);
             }
         };
@@ -799,14 +800,8 @@ impl Tool for ToolTaskSpawnAgent {
             meta.last_agents_summary_at = Some(earliest.unwrap_or_else(Utc::now).to_rfc3339());
         }
         if let Err(e) = storage::save_task_meta(gcx.clone(), &task_id, &meta).await {
-            rollback(
-                gcx.clone(),
-                &task_id,
-                &original_card,
-                &agent_chat_id,
-                &prepared_worktree,
-            )
-            .await;
+            rollback_retain(gcx.clone(), &task_id, card_id, &agent_chat_id, &e).await;
+            prepared_worktree.retain(gcx.clone()).await;
             return Err(e);
         }
 
@@ -875,14 +870,8 @@ impl Tool for ToolTaskSpawnAgent {
         }
         .await;
         if let Err(e) = session_result {
-            rollback(
-                gcx.clone(),
-                &task_id,
-                &original_card,
-                &agent_chat_id,
-                &prepared_worktree,
-            )
-            .await;
+            rollback_retain(gcx.clone(), &task_id, card_id, &agent_chat_id, &e).await;
+            prepared_worktree.retain(gcx.clone()).await;
             return Err(e);
         }
 
@@ -937,7 +926,8 @@ The agent will call `task_agent_finish()` when done. Use `task_check_agents` to 
 mod tests {
     use super::*;
     use crate::privacy::{FilePrivacySettings, PrivacySettings};
-    use crate::tasks::types::{BoardCard, TaskBoard, TaskStatus};
+    use crate::tasks::storage;
+    use crate::tasks::types::{BoardCard, TaskBoard, TaskMeta, TaskStatus};
     use std::path::Path;
     use std::process::Command;
 
@@ -1118,7 +1108,7 @@ mod tests {
         assert_eq!(prepared.meta.agent_id.as_deref(), Some("agent-12345678"));
         assert!(prepared.meta.root.is_dir());
 
-        prepared.cleanup(gcx).await;
+        prepared.cleanup_unlinked(gcx).await;
     }
 
     #[tokio::test]
@@ -1147,7 +1137,7 @@ mod tests {
         let service = WorktreeService::new(cache_dir, source.canonicalize().unwrap()).unwrap();
         assert!(service.get_worktree(&id).await.is_ok());
 
-        prepared.cleanup(gcx).await;
+        prepared.cleanup_unlinked(gcx).await;
 
         assert!(!root.exists());
         assert!(service.get_worktree(&id).await.is_err());
@@ -1188,7 +1178,7 @@ mod tests {
         assert!(!prepared.meta.root.join("dev_only.txt").exists());
         assert_eq!(run_git(&source, &["rev-parse", "dev"]).trim(), dev_head);
 
-        prepared.cleanup(gcx).await;
+        prepared.cleanup_unlinked(gcx).await;
     }
 
     #[tokio::test]
@@ -1222,7 +1212,7 @@ mod tests {
         assert!(prepared.meta.root.join("dev_only.txt").is_file());
         assert!(prepared.base_branch_mismatch_warning.is_none());
 
-        prepared.cleanup(gcx).await;
+        prepared.cleanup_unlinked(gcx).await;
     }
 
     #[tokio::test]
@@ -1281,7 +1271,7 @@ mod tests {
         assert!(warning.contains("Current repo HEAD is on branch 'dev'"));
         assert!(warning.contains("this task was created from 'main'"));
 
-        prepared.cleanup(gcx).await;
+        prepared.cleanup_unlinked(gcx).await;
     }
 
     #[test]
@@ -1592,6 +1582,153 @@ mod tests {
         assert!(
             abandoned[0].contains("T-2"),
             "done card with retained worktree should still be flagged"
+        );
+    }
+
+    async fn setup_task_storage(
+        gcx: Arc<GlobalContext>,
+        source: &Path,
+        task_id: &str,
+        card: BoardCard,
+    ) {
+        let task_dir = source.join(".refact").join("tasks").join(task_id);
+        tokio::fs::create_dir_all(task_dir.join("trajectories").join("planner"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(task_dir.join("trajectories").join("agents"))
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let meta = TaskMeta {
+            schema_version: 1,
+            id: task_id.to_string(),
+            name: "Test Task".to_string(),
+            status: TaskStatus::Active,
+            created_at: now.clone(),
+            updated_at: now,
+            cards_total: 1,
+            cards_done: 0,
+            cards_failed: 0,
+            agents_active: 1,
+            base_branch: None,
+            base_commit: None,
+            default_agent_model: None,
+            is_name_generated: false,
+            last_agents_summary_at: None,
+            planner_session_state: None,
+        };
+        storage::save_task_meta(gcx.clone(), task_id, &meta).await.unwrap();
+        storage::save_board(
+            gcx.clone(),
+            task_id,
+            &TaskBoard { cards: vec![card], ..Default::default() },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawn_rollback_before_board_write_cleans_up_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        set_workspace(gcx.clone(), &source).await;
+        let task_meta = sample_task_meta(None);
+        let prepared = prepare_agent_worktree(
+            gcx.clone(),
+            &task_meta,
+            "task-1",
+            "agent-abcdef12",
+            "T-1",
+            "agent-T-1-abcdef12",
+        )
+        .await
+        .unwrap();
+        let root = prepared.meta.root.clone();
+        assert!(root.is_dir());
+
+        prepared.cleanup_unlinked(gcx).await;
+
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn spawn_rollback_after_board_write_retains_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        set_workspace(gcx.clone(), &source).await;
+
+        let task_id = "task-retain-test";
+        let task_meta = sample_task_meta(None);
+        let prepared = prepare_agent_worktree(
+            gcx.clone(),
+            &task_meta,
+            task_id,
+            "agent-abcdef12",
+            "T-1",
+            "agent-T-1-abcdef12",
+        )
+        .await
+        .unwrap();
+        let root = prepared.meta.root.clone();
+        let branch = prepared.meta.branch.clone().unwrap();
+
+        let mut card = test_card("T-1", "doing", Some(root.to_string_lossy().to_string()));
+        card.agent_chat_id = Some("agent-T-1-abcdef12".to_string());
+        setup_task_storage(gcx.clone(), &source, task_id, card).await;
+
+        rollback_retain(gcx.clone(), task_id, "T-1", "agent-T-1-abcdef12", "model unavailable").await;
+        prepared.retain(gcx.clone()).await;
+
+        assert!(root.exists(), "worktree dir should still exist after retain");
+        let branches = run_git(&source, &["branch", "--list", &branch]);
+        assert!(!branches.trim().is_empty(), "branch should still exist after retain");
+
+        let board = storage::load_board(gcx.clone(), task_id).await.unwrap();
+        let card = board.get_card("T-1").unwrap();
+        assert_eq!(card.column, "failed");
+        assert!(
+            card.status_updates.iter().any(|u| u.message.contains("retained for inspection")),
+            "status update should mention retained for inspection"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_rollback_message_includes_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("repo");
+        std::fs::create_dir_all(&source).unwrap();
+        init_repo(&source);
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        set_workspace(gcx.clone(), &source).await;
+
+        let task_id = "task-msg-test";
+        let mut card = test_card("T-2", "doing", None);
+        card.agent_chat_id = Some("agent-T-2-msgtest".to_string());
+        setup_task_storage(gcx.clone(), &source, task_id, card).await;
+
+        let long_error: String = "x".repeat(400);
+        rollback_retain(gcx.clone(), task_id, "T-2", "agent-T-2-msgtest", &long_error).await;
+
+        let board = storage::load_board(gcx.clone(), task_id).await.unwrap();
+        let card = board.get_card("T-2").unwrap();
+        let msg = &card.status_updates.last().unwrap().message;
+        assert!(
+            msg.contains(&"x".repeat(300)),
+            "message should include first 300 chars of error"
+        );
+        assert!(
+            !msg.contains(&"x".repeat(301)),
+            "message should not include more than 300 chars of error"
+        );
+        assert!(
+            msg.contains("Worktree retained for inspection"),
+            "message should contain retention notice"
         );
     }
 }
