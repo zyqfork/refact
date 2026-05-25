@@ -5,7 +5,11 @@ import { server } from "../utils/mockServer";
 import { useSidebarSubscription } from "../hooks/useSidebarSubscription";
 import { setBuddySnapshot } from "../features/Buddy/buddySlice";
 import type { BuddySnapshot } from "../features/Buddy/types";
-import type { TaskMeta } from "../services/refact/tasks";
+import {
+  subscribeToSidebarEvents,
+  type SidebarSubscriptionCallbacks,
+} from "../services/refact/sidebarSubscription";
+import { type TaskBoard, type TaskMeta } from "../services/refact/tasks";
 
 const CONFIG_STATE = {
   config: {
@@ -66,17 +70,60 @@ function notification(seq: number, payload: Record<string, unknown>) {
 }
 
 function sseStream(events: unknown[]): ReadableStream<Uint8Array> {
+  const blocks = events.map((event) => `data: ${JSON.stringify(event)}\n\n`);
+  return sseRawStream(blocks);
+}
+
+function sseRawStream(blocks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
     start(controller) {
-      for (const event of events) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
-        );
+      for (const block of blocks) {
+        controller.enqueue(encoder.encode(block));
       }
     },
   });
 }
+
+function sidebarHandler(events: unknown[]) {
+  return http.get(
+    "http://127.0.0.1:8001/v1/sidebar/subscribe",
+    () =>
+      new HttpResponse(sseStream(events), {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+  );
+}
+
+function sidebarRawHandler(blocks: string[]) {
+  return http.get(
+    "http://127.0.0.1:8001/v1/sidebar/subscribe",
+    () =>
+      new HttpResponse(sseRawStream(blocks), {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+  );
+}
+
+function subscribeForTest(overrides: Partial<SidebarSubscriptionCallbacks> = {}) {
+  const events: Parameters<SidebarSubscriptionCallbacks["onEvent"]>[0][] = [];
+  const errors: Error[] = [];
+  const liveness = vi.fn();
+  const disconnect = subscribeToSidebarEvents(8001, "test", {
+    onEvent: (event) => events.push(event),
+    onError: (error) => errors.push(error),
+    onLiveness: liveness,
+    ...overrides,
+  });
+  return { events, errors, liveness, disconnect };
+}
+
+const testBoard: TaskBoard = {
+  schema_version: 1,
+  rev: 2,
+  columns: [],
+  cards: [],
+};
 
 const taskA: TaskMeta = {
   id: "task-a",
@@ -141,6 +188,140 @@ const chatC = {
 };
 
 describe("useSidebarSubscription", () => {
+  it("unknown_event_type_is_ignored_not_fatal", async () => {
+    server.use(
+      sidebarHandler([
+        envelope(0, { type: "future_event", payload: { ok: true } }),
+        sectionSnapshot(1, "tasks", { tasks: [taskA] }),
+      ]),
+    );
+
+    const { store } = render(<TestHarness />, { preloadedState: CONFIG_STATE });
+
+    await waitFor(() => {
+      expect(tasksFromStore(store.getState()).map((task) => task.id)).toEqual([
+        "task-a",
+      ]);
+      expect(store.getState().sidebar.sections.tasks.status).toBe("ready");
+    });
+    expect(store.getState().history.loadError).toBeNull();
+  });
+
+  it("malformed_json_block_is_skipped_not_fatal", async () => {
+    server.use(
+      sidebarRawHandler([
+        "data: {not json}\n\n",
+        `data: ${JSON.stringify(sectionSnapshot(0, "tasks", { tasks: [taskA] }))}\n\n`,
+      ]),
+    );
+
+    const { store } = render(<TestHarness />, { preloadedState: CONFIG_STATE });
+
+    await waitFor(() => {
+      expect(tasksFromStore(store.getState()).map((task) => task.id)).toEqual([
+        "task-a",
+      ]);
+      expect(store.getState().sidebar.sections.tasks.status).toBe("ready");
+    });
+    expect(store.getState().history.loadError).toBeNull();
+  });
+
+  it("known_event_with_bad_payload_is_skipped_not_fatal", async () => {
+    server.use(
+      sidebarHandler([
+        envelope(0, {
+          type: "section_snapshot",
+          section: "tasks",
+          status: "ready",
+          snapshot: { tasks: "oops" },
+        }),
+        sectionSnapshot(1, "tasks", { tasks: [taskB] }),
+      ]),
+    );
+
+    const { store } = render(<TestHarness />, { preloadedState: CONFIG_STATE });
+
+    await waitFor(() => {
+      expect(tasksFromStore(store.getState()).map((task) => task.id)).toEqual([
+        "task-b",
+      ]);
+      expect(store.getState().sidebar.sections.tasks.status).toBe("ready");
+    });
+    expect(store.getState().history.loadError).toBeNull();
+  });
+
+  it("heartbeat_event_does_not_trigger_invalidation", async () => {
+    server.use(sidebarHandler([envelope(0, { type: "heartbeat" })]));
+    const events: Parameters<SidebarSubscriptionCallbacks["onEvent"]>[0][] = [];
+    const liveness = vi.fn();
+    const disconnect = subscribeToSidebarEvents(8001, "test", {
+      onEvent: (event) => events.push(event),
+      onError: () => undefined,
+      onLiveness: liveness,
+    });
+
+    await waitFor(() => {
+      expect(liveness).toHaveBeenCalled();
+    });
+    expect(events).toEqual([]);
+    disconnect();
+  });
+
+  it("heartbeat_event_resets_liveness_timer", async () => {
+    server.use(sidebarHandler([envelope(0, { type: "heartbeat" })]));
+    const { events, errors, liveness, disconnect } = subscribeForTest();
+
+    await waitFor(() => {
+      expect(liveness).toHaveBeenCalled();
+    });
+    expect(events).toEqual([]);
+    expect(errors).toEqual([]);
+    disconnect();
+  });
+
+  it("sse_block_exceeding_1mib_triggers_reconnect", async () => {
+    server.use(sidebarRawHandler([`data: ${"x".repeat(1024 * 1024 + 1)}`]));
+    const { errors, disconnect } = subscribeForTest();
+
+    await waitFor(() => {
+      expect(errors.map((error) => error.message)).toContain(
+        "sse_block_too_large",
+      );
+    });
+    disconnect();
+  });
+
+  it("subsequent_known_event_after_unknown_event_is_dispatched_correctly", async () => {
+    server.use(
+      sidebarHandler([
+        envelope(0, { type: "future_event", payload: { ok: true } }),
+        sectionUpdate(1, "tasks", {
+          type: "board_changed",
+          task_id: "task-a",
+          rev: testBoard.rev,
+          board: testBoard,
+        }),
+      ]),
+    );
+    const { events, errors, disconnect } = subscribeForTest();
+
+    await waitFor(() => {
+      expect(events).toHaveLength(1);
+    });
+    expect(errors).toEqual([]);
+    expect(events[0].event).toEqual({
+      type: "section_update",
+      section: "tasks",
+      update: {
+        type: "board_changed",
+        task_id: "task-a",
+        rev: testBoard.rev,
+        board: testBoard,
+      },
+    });
+    disconnect();
+  });
+
   it("handles v2 section snapshots and null buddy snapshots", async () => {
     server.use(
       http.get(

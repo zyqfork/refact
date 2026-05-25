@@ -4,7 +4,7 @@ import { useConfig } from "./useConfig";
 import { usePostMessage } from "./usePostMessage";
 import {
   subscribeToSidebarEvents,
-  SidebarEventEnvelope,
+  type SidebarDispatchedEventEnvelope,
   type BuddySnapshotPayload,
   type NotificationEvent,
   type SidebarSection,
@@ -206,7 +206,7 @@ function isBuddyUpdate(update: SidebarSectionUpdate): update is BuddySSEEvent {
 }
 
 type SidebarSnapshotEvent = Extract<
-  SidebarEventEnvelope["event"],
+  SidebarDispatchedEventEnvelope["event"],
   { type: "section_snapshot" }
 >;
 export function useSidebarSubscription() {
@@ -574,7 +574,7 @@ export function useSidebarSubscription() {
   const processSectionSnapshot = useCallback(
     (
       event: Extract<
-        SidebarEventEnvelope["event"],
+        SidebarDispatchedEventEnvelope["event"],
         { type: "section_snapshot" }
       >,
       subscriptionId: string,
@@ -806,7 +806,7 @@ export function useSidebarSubscription() {
     tasksSnapshotRef.current = null;
     void prepareInitialHistory(generation);
 
-    const onEvent = (envelope: SidebarEventEnvelope) => {
+    const onEvent = (envelope: SidebarDispatchedEventEnvelope) => {
       if (generation !== generationRef.current) return;
 
       if (envelope.seq === 0) {

@@ -1,3 +1,4 @@
+import { debugRefact } from "../../debugConfig";
 import type { TrajectoryMeta, TrajectoryEvent } from "./trajectories";
 import type { TaskMeta, TaskBoard } from "./tasks";
 import type { BuddySnapshot, BuddySSEEvent } from "../../features/Buddy/types";
@@ -43,7 +44,7 @@ export type SidebarSectionSnapshot =
 
 export type SidebarSectionUpdate = TrajectoryEvent | TaskEvent | BuddySSEEvent;
 
-export type SidebarEvent =
+export type SidebarKnownEvent =
   | {
       type: "section_snapshot";
       section: SidebarSection;
@@ -60,6 +61,17 @@ export type SidebarEvent =
   | {
       type: "notification";
       notification: NotificationEvent;
+    }
+  | {
+      type: "heartbeat";
+      payload: { ts: string };
+    };
+
+export type SidebarEvent =
+  | SidebarKnownEvent
+  | {
+      type: string;
+      payload: unknown;
     };
 
 export type SidebarEventEnvelope = {
@@ -69,12 +81,28 @@ export type SidebarEventEnvelope = {
   event: SidebarEvent;
 };
 
+export type SidebarDispatchedEvent = Exclude<
+  SidebarKnownEvent,
+  { type: "heartbeat" }
+>;
+
+export type SidebarDispatchedEventEnvelope = Omit<
+  SidebarEventEnvelope,
+  "event"
+> & {
+  event: SidebarDispatchedEvent;
+};
+
 export type SidebarSubscriptionCallbacks = {
-  onEvent: (event: SidebarEventEnvelope) => void;
+  onEvent: (event: SidebarDispatchedEventEnvelope) => void;
   onError: (error: Error) => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
+  onLiveness?: () => void;
 };
+
+const IDLE_TIMEOUT_MS = 30_000;
+const MAX_SSE_BLOCK_BYTES = 1024 * 1024;
 
 function hasArrayProperty(obj: Record<string, unknown>, key: string): boolean {
   return Array.isArray(obj[key]);
@@ -86,12 +114,23 @@ function isValidTrajectoryEvent(obj: Record<string, unknown>): boolean {
 
 function isValidTaskEvent(obj: Record<string, unknown>): boolean {
   if (typeof obj.type !== "string") return false;
-  if (obj.type === "snapshot") return Array.isArray(obj.tasks);
-  if (obj.type === "task_deleted") return typeof obj.task_id === "string";
-  if (obj.type === "board_changed") {
-    return typeof obj.task_id === "string" && obj.board !== undefined;
+  switch (obj.type) {
+    case "snapshot":
+      return Array.isArray(obj.tasks);
+    case "task_created":
+    case "task_updated":
+      return typeof obj.task_id === "string" && obj.meta !== undefined;
+    case "task_deleted":
+      return typeof obj.task_id === "string";
+    case "board_changed":
+      return (
+        typeof obj.task_id === "string" &&
+        typeof obj.rev === "number" &&
+        obj.board !== undefined
+      );
+    default:
+      return false;
   }
-  return typeof obj.task_id === "string" && obj.meta !== undefined;
 }
 
 function isValidNotificationEvent(obj: Record<string, unknown>): boolean {
@@ -149,51 +188,189 @@ function isValidSectionUpdate(
   return false;
 }
 
-function isValidSidebarEvent(event: unknown): event is SidebarEvent {
-  if (typeof event !== "object" || event === null) return false;
-  const obj = event as Record<string, unknown>;
-  if (typeof obj.type !== "string") return false;
-
-  if (obj.type === "section_snapshot") {
-    if (!isValidSection(obj.section)) return false;
-    if (!isValidSectionStatus(obj.status)) return false;
-    if (!isValidSectionSnapshot(obj.section, obj.snapshot)) return false;
-    if (obj.elapsed_ms !== undefined && typeof obj.elapsed_ms !== "number") {
-      return false;
-    }
-    if (obj.error !== undefined && typeof obj.error !== "string") return false;
-    return true;
-  }
-
-  if (obj.type === "section_update") {
-    if (!isValidSection(obj.section)) return false;
-    return isValidSectionUpdate(obj.section, obj.update);
-  }
-
-  if (obj.type === "notification") {
-    if (typeof obj.notification !== "object" || obj.notification === null) {
-      return false;
-    }
-    return isValidNotificationEvent(
-      obj.notification as Record<string, unknown>,
-    );
-  }
-
-  return false;
+function isDispatchedSidebarEvent(
+  event: SidebarEvent,
+): event is SidebarDispatchedEvent {
+  if (event.type === "section_snapshot") return true;
+  if (event.type === "section_update") return true;
+  return event.type === "notification";
 }
 
-function isValidSidebarEventEnvelope(
-  data: unknown,
-): data is SidebarEventEnvelope {
-  if (typeof data !== "object" || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  if (obj.protocol_version !== 2) return false;
-  if (typeof obj.seq !== "number") return false;
-  if (typeof obj.subscription_id !== "string") return false;
-  return isValidSidebarEvent(obj.event);
+function toSeq(value: unknown): number | null {
+  if (typeof value !== "number") return null;
+  if (!Number.isInteger(value) || value < 0) return null;
+  return value;
 }
 
-const IDLE_TIMEOUT_MS = 30_000;
+function getEnvelopeParts(
+  parsed: unknown,
+): { seq: number; subscriptionId: string; event: Record<string, unknown> } | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const envelope = parsed as Record<string, unknown>;
+  if (envelope.protocol_version !== 2) return null;
+  const seq = toSeq(envelope.seq);
+  if (seq === null) return null;
+  if (typeof envelope.subscription_id !== "string") return null;
+  if (typeof envelope.event !== "object" || envelope.event === null) return null;
+  const event = envelope.event as Record<string, unknown>;
+  if (typeof event.type !== "string") return null;
+  return { seq, subscriptionId: envelope.subscription_id, event };
+}
+
+function tryParseSidebarEvent(raw: string): SidebarEventEnvelope | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const envelope = getEnvelopeParts(parsed);
+  if (!envelope) return null;
+  const { seq, subscriptionId, event } = envelope;
+
+  switch (event.type) {
+    case "section_snapshot": {
+      const section = event.section;
+      const status = event.status;
+      const snapshot = event.snapshot;
+      if (!isValidSection(section)) return null;
+      if (!isValidSectionStatus(status)) return null;
+      if (!isValidSectionSnapshot(section, snapshot)) return null;
+      if (
+        event.elapsed_ms !== undefined &&
+        typeof event.elapsed_ms !== "number"
+      ) {
+        return null;
+      }
+      if (event.error !== undefined && typeof event.error !== "string") {
+        return null;
+      }
+      return {
+        protocol_version: 2,
+        seq,
+        subscription_id: subscriptionId,
+        event: {
+          type: "section_snapshot",
+          section,
+          status,
+          snapshot,
+          ...(event.elapsed_ms !== undefined
+            ? { elapsed_ms: event.elapsed_ms }
+            : {}),
+          ...(event.error !== undefined ? { error: event.error } : {}),
+        },
+      };
+    }
+
+    case "section_update": {
+      const section = event.section;
+      const update = event.update;
+      if (!isValidSection(section)) return null;
+      if (!isValidSectionUpdate(section, update)) return null;
+      return {
+        protocol_version: 2,
+        seq,
+        subscription_id: subscriptionId,
+        event: {
+          type: "section_update",
+          section,
+          update,
+        },
+      };
+    }
+
+    case "notification":
+      if (
+        typeof event.notification !== "object" ||
+        event.notification === null
+      ) {
+        return null;
+      }
+      if (
+        !isValidNotificationEvent(
+          event.notification as Record<string, unknown>,
+        )
+      ) {
+        return null;
+      }
+      return {
+        protocol_version: 2,
+        seq,
+        subscription_id: subscriptionId,
+        event: {
+          type: "notification",
+          notification: event.notification as NotificationEvent,
+        },
+      };
+
+    case "heartbeat":
+      return {
+        protocol_version: 2,
+        seq,
+        subscription_id: subscriptionId,
+        event: {
+          type: "heartbeat",
+          payload: {
+            ts:
+              typeof event.payload === "object" && event.payload !== null
+                ? String((event.payload as Record<string, unknown>).ts ?? "")
+                : "",
+          },
+        },
+      };
+
+    default:
+      return {
+        protocol_version: 2,
+        seq,
+        subscription_id: subscriptionId,
+        event: { type: event.type as string, payload: event.payload },
+      };
+  }
+}
+
+function tryReadSidebarEnvelopeSeq(raw: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  return getEnvelopeParts(parsed)?.seq ?? null;
+}
+
+function warnSkippedSidebarEvent(raw: string): void {
+  debugRefact("[sidebar] skipped malformed event:", raw.slice(0, 200));
+}
+
+function debugIgnoredSidebarEvent(type: string): void {
+  debugRefact("[sidebar] ignored event type:", type);
+}
+
+function errorSidebarBlockTooLarge(): void {
+  debugRefact(
+    `[sidebar] SSE block exceeded ${MAX_SSE_BLOCK_BYTES} bytes; reconnecting`,
+  );
+}
+
+function parseSseBlock(block: string): string | null {
+  if (!block.trim()) return null;
+  if (block.startsWith(":")) return null;
+
+  const dataLines: string[] = [];
+  for (const rawLine of block.split("\n")) {
+    if (rawLine.startsWith(":")) continue;
+    if (!rawLine.startsWith("data:")) continue;
+    dataLines.push(rawLine.slice(5).replace(/^\s*/, ""));
+  }
+
+  if (dataLines.length === 0) return null;
+
+  const dataStr = dataLines.join("\n");
+  return dataStr === "[DONE]" ? null : dataStr;
+}
 
 export function subscribeToSidebarEvents(
   port: number,
@@ -215,6 +392,13 @@ export function subscribeToSidebarEvents(
     idleTimer = setTimeout(() => {
       abortController.abort();
     }, IDLE_TIMEOUT_MS);
+  };
+
+  const advanceSeq = (seq: number) => {
+    if (state.lastSeq >= 0 && seq !== state.lastSeq + 1) {
+      throw new Error(`Seq gap: expected ${state.lastSeq + 1}, got ${seq}`);
+    }
+    state.lastSeq = seq;
   };
 
   const cleanup = () => {
@@ -248,6 +432,7 @@ export function subscribeToSidebarEvents(
       state.connected = true;
       callbacks.onConnected?.();
       resetIdleTimer();
+      callbacks.onLiveness?.();
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -259,54 +444,47 @@ export function subscribeToSidebarEvents(
           if (done) break;
 
           resetIdleTimer();
-          buffer += decoder.decode(value, { stream: true });
-          buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+          callbacks.onLiveness?.();
+          buffer += decoder
+            .decode(value, { stream: true })
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n");
 
-          const blocks = buffer.split("\n\n");
-          buffer = blocks.pop() ?? "";
+          if (buffer.length > MAX_SSE_BLOCK_BYTES) {
+            errorSidebarBlockTooLarge();
+            throw new Error("sse_block_too_large");
+          }
 
-          for (const block of blocks) {
-            if (!block.trim()) continue;
-            if (block.startsWith(":")) continue;
-
-            const dataLines: string[] = [];
-            for (const rawLine of block.split("\n")) {
-              if (rawLine.startsWith(":")) continue;
-              if (!rawLine.startsWith("data:")) continue;
-              dataLines.push(rawLine.slice(5).replace(/^\s*/, ""));
+          let idx = buffer.indexOf("\n\n");
+          while (idx !== -1) {
+            const block = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const dataStr = parseSseBlock(block);
+            if (dataStr !== null) {
+              const parsed = tryParseSidebarEvent(dataStr);
+              if (!parsed) {
+                const skippedSeq = tryReadSidebarEnvelopeSeq(dataStr);
+                if (skippedSeq !== null) advanceSeq(skippedSeq);
+                warnSkippedSidebarEvent(dataStr);
+              } else {
+                advanceSeq(parsed.seq);
+                if (isDispatchedSidebarEvent(parsed.event)) {
+                  callbacks.onEvent({
+                    protocol_version: parsed.protocol_version,
+                    seq: parsed.seq,
+                    subscription_id: parsed.subscription_id,
+                    event: parsed.event,
+                  });
+                } else {
+                  debugIgnoredSidebarEvent(parsed.event.type);
+                }
+              }
             }
-
-            if (dataLines.length === 0) continue;
-
-            const dataStr = dataLines.join("\n");
-            if (dataStr === "[DONE]") continue;
-
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(dataStr);
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : "JSON parse error";
-              throw new Error(`Parse error: ${msg}`);
-            }
-
-            if (!isValidSidebarEventEnvelope(parsed)) {
-              throw new Error("Invalid sidebar v2 event structure");
-            }
-
-            if (state.lastSeq >= 0 && parsed.seq !== state.lastSeq + 1) {
-              throw new Error(
-                `Seq gap: expected ${state.lastSeq + 1}, got ${parsed.seq}`,
-              );
-            }
-            state.lastSeq = parsed.seq;
-
-            callbacks.onEvent(parsed);
+            idx = buffer.indexOf("\n\n");
           }
         }
       } finally {
-        await reader.cancel().catch(() => {
-          // Ignore cancel errors - connection already closed
-        });
+        await reader.cancel().catch(() => undefined);
       }
 
       cleanup();
