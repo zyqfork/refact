@@ -83,7 +83,13 @@ const CONTENT_POLICY_STATUS_CODES: &[&str] = &["451"];
 const INVALID_REQUEST_STATUS_CODES: &[&str] =
     &["400", "405", "409", "415", "422", "423", "424", "426"];
 
-const USER_CANCELLED_PATTERNS: &[&str] = &["aborted", "cancelled", "canceled"];
+const USER_CANCELLED_SENTINEL: &str = "aborted";
+const USER_CANCELLED_WRAPPED_SUFFIX: &str = "original error: aborted";
+
+fn is_user_cancelled_sentinel(lower: &str) -> bool {
+    let trimmed = lower.trim();
+    trimmed == USER_CANCELLED_SENTINEL || trimmed.ends_with(USER_CANCELLED_WRAPPED_SUFFIX)
+}
 
 const CONTEXT_LIMIT_PATTERNS: &[&str] = &[
     "context window",
@@ -661,7 +667,7 @@ pub fn user_error_info(category: UserErrorCategory) -> UserErrorInfo {
 pub fn classify_llm_error_for_retry(error: &str) -> RetryDecision {
     let lower = error.to_lowercase();
 
-    if contains_any(&lower, USER_CANCELLED_PATTERNS) {
+    if is_user_cancelled_sentinel(&lower) {
         return RetryDecision::UserCancelled {
             reason: "cancelled",
         };
@@ -1147,7 +1153,7 @@ mod tests {
                 category: UserErrorCategory::Unknown,
             },
             ErrorCase {
-                error: "User cancelled the operation",
+                error: "Aborted",
                 decision: cancelled(),
                 category: UserErrorCategory::Unknown,
             },
@@ -1251,6 +1257,52 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_abort_sentinel_classified_as_user_cancelled() {
+        let wrapped = "Stream interrupted after partial output and all retry attempts failed. \
+            Original error: Aborted";
+        assert!(matches!(
+            classify_llm_error_for_retry(wrapped),
+            RetryDecision::UserCancelled { .. }
+        ));
+    }
+
+    #[test]
+    fn transient_connection_aborted_is_retryable_not_user_cancelled() {
+        let error = "Stream error: connection aborted";
+        let decision = classify_llm_error_for_retry(error);
+        assert!(
+            !decision.is_user_cancelled(),
+            "connection aborted must not be classified as user cancellation, got {:?}",
+            decision
+        );
+        assert!(
+            decision.is_retryable_transient(),
+            "connection aborted must be retryable transient, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn http2_stream_canceled_is_not_user_cancelled() {
+        let decision = classify_llm_error_for_retry("LLM request failed: HTTP/2 stream canceled");
+        assert!(
+            !decision.is_user_cancelled(),
+            "HTTP/2 stream canceled must not be classified as user cancellation, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn operation_canceled_by_peer_is_not_user_cancelled() {
+        let decision = classify_llm_error_for_retry("operation canceled by peer");
+        assert!(
+            !decision.is_user_cancelled(),
+            "remote-side cancellation must not be classified as user cancellation, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
     fn should_retry_obeys_attempt_limit_and_abort() {
         let flag = AtomicBool::new(false);
         assert!(should_retry_llm_error("timeout", 0, &flag));
@@ -1267,7 +1319,7 @@ mod tests {
     fn helper_methods_identify_classification_groups() {
         assert!(classify_llm_error_for_retry("timeout").is_retryable_transient());
         assert!(classify_llm_error_for_retry("context length exceeded").is_context_limit());
-        assert!(classify_llm_error_for_retry("cancelled").is_user_cancelled());
+        assert!(classify_llm_error_for_retry("Aborted").is_user_cancelled());
         assert_eq!(
             classify_llm_error_for_retry("timeout").reason(),
             "transient_error"

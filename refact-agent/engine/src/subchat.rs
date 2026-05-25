@@ -39,7 +39,7 @@ use crate::worktrees::service::WorktreeService;
 use crate::worktrees::types::WorktreeReference;
 
 const PARTIAL_OUTPUT_STREAM_ERROR: &str =
-    "Stream interrupted after partial output. Not retrying to avoid corruption.";
+    "Stream interrupted after partial output and all retry attempts failed.";
 const MAX_CONTEXT_LIMIT_COMPACT_ATTEMPTS: usize = 3;
 
 fn should_compact_context_limit_error(
@@ -990,7 +990,16 @@ pub async fn run_subchat_once(
     tool_name: &str,
     messages: Vec<ChatMessage>,
 ) -> Result<SubchatResult, String> {
-    let config = resolve_subchat_config(
+    run_subchat_once_with_abort(gcx, tool_name, messages, None).await
+}
+
+pub async fn run_subchat_once_with_abort(
+    gcx: Arc<GlobalContext>,
+    tool_name: &str,
+    messages: Vec<ChatMessage>,
+    abort_flag: Option<Arc<AtomicBool>>,
+) -> Result<SubchatResult, String> {
+    let config = resolve_subchat_config_with_parent(
         gcx.clone(),
         tool_name,
         false,
@@ -1004,6 +1013,12 @@ pub async fn run_subchat_once(
         false,
         None,
         "agent".to_string(),
+        None,
+        None,
+        None,
+        None,
+        abort_flag,
+        0,
     )
     .await?;
 

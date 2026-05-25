@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::Mutex as AMutex;
 
-use crate::agentic::generate_commit_message::generate_commit_message_by_diff;
+use crate::agentic::generate_commit_message::generate_commit_message_by_diff_with_abort;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::chat::verifier::schedule_card_verifier_after_finish;
@@ -92,7 +92,11 @@ async fn ensure_lock_for<T>(
         finish.await
     };
     let mut locks = get_finish_locks().lock().await;
-    locks.remove(&key);
+    if let Some(entry) = locks.get(&key) {
+        if Arc::ptr_eq(entry, &finish_lock) && Arc::strong_count(&finish_lock) == 2 {
+            locks.remove(&key);
+        }
+    }
     result
 }
 
@@ -454,8 +458,10 @@ async fn auto_commit_worktree(
     worktree_path: &Path,
     card_id: &str,
     card_title: &str,
+    abort_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Option<String>, String> {
-    auto_commit_worktree_with_message(gcx, worktree_path, card_id, card_title, None).await
+    auto_commit_worktree_with_message(gcx, worktree_path, card_id, card_title, None, abort_flag)
+        .await
 }
 
 async fn auto_commit_worktree_with_message(
@@ -464,6 +470,7 @@ async fn auto_commit_worktree_with_message(
     card_id: &str,
     card_title: &str,
     commit_msg_override: Option<String>,
+    abort_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Option<String>, String> {
     validate_git_worktree(worktree_path).await?;
 
@@ -483,7 +490,13 @@ async fn auto_commit_worktree_with_message(
 
     let commit_msg = match commit_msg_override {
         Some(msg) if !msg.trim().is_empty() => msg,
-        _ => match generate_commit_message_by_diff(gcx, &diff, &Some(card_title.to_string())).await
+        _ => match generate_commit_message_by_diff_with_abort(
+            gcx,
+            &diff,
+            &Some(card_title.to_string()),
+            abort_flag,
+        )
+        .await
         {
             Ok(msg) if !msg.trim().is_empty() => msg,
             _ => format!("Card {}: {}", card_id, card_title),
@@ -585,7 +598,10 @@ impl Tool for ToolTaskAgentFinish {
 
         let report = parse_finish_report(args, success)?;
 
-        let gcx = ccx.lock().await.app.gcx.clone();
+        let (gcx, abort_flag_for_commit) = {
+            let ccx_lock = ccx.lock().await;
+            (ccx_lock.app.gcx.clone(), ccx_lock.abort_flag.clone())
+        };
         let lock_task_id = task_id.clone();
         let lock_card_id = card_id.clone();
 
@@ -619,6 +635,7 @@ impl Tool for ToolTaskAgentFinish {
                     &worktree.root,
                     &card_id,
                     &card_title_for_commit,
+                    Some(abort_flag_for_commit.clone()),
                 )
                 .await
                 {
@@ -866,6 +883,32 @@ mod tests {
         assert!(!get_finish_locks().lock().await.contains_key(&key));
     }
 
+    #[tokio::test]
+    async fn finish_lock_not_pruned_while_external_holder_exists() {
+        let task_id = "race-task";
+        let card_id = "T-Race";
+        let key = format!("{}:{}", task_id, card_id);
+
+        let external = get_finish_lock(task_id, card_id).await;
+
+        ensure_lock_for(task_id, card_id, async {}).await;
+
+        assert!(
+            get_finish_locks().lock().await.contains_key(&key),
+            "lock entry was pruned while another caller still held an Arc; \
+             a concurrent waiter would have proceeded against a stale lock \
+             while a new caller created a fresh one and ran in parallel"
+        );
+
+        drop(external);
+        ensure_lock_for(task_id, card_id, async {}).await;
+
+        assert!(
+            !get_finish_locks().lock().await.contains_key(&key),
+            "lock entry must be pruned once no external holder remains"
+        );
+    }
+
     #[test]
     fn agents_active_uses_chat_id_not_assignee() {
         let mut card = test_card(None);
@@ -1050,6 +1093,7 @@ mod tests {
             "T-1",
             "Card T-1",
             Some("test commit".to_string()),
+            None,
         )
         .await;
 
@@ -1068,6 +1112,7 @@ mod tests {
             "T-1",
             "Card T-1",
             Some("test commit".to_string()),
+            None,
         )
         .await;
 
@@ -1088,6 +1133,7 @@ mod tests {
             "T-1",
             "Card T-1",
             Some("test commit".to_string()),
+            None,
         )
         .await
         .unwrap();
@@ -1116,12 +1162,14 @@ mod tests {
         std::fs::write(worktree.join("file.txt"), "changed in worktree\n").unwrap();
         let gcx = crate::global_context::tests::make_test_gcx().await;
 
+
         let commit = auto_commit_worktree_with_message(
             gcx,
             &worktree,
             "T-1",
             "Card T-1",
             Some("test commit".to_string()),
+            None,
         )
         .await
         .unwrap();

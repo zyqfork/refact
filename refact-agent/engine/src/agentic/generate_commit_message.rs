@@ -1,12 +1,13 @@
 pub use refact_agentic::generate_commit_message::remove_fencing;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::files_correction::CommandSimplifiedDirExt;
 use crate::global_context::GlobalContext;
-use crate::subchat::run_subchat_once;
+use crate::subchat::run_subchat_once_with_abort;
 use crate::yaml_configs::customization_registry::get_subagent_config;
-use std::sync::Arc;
 use hashbrown::HashMap;
 use tracing::warn;
 use crate::files_in_workspace::detect_vcs_for_a_file_path;
@@ -17,6 +18,15 @@ pub async fn generate_commit_message_by_diff(
     gcx: Arc<GlobalContext>,
     diff: &String,
     commit_message_prompt: &Option<String>,
+) -> Result<String, String> {
+    generate_commit_message_by_diff_with_abort(gcx, diff, commit_message_prompt, None).await
+}
+
+pub async fn generate_commit_message_by_diff_with_abort(
+    gcx: Arc<GlobalContext>,
+    diff: &String,
+    commit_message_prompt: &Option<String>,
+    abort_flag: Option<Arc<AtomicBool>>,
 ) -> Result<String, String> {
     if diff.is_empty() {
         return Err("The provided diff is empty".to_string());
@@ -85,7 +95,7 @@ pub async fn generate_commit_message_by_diff(
                     },
                 ]
             };
-            let result = run_subchat_once(gcx2, SUBAGENT_ID, messages)
+            let result = run_subchat_once_with_abort(gcx2, SUBAGENT_ID, messages, abort_flag)
                 .await
                 .map_err(|e| format!("Error: {}", e))?;
 
