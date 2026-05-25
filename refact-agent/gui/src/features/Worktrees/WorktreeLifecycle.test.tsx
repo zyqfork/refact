@@ -249,6 +249,15 @@ function taskHandlers(record: WorktreeRecordView) {
     http.get("http://127.0.0.1:8001/v1/tasks/task-1/trajectories/planner", () =>
       HttpResponse.json([]),
     ),
+    http.get("http://127.0.0.1:8001/v1/task/task-1/memories", () =>
+      HttpResponse.json({
+        task_id: "task-1",
+        since: "",
+        new_count: 0,
+        memories: [],
+        warnings: [],
+      }),
+    ),
     http.get("http://127.0.0.1:8001/v1/ping", () =>
       HttpResponse.json({ status: "ok" }),
     ),

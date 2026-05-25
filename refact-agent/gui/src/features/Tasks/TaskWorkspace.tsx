@@ -10,7 +10,6 @@ import {
   Dialog,
   Checkbox,
   Tooltip,
-  Tabs,
 } from "@radix-ui/themes";
 import {
   PlusIcon,
@@ -666,7 +665,6 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const [layout, setLayout] = useState(() =>
     loadTaskWorkspaceLayout(taskId, defaultTaskWorkspaceLayout()),
   );
-  const [workspaceTab, setWorkspaceTab] = useState("chat");
   const prevTaskStatusRef = React.useRef<string | undefined>(undefined);
   const chatExpanded = layout.chatExpanded;
   const panelsExpanded = layout.panelsExpanded;
@@ -1366,72 +1364,53 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
       </CollapsePanel>
 
       <Box className={styles.chatSection}>
-        <Tabs.Root
-          value={workspaceTab}
-          onValueChange={setWorkspaceTab}
-          className={styles.workspaceTabs}
-        >
-          <div className={styles.chatHeader}>
-            <button
-              type="button"
-              onClick={handleToggleChatExpanded}
-              aria-expanded={chatExpanded}
-              aria-label={chatToggleLabel}
-              title={chatToggleLabel}
-              className={`${styles.sectionHeaderToggle} ${styles.chatHeaderToggle}`}
+        <div className={styles.chatHeader}>
+          <button
+            type="button"
+            onClick={handleToggleChatExpanded}
+            aria-expanded={chatExpanded}
+            aria-label={chatToggleLabel}
+            title={chatToggleLabel}
+            className={`${styles.sectionHeaderToggle} ${styles.chatHeaderToggle}`}
+          >
+            <ChevronDownIcon
+              className={`${styles.chevron} ${
+                chatExpanded ? styles.chevronExpanded : ""
+              }`}
+            />
+            <Text
+              size="1"
+              weight="bold"
+              color="gray"
+              className={styles.sectionHeaderLabel}
             >
-              <ChevronDownIcon
-                className={`${styles.chevron} ${
-                  chatExpanded ? styles.chevronExpanded : ""
-                }`}
-              />
-              <Text
-                size="1"
-                weight="bold"
-                color="gray"
-                className={styles.sectionHeaderLabel}
-              >
-                Task
-              </Text>
-              <Text size="1" color="gray" className={styles.chatHeaderLabel}>
-                {workspaceTab === "chat" ? chatLabel : "Memories"}
-              </Text>
-            </button>
-            <Tabs.List size="1">
-              <Tabs.Trigger value="chat">Chat</Tabs.Trigger>
-              <Tabs.Trigger value="memories">Memories</Tabs.Trigger>
-            </Tabs.List>
-          </div>
-          <Box className={styles.chatContent}>
-            {workspaceTab === "chat" ? (
-              <Box className={styles.workspaceTabContent}>
-                {activeChat ? (
-                  <InternalLinkProvider onInternalLink={handleInternalLink}>
-                    <Chat
-                      host={config.host}
-                      tabbed={false}
-                      backFromChat={handleBack}
-                    />
-                  </InternalLinkProvider>
-                ) : (
-                  <Flex
-                    align="center"
-                    justify="center"
-                    style={{ height: "100%" }}
-                  >
-                    <Text color="gray">
-                      Create a planner chat to get started
-                    </Text>
-                  </Flex>
-                )}
-              </Box>
+              Task
+            </Text>
+            <Text size="1" color="gray" className={styles.chatHeaderLabel}>
+              {chatLabel}
+            </Text>
+          </button>
+        </div>
+        <Box className={styles.taskContentGrid}>
+          <Box className={styles.chatContentPane}>
+            {activeChat ? (
+              <InternalLinkProvider onInternalLink={handleInternalLink}>
+                <Chat
+                  host={config.host}
+                  tabbed={false}
+                  backFromChat={handleBack}
+                />
+              </InternalLinkProvider>
             ) : (
-              <Box className={styles.workspaceTabContent}>
-                <MemoryInboxPanel taskId={taskId} />
-              </Box>
+              <Flex align="center" justify="center" style={{ height: "100%" }}>
+                <Text color="gray">Create a planner chat to get started</Text>
+              </Flex>
             )}
           </Box>
-        </Tabs.Root>
+          <Box className={styles.memoryInboxPane}>
+            <MemoryInboxPanel taskId={taskId} />
+          </Box>
+        </Box>
       </Box>
 
       {selectedCard && (

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { render, screen, waitFor } from "../../../utils/test-utils";
 import { server } from "../../../utils/mockServer";
@@ -27,8 +28,9 @@ const memoriesResponse: TaskMemoriesResponse = {
       created_at: "2026-05-22T01:00:00Z",
       created_at_known: true,
       title: "Use scoped memory index",
-      content: "Keep memory search local to the current task.",
-      tags: ["planner", "search"],
+      content:
+        "Keep memory search local to the current task. This preview has enough detail to invite expansion when future agents need the full context without making the inbox noisy by default. Extra words keep it long.",
+      tags: ["planner", "search", "index", "agent", "handoff"],
       kind: "decision",
       namespace: "task",
       pinned: false,
@@ -71,6 +73,34 @@ describe("MemoryInboxPanel", () => {
     expect(screen.getByText("Archive stale notes")).toBeInTheDocument();
     expect(screen.getByText(/5 new since/)).toBeInTheDocument();
     expect(screen.getByText("pinned")).toBeInTheDocument();
+  });
+
+  it("collapses tags and expands memory previews inline", async () => {
+    mockMemories();
+
+    const { user } = render(<MemoryInboxPanel taskId="task-1" />, {
+      preloadedState: CONFIG_STATE,
+    });
+
+    const card = await screen.findByTestId("memory-card-decision.md");
+    expect(
+      within(card).getByRole("button", { name: "Show 2 more" }),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText("handoff")).not.toBeInTheDocument();
+
+    await user.click(within(card).getByRole("button", { name: "Show 2 more" }));
+    expect(within(card).getByText("handoff")).toBeInTheDocument();
+
+    expect(
+      within(card).queryByText(/Extra words keep it long\./),
+    ).not.toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Expand" }));
+    expect(
+      within(card).getByText(/Extra words keep it long\./),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByRole("button", { name: "Collapse" }),
+    ).toBeInTheDocument();
   });
 
   it("pin and archive actions call mutations", async () => {
