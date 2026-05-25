@@ -197,11 +197,21 @@ async fn read_memory_ops_records(project_root: &Path) -> (Vec<MemoryOpsRecord>, 
             "buddy: quarantining {} malformed memory ops queue line(s) from {:?}",
             malformed_lines, path
         );
-        if let Err(err) = quarantine_memory_ops_bad_lines(project_root, &path, &malformed).await {
-            warn!(
-                "buddy: failed to quarantine malformed memory ops lines: {}",
-                err
-            );
+        match quarantine_memory_ops_bad_lines(project_root, &path, &malformed).await {
+            Ok(()) => {
+                if let Err(err) = rewrite_memory_ops_records(&path, records.clone()).await {
+                    warn!(
+                        "buddy: failed to repair memory ops queue after quarantine: {}",
+                        err
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "buddy: failed to quarantine malformed memory ops lines: {}",
+                    err
+                );
+            }
         }
     }
     (records, malformed_lines)
@@ -772,7 +782,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_ops_malformed_line_is_skipped() {
+    async fn memory_ops_malformed_line_is_quarantined_and_removed_from_source() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let path = memory_ops_path(root);
@@ -793,14 +803,19 @@ mod tests {
         assert_eq!(state.ops.len(), 1);
         assert_eq!(state.ops[0].op_id, "op-1");
         assert_eq!(state.malformed_lines, 2);
-        let unrepaired = tokio::fs::read_to_string(&path).await.unwrap();
-        assert_eq!(unrepaired.lines().count(), 3);
+        let repaired = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(repaired.lines().count(), 1);
+        assert!(!repaired.contains("not json"));
+        assert!(repaired.contains("op-1"));
         let bad_content = tokio::fs::read_to_string(memory_ops_bad_path(root))
             .await
             .unwrap();
         assert!(bad_content.contains("not json"));
         let bad_line_count = bad_content.lines().count();
-        let _ = load_memory_ops(root).await;
+
+        let reloaded = load_memory_ops(root).await;
+        assert_eq!(reloaded.ops.len(), 1);
+        assert_eq!(reloaded.malformed_lines, 0);
         let bad_content_second = tokio::fs::read_to_string(memory_ops_bad_path(root))
             .await
             .unwrap();
@@ -808,11 +823,6 @@ mod tests {
 
         let compacted = compact_memory_ops(root).await.unwrap();
         assert_eq!(compacted.ops.len(), 1);
-        let repaired = tokio::fs::read_to_string(&path).await.unwrap();
-        assert_eq!(repaired.lines().count(), 1);
-        let reloaded = load_memory_ops(root).await;
-        assert_eq!(reloaded.ops.len(), 1);
-        assert_eq!(reloaded.malformed_lines, 0);
     }
 
     #[tokio::test]
