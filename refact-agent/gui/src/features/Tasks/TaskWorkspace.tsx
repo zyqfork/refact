@@ -92,14 +92,18 @@ type ActiveChat =
   | { type: "agent"; cardId: string; chatId: string }
   | null;
 
-type CardWorktreeTarget = {
+export type CardWorktreeTarget = {
   id: string;
   label: string;
   record?: WorktreeRecordView;
   meta?: WorktreeMeta | null;
+  legacy: boolean;
   stale: boolean;
   referenceCount?: number;
 };
+
+const LEGACY_WORKTREE_TOOLTIP =
+  "This worktree was created before the registry; recreate it via `restart_agent(mode=fresh)` to enable actions.";
 
 function compactPath(path: string): string {
   const normalized = path.replace(/[\\/]+$/, "");
@@ -125,14 +129,40 @@ function worktreeLabel(
   );
 }
 
-function resolveCardWorktree(
+function formatWorktreeTargetLabel(label: string): string {
+  return label.includes("/") || label.includes("\\")
+    ? compactPath(label)
+    : label;
+}
+
+function makeLegacyTarget(
+  card: BoardCard,
+  threadWorktree?: WorktreeMeta | null,
+): CardWorktreeTarget | null {
+  const label = worktreeLabel(card, undefined, threadWorktree);
+  if (!label) return null;
+  return {
+    id: "",
+    label: formatWorktreeTargetLabel(label),
+    meta: threadWorktree ?? null,
+    legacy: true,
+    stale: threadWorktree?.deleted === true || threadWorktree?.stale === true,
+    referenceCount: threadWorktree?.reference_count,
+  };
+}
+
+function isActionableWorktree(worktree: CardWorktreeTarget): boolean {
+  return !worktree.legacy && !worktree.stale && worktree.id.trim().length > 0;
+}
+
+export function resolveCardWorktree(
   taskId: string,
   card: BoardCard,
   records: WorktreeRecordView[],
   threadWorktree?: WorktreeMeta | null,
 ): CardWorktreeTarget | null {
-  const byId = card.agent_worktree
-    ? records.find((record) => record.meta.id === card.agent_worktree)
+  const byName = card.agent_worktree_name
+    ? records.find((record) => record.meta.id === card.agent_worktree_name)
     : undefined;
   const byThread = threadWorktree
     ? records.find((record) => record.meta.id === threadWorktree.id)
@@ -148,17 +178,23 @@ function resolveCardWorktree(
           (!record.meta.task_id || record.meta.task_id === taskId),
       )
     : undefined;
-  const record = byId ?? byThread ?? byCard ?? byBranch;
+  const record = byName ?? byThread ?? byCard ?? byBranch;
   const meta = record?.meta ?? threadWorktree ?? null;
-  const id = record?.meta.id ?? threadWorktree?.id ?? card.agent_worktree;
+  const id = record?.meta.id ?? threadWorktree?.id ?? card.agent_worktree_name;
+  if (!id) {
+    if (card.agent_worktree || card.agent_branch) {
+      return makeLegacyTarget(card, threadWorktree);
+    }
+    return null;
+  }
   const label = worktreeLabel(card, record, meta);
-  if (!id || !label) return null;
+  if (!label) return null;
   return {
     id,
-    label:
-      label.includes("/") || label.includes("\\") ? compactPath(label) : label,
+    label: formatWorktreeTargetLabel(label),
     record,
     meta,
+    legacy: false,
     stale:
       record?.status.path_exists === false ||
       record?.meta.lifecycle_state === "deleted" ||
@@ -460,6 +496,27 @@ const CardDetail: React.FC<CardDetailProps> = ({
   onOpenWorktree,
   onDeleteWorktree,
 }) => {
+  const worktreeActionsDisabled = !worktree || !isActionableWorktree(worktree);
+  const worktreeActionsTooltip = worktree?.legacy
+    ? LEGACY_WORKTREE_TOOLTIP
+    : worktree?.stale
+      ? "This worktree appears stale, missing, or deleted."
+      : undefined;
+  const invokeWorktreeAction = (
+    action: (target: CardWorktreeTarget) => void,
+  ) => {
+    if (!worktree || worktreeActionsDisabled) return;
+    action(worktree);
+  };
+  const wrapWorktreeAction = (button: React.ReactNode) =>
+    worktreeActionsTooltip ? (
+      <Tooltip content={worktreeActionsTooltip}>
+        <span>{button}</span>
+      </Tooltip>
+    ) : (
+      button
+    );
+
   return (
     <Box className={styles.cardDetailOverlay} onClick={onClose}>
       <Card className={styles.cardDetail} onClick={(e) => e.stopPropagation()}>
@@ -536,45 +593,62 @@ const CardDetail: React.FC<CardDetailProps> = ({
                     This worktree appears stale, missing, or deleted.
                   </Text>
                 )}
+                {worktree?.legacy && (
+                  <Text size="1" color="amber">
+                    Legacy / unregistered worktree
+                  </Text>
+                )}
                 <Flex gap="2" wrap="wrap">
-                  <Button
-                    type="button"
-                    size="1"
-                    variant="soft"
-                    disabled={!worktree}
-                    onClick={() => worktree && onViewDiff(worktree)}
-                  >
-                    View Diff
-                  </Button>
-                  <Button
-                    type="button"
-                    size="1"
-                    variant="soft"
-                    disabled={!worktree}
-                    onClick={() => worktree && onMerge(worktree)}
-                  >
-                    Merge
-                  </Button>
-                  <Button
-                    type="button"
-                    size="1"
-                    variant="soft"
-                    color="gray"
-                    disabled={!worktree}
-                    onClick={() => worktree && onOpenWorktree(worktree)}
-                  >
-                    Open
-                  </Button>
-                  <Button
-                    type="button"
-                    size="1"
-                    variant="soft"
-                    color="red"
-                    disabled={!worktree}
-                    onClick={() => worktree && onDeleteWorktree(worktree)}
-                  >
-                    Discard/Delete
-                  </Button>
+                  {wrapWorktreeAction(
+                    <Button
+                      type="button"
+                      size="1"
+                      variant="soft"
+                      disabled={worktreeActionsDisabled}
+                      title={worktreeActionsTooltip}
+                      onClick={() => invokeWorktreeAction(onViewDiff)}
+                    >
+                      View Diff
+                    </Button>,
+                  )}
+                  {wrapWorktreeAction(
+                    <Button
+                      type="button"
+                      size="1"
+                      variant="soft"
+                      disabled={worktreeActionsDisabled}
+                      title={worktreeActionsTooltip}
+                      onClick={() => invokeWorktreeAction(onMerge)}
+                    >
+                      Merge
+                    </Button>,
+                  )}
+                  {wrapWorktreeAction(
+                    <Button
+                      type="button"
+                      size="1"
+                      variant="soft"
+                      color="gray"
+                      disabled={worktreeActionsDisabled}
+                      title={worktreeActionsTooltip}
+                      onClick={() => invokeWorktreeAction(onOpenWorktree)}
+                    >
+                      Open
+                    </Button>,
+                  )}
+                  {wrapWorktreeAction(
+                    <Button
+                      type="button"
+                      size="1"
+                      variant="soft"
+                      color="red"
+                      disabled={worktreeActionsDisabled}
+                      title={worktreeActionsTooltip}
+                      onClick={() => invokeWorktreeAction(onDeleteWorktree)}
+                    >
+                      Discard/Delete
+                    </Button>,
+                  )}
                 </Flex>
               </Flex>
             </Box>
@@ -1104,12 +1178,13 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   }, [dispatch, taskId]);
 
   const handleViewCardDiff = useCallback((worktree: CardWorktreeTarget) => {
+    if (!isActionableWorktree(worktree)) return;
     setDiffTarget(worktree);
   }, []);
 
   const handleMergeCardWorktree = useCallback(
     (worktree: CardWorktreeTarget) => {
-      if (!selectedCard) return;
+      if (!selectedCard || !isActionableWorktree(worktree)) return;
       setMergeTarget({ card: selectedCard, worktree });
     },
     [selectedCard],
@@ -1117,6 +1192,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
 
   const handleOpenCardWorktree = useCallback(
     async (worktree: CardWorktreeTarget) => {
+      if (!isActionableWorktree(worktree)) return;
       try {
         const response = await openWorktree({
           id: worktree.id,
@@ -1150,7 +1226,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
 
   const handleDeleteCardWorktree = useCallback(
     (worktree: CardWorktreeTarget) => {
-      if (!selectedCard) return;
+      if (!selectedCard || !isActionableWorktree(worktree)) return;
       setDeleteBranch(false);
       setDeleteTarget({ card: selectedCard, worktree });
     },
@@ -1158,7 +1234,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   );
 
   const handleConfirmDeleteCardWorktree = useCallback(async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || !isActionableWorktree(deleteTarget.worktree)) return;
     try {
       await deleteWorktree({
         id: deleteTarget.worktree.id,
