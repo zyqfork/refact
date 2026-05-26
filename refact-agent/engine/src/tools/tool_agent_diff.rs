@@ -247,6 +247,13 @@ async fn canonical_worktree(
     validate_fallback_worktree_path(&gcx, &card.id, Path::new(worktree))
 }
 
+async fn run_with_timeout<F, T>(fut: F, timeout: Duration) -> Result<T, ()>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(timeout, fut).await.map_err(|_| ())
+}
+
 async fn run_git(worktree: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     use tokio::io::AsyncReadExt;
 
@@ -264,7 +271,7 @@ async fn run_git(worktree: &Path, args: &[&str], timeout: Duration) -> Result<St
     let mut chunk = [0u8; 8192];
     let mut capped = false;
 
-    let read_result = tokio::time::timeout(timeout, async {
+    let read_result = run_with_timeout(async {
         loop {
             let n = stdout
                 .read(&mut chunk)
@@ -283,14 +290,13 @@ async fn run_git(worktree: &Path, args: &[&str], timeout: Duration) -> Result<St
             buf.extend_from_slice(&chunk[..n]);
         }
         Ok::<_, String>(())
-    })
-    .await;
+    }, timeout).await;
 
     let _ = child.kill().await;
     let status = child.wait().await.map_err(|e| format!("git wait failed: {e}"))?;
 
     match read_result {
-        Err(_) => {
+        Err(()) => {
             return Err(format!(
                 "git {:?} timed out after {} seconds",
                 args,
@@ -1501,22 +1507,15 @@ mod tests {
         );
     }
 
-    // FLAKY: tokio::time::timeout always polls the inner future first before
-    // checking the timer. On fast machines, `git log --all` on a 1-commit repo
-    // completes its read loop before the timer can fire — even with
-    // Duration::ZERO — making this test pass non-deterministically. Tracked T-183.
-    #[ignore = "tokio::time::timeout polls inner future first; race with fast git; T-183"]
     #[tokio::test]
     async fn run_git_respects_timeout() {
-        let temp = tempfile::tempdir().unwrap();
-        let repo = temp.path();
-        init_repo(repo);
+        let result = super::run_with_timeout(
+            std::future::pending::<()>(),
+            Duration::from_nanos(1),
+        )
+        .await;
 
-        let err = super::run_git(repo, &["log", "--all"], Duration::from_nanos(1))
-            .await
-            .unwrap_err();
-
-        assert!(err.contains("timed out"), "expected timeout error, got: {err}");
+        assert!(result.is_err(), "expected timeout");
     }
 
     #[tokio::test]
