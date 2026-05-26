@@ -201,6 +201,10 @@ function classifySpeech(activeSpeech: {
 }
 
 function classifyRuntimeEvent(event: BuddyRuntimeEvent): BuddyChatBubbleClass {
+  if (event.bubble_policy === "ambient") return "ambient";
+  if (event.bubble_policy === "durable") return "actionable";
+  if (event.bubble_policy === "event_once") return "event_once";
+
   if (
     isAmbientToken(event.signal_type) ||
     isAmbientToken(event.source) ||

@@ -1007,6 +1007,7 @@ export interface BuddyRuntimeEvent {
   priority: string;
   created_at: string;
   ttl_ms?: number | null;
+  bubble_policy?: "ambient" | "durable" | "event_once" | null;
   speech_text?: string | null;
   scene?: string | null;
   duration_hint?: number | null;

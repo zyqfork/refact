@@ -1381,6 +1381,124 @@ describe("Buddy chat notification freshness", () => {
       vi.useRealTimers();
     }
   });
+
+  test("explicit ambient runtime bubble policy wins when ambient ratio is low", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
+    try {
+      const store = setUpStore();
+      const actionableRuntime = makeChatRuntimeEvent({
+        id: "runtime-explicit-actionable",
+        title: "Actionable runtime",
+        created_at: "2024-01-01T00:00:00Z",
+      });
+      const ambientRuntime = makeChatRuntimeEvent({
+        id: "runtime-explicit-ambient",
+        signal_type: "ordinary_status",
+        title: "Explicit ambient runtime",
+        status: "completed",
+        priority: "normal",
+        controls: [],
+        bubble_policy: "ambient",
+        created_at: "2024-01-01T00:00:00Z",
+      });
+      store.dispatch(
+        setBuddySnapshot(
+          makeSnapshot({
+            runtime_queue: [actionableRuntime, ambientRuntime],
+          }),
+        ),
+      );
+      store.dispatch(
+        recordChatBubbleImpression({
+          id: "prior-actionable",
+          kind: "actionable",
+        }),
+      );
+
+      const { container } = renderBuddyChatCompanion(store, "chat-a");
+
+      await expectCompanionNotification(
+        container,
+        "runtime:runtime-explicit-ambient",
+      );
+      expectNoCompanionNotificationNow(
+        container,
+        "runtime:runtime-explicit-actionable",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("explicit event-once runtime bubble policy makes an old actionable event ineligible", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2024-01-01T00:02:00Z"));
+    try {
+      const store = setUpStore();
+      const oldActionableRuntime = makeChatRuntimeEvent({
+        id: "runtime-explicit-event-once-old",
+        title: "Old actionable runtime",
+        status: "failed",
+        priority: "high",
+        controls: [
+          {
+            id: "dismiss-old-explicit-event-once",
+            label: "Dismiss",
+            action: "dismiss_runtime_event",
+            action_param: "runtime-explicit-event-once-old",
+            style: "ghost",
+          },
+        ],
+        bubble_policy: "event_once",
+        created_at: "2024-01-01T00:00:00Z",
+      });
+      store.dispatch(
+        setBuddySnapshot(
+          makeSnapshot({ runtime_queue: [oldActionableRuntime] }),
+        ),
+      );
+
+      const { container } = renderBuddyChatCompanion(store, "chat-a");
+
+      await expectNoCompanionNotification(
+        container,
+        "runtime:runtime-explicit-event-once-old",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("explicit durable runtime bubble policy survives event-once freshness window", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2024-01-01T00:02:00Z"));
+    try {
+      const store = setUpStore();
+      const durableRuntime = makeChatRuntimeEvent({
+        id: "runtime-explicit-durable-old",
+        signal_type: "ordinary_status",
+        title: "Old durable runtime",
+        status: "completed",
+        priority: "normal",
+        controls: [],
+        bubble_policy: "durable",
+        created_at: "2024-01-01T00:00:00Z",
+      });
+      store.dispatch(
+        setBuddySnapshot(makeSnapshot({ runtime_queue: [durableRuntime] })),
+      );
+
+      const { container } = renderBuddyChatCompanion(store, "chat-a");
+
+      await expectCompanionNotification(
+        container,
+        "runtime:runtime-explicit-durable-old",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("buddySlice reducers", () => {
