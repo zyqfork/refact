@@ -2841,7 +2841,10 @@ fn buddy_pulse_default() {
 #[test]
 fn settings_default_observer_toggles() {
     let settings = BuddySettings::default();
-    assert!(settings.observers.chat_pattern);
+    assert!(
+        !settings.observers.chat_pattern,
+        "chat_pattern must default to false"
+    );
     assert!(settings.observers.task_health);
     assert!(settings.observers.trajectory_clutter);
     assert!(settings.observers.customization_drift);
