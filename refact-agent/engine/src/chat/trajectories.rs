@@ -2421,22 +2421,16 @@ fn apply_task_trajectory_context(path: &Path, task_roots: &[PathBuf], meta: &mut
     }
 }
 
-pub async fn handle_v1_trajectories_list(
-    State(app): State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<TrajectoriesListQuery>,
-) -> Result<Response<Body>, ScratchError> {
+pub async fn list_trajectories_page(
+    app: AppState,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<PaginatedTrajectories, String> {
     let gcx = app.gcx.clone();
-    let limit = params.limit.unwrap_or(50).min(200);
-    let cursor_filter = match &params.cursor {
-        Some(c) => {
-            let decoded = decode_cursor(c);
-            if decoded.is_none() {
-                return Err(ScratchError::new(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid cursor format".to_string(),
-                ));
-            }
-            decoded
+    let limit = limit.clamp(1, 200);
+    let cursor_filter = match cursor.as_deref() {
+        Some(cursor) => {
+            Some(decode_cursor(cursor).ok_or_else(|| "Invalid cursor format".to_string())?)
         }
         None => None,
     };
@@ -2509,12 +2503,21 @@ pub async fn handle_v1_trajectories_list(
         None
     };
 
-    let response = PaginatedTrajectories {
+    Ok(PaginatedTrajectories {
         items,
         next_cursor,
         has_more,
         total_count,
-    };
+    })
+}
+
+pub async fn handle_v1_trajectories_list(
+    State(app): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<TrajectoriesListQuery>,
+) -> Result<Response<Body>, ScratchError> {
+    let response = list_trajectories_page(app, params.limit.unwrap_or(50), params.cursor)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::BAD_REQUEST, e))?;
 
     let json = serde_json::to_string(&response).map_err(|e| {
         ScratchError::new(

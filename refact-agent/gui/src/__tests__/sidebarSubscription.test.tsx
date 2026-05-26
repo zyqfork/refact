@@ -254,6 +254,40 @@ describe("useSidebarSubscription", () => {
     expect(store.getState().history.loadError).toBeNull();
   });
 
+  it("accepts chat snapshot pagination metadata", async () => {
+    server.use(
+      sidebarHandler([
+        sectionSnapshot(0, "chats", {
+          trajectories: [],
+          pagination: {
+            next_cursor: "next-page",
+            has_more: true,
+            total_count: 51,
+          },
+        }),
+      ]),
+    );
+
+    const { events, disconnect } = subscribeForTest();
+
+    await waitFor(() => {
+      expect(events[0]?.event).toEqual({
+        type: "section_snapshot",
+        section: "chats",
+        status: "ready",
+        snapshot: {
+          trajectories: [],
+          pagination: {
+            next_cursor: "next-page",
+            has_more: true,
+            total_count: 51,
+          },
+        },
+      });
+    });
+    disconnect();
+  });
+
   it("heartbeat_event_does_not_trigger_invalidation", async () => {
     server.use(sidebarHandler([envelope(0, { type: "heartbeat" })]));
     const events: Parameters<SidebarSubscriptionCallbacks["onEvent"]>[0][] = [];
@@ -292,6 +326,28 @@ describe("useSidebarSubscription", () => {
         "sse_block_too_large",
       );
     });
+    disconnect();
+  });
+
+  it("allows one read chunk with multiple valid blocks over 1mib total", async () => {
+    const first = sectionSnapshot(0, "chats", {
+      trajectories: [{ id: "a", title: "A".repeat(600 * 1024) }],
+    });
+    const second = sectionSnapshot(1, "chats", {
+      trajectories: [{ id: "b", title: "B".repeat(600 * 1024) }],
+    });
+    server.use(
+      sidebarRawHandler([
+        `data: ${JSON.stringify(first)}\n\ndata: ${JSON.stringify(second)}\n\n`,
+      ]),
+    );
+
+    const { events, errors, disconnect } = subscribeForTest();
+
+    await waitFor(() => {
+      expect(events.map((event) => event.seq)).toEqual([0, 1]);
+    });
+    expect(errors).toEqual([]);
     disconnect();
   });
 

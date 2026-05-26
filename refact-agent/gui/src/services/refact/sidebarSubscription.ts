@@ -36,9 +36,15 @@ export type SidebarSection = "workspace" | "chats" | "tasks" | "buddy";
 export type SidebarSectionStatus = "ready" | "error";
 export type BuddySnapshotPayload = BuddySnapshot | null;
 
+export type SidebarPagination = {
+  next_cursor: string | null;
+  has_more: boolean;
+  total_count: number;
+};
+
 export type SidebarSectionSnapshot =
   | { workspace_roots: string[] }
-  | { trajectories: TrajectoryMeta[] }
+  | { trajectories: TrajectoryMeta[]; pagination?: SidebarPagination }
   | { tasks: TaskMeta[] }
   | { buddy: BuddySnapshotPayload };
 
@@ -162,6 +168,16 @@ function isValidSectionStatus(value: unknown): value is SidebarSectionStatus {
   return value === "ready" || value === "error";
 }
 
+function isValidSidebarPagination(value: unknown): value is SidebarPagination {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    (typeof obj.next_cursor === "string" || obj.next_cursor === null) &&
+    typeof obj.has_more === "boolean" &&
+    typeof obj.total_count === "number"
+  );
+}
+
 function isValidSectionSnapshot(
   section: SidebarSection,
   snapshot: unknown,
@@ -170,7 +186,12 @@ function isValidSectionSnapshot(
   const obj = snapshot as Record<string, unknown>;
 
   if (section === "workspace") return hasArrayProperty(obj, "workspace_roots");
-  if (section === "chats") return hasArrayProperty(obj, "trajectories");
+  if (section === "chats") {
+    return (
+      hasArrayProperty(obj, "trajectories") &&
+      (obj.pagination === undefined || isValidSidebarPagination(obj.pagination))
+    );
+  }
   if (section === "tasks") return hasArrayProperty(obj, "tasks");
   return "buddy" in obj;
 }
@@ -202,9 +223,7 @@ function toSeq(value: unknown): number | null {
   return value;
 }
 
-function getEnvelopeParts(
-  parsed: unknown,
-): {
+function getEnvelopeParts(parsed: unknown): {
   seq: number;
   subscriptionId: string;
   event: Record<string, unknown>;
@@ -453,16 +472,15 @@ export function subscribeToSidebarEvents(
             .replace(/\r\n/g, "\n")
             .replace(/\r/g, "\n");
 
-          if (buffer.length > MAX_SSE_BLOCK_BYTES) {
-            errorSidebarBlockTooLarge();
-            const blockTooLarge = new Error("sse_block_too_large");
-            callbacks.onError(blockTooLarge);
-            throw blockTooLarge;
-          }
-
           let idx = buffer.indexOf("\n\n");
           while (idx !== -1) {
             const block = buffer.slice(0, idx);
+            if (block.length > MAX_SSE_BLOCK_BYTES) {
+              errorSidebarBlockTooLarge();
+              const blockTooLarge = new Error("sse_block_too_large");
+              callbacks.onError(blockTooLarge);
+              throw blockTooLarge;
+            }
             buffer = buffer.slice(idx + 2);
             const dataStr = parseSseBlock(block);
             if (dataStr !== null) {
@@ -487,6 +505,13 @@ export function subscribeToSidebarEvents(
             }
             idx = buffer.indexOf("\n\n");
           }
+
+          if (buffer.length > MAX_SSE_BLOCK_BYTES) {
+            errorSidebarBlockTooLarge();
+            const blockTooLarge = new Error("sse_block_too_large");
+            callbacks.onError(blockTooLarge);
+            throw blockTooLarge;
+          }
         }
       } finally {
         await reader.cancel().catch(() => undefined);
@@ -496,7 +521,10 @@ export function subscribeToSidebarEvents(
     })
     .catch((err: unknown) => {
       const error = err as Error;
-      if (error.name !== "AbortError" && error.message !== "sse_block_too_large") {
+      if (
+        error.name !== "AbortError" &&
+        error.message !== "sse_block_too_large"
+      ) {
         callbacks.onError(error);
       }
       cleanup();

@@ -548,6 +548,12 @@ export const historySlice = createSlice({
         task_role?: string;
         agent_id?: string;
         card_id?: string;
+        total_prompt_tokens?: number;
+        total_completion_tokens?: number;
+        total_tokens?: number;
+        total_cache_read_tokens?: number;
+        total_cache_creation_tokens?: number;
+        total_cost_usd?: number;
       }>,
     ) => {
       if (!(action.payload.id in state.chats)) return;
@@ -611,6 +617,25 @@ export const historySlice = createSlice({
       }
       if (action.payload.card_id !== undefined) {
         chat.card_id = action.payload.card_id;
+      }
+      if (action.payload.total_prompt_tokens !== undefined) {
+        chat.total_prompt_tokens = action.payload.total_prompt_tokens;
+      }
+      if (action.payload.total_completion_tokens !== undefined) {
+        chat.total_completion_tokens = action.payload.total_completion_tokens;
+      }
+      if (action.payload.total_tokens !== undefined) {
+        chat.total_tokens = action.payload.total_tokens;
+      }
+      if (action.payload.total_cache_read_tokens !== undefined) {
+        chat.total_cache_read_tokens = action.payload.total_cache_read_tokens;
+      }
+      if (action.payload.total_cache_creation_tokens !== undefined) {
+        chat.total_cache_creation_tokens =
+          action.payload.total_cache_creation_tokens;
+      }
+      if (action.payload.total_cost_usd !== undefined) {
+        chat.total_cost_usd = action.payload.total_cost_usd;
       }
     },
 

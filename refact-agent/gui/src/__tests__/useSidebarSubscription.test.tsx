@@ -716,6 +716,34 @@ describe("useSidebarSubscription", () => {
     });
   });
 
+  it("applies chat snapshot pagination from the sidebar", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation((key) =>
+      key === "refact-trajectories-migrated" ? "true" : null,
+    );
+    server.use(
+      sidebarSnapshotHandler(
+        sectionSnapshot(0, "chats", {
+          trajectories: [],
+          pagination: {
+            next_cursor: "next-page",
+            has_more: true,
+            total_count: 51,
+          },
+        }),
+      ),
+    );
+
+    const store = renderSidebarSubscription();
+
+    await waitFor(() => {
+      expect(store.getState().history.pagination).toEqual({
+        cursor: "next-page",
+        hasMore: true,
+      });
+      expect(store.getState().history.isLoading).toBe(false);
+    });
+  });
+
   it("does not return to project loading when local IDE project info matches the server snapshot", async () => {
     server.use(
       sidebarSnapshotHandler(

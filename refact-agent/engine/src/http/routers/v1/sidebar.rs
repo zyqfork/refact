@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::app_state::AppState;
 use crate::global_context::GlobalContext;
 use crate::buddy::events::BuddyEvent;
-use crate::chat::{TrajectoryEvent, TrajectoryMeta, list_all_trajectories_meta};
+use crate::chat::{TrajectoryEvent, TrajectoryMeta, list_trajectories_page};
 use crate::custom_error::ScratchError;
 use crate::http::routers::v1::tasks::list_tasks_with_session_state;
 use crate::tasks::events::TaskEvent;
@@ -24,6 +24,7 @@ use crate::tasks::types::TaskMeta;
 const SIDEBAR_PROTOCOL_VERSION: u8 = 2;
 const SIDEBAR_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 const SIDEBAR_RETRY_DELAY: Duration = Duration::from_secs(5);
+const SIDEBAR_CHATS_PAGE_SIZE: usize = 50;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -71,10 +72,27 @@ pub enum SidebarSectionStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SidebarSectionSnapshot {
-    Workspace { workspace_roots: Vec<String> },
-    Chats { trajectories: Vec<TrajectoryMeta> },
-    Tasks { tasks: Vec<TaskMeta> },
-    Buddy { buddy: serde_json::Value },
+    Workspace {
+        workspace_roots: Vec<String>,
+    },
+    Chats {
+        trajectories: Vec<TrajectoryMeta>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pagination: Option<SidebarPagination>,
+    },
+    Tasks {
+        tasks: Vec<TaskMeta>,
+    },
+    Buddy {
+        buddy: serde_json::Value,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SidebarPagination {
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub total_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -123,6 +141,7 @@ enum InitialSidebarPart {
     },
     Chats {
         trajectories: Vec<TrajectoryMeta>,
+        pagination: Option<SidebarPagination>,
         status: SidebarSectionStatus,
         error: Option<String>,
     },
@@ -253,12 +272,16 @@ impl InitialSidebarPart {
             ),
             InitialSidebarPart::Chats {
                 trajectories,
+                pagination,
                 status,
                 error,
             } => section_snapshot_event(
                 SidebarSection::Chats,
                 status,
-                SidebarSectionSnapshot::Chats { trajectories },
+                SidebarSectionSnapshot::Chats {
+                    trajectories,
+                    pagination,
+                },
                 Some(elapsed_ms),
                 error,
             ),
@@ -305,19 +328,34 @@ async fn load_workspace_part(gcx: Arc<GlobalContext>) -> InitialSidebarPart {
 
 async fn load_chats_part(gcx: Arc<GlobalContext>) -> InitialSidebarPart {
     let app = crate::app_state::AppState::from_gcx(gcx).await;
-    match timeout(SIDEBAR_BOOTSTRAP_TIMEOUT, list_all_trajectories_meta(app)).await {
-        Ok(Ok(trajectories)) => InitialSidebarPart::Chats {
-            trajectories,
-            status: SidebarSectionStatus::Ready,
-            error: None,
-        },
+    match timeout(
+        SIDEBAR_BOOTSTRAP_TIMEOUT,
+        list_trajectories_page(app, SIDEBAR_CHATS_PAGE_SIZE, None),
+    )
+    .await
+    {
+        Ok(Ok(page)) => {
+            let pagination = SidebarPagination {
+                next_cursor: page.next_cursor,
+                has_more: page.has_more,
+                total_count: page.total_count,
+            };
+            InitialSidebarPart::Chats {
+                trajectories: page.items,
+                pagination: Some(pagination),
+                status: SidebarSectionStatus::Ready,
+                error: None,
+            }
+        }
         Ok(Err(error)) => InitialSidebarPart::Chats {
             trajectories: Vec::new(),
+            pagination: None,
             status: SidebarSectionStatus::Error,
             error: Some(error),
         },
         Err(_) => InitialSidebarPart::Chats {
             trajectories: Vec::new(),
+            pagination: None,
             status: SidebarSectionStatus::Error,
             error: Some("Timed out loading chats".to_string()),
         },
@@ -901,6 +939,7 @@ mod tests {
             },
             SidebarSection::Chats => InitialSidebarPart::Chats {
                 trajectories: Vec::new(),
+                pagination: None,
                 status,
                 error,
             },
@@ -969,6 +1008,7 @@ mod tests {
             SidebarSectionStatus::Error,
             SidebarSectionSnapshot::Chats {
                 trajectories: Vec::new(),
+                pagination: None,
             },
             None,
             Some("boom".to_string()),

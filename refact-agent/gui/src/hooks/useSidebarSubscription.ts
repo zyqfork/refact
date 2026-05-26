@@ -24,6 +24,7 @@ import {
   updateChatMetaById,
   setHistoryLoading,
   setHistoryLoadError,
+  setPagination,
 } from "../features/History/historySlice";
 import type { ChatHistoryItem } from "../features/History/historySlice";
 import {
@@ -182,6 +183,12 @@ function trajectoryItemsFromMeta(
     task_role: t.task_role,
     agent_id: t.agent_id,
     card_id: t.card_id,
+    total_prompt_tokens: t.total_prompt_tokens,
+    total_completion_tokens: t.total_completion_tokens,
+    total_tokens: t.total_tokens,
+    total_cache_read_tokens: t.total_cache_read_tokens,
+    total_cache_creation_tokens: t.total_cache_creation_tokens,
+    total_cost_usd: t.total_cost_usd,
   }));
 }
 
@@ -258,7 +265,13 @@ export function useSidebarSubscription() {
         event.task_id !== undefined ||
         event.task_role !== undefined ||
         event.agent_id !== undefined ||
-        event.card_id !== undefined;
+        event.card_id !== undefined ||
+        event.total_prompt_tokens !== undefined ||
+        event.total_completion_tokens !== undefined ||
+        event.total_tokens !== undefined ||
+        event.total_cache_read_tokens !== undefined ||
+        event.total_cache_creation_tokens !== undefined ||
+        event.total_cost_usd !== undefined;
 
       if (existsInHistory && hasMetaUpdate) {
         const metaPatch: Record<string, unknown> = { id: event.id };
@@ -295,6 +308,19 @@ export function useSidebarSubscription() {
           metaPatch.task_role = event.task_role;
         if (event.agent_id !== undefined) metaPatch.agent_id = event.agent_id;
         if (event.card_id !== undefined) metaPatch.card_id = event.card_id;
+        if (event.total_prompt_tokens !== undefined)
+          metaPatch.total_prompt_tokens = event.total_prompt_tokens;
+        if (event.total_completion_tokens !== undefined)
+          metaPatch.total_completion_tokens = event.total_completion_tokens;
+        if (event.total_tokens !== undefined)
+          metaPatch.total_tokens = event.total_tokens;
+        if (event.total_cache_read_tokens !== undefined)
+          metaPatch.total_cache_read_tokens = event.total_cache_read_tokens;
+        if (event.total_cache_creation_tokens !== undefined)
+          metaPatch.total_cache_creation_tokens =
+            event.total_cache_creation_tokens;
+        if (event.total_cost_usd !== undefined)
+          metaPatch.total_cost_usd = event.total_cost_usd;
         dispatch(
           updateChatMetaById(
             metaPatch as Parameters<typeof updateChatMetaById>[0],
@@ -351,13 +377,19 @@ export function useSidebarSubscription() {
               worktree: event.worktree,
               total_lines_added: event.total_lines_added ?? 0,
               total_lines_removed: event.total_lines_removed ?? 0,
-              tasks_total: 0,
-              tasks_done: 0,
-              tasks_failed: 0,
+              tasks_total: event.tasks_total ?? 0,
+              tasks_done: event.tasks_done ?? 0,
+              tasks_failed: event.tasks_failed ?? 0,
               task_id: event.task_id,
               task_role: event.task_role,
               agent_id: event.agent_id,
               card_id: event.card_id,
+              total_prompt_tokens: event.total_prompt_tokens,
+              total_completion_tokens: event.total_completion_tokens,
+              total_tokens: event.total_tokens,
+              total_cache_read_tokens: event.total_cache_read_tokens,
+              total_cache_creation_tokens: event.total_cache_creation_tokens,
+              total_cost_usd: event.total_cost_usd,
             },
           ]),
         );
@@ -491,9 +523,21 @@ export function useSidebarSubscription() {
   );
 
   const processTrajectoriesSnapshot = useCallback(
-    (trajectories: TrajectoryMeta[], error?: string) => {
+    (
+      trajectories: TrajectoryMeta[],
+      error?: string,
+      pagination?: { next_cursor: string | null; has_more: boolean },
+    ) => {
       if (trajectories.length > 0 || !error) {
         dispatch(replaceSnapshotHistory(trajectoryItemsFromMeta(trajectories)));
+        if (pagination) {
+          dispatch(
+            setPagination({
+              cursor: pagination.next_cursor,
+              hasMore: pagination.has_more,
+            }),
+          );
+        }
       }
       dispatch(setHistoryLoadError(error ?? null));
       dispatch(setHistoryLoading(false));
@@ -545,7 +589,8 @@ export function useSidebarSubscription() {
       ) {
         processTrajectoriesSnapshot(
           snapshot.trajectories,
-          status === "error" ? error ?? "Failed to load chats" : undefined,
+          status === "error" ? (error ?? "Failed to load chats") : undefined,
+          snapshot.pagination,
         );
       } else if (
         section === "tasks" &&
