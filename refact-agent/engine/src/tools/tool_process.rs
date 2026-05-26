@@ -714,7 +714,10 @@ impl Tool for ToolShellServiceAlias {
                 .command
                 .ok_or_else(|| "Command is required for start/restart action".to_string());
         }
-        Ok(format!("shell_service {} {}", parsed.action, parsed.service_name))
+        Ok(format!(
+            "shell_service {} {}",
+            parsed.action, parsed.service_name
+        ))
     }
 
     fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
@@ -1035,7 +1038,10 @@ fn process_start_args_from_shell_service(
         result.insert("startup_wait_port".to_string(), json!(startup_wait_port));
     }
     if let Some(startup_wait_keyword) = parsed.startup_wait_keyword.as_ref() {
-        result.insert("startup_wait_keyword".to_string(), json!(startup_wait_keyword));
+        result.insert(
+            "startup_wait_keyword".to_string(),
+            json!(startup_wait_keyword),
+        );
     }
     Ok(result)
 }
@@ -1323,7 +1329,6 @@ mod tests {
     use super::*;
     use crate::app_state::AppState;
     use crate::exec::{ExecProcessMeta, ExecStatusKind};
-
 
     async fn test_ccx() -> (Arc<GlobalContext>, Arc<AMutex<AtCommandsContext>>) {
         let gcx = crate::global_context::tests::make_test_gcx().await;
@@ -1869,7 +1874,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(matched.command, command);
-        assert_eq!(matched.result, crate::tools::tools_description::MatchConfirmDenyResult::CONFIRMATION);
+        assert_eq!(
+            matched.result,
+            crate::tools::tools_description::MatchConfirmDenyResult::CONFIRMATION
+        );
     }
 
     #[tokio::test]
@@ -1955,9 +1963,13 @@ mod tests {
         let mut list = ToolProcessList {
             config_path: String::new(),
         };
-        let message = run_tool(&mut list, ccx, make_args_map(vec![("status", json!("completed"))]))
-            .await
-            .unwrap();
+        let message = run_tool(
+            &mut list,
+            ccx,
+            make_args_map(vec![("status", json!("completed"))]),
+        )
+        .await
+        .unwrap();
         assert!(text(&message).contains(completed.meta.process_id.as_str()));
         assert!(!text(&message).contains(running.meta.process_id.as_str()));
         assert_eq!(exec(&message)["processes"][0]["status"], "exited");

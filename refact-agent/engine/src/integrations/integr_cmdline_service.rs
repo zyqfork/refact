@@ -11,8 +11,8 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::exec::{
     generate_short_description, sanitize_short_description, ExecMode, ExecOutputChunk,
-    ExecOutputStream, ExecOwnerMeta, ExecReadResult, ExecReadinessProbe,
-    ExecServiceLookup, ExecSpawnRequest, ExecStatus,
+    ExecOutputStream, ExecOwnerMeta, ExecReadResult, ExecReadinessProbe, ExecServiceLookup,
+    ExecSpawnRequest, ExecStatus,
 };
 #[cfg(test)]
 use crate::exec::ExecProcessId;
@@ -114,7 +114,8 @@ impl Tool for ToolService {
             }
             "restart" => {
                 if let Some(snapshot) =
-                    find_active_service(&exec_registry, &self.name, &chat_id, workspace.as_ref()).await
+                    find_active_service(&exec_registry, &self.name, &chat_id, workspace.as_ref())
+                        .await
                 {
                     let _ = exec_registry.kill(&snapshot.meta.process_id).await?;
                 }
@@ -132,21 +133,18 @@ impl Tool for ToolService {
                 .await?
             }
             "stop" => {
-                let snapshot = find_active_service(
-                    &exec_registry,
-                    &self.name,
-                    &chat_id,
-                    workspace.as_ref(),
-                )
-                .await
-                .ok_or_else(|| format!("Service '{}' is not running", self.name))?;
+                let snapshot =
+                    find_active_service(&exec_registry, &self.name, &chat_id, workspace.as_ref())
+                        .await
+                        .ok_or_else(|| format!("Service '{}' is not running", self.name))?;
                 let snapshot = exec_registry.kill(&snapshot.meta.process_id).await?;
                 format_service_snapshot("Service stopped", &snapshot)
             }
             "status" => {
-                let snapshot = find_service(&exec_registry, &self.name, &chat_id, workspace.as_ref())
-                    .await
-                    .ok_or_else(|| format!("Service '{}' is not running", self.name))?;
+                let snapshot =
+                    find_service(&exec_registry, &self.name, &chat_id, workspace.as_ref())
+                        .await
+                        .ok_or_else(|| format!("Service '{}' is not running", self.name))?;
                 let read = exec_registry.read(&snapshot.meta.process_id, 0, None).await;
                 let mut output = format_service_snapshot("Service status", &snapshot);
                 output.push_str(&format_service_logs(&read, &self.cfg.output_filter));
@@ -324,7 +322,10 @@ async fn start_service(
     Ok(output)
 }
 
-async fn resolve_workdir(gcx: Arc<GlobalContext>, workdir: &str) -> Result<Option<PathBuf>, String> {
+async fn resolve_workdir(
+    gcx: Arc<GlobalContext>,
+    workdir: &str,
+) -> Result<Option<PathBuf>, String> {
     if workdir.trim().is_empty() {
         return Ok(crate::files_correction::get_active_project_path(gcx).await);
     }

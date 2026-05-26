@@ -301,7 +301,9 @@ async fn wait_for_readiness(
                 ));
             }
         } else {
-            return Err(format!("process disappeared before startup readiness: {process_id}"));
+            return Err(format!(
+                "process disappeared before startup readiness: {process_id}"
+            ));
         }
         let read = registry.read(process_id, 0, None).await;
         if let Some(keyword) = readiness.wait_keyword.as_ref() {
@@ -411,10 +413,16 @@ impl ExecRegistry {
         }
         if let Some(readiness) = request.readiness.as_ref() {
             let startup_wait = startup_wait.unwrap_or(Duration::from_secs(10));
-            if let Err(message) = wait_for_readiness(self, &process_id, readiness, startup_wait).await
+            if let Err(message) =
+                wait_for_readiness(self, &process_id, readiness, startup_wait).await
             {
                 if let Ok(snapshot) = self
-                    .finish_with_status(&process_id, ExecStatus::Failed { message: message.clone() })
+                    .finish_with_status(
+                        &process_id,
+                        ExecStatus::Failed {
+                            message: message.clone(),
+                        },
+                    )
                     .await
                 {
                     return Ok(ExecSpawnResult { snapshot });
