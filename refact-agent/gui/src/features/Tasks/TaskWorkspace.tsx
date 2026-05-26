@@ -316,7 +316,16 @@ export const PlannerItem: React.FC<PlannerItemProps> = ({
       className={`${styles.panelItem} ${
         isSelected ? styles.panelItemSelected : ""
       }`}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open planner chat ${displayTitle}`}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
     >
       <Flex align="center" gap="1" className={styles.panelItemLead}>
         <Badge size="1" color="violet">

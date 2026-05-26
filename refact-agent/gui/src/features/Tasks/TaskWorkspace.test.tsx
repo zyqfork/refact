@@ -496,6 +496,29 @@ describe("PlannerItem waiting chips", () => {
       screen.queryByTestId(`planner-waiting-chips-${planner.id}`),
     ).not.toBeInTheDocument();
   });
+
+  it("pressing_enter_on_focused_planner_item_invokes_onSelect", async () => {
+    const planner = makePlanner();
+    const onSelect = vi.fn();
+
+    const { user } = render(
+      <PlannerItem
+        planner={planner}
+        isSelected={false}
+        onSelect={onSelect}
+        onRemove={vi.fn()}
+      />,
+      { preloadedState: makePreloadedState() },
+    );
+
+    const item = screen.getByRole("button", {
+      name: /Open planner chat/,
+    });
+    item.focus();
+    await user.keyboard("{Enter}");
+
+    expect(onSelect).toHaveBeenCalledOnce();
+  });
 });
 
 describe("TaskWorkspace worktree resolution", () => {
