@@ -604,6 +604,10 @@ data class DiffChunk(
     val linesRemove: String,
     @SerializedName("lines_add")
     val linesAdd: String,
+    @SerializedName("lines_before")
+    val linesBefore: String? = null,
+    @SerializedName("lines_after")
+    val linesAfter: String? = null,
     @SerializedName("file_name_rename")
     val fileNameRename: String? = null,
     @SerializedName("application_details")

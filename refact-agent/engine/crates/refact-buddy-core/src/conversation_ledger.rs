@@ -210,7 +210,16 @@ pub async fn list_all_buddy_conversations(
                 .unwrap_or("")
                 .to_string();
             if id.is_empty() {
-                warn!("buddy: conversation file missing chat_id: {:?}", path);
+                warn!(
+                    "buddy: deleting conversation file missing chat_id: {:?}",
+                    path
+                );
+                if let Err(err) = fs::remove_file(&path).await {
+                    warn!(
+                        "buddy: failed to delete conversation file {:?}: {}",
+                        path, err
+                    );
+                }
                 continue;
             }
             let kind = conversation_kind(&val);

@@ -149,6 +149,10 @@ pub struct DiffChunk {
     pub line2: usize,
     pub lines_remove: String,
     pub lines_add: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_after: Option<String>,
     #[serde(default)]
     pub file_name_rename: Option<String>,
     #[serde(default = "default_true", skip_serializing)]

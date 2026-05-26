@@ -378,6 +378,8 @@ impl Tool for ToolMv {
                 line2: src_file_content.lines().count(),
                 lines_remove: src_file_content.clone(),
                 lines_add: "".to_string(),
+                lines_before: None,
+                lines_after: None,
                 file_name_rename: Some(dst_corrected_path.clone()),
                 is_file: true,
                 application_details: format!(
@@ -399,6 +401,8 @@ impl Tool for ToolMv {
                     line2: dst_file_content.lines().count(),
                     lines_remove: dst_file_content.clone(),
                     lines_add: src_file_content.clone(),
+                    lines_before: None,
+                    lines_after: None,
                     file_name_rename: None,
                     is_file: true,
                     application_details: format!(

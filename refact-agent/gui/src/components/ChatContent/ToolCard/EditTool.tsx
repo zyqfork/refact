@@ -71,67 +71,238 @@ function isCreateTool(name: string | undefined): boolean {
   return name === "create_textdoc";
 }
 
-const DiffLine: React.FC<{
-  lineNumber?: number;
+function handleKeyboardClick(
+  event: React.KeyboardEvent,
+  action: () => void,
+): void {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  event.stopPropagation();
+  action();
+}
+
+const CONTEXT_LINES = 1;
+const MAX_VISIBLE_DIFF_LINES = 80;
+
+type DiffLineKind = "context" | "remove" | "add";
+
+type RenderedDiffLine = {
+  kind: DiffLineKind;
+  oldLineNumber?: number;
+  newLineNumber?: number;
   sign: string;
   line: string;
-}> = ({ lineNumber, sign, line }) => {
-  const isRemove = sign === "-";
-  const isAdd = sign === "+";
-  const rowClass = isRemove ? styles.remove : isAdd ? styles.add : "";
+};
+
+type RenderedDiffHunk = {
+  header: string;
+  lines: RenderedDiffLine[];
+};
+
+function displayLineNumber(line: RenderedDiffLine): number | undefined {
+  if (line.kind === "add") return line.newLineNumber;
+  if (line.kind === "context") {
+    if (line.oldLineNumber === undefined) return line.newLineNumber;
+    if (line.newLineNumber === undefined) return line.oldLineNumber;
+    return contextLineNumber(line.oldLineNumber, line.newLineNumber);
+  }
+  return line.oldLineNumber;
+}
+
+const DiffLine: React.FC<RenderedDiffLine> = (line) => {
+  const { kind, sign } = line;
+  const rowClass =
+    kind === "remove"
+      ? styles.remove
+      : kind === "add"
+        ? styles.add
+        : styles.context;
   return (
     <div className={`${styles.diffLine} ${rowClass}`}>
-      <span className={styles.lineNumber}>{lineNumber ?? ""}</span>
+      <span className={styles.lineNumber}>{displayLineNumber(line) ?? ""}</span>
       <span className={styles.sign}>{sign}</span>
-      <span className={styles.lineContent}>{line}</span>
+      <span className={styles.lineContent}>{line.line}</span>
     </div>
   );
 };
 
-function splitNonEmptyLines(text: string): string[] {
-  const lines: string[] = [];
-  let start = 0;
+function splitDiffLines(text: string): string[] {
+  if (!text) return [];
 
-  for (let i = 0; i <= text.length; i++) {
-    if (i !== text.length && text[i] !== "\n") continue;
-
-    if (i > start) {
-      lines.push(text.slice(start, i));
-    }
-    start = i + 1;
-  }
-
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+  if (normalized.endsWith("\n")) lines.pop();
   return lines;
 }
 
+function firstContextLine(text: string | null | undefined): string | null {
+  const lines = splitDiffLines(text ?? "");
+  return lines[0] ?? null;
+}
+
+function commonPrefixLength(left: string[], right: string[]): number {
+  const max = Math.min(left.length, right.length);
+  let count = 0;
+  while (count < max && left[count] === right[count]) count++;
+  return count;
+}
+
+function commonSuffixLength(
+  left: string[],
+  right: string[],
+  prefixLength: number,
+): number {
+  const max = Math.min(left.length, right.length) - prefixLength;
+  let count = 0;
+  while (
+    count < max &&
+    left[left.length - 1 - count] === right[right.length - 1 - count]
+  ) {
+    count++;
+  }
+  return count;
+}
+
+function lineSpan(start: number, count: number): string {
+  return count === 1 ? String(start) : `${start},${count}`;
+}
+
+function formatHunkHeader(
+  diff: DiffChunk,
+  oldLineCount: number,
+  newLineCount: number,
+): string {
+  return `@@ -${lineSpan(diff.line1, oldLineCount)} +${lineSpan(
+    diff.line2,
+    newLineCount,
+  )} @@`;
+}
+
+function contextLineNumber(
+  oldLineNumber: number,
+  newLineNumber: number,
+): number {
+  return oldLineNumber === newLineNumber ? oldLineNumber : newLineNumber;
+}
+
+function buildRenderedHunk(diff: DiffChunk): RenderedDiffHunk {
+  const removeLines = splitDiffLines(diff.lines_remove);
+  const addLines = splitDiffLines(diff.lines_add);
+  const prefixLength = commonPrefixLength(removeLines, addLines);
+  const suffixLength = commonSuffixLength(removeLines, addLines, prefixLength);
+  const lines: RenderedDiffLine[] = [];
+  const backendBeforeLine = firstContextLine(diff.lines_before);
+  if (backendBeforeLine !== null) {
+    lines.push({
+      kind: "context",
+      oldLineNumber: diff.line1 > 1 ? diff.line1 - 1 : undefined,
+      newLineNumber: diff.line2 > 1 ? diff.line2 - 1 : undefined,
+      sign: " ",
+      line: backendBeforeLine,
+    });
+  }
+
+  const inferredBeforeContextLines =
+    backendBeforeLine === null ? CONTEXT_LINES : 0;
+  const beforeContextStart = Math.max(
+    0,
+    prefixLength - inferredBeforeContextLines,
+  );
+  for (let i = beforeContextStart; i < prefixLength; i++) {
+    lines.push({
+      kind: "context",
+      oldLineNumber: diff.line1 + i,
+      newLineNumber: diff.line2 + i,
+      sign: " ",
+      line: removeLines[i],
+    });
+  }
+
+  const removeChangeEnd = removeLines.length - suffixLength;
+  for (let i = prefixLength; i < removeChangeEnd; i++) {
+    lines.push({
+      kind: "remove",
+      oldLineNumber: diff.line1 + i,
+      sign: "-",
+      line: removeLines[i],
+    });
+  }
+
+  const addChangeEnd = addLines.length - suffixLength;
+  for (let i = prefixLength; i < addChangeEnd; i++) {
+    lines.push({
+      kind: "add",
+      newLineNumber: diff.line2 + i,
+      sign: "+",
+      line: addLines[i],
+    });
+  }
+
+  const backendAfterLine = firstContextLine(diff.lines_after);
+  const suffixStart = removeLines.length - suffixLength;
+  const inferredAfterContextLines =
+    backendAfterLine === null ? CONTEXT_LINES : 0;
+  const afterContextEnd = Math.min(
+    removeLines.length,
+    suffixStart + inferredAfterContextLines,
+  );
+  for (let i = suffixStart; i < afterContextEnd; i++) {
+    lines.push({
+      kind: "context",
+      oldLineNumber: diff.line1 + i,
+      newLineNumber: diff.line2 + i,
+      sign: " ",
+      line: removeLines[i],
+    });
+  }
+
+  if (backendAfterLine !== null) {
+    lines.push({
+      kind: "context",
+      oldLineNumber: diff.line1 + removeLines.length,
+      newLineNumber: diff.line2 + addLines.length,
+      sign: " ",
+      line: backendAfterLine,
+    });
+  }
+
+  return {
+    header: formatHunkHeader(diff, removeLines.length, addLines.length),
+    lines,
+  };
+}
+
 const DiffBlock: React.FC<{ diff: DiffChunk }> = ({ diff }) => {
-  const removeLines = useMemo(
-    () => splitNonEmptyLines(diff.lines_remove),
-    [diff.lines_remove],
-  );
-  const addLines = useMemo(
-    () => splitNonEmptyLines(diff.lines_add),
-    [diff.lines_add],
-  );
+  const [showAll, setShowAll] = useState(false);
+  const hunk = useMemo(() => buildRenderedHunk(diff), [diff]);
+  const isLarge = hunk.lines.length > MAX_VISIBLE_DIFF_LINES;
+  const visibleLines = showAll
+    ? hunk.lines
+    : hunk.lines.slice(0, MAX_VISIBLE_DIFF_LINES);
+  const hiddenLineCount = Math.max(0, hunk.lines.length - visibleLines.length);
 
   return (
     <Box className={styles.diffBlock}>
-      {removeLines.map((line, i) => (
+      <div className={styles.hunkHeader}>{hunk.header}</div>
+      {visibleLines.map((line, i) => (
         <DiffLine
-          key={`remove-${i}`}
-          lineNumber={diff.line1 + i}
-          sign="-"
-          line={line}
+          key={`${line.kind}-${line.oldLineNumber ?? ""}-${
+            line.newLineNumber ?? ""
+          }-${i}`}
+          {...line}
         />
       ))}
-      {addLines.map((line, i) => (
-        <DiffLine
-          key={`add-${i}`}
-          lineNumber={diff.line2 + i}
-          sign="+"
-          line={line}
-        />
-      ))}
+      {isLarge && (
+        <button
+          type="button"
+          className={styles.showMoreButton}
+          onClick={() => setShowAll((prev) => !prev)}
+        >
+          {showAll
+            ? "Show fewer diff lines"
+            : `Show ${hiddenLineCount} more diff lines`}
+        </button>
+      )}
     </Box>
   );
 };
@@ -147,7 +318,7 @@ const FileEditItem: React.FC<FileEditItemProps> = ({
   diffs,
   onOpenFile,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true);
   const stats = useMemo(() => getDiffStats(diffs), [diffs]);
 
   const handleToggle = useCallback(() => {
@@ -162,6 +333,13 @@ const FileEditItem: React.FC<FileEditItemProps> = ({
     [onOpenFile],
   );
 
+  const handleHeaderKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      handleKeyboardClick(event, handleToggle);
+    },
+    [handleToggle],
+  );
+
   return (
     <div className={styles.fileItem}>
       <Flex
@@ -169,6 +347,10 @@ const FileEditItem: React.FC<FileEditItemProps> = ({
         align="center"
         gap="2"
         onClick={handleToggle}
+        onKeyDown={handleHeaderKeyDown}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isOpen}
       >
         <Text size="1" className={styles.filename} onClick={handleOpenClick}>
           {basename(fileName)}
@@ -200,7 +382,7 @@ export const EditTool: React.FC<EditToolProps> = ({
   isActiveTool = true,
 }) => {
   const storeKey = toolCall.id ? `tc:${toolCall.id}` : undefined;
-  const [isOpen, handleToggle] = useStoredOpen(storeKey);
+  const [isOpen, handleToggle] = useStoredOpen(storeKey, true);
   const { queryPathThenOpenFile, diffPasteBack, sendToolCallToIde } =
     useEventsBusForIDE();
   const [requestDryRun, dryRunResult] = toolsApi.useDryRunForEditToolMutation();
@@ -306,6 +488,15 @@ export const EditTool: React.FC<EditToolProps> = ({
     [queryPathThenOpenFile],
   );
 
+  const handleFileKeyDown = useCallback(
+    (event: React.KeyboardEvent, path: string) => {
+      handleKeyboardClick(event, () => {
+        void queryPathThenOpenFile({ file_path: path });
+      });
+    },
+    [queryPathThenOpenFile],
+  );
+
   const status: ToolStatus = useMemo(() => {
     if (
       maybeResult &&
@@ -341,6 +532,10 @@ export const EditTool: React.FC<EditToolProps> = ({
           <span
             className={styles.filename}
             onClick={(e) => handleFileClick(e, filePath)}
+            onKeyDown={(event) => handleFileKeyDown(event, filePath)}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open ${filePath}`}
           >
             {basename(filePath)}
           </span>
@@ -366,6 +561,7 @@ export const EditTool: React.FC<EditToolProps> = ({
     filePath,
     fileNames.length,
     handleFileClick,
+    handleFileKeyDown,
     stats.added,
     stats.removed,
   ]);

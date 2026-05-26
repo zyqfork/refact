@@ -246,6 +246,8 @@ export type DiffChunk = {
   line2: number;
   lines_remove: string;
   lines_add: string;
+  lines_before?: string | null;
+  lines_after?: string | null;
   file_name_rename?: string | null;
   application_details?: string;
 };

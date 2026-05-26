@@ -1741,6 +1741,8 @@ async fn test_ledger_skips_empty_chat_id() {
     let entries = super::conversation_ledger::list_all_buddy_conversations(root, None).await;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, "has_id");
+    assert!(!tokio::fs::try_exists(&bad_path).await.unwrap());
+    assert!(tokio::fs::try_exists(&good_path).await.unwrap());
 }
 
 #[test]

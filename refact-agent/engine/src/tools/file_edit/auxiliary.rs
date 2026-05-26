@@ -281,17 +281,29 @@ pub fn convert_edit_to_diffchunks(
     before: &String,
     after: &String,
 ) -> Result<Vec<DiffChunk>, String> {
+    let before_lines: Vec<&str> = before.lines().collect();
+    let after_lines: Vec<&str> = after.lines().collect();
     let diffs = diff::lines(before, after);
     let mut line_num = 0;
+    let mut old_line_num = 0;
+    let mut new_line_num = 0;
     let mut current_chunk_lines_remove = Vec::new();
     let mut current_chunk_lines_add = Vec::new();
     let mut current_chunk_line_nums = Vec::new();
+    let mut current_chunk_old_line_nums = Vec::new();
+    let mut current_chunk_new_line_nums = Vec::new();
     let mut current_chunk_is_plus = Vec::new();
     let mut diff_chunks = Vec::new();
+
+    let context_line = |lines: &[&str], index: usize| -> Option<String> {
+        lines.get(index).map(|line| format!("{}\n", line))
+    };
 
     let flush_changes = |lines_remove: &Vec<String>,
                          lines_add: &Vec<String>,
                          line_nums: &Vec<usize>,
+                         old_line_nums: &Vec<usize>,
+                         new_line_nums: &Vec<usize>,
                          is_plus: &Vec<bool>|
      -> Option<DiffChunk> {
         if lines_remove.is_empty() && lines_add.is_empty() {
@@ -301,7 +313,11 @@ pub fn convert_edit_to_diffchunks(
         let lines_remove = lines_remove.join("");
         let lines_add = lines_add.join("");
 
-        let line1 = line_nums.iter().min().map(|&x| x + 1).unwrap_or(1);
+        let min_line_index = line_nums.iter().min().copied().unwrap_or(0);
+        let line1 = min_line_index + 1;
+
+        let max_old_line_index = old_line_nums.iter().max().copied();
+        let max_new_line_index = new_line_nums.iter().max().copied();
 
         let line2 = line_nums
             .iter()
@@ -309,6 +325,17 @@ pub fn convert_edit_to_diffchunks(
             .map(|(&num, &is_plus)| if is_plus { num + 1 } else { num + 2 })
             .max()
             .unwrap_or(1);
+
+        let lines_before = old_line_nums
+            .iter()
+            .min()
+            .or_else(|| new_line_nums.iter().min())
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| context_line(&before_lines, index));
+        let after_context_index = max_new_line_index
+            .map(|index| index + 1)
+            .or_else(|| max_old_line_index.map(|index| index));
+        let lines_after = after_context_index.and_then(|index| context_line(&after_lines, index));
 
         Some(DiffChunk {
             file_name: path.to_string_lossy().to_string(),
@@ -318,6 +345,8 @@ pub fn convert_edit_to_diffchunks(
             line2,
             lines_remove,
             lines_add,
+            lines_before,
+            lines_after,
             ..Default::default()
         })
     };
@@ -327,19 +356,25 @@ pub fn convert_edit_to_diffchunks(
             diff::Result::Left(l) => {
                 current_chunk_lines_remove.push(format!("{}\n", l));
                 current_chunk_line_nums.push(line_num);
+                current_chunk_old_line_nums.push(old_line_num);
                 current_chunk_is_plus.push(false);
+                old_line_num += 1;
                 line_num += 1;
             }
             diff::Result::Right(r) => {
                 current_chunk_lines_add.push(format!("{}\n", r));
                 current_chunk_line_nums.push(line_num);
+                current_chunk_new_line_nums.push(new_line_num);
                 current_chunk_is_plus.push(true);
+                new_line_num += 1;
             }
             diff::Result::Both(_, _) => {
                 if let Some(chunk) = flush_changes(
                     &current_chunk_lines_remove,
                     &current_chunk_lines_add,
                     &current_chunk_line_nums,
+                    &current_chunk_old_line_nums,
+                    &current_chunk_new_line_nums,
                     &current_chunk_is_plus,
                 ) {
                     diff_chunks.push(chunk);
@@ -347,7 +382,11 @@ pub fn convert_edit_to_diffchunks(
                 current_chunk_lines_remove.clear();
                 current_chunk_lines_add.clear();
                 current_chunk_line_nums.clear();
+                current_chunk_old_line_nums.clear();
+                current_chunk_new_line_nums.clear();
                 current_chunk_is_plus.clear();
+                old_line_num += 1;
+                new_line_num += 1;
                 line_num += 1;
             }
         }
@@ -357,6 +396,8 @@ pub fn convert_edit_to_diffchunks(
         &current_chunk_lines_remove,
         &current_chunk_lines_add,
         &current_chunk_line_nums,
+        &current_chunk_old_line_nums,
+        &current_chunk_new_line_nums,
         &current_chunk_is_plus,
     ) {
         diff_chunks.push(chunk);
@@ -735,6 +776,35 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].lines_remove.contains("old"));
         assert!(chunks[0].lines_add.contains("new"));
+        assert_eq!(chunks[0].lines_before.as_deref(), Some("line1\n"));
+        assert_eq!(chunks[0].lines_after.as_deref(), Some("line3\n"));
+    }
+
+    #[test]
+    fn test_convert_edit_to_diffchunks_context_boundaries_and_insertions() {
+        let before = "first\nanchor\nlast\n";
+        let after = "first\nanchor\ninserted\nlast\n";
+        let chunks = convert_edit_to_diffchunks(
+            PathBuf::from("test.txt"),
+            &before.to_string(),
+            &after.to_string(),
+        )
+        .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].lines_before.as_deref(), Some("anchor\n"));
+        assert_eq!(chunks[0].lines_after.as_deref(), Some("last\n"));
+
+        let before = "old\nnext\n";
+        let after = "new\nnext\n";
+        let chunks = convert_edit_to_diffchunks(
+            PathBuf::from("test.txt"),
+            &before.to_string(),
+            &after.to_string(),
+        )
+        .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].lines_before, None);
+        assert_eq!(chunks[0].lines_after.as_deref(), Some("next\n"));
     }
 
     mod worktree_scope_tools {

@@ -347,6 +347,8 @@ impl Tool for ToolRm {
                     line2: file_content.lines().count(),
                     lines_remove: file_content.clone(),
                     lines_add: "".to_string(),
+                    lines_before: None,
+                    lines_after: None,
                     file_name_rename: None,
                     is_file: true,
                     application_details: format!("File `{}` removed", corrected_path),

@@ -202,6 +202,8 @@ class EventsTest {
                     "line2": 32,
                     "lines_remove": "old string\n",
                     "lines_add": "new string\n",
+                    "lines_before": "previous line\n",
+                    "lines_after": "next line\n",
                     "file_name_rename": null,
                     "application_details": ""
                 }
@@ -218,7 +220,18 @@ class EventsTest {
         val toolCallFn =  TextDocToolCall.UpdateTextDocToolCall.Function("update_textdoc", toolCallArgs)
         val toolCall = TextDocToolCall.UpdateTextDocToolCall("test_tool_call_id", toolCallFn)
         val chunks = listOf(
-            DiffChunk(path, "edit", 32, 32, oldStr + "\n", newStr + "\n", null, "")
+            DiffChunk(
+                path,
+                "edit",
+                32,
+                32,
+                oldStr + "\n",
+                newStr + "\n",
+                "previous line\n",
+                "next line\n",
+                null,
+                ""
+            )
         )
 
         val edit = ToolEditResult(oldStr+"\n", newStr+"\n", chunks)
