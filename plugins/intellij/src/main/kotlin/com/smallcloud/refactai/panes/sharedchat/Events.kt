@@ -18,7 +18,8 @@ class EventNames {
         OPEN_SETTINGS("ide/openSettings"),
         OPEN_HOTKEYS("ide/openHotKeys"), // Will this work?
         OPEN_FILE("ide/openFile"),
-        OPEN_CHAT_IN_TAB("ide/openChatInNewTab"), // Will this work?
+        OPEN_CHAT_IN_TAB("ide/openChatInNewTab"),
+        OPEN_CHAT_IN_BROWSER("ide/openChatInBrowser"),
         OPEN_EXTERNAL_URL("open_external_url"),
         FIM_READY("fim/ready"),
         FIM_REQUEST("fim/request"),
@@ -95,6 +96,7 @@ class Events {
                 // EventNames.FromChat.FIM_READY.value -> p2?.deserialize(payload, Fim.Ready::class.java)
                 EventNames.FromChat.FIM_REQUEST.value -> Fim.Request()
                 EventNames.FromChat.OPEN_HOTKEYS.value -> OpenHotKeys()
+                EventNames.FromChat.OPEN_CHAT_IN_BROWSER.value -> OpenChatInBrowser()
                 EventNames.FromChat.IS_CHAT_STREAMING.value -> {
                     IsChatStreaming(payload?.asBoolean ?: false)
                 }
@@ -329,6 +331,8 @@ class Events {
     class OpenSettings : FromChat(EventNames.FromChat.OPEN_SETTINGS, null)
 
     class OpenHotKeys : FromChat(EventNames.FromChat.OPEN_HOTKEYS, null)
+
+    class OpenChatInBrowser : FromChat(EventNames.FromChat.OPEN_CHAT_IN_BROWSER, null)
 
     data class DropdownStateChanged(val isOpen: Boolean) : FromChat(EventNames.FromChat.DROPDOWN_STATE_CHANGED, isOpen)
 

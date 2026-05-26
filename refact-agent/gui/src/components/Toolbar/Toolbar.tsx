@@ -142,7 +142,8 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   const { data: modesData } = useGetChatModesQuery(undefined);
   const { data: tasksList = [] } = useListTasksQuery(undefined);
 
-  const { openSettings, openHotKeys } = useEventsBusForIDE();
+  const { openSettings, openHotKeys, openChatInBrowser } =
+    useEventsBusForIDE();
   const [createTask] = useCreateTaskMutation();
 
   const [renameState, setRenameState] = useState<{
@@ -219,8 +220,14 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   }, [createTask, dispatch]);
 
   const onOpenChatInBrowser = useCallback(() => {
-    openUrl(`http://127.0.0.1:${lspPort}`);
-  }, [lspPort, openUrl]);
+    if (host !== "web") {
+      openChatInBrowser();
+      return;
+    }
+    if (lspPort > 0) {
+      openUrl(`http://127.0.0.1:${lspPort}`);
+    }
+  }, [host, lspPort, openChatInBrowser, openUrl]);
 
   const goToTab = useCallback(
     (tab: Tab) => {

@@ -282,6 +282,14 @@ class EventsTest {
     }
 
     @Test
+    fun parseOpenChatInBrowserMessage() {
+        val message = """{"type":"ide/openChatInBrowser"}"""
+        val result = Events.parse(message)
+        assertNotNull(result)
+        assertTrue(result is Events.OpenChatInBrowser)
+    }
+
+    @Test
     fun parseOpenFileMessage() {
         val message = """{"type":"ide/openFile","payload":{"file_path":"/home/mitya/.config/refact/customization.yaml","line":10}}"""
         val result = Events.parse(message)

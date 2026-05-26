@@ -29,6 +29,8 @@ export const ideOpenChatInNewTab = createAction<ChatThread>(
   "ide/openChatInNewTab",
 );
 
+export const ideOpenChatInBrowser = createAction("ide/openChatInBrowser");
+
 export const ideOpenFolderInNewWindow = createAction<{ path: string }>(
   "ide/openFolderInNewWindow",
 );
@@ -168,6 +170,11 @@ export const useEventsBusForIDE = () => {
     },
     [postMessage],
   );
+
+  const openChatInBrowser = useCallback(() => {
+    const action = ideOpenChatInBrowser();
+    postMessage(action);
+  }, [postMessage]);
 
   const openFolderInNewWindow = useCallback(
     (path: string) => {
@@ -310,6 +317,7 @@ export const useEventsBusForIDE = () => {
     openHotKeys,
     openFile,
     openChatInNewTab,
+    openChatInBrowser,
     openFolderInNewWindow,
     queryPathThenOpenFile,
     openCustomizationFile,

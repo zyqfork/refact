@@ -4,6 +4,7 @@ import * as chatTab from './chatTab';
 import * as statisticTab from './statisticTab';
 import * as usabilityHints from "./usabilityHints";
 import * as path from 'path';
+import { basename } from "path";
 import { v4 as uuidv4 } from "uuid";
 import { getKeyBindingForChat } from "./getKeybindings";
 import {
@@ -41,18 +42,12 @@ import {
     ideAskQuestions,
     ideSwitchToThread
 } from "refact-chat-js/dist/events";
-import { basename, join } from "path";
 import { diff_paste_back } from "./chatTab";
 import { execFile } from "child_process";
 import * as estate from './estate';
 import { animation_start } from "./interactiveDiff";
-import {existsSync} from "fs";
 
-
-type Handler = ((data: any) => void) | undefined;
-function composeHandlers(...eventHandlers: Handler[]) {
-    return (data: any) => eventHandlers.forEach(fn => fn && fn(data));
-}
+const OPEN_CHAT_IN_BROWSER_EVENT = "ide/openChatInBrowser";
 
 export type CurrentProjectInfoPayload = {
     name: string;
@@ -524,7 +519,22 @@ export class PanelWebview implements vscode.WebviewViewProvider {
         }
     }
 
-    private async handleEvents(e: unknown) {
+    private async openChatInBrowser() {
+        const panel = vscode.window.createWebviewPanel(
+            "refact-chat-browser",
+            "Refact.ai Chat",
+            vscode.ViewColumn.One,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [this.context.extensionUri],
+            }
+        );
+        panel.webview.html = await this.html_main_screen(panel.webview, undefined, true);
+        panel.webview.onDidReceiveMessage(this.handleEvents);
+    }
+
+    private async handleEvents(e: any) {
         console.log("sidebar event", e);
         if(!e || typeof e !== "object") {
             return;
@@ -545,6 +555,10 @@ export class PanelWebview implements vscode.WebviewViewProvider {
 
         if (isOpenExternalUrl(e)) {
             await vscode.env.openExternal(vscode.Uri.parse(e.payload.url));
+        }
+
+        if(e.type === OPEN_CHAT_IN_BROWSER_EVENT) {
+            return this.openChatInBrowser();
         }
 
         if(ideNewFileAction.match(e)) {
