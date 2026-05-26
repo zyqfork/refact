@@ -1012,7 +1012,7 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
   const showNotification = useCallback((message: string) => {
     setNotification(message);
     if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
-    notificationTimerRef.current = window.setTimeout(() => setNotification(null), 3000);
+    notificationTimerRef.current = setTimeout(() => setNotification(null), 3000);
   }, []);
 
   const handleNewPlanner = useCallback(() => {
@@ -1160,48 +1160,44 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
 
       if (parsed.type === "chat") {
         const chatId = parsed.id;
-        const card = board?.cards.find((c) => c.agent_chat_id === chatId);
 
-        let cardId = card?.id ?? "";
-        if (!cardId && chatId.startsWith("agent-")) {
-          // Format: agent-{card_id}-{uuid8}
-          // Parse from end to handle hyphenated card IDs like "T-1"
+        const planner = plannerChats.find((p) => p.id === chatId);
+        if (planner) {
+          dispatch(
+            setTaskActiveChat({
+              taskId,
+              activeChat: { type: "planner", chatId },
+            }),
+          );
+          return true;
+        }
+
+        const card = board?.cards.find((c) => c.agent_chat_id === chatId);
+        if (card) {
+          handleSelectAgent(card.id, chatId);
+          return true;
+        }
+
+        if (chatId.startsWith("agent-")) {
           const withoutPrefix = chatId.slice("agent-".length);
           const lastDashIdx = withoutPrefix.lastIndexOf("-");
           if (lastDashIdx > 0) {
-            cardId = withoutPrefix.slice(0, lastDashIdx);
+            const cardId = withoutPrefix.slice(0, lastDashIdx);
+            const legacyCard = board?.cards.find((c) => c.id === cardId);
+            if (legacyCard) {
+              handleSelectAgent(cardId, chatId);
+              return true;
+            }
           }
         }
 
-        const cardTitle = card?.title ?? `Card ${cardId}`;
-
-        dispatch(
-          createChatWithId({
-            id: chatId,
-            title: formatAgentChatTitle(cardId, cardTitle),
-            isTaskChat: true,
-            mode: "TASK_AGENT",
-            taskMeta: {
-              task_id: taskId,
-              role: "agents",
-              card_id: cardId,
-            },
-            model: task?.default_agent_model,
-          }),
-        );
-
-        dispatch(
-          setTaskActiveChat({
-            taskId,
-            activeChat: { type: "agent", cardId, chatId },
-          }),
-        );
+        showNotification(`Chat not found: ${chatId}`);
         return true;
       }
 
       return false;
     },
-    [board, taskId, dispatch, task?.default_agent_model],
+    [board, taskId, dispatch, plannerChats, handleSelectAgent, showNotification],
   );
 
   const handleToggleChatExpanded = useCallback(() => {
