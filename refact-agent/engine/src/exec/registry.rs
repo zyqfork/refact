@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 
 use crate::exec::transcript::ExecTranscript;
 use crate::exec::types::{
@@ -10,10 +10,22 @@ use crate::exec::types::{
     ExecProcessMeta, ExecProcessSnapshot, ExecReadResult, ExecServiceLookup, ExecStatus,
 };
 
+pub(crate) enum ExecProcessCommand {
+    Kill {
+        response: oneshot::Sender<Result<ExecProcessSnapshot, String>>,
+    },
+}
+
+pub(crate) struct ExecProcessRuntime {
+    pub control_tx: mpsc::Sender<ExecProcessCommand>,
+    pub terminal: Arc<Notify>,
+}
+
 struct ExecProcessRecord {
     snapshot: ExecProcessSnapshot,
     transcript: ExecTranscript,
     child: Option<tokio::process::Child>,
+    runtime: Option<ExecProcessRuntime>,
 }
 
 impl ExecProcessRecord {
@@ -23,6 +35,7 @@ impl ExecProcessRecord {
             snapshot: ExecProcessSnapshot::new(meta),
             transcript: ExecTranscript::new(process_id, transcript_limit_bytes),
             child: None,
+            runtime: None,
         }
     }
 
@@ -111,6 +124,19 @@ impl ExecRegistry {
         snapshot
     }
 
+    pub(crate) async fn attach_runtime(
+        &self,
+        process_id: &ExecProcessId,
+        runtime: ExecProcessRuntime,
+    ) -> Result<ExecProcessSnapshot, String> {
+        let mut records = self.records.lock().await;
+        let record = records
+            .get_mut(process_id)
+            .ok_or_else(|| format!("process not found: {process_id}"))?;
+        record.runtime = Some(runtime);
+        Ok(record.snapshot.clone())
+    }
+
     pub async fn get(&self, process_id: &ExecProcessId) -> Option<ExecProcessSnapshot> {
         let records = self.records.lock().await;
         records
@@ -180,7 +206,28 @@ impl ExecRegistry {
             .get_mut(process_id)
             .ok_or_else(|| format!("process not found: {process_id}"))?;
         record.set_status(status);
-        Ok(record.snapshot.clone())
+        let snapshot = record.snapshot.clone();
+        let terminal = if snapshot.status.is_terminal() {
+            record
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.terminal.clone())
+        } else {
+            None
+        };
+        drop(records);
+        if let Some(terminal) = terminal {
+            terminal.notify_waiters();
+        }
+        Ok(snapshot)
+    }
+
+    pub(crate) async fn complete_status(
+        &self,
+        process_id: &ExecProcessId,
+        status: ExecStatus,
+    ) -> Result<ExecProcessSnapshot, String> {
+        self.set_status(process_id, status).await
     }
 
     pub async fn mark_started(
@@ -222,9 +269,72 @@ impl ExecRegistry {
         self.set_status(process_id, ExecStatus::TimedOut).await
     }
 
+    pub async fn kill(&self, process_id: &ExecProcessId) -> Result<ExecProcessSnapshot, String> {
+        let control_tx = {
+            let records = self.records.lock().await;
+            let record = records
+                .get(process_id)
+                .ok_or_else(|| format!("process not found: {process_id}"))?;
+            if record.snapshot.status.is_terminal() {
+                return Ok(record.snapshot.clone());
+            }
+            record
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.control_tx.clone())
+                .ok_or_else(|| format!("process is not running: {process_id}"))?
+        };
+        let (response, rx) = oneshot::channel();
+        if control_tx
+            .send(ExecProcessCommand::Kill { response })
+            .await
+            .is_err()
+        {
+            return self.wait(process_id).await;
+        }
+        tokio::select! {
+            response = rx => match response {
+                Ok(result) => result,
+                Err(_) => self.wait(process_id).await,
+            },
+            result = self.wait(process_id) => result,
+        }
+    }
+
+    pub async fn wait(&self, process_id: &ExecProcessId) -> Result<ExecProcessSnapshot, String> {
+        loop {
+            let records = self.records.lock().await;
+            let record = records
+                .get(process_id)
+                .ok_or_else(|| format!("process not found: {process_id}"))?;
+            if record.snapshot.status.is_terminal() {
+                return Ok(record.snapshot.clone());
+            }
+            let terminal = record
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.terminal.clone())
+                .ok_or_else(|| format!("process is not running: {process_id}"))?;
+            let notified = terminal.notified();
+            drop(records);
+            notified.await;
+        }
+    }
+
     pub async fn remove(&self, process_id: &ExecProcessId) -> Option<ExecProcessSnapshot> {
-        let mut records = self.records.lock().await;
-        records.remove(process_id).map(|record| record.snapshot)
+        let (snapshot, terminal) = {
+            let mut records = self.records.lock().await;
+            records.remove(process_id).map(|record| {
+                (
+                    record.snapshot,
+                    record.runtime.map(|runtime| runtime.terminal),
+                )
+            })?
+        };
+        if let Some(terminal) = terminal {
+            terminal.notify_waiters();
+        }
+        Some(snapshot)
     }
 
     pub async fn remove_by_owner(&self, filter: ExecProcessFilter) -> Vec<ExecProcessSnapshot> {
@@ -240,10 +350,24 @@ impl ExecRegistry {
             })
             .map(|(process_id, _)| process_id.clone())
             .collect::<Vec<_>>();
-        process_ids
+        let removed = process_ids
             .into_iter()
-            .filter_map(|process_id| records.remove(&process_id).map(|record| record.snapshot))
-            .collect()
+            .filter_map(|process_id| {
+                records.remove(&process_id).map(|record| {
+                    (
+                        record.snapshot,
+                        record.runtime.map(|runtime| runtime.terminal),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(records);
+        for (_, terminal) in &removed {
+            if let Some(terminal) = terminal {
+                terminal.notify_waiters();
+            }
+        }
+        removed.into_iter().map(|(snapshot, _)| snapshot).collect()
     }
 
     pub async fn cleanup_shutdown(&self, timeout: Duration) -> ExecShutdownCleanupSummary {

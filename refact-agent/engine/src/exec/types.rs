@@ -1,9 +1,14 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const SHORT_DESC_MAX_LEN: usize = 80;
+pub const DEFAULT_EXEC_OUTPUT_LIMIT_BYTES: usize = 512 * 1024;
 
 pub(crate) fn current_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
@@ -107,6 +112,129 @@ pub struct ExecOutputChunk {
     pub stream: ExecOutputStream,
     pub text: String,
     pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecOutputLimits {
+    pub transcript_max_bytes: usize,
+}
+
+impl Default for ExecOutputLimits {
+    fn default() -> Self {
+        Self {
+            transcript_max_bytes: DEFAULT_EXEC_OUTPUT_LIMIT_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecReadinessProbe {
+    pub wait_keyword: Option<String>,
+    pub wait_port: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecSpawnRequest {
+    pub command: String,
+    pub cwd: Option<PathBuf>,
+    pub env: HashMap<String, String>,
+    pub mode: ExecMode,
+    pub timeout: Option<Duration>,
+    pub startup_wait: Option<Duration>,
+    pub readiness: Option<ExecReadinessProbe>,
+    pub owner: ExecOwnerMeta,
+    pub output_limits: ExecOutputLimits,
+    pub short_description: Option<String>,
+    pub abort_flag: Option<Arc<AtomicBool>>,
+}
+
+impl ExecSpawnRequest {
+    pub fn new(mode: ExecMode, command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            cwd: None,
+            env: HashMap::new(),
+            mode,
+            timeout: None,
+            startup_wait: None,
+            readiness: None,
+            owner: ExecOwnerMeta::default(),
+            output_limits: ExecOutputLimits::default(),
+            short_description: None,
+            abort_flag: None,
+        }
+    }
+
+    pub fn foreground(command: impl Into<String>) -> Self {
+        Self::new(ExecMode::Foreground, command)
+    }
+
+    pub fn background(command: impl Into<String>) -> Self {
+        Self::new(ExecMode::Background, command)
+    }
+
+    pub fn service(command: impl Into<String>) -> Self {
+        Self::new(ExecMode::Service, command)
+    }
+
+    pub fn interactive(command: impl Into<String>) -> Self {
+        Self::new(ExecMode::Interactive, command)
+    }
+
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn with_env_map(mut self, env: HashMap<String, String>) -> Self {
+        self.env = env;
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_startup_wait(mut self, startup_wait: Duration) -> Self {
+        self.startup_wait = Some(startup_wait);
+        self
+    }
+
+    pub fn with_readiness(mut self, readiness: ExecReadinessProbe) -> Self {
+        self.readiness = Some(readiness);
+        self
+    }
+
+    pub fn with_owner(mut self, owner: ExecOwnerMeta) -> Self {
+        self.owner = owner;
+        self
+    }
+
+    pub fn with_output_limits(mut self, output_limits: ExecOutputLimits) -> Self {
+        self.output_limits = output_limits;
+        self
+    }
+
+    pub fn with_transcript_limit(mut self, transcript_max_bytes: usize) -> Self {
+        self.output_limits.transcript_max_bytes = transcript_max_bytes;
+        self
+    }
+
+    pub fn with_short_description(mut self, short_description: impl Into<String>) -> Self {
+        self.short_description = Some(short_description.into());
+        self
+    }
+
+    pub fn with_abort_flag(mut self, abort_flag: Arc<AtomicBool>) -> Self {
+        self.abort_flag = Some(abort_flag);
+        self
+    }
 }
 
 pub fn sanitize_short_description(s: &str) -> String {
