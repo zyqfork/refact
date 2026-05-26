@@ -1,30 +1,30 @@
-use std::any::Any;
 use std::collections::HashMap;
-use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::process::Stdio;
-use tokio::io::BufReader;
-use tokio::sync::Mutex as AMutex;
+use std::time::Duration;
+
 use async_trait::async_trait;
-use process_wrap::tokio::*;
+use serde_json::{json, Value};
+use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
-use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
-use serde_json::json;
-use crate::call_validation::{ChatMessage, ChatContent, ContextEnum};
+use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
+use crate::exec::{
+    generate_short_description, sanitize_short_description, ExecMode, ExecOutputChunk,
+    ExecOutputStream, ExecOwnerMeta, ExecReadResult, ExecReadinessProbe,
+    ExecServiceLookup, ExecSpawnRequest, ExecStatus,
+};
+#[cfg(test)]
+use crate::exec::ExecProcessId;
 use crate::global_context::GlobalContext;
-use crate::postprocessing::pp_command_output::output_mini_postprocessing;
-use crate::integrations::process_io_utils::{
-    blocking_read_until_token_or_timeout, is_someone_listening_on_that_tcp_port,
-};
-use crate::integrations::sessions::IntegrationSession;
 use crate::integrations::integr_abstract::{
-    IntegrationTrait, IntegrationCommon, IntegrationConfirmation,
+    IntegrationCommon, IntegrationConfirmation, IntegrationTrait,
 };
-use crate::integrations::integr_cmdline::*;
-use crate::custom_error::YamlError;
+use crate::integrations::integr_cmdline::{format_output, replace_args, CmdlineToolConfig};
+use crate::postprocessing::pp_command_output::{output_mini_postprocessing, OutputFilter};
+use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 
-const REALLY_HORRIBLE_ROUNDTRIP: u64 = 3000; // 3000 should be a really bad ping via internet, just in rare case it's a remote port
+const SERVICE_TRANSCRIPT_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct ToolService {
@@ -56,10 +56,7 @@ impl IntegrationTrait for ToolService {
         self.common.clone()
     }
 
-    async fn integr_tools(
-        &self,
-        integr_name: &str,
-    ) -> Vec<Box<dyn crate::tools::tools_description::Tool + Send>> {
+    async fn integr_tools(&self, integr_name: &str) -> Vec<Box<dyn Tool + Send>> {
         vec![Box::new(ToolService {
             common: self.common.clone(),
             name: integr_name.to_string(),
@@ -73,345 +70,101 @@ impl IntegrationTrait for ToolService {
     }
 }
 
-pub struct CmdlineSession {
-    cmdline_string: String,
-    cmdline_workdir: String,
-    cmdline_process: Box<dyn TokioChildWrapper>,
-    cmdline_stdout: BufReader<tokio::process::ChildStdout>,
-    cmdline_stderr: BufReader<tokio::process::ChildStderr>,
-    service_name: String,
-}
-
-impl IntegrationSession for CmdlineSession {
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn is_expired(&self) -> bool {
-        false
-    }
-
-    fn try_stop(
-        &mut self,
-        self_arc: Arc<AMutex<Box<dyn IntegrationSession>>>,
-    ) -> Box<dyn Future<Output = String> + Send> {
-        Box::new(async move {
-            let mut session_locked = self_arc.lock().await;
-            let session = session_locked
-                .as_any_mut()
-                .downcast_mut::<CmdlineSession>()
-                .unwrap();
-            _stop_locked(session).await
-        })
-    }
-}
-
-async fn _stop_locked(sess: &mut CmdlineSession) -> String {
-    tracing::info!(
-        "SERVICE STOP workdir {}:\n{:?}",
-        sess.cmdline_workdir,
-        sess.cmdline_string
-    );
-    let t0 = tokio::time::Instant::now();
-    match Box::into_pin(sess.cmdline_process.kill()).await {
-        Ok(_) => {
-            format!(
-                "Success, it took {:.3}s to stop it.\n\n",
-                t0.elapsed().as_secs_f64()
-            )
-        }
-        Err(e) => {
-            tracing::warn!(
-                "Failed to kill service '{}'. Error: {}. Assuming process died on its own.",
-                sess.service_name,
-                e
-            );
-            format!("Failed to kill service. Error: {}.\nAssuming process died on its own, let's continue.\n\n", e)
-        }
-    }
-}
-
-async fn get_stdout_and_stderr(
-    timeout_ms: u64,
-    stdout: &mut BufReader<tokio::process::ChildStdout>,
-    stderr: &mut BufReader<tokio::process::ChildStderr>,
-) -> Result<(String, String), String> {
-    let (stdout_out, stderr_out, _) =
-        blocking_read_until_token_or_timeout(stdout, stderr, timeout_ms, "").await?;
-    Ok((stdout_out, stderr_out))
-}
-
-async fn execute_background_command(
-    gcx: Arc<GlobalContext>,
-    service_name: &str,
-    command_str: &str,
-    cmdline_workdir: &String,
-    cfg: &CmdlineToolConfig,
-    action: &str,
-    env_variables: &HashMap<String, String>,
-) -> Result<String, String> {
-    let session_key = format!("custom_service_{service_name}");
-    let integration_sessions = gcx.integration_sessions.clone();
-    let mut session_mb = {
-        let integration_sessions = integration_sessions.lock().await;
-        integration_sessions.get(&session_key).cloned()
-    };
-    let command_str = command_str.to_string();
-    let mut actions_log = String::new();
-
-    if session_mb.is_some() {
-        let session_arc = session_mb.clone().unwrap();
-        let mut session_locked = session_arc.lock().await;
-        let session = session_locked
-            .as_any_mut()
-            .downcast_mut::<CmdlineSession>()
-            .unwrap();
-        actions_log.push_str(&format!(
-            "Currently the service is running.\nworkdir: {}\ncommand line: {}\n\n",
-            session.cmdline_workdir, session.cmdline_string
-        ));
-        let (stdout_out, stderr_out) = get_stdout_and_stderr(
-            100,
-            &mut session.cmdline_stdout,
-            &mut session.cmdline_stderr,
-        )
-        .await?;
-        let filtered_stdout = output_mini_postprocessing(&cfg.output_filter, &stdout_out);
-        let filtered_stderr = output_mini_postprocessing(&cfg.output_filter, &stderr_out);
-        actions_log.push_str(&format!(
-            "Here are stdin/stderr since the last checking out on the service:\n{}\n\n",
-            format_output(&filtered_stdout, &filtered_stderr)
-        ));
-    } else {
-        actions_log.push_str(&format!("Service is currently not running\n"));
-    }
-
-    if session_mb.is_some() && (action == "restart" || action == "stop") {
-        let session_arc = session_mb.clone().unwrap();
-        {
-            let mut session_locked = session_arc.lock().await;
-            let mut session = session_locked
-                .as_any_mut()
-                .downcast_mut::<CmdlineSession>()
-                .unwrap();
-            actions_log.push_str(&format!("Stopping it...\n"));
-            let stop_msg = _stop_locked(&mut session).await;
-            actions_log.push_str(&stop_msg);
-        }
-        integration_sessions.lock().await.remove(&session_key);
-        session_mb = None;
-    }
-
-    if session_mb.is_none() && (action == "restart" || action == "start") {
-        let mut port_already_open = false;
-        if let Some(wait_port) = cfg.startup_wait_port {
-            port_already_open = is_someone_listening_on_that_tcp_port(
-                wait_port,
-                tokio::time::Duration::from_millis(REALLY_HORRIBLE_ROUNDTRIP),
-            )
-            .await;
-            if port_already_open {
-                actions_log.push_str(&format!(
-                    "This service startup sequence requires to wait until a TCP port gets occupied, but this port {} is already busy even before the service start is attempted. Not good, but let's try to run it anyway.\n\n",
-                    wait_port,
-                ));
-            }
-        }
-        tracing::info!(
-            "SERVICE START workdir {}:\n{:?}",
-            cmdline_workdir,
-            command_str
-        );
-        actions_log.push_str(&format!(
-            "Starting service with the following command line:\n{}\n",
-            command_str
-        ));
-        let project_dirs = crate::files_correction::get_project_dirs(gcx.clone()).await;
-
-        let mut command =
-            create_command_from_string(&command_str, cmdline_workdir, env_variables, project_dirs)?;
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-        let mut command_wrap = TokioCommandWrap::from(command);
-        #[cfg(unix)]
-        command_wrap.wrap(ProcessGroup::leader());
-        #[cfg(windows)]
-        command_wrap.wrap(JobObject);
-        let mut process = command_wrap
-            .spawn()
-            .map_err(|e| format!("failed to create process: {e}"))?;
-
-        let mut stdout_reader =
-            BufReader::new(process.stdout().take().ok_or("Failed to open stdout")?);
-        let mut stderr_reader =
-            BufReader::new(process.stderr().take().ok_or("Failed to open stderr")?);
-
-        let t0 = tokio::time::Instant::now();
-
-        let mut accumulated_stdout = String::new();
-        let mut accumulated_stderr = String::new();
-        let mut exit_code: i32 = -100000;
-
-        loop {
-            if t0.elapsed()
-                >= tokio::time::Duration::from_secs(
-                    cfg.startup_wait.to_string().parse::<u64>().unwrap_or(10),
-                )
-            {
-                actions_log.push_str(&format!(
-                    "Timeout {:.2}s reached while waiting for the service to start.\n\n",
-                    t0.elapsed().as_secs_f64()
-                ));
-                break;
-            }
-
-            let (stdout_out, stderr_out) =
-                get_stdout_and_stderr(100, &mut stdout_reader, &mut stderr_reader).await?;
-            accumulated_stdout.push_str(&stdout_out);
-            accumulated_stderr.push_str(&stderr_out);
-
-            if !cfg.startup_wait_keyword.is_empty() {
-                if accumulated_stdout.contains(&cfg.startup_wait_keyword)
-                    || accumulated_stderr.contains(&cfg.startup_wait_keyword)
-                {
-                    actions_log.push_str(&format!(
-                        "Startup keyword '{}' found in output, success!\n\n",
-                        cfg.startup_wait_keyword
-                    ));
-                    break;
-                }
-            }
-
-            let exit_status = process.try_wait().map_err(|e| e.to_string())?;
-            if let Some(status) = exit_status {
-                exit_code = status.code().unwrap_or(-1);
-                actions_log.push_str(&format!("Service process exited prematurely with exit code: {}\nService did not start.\n\n", exit_code));
-                break;
-            }
-
-            if let Some(wait_port) = cfg.startup_wait_port {
-                match is_someone_listening_on_that_tcp_port(
-                    wait_port,
-                    tokio::time::Duration::from_millis(REALLY_HORRIBLE_ROUNDTRIP),
-                )
-                .await
-                {
-                    true => {
-                        if !port_already_open {
-                            actions_log
-                                .push_str(&format!("Port {} is now busy, success!\n", wait_port));
-                            break;
-                        }
-                    }
-                    false => {
-                        if port_already_open {
-                            port_already_open = false;
-                            actions_log.push_str(&format!("Port {} is now free\n", wait_port));
-                        }
-                    }
-                }
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        }
-
-        let filtered_stdout = output_mini_postprocessing(&cfg.output_filter, &accumulated_stdout);
-        let filtered_stderr = output_mini_postprocessing(&cfg.output_filter, &accumulated_stderr);
-        let out = format_output(&filtered_stdout, &filtered_stderr);
-        actions_log.push_str(&out);
-
-        if exit_code == -100000 {
-            let session: Box<dyn IntegrationSession> = Box::new(CmdlineSession {
-                cmdline_process: process,
-                cmdline_string: command_str,
-                cmdline_workdir: cmdline_workdir.clone(),
-                cmdline_stdout: stdout_reader,
-                cmdline_stderr: stderr_reader,
-                service_name: service_name.to_string(),
-            });
-            integration_sessions
-                .lock()
-                .await
-                .insert(session_key.to_string(), Arc::new(AMutex::new(session)));
-        }
-
-        tracing::info!("SERVICE START LOG:\n{}", actions_log);
-    }
-
-    Ok(actions_log)
-}
-
 #[async_trait]
 impl Tool for ToolService {
     async fn tool_execute(
         &mut self,
         ccx: Arc<AMutex<AtCommandsContext>>,
         tool_call_id: &String,
-        args: &HashMap<String, serde_json::Value>,
+        args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let gcx = ccx.lock().await.global_context.clone();
-        let mut args_str: HashMap<String, String> = HashMap::new();
-
-        for (k, v) in args.iter() {
-            match v {
-                serde_json::Value::String(s) => {
-                    args_str.insert(k.clone(), s.clone());
-                }
-                _ => return Err(format!("argument `{}` is not a string: {:?}", k, v)),
-            }
-        }
-
-        for param in &self.cfg.parameters {
-            if self
-                .cfg
-                .parameters_required
-                .as_ref()
-                .map_or(false, |req| req.contains(&param.name))
-                && !args_str.contains_key(&param.name)
-            {
-                return Err(format!("Missing required argument `{}`", param.name));
-            }
-        }
-
+        let args_str = parse_service_tool_args(args, &self.cfg)?;
         let command = replace_args(self.cfg.command.as_str(), &args_str);
         let workdir = replace_args(self.cfg.command_workdir.as_str(), &args_str);
-        let mut error_log = Vec::<YamlError>::new();
-        let env_variables =
-            crate::integrations::setting_up_integrations::get_vars_for_replacements(
-                gcx.clone(),
-                &mut error_log,
+        let action = args_str
+            .get("action")
+            .cloned()
+            .unwrap_or_else(|| "start".to_string());
+        if !["start", "restart", "stop", "status"].contains(&action.as_str()) {
+            return Err("Tool call is invalid. Param 'action' must be one of 'start', 'restart', 'stop', 'status'. Try again".to_string());
+        }
+        let (gcx, exec_registry, chat_id) = {
+            let ccx_lock = ccx.lock().await;
+            (
+                ccx_lock.app.gcx.clone(),
+                ccx_lock.app.runtime.exec_registry.clone(),
+                ccx_lock.chat_id.clone(),
             )
-            .await;
-
-        let tool_ouput = {
-            let action = args_str
-                .get("action")
-                .cloned()
-                .unwrap_or("start".to_string());
-            if !["start", "restart", "stop", "status"].contains(&action.as_str()) {
-                return Err("Tool call is invalid. Param 'action' must be one of 'start', 'restart', 'stop', 'status'. Try again".to_string());
-            }
-            execute_background_command(
-                gcx,
-                &self.name,
-                &command,
-                &workdir,
-                &self.cfg,
-                action.as_str(),
-                &env_variables,
-            )
-            .await?
         };
-
-        let result = vec![ContextEnum::ChatMessage(ChatMessage {
-            role: "tool".to_string(),
-            content: ChatContent::SimpleText(tool_ouput),
-            tool_calls: None,
-            tool_call_id: tool_call_id.clone(),
-            ..Default::default()
-        })];
-
-        Ok((false, result))
+        let workspace = crate::files_correction::get_active_project_path(gcx.clone()).await;
+        let output = match action.as_str() {
+            "start" => {
+                start_service(
+                    gcx,
+                    &exec_registry,
+                    &self.name,
+                    tool_call_id,
+                    &chat_id,
+                    workspace,
+                    &command,
+                    &workdir,
+                    &self.cfg,
+                )
+                .await?
+            }
+            "restart" => {
+                if let Some(snapshot) =
+                    find_active_service(&exec_registry, &self.name, &chat_id, workspace.as_ref()).await
+                {
+                    let _ = exec_registry.kill(&snapshot.meta.process_id).await?;
+                }
+                start_service(
+                    gcx,
+                    &exec_registry,
+                    &self.name,
+                    tool_call_id,
+                    &chat_id,
+                    workspace,
+                    &command,
+                    &workdir,
+                    &self.cfg,
+                )
+                .await?
+            }
+            "stop" => {
+                let snapshot = find_active_service(
+                    &exec_registry,
+                    &self.name,
+                    &chat_id,
+                    workspace.as_ref(),
+                )
+                .await
+                .ok_or_else(|| format!("Service '{}' is not running", self.name))?;
+                let snapshot = exec_registry.kill(&snapshot.meta.process_id).await?;
+                format_service_snapshot("Service stopped", &snapshot)
+            }
+            "status" => {
+                let snapshot = find_service(&exec_registry, &self.name, &chat_id, workspace.as_ref())
+                    .await
+                    .ok_or_else(|| format!("Service '{}' is not running", self.name))?;
+                let read = exec_registry.read(&snapshot.meta.process_id, 0, None).await;
+                let mut output = format_service_snapshot("Service status", &snapshot);
+                output.push_str(&format_service_logs(&read, &self.cfg.output_filter));
+                output
+            }
+            _ => return Err(format!("Unknown action: {action}")),
+        };
+        Ok((
+            false,
+            vec![ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(output),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                output_filter: Some(OutputFilter::no_limits()),
+                ..Default::default()
+            })],
+        ))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {
@@ -462,6 +215,15 @@ impl Tool for ToolService {
         }
     }
 
+    async fn command_to_match_against_confirm_deny(
+        &self,
+        _ccx: Arc<AMutex<AtCommandsContext>>,
+        args: &HashMap<String, Value>,
+    ) -> Result<String, String> {
+        let args_str = parse_service_tool_args(args, &self.cfg)?;
+        Ok(replace_args(self.cfg.command.as_str(), &args_str))
+    }
+
     fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
         Some(self.integr_common().confirmation)
     }
@@ -469,6 +231,224 @@ impl Tool for ToolService {
     fn has_config_path(&self) -> Option<String> {
         Some(self.config_path.clone())
     }
+}
+
+fn parse_service_tool_args(
+    args: &HashMap<String, Value>,
+    cfg: &CmdlineToolConfig,
+) -> Result<HashMap<String, String>, String> {
+    let mut args_str = HashMap::new();
+    for (key, value) in args {
+        match value {
+            Value::String(s) => {
+                args_str.insert(key.clone(), s.clone());
+            }
+            _ => return Err(format!("argument `{key}` is not a string: {value:?}")),
+        }
+    }
+    for param in &cfg.parameters {
+        if cfg
+            .parameters_required
+            .as_ref()
+            .map_or(false, |required| required.contains(&param.name))
+            && !args_str.contains_key(&param.name)
+        {
+            return Err(format!("Missing required argument `{}`", param.name));
+        }
+    }
+    Ok(args_str)
+}
+
+async fn start_service(
+    gcx: Arc<GlobalContext>,
+    exec_registry: &crate::exec::ExecRegistry,
+    service_name: &str,
+    tool_call_id: &str,
+    chat_id: &str,
+    workspace: Option<PathBuf>,
+    command: &str,
+    workdir: &str,
+    cfg: &CmdlineToolConfig,
+) -> Result<String, String> {
+    if let Some(snapshot) =
+        find_active_service(exec_registry, service_name, chat_id, workspace.as_ref()).await
+    {
+        return Err(format!(
+            "Service '{}' is already running as {}. Use stop or process_kill first.",
+            service_name, snapshot.meta.process_id
+        ));
+    }
+    let mut error_log = Vec::new();
+    let env_variables = crate::integrations::setting_up_integrations::get_vars_for_replacements(
+        gcx.clone(),
+        &mut error_log,
+    )
+    .await;
+    let resolved_workdir = resolve_workdir(gcx, workdir).await?;
+    let owner = ExecOwnerMeta {
+        chat_id: Some(chat_id.to_string()),
+        tool_call_id: Some(tool_call_id.to_string()),
+        service_name: Some(service_name.to_string()),
+        workspace,
+    };
+    let short_description = sanitize_short_description(&format!(
+        "service {}: {}",
+        service_name,
+        generate_short_description(command, &ExecMode::Service)
+    ));
+    let mut request = ExecSpawnRequest::service(command.to_string())
+        .with_owner(owner)
+        .with_env_map(env_variables)
+        .with_startup_wait(Duration::from_secs(cfg.startup_wait))
+        .with_transcript_limit(SERVICE_TRANSCRIPT_MAX_BYTES)
+        .with_short_description(short_description);
+    if let Some(workdir) = resolved_workdir {
+        request = request.with_cwd(workdir);
+    }
+    if !cfg.startup_wait_keyword.is_empty() || cfg.startup_wait_port.is_some() {
+        request = request.with_readiness(ExecReadinessProbe {
+            wait_keyword: if cfg.startup_wait_keyword.is_empty() {
+                None
+            } else {
+                Some(cfg.startup_wait_keyword.clone())
+            },
+            wait_port: cfg.startup_wait_port,
+        });
+    }
+    let result = exec_registry.spawn(request).await?;
+    let read = exec_registry
+        .read(&result.snapshot.meta.process_id, 0, None)
+        .await;
+    let mut output = format_service_snapshot("Service started", &result.snapshot);
+    output.push_str(&format_service_logs(&read, &cfg.output_filter));
+    Ok(output)
+}
+
+async fn resolve_workdir(gcx: Arc<GlobalContext>, workdir: &str) -> Result<Option<PathBuf>, String> {
+    if workdir.trim().is_empty() {
+        return Ok(crate::files_correction::get_active_project_path(gcx).await);
+    }
+    let path = PathBuf::from(workdir);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        let project_dirs = crate::files_correction::get_project_dirs(gcx).await;
+        let first_dir = project_dirs
+            .first()
+            .ok_or_else(|| "No project directory found".to_string())?;
+        first_dir.join(path)
+    };
+    if resolved.exists() {
+        Ok(Some(resolved))
+    } else {
+        Err(format!("Workdir '{}' does not exist", resolved.display()))
+    }
+}
+
+async fn find_service(
+    exec_registry: &crate::exec::ExecRegistry,
+    service_name: &str,
+    chat_id: &str,
+    workspace: Option<&PathBuf>,
+) -> Option<crate::exec::ExecProcessSnapshot> {
+    let mut lookup = ExecServiceLookup::new(service_name.to_string());
+    if !chat_id.is_empty() {
+        lookup = lookup.with_chat_id(chat_id.to_string());
+    }
+    if let Some(workspace) = workspace.cloned() {
+        lookup = lookup.with_workspace(workspace);
+    }
+    exec_registry.find_service(lookup).await
+}
+
+async fn find_active_service(
+    exec_registry: &crate::exec::ExecRegistry,
+    service_name: &str,
+    chat_id: &str,
+    workspace: Option<&PathBuf>,
+) -> Option<crate::exec::ExecProcessSnapshot> {
+    find_service(exec_registry, service_name, chat_id, workspace)
+        .await
+        .filter(|snapshot| !snapshot.status.is_terminal())
+}
+
+fn status_label(status: &ExecStatus) -> &'static str {
+    match status {
+        ExecStatus::Starting => "starting",
+        ExecStatus::Running => "running",
+        ExecStatus::Exited { .. } => "exited",
+        ExecStatus::Failed { .. } => "failed",
+        ExecStatus::Killed => "killed",
+        ExecStatus::TimedOut => "timed_out",
+    }
+}
+
+fn exit_code(status: &ExecStatus) -> Option<i32> {
+    match status {
+        ExecStatus::Exited { exit_code } => *exit_code,
+        ExecStatus::Starting
+        | ExecStatus::Running
+        | ExecStatus::Failed { .. }
+        | ExecStatus::Killed
+        | ExecStatus::TimedOut => None,
+    }
+}
+
+fn format_service_snapshot(title: &str, snapshot: &crate::exec::ExecProcessSnapshot) -> String {
+    let cwd = snapshot
+        .meta
+        .cwd
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<default>".to_string());
+    let service_name = snapshot
+        .meta
+        .owner
+        .service_name
+        .as_deref()
+        .unwrap_or("<none>");
+    let exit_code = exit_code(&snapshot.status)
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "<none>".to_string());
+    format!(
+        "{title}\nprocess_id: {}\nshort_description: {}\nstatus: {}\nmode: {}\nservice_name: {}\ncommand: {}\ncwd: {}\nexit_code: {}\n",
+        snapshot.meta.process_id,
+        snapshot.meta.short_description,
+        status_label(&snapshot.status),
+        snapshot.meta.mode,
+        service_name,
+        snapshot.meta.command,
+        cwd,
+        exit_code
+    )
+}
+
+fn format_service_logs(read: &ExecReadResult, output_filter: &OutputFilter) -> String {
+    let stdout = collect_stream(&read.chunks, ExecOutputStream::Stdout);
+    let stderr = collect_stream(&read.chunks, ExecOutputStream::Stderr);
+    let filtered_stdout = output_mini_postprocessing(output_filter, &stdout);
+    let filtered_stderr = output_mini_postprocessing(output_filter, &stderr);
+    let mut output = String::new();
+    output.push_str("\nRecent output:\n");
+    output.push_str(&format_output(&filtered_stdout, &filtered_stderr));
+    output.push_str(&format!(
+        "transcript: next_seq={}, latest_seq={}, current_bytes={}, dropped_bytes={}, truncated_chunks={}, is_truncated={}\n",
+        read.next_seq,
+        read.latest_seq,
+        read.current_bytes,
+        read.dropped_bytes,
+        read.truncated_chunks,
+        read.is_truncated
+    ));
+    output
+}
+
+fn collect_stream(chunks: &[ExecOutputChunk], stream: ExecOutputStream) -> String {
+    chunks
+        .iter()
+        .filter(|chunk| chunk.stream == stream)
+        .map(|chunk| chunk.text.as_str())
+        .collect::<String>()
 }
 
 pub const CMDLINE_SERVICE_INTEGRATION_SCHEMA: &str = r#"
@@ -525,3 +505,102 @@ smartlinks:
           🔧 Please write %CURRENT_CONFIG% based on what you see in the project. Follow the plan in the system prompt. Remember that service_ tools
           are only suitable for blocking command line commands that run until you hit Ctrl+C, like web servers or `tail -f`.
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::integrations::integr_cmdline::CmdlineParam;
+
+    fn args(entries: Vec<(&str, Value)>) -> HashMap<String, Value> {
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect()
+    }
+
+    async fn test_ccx() -> (Arc<GlobalContext>, Arc<AMutex<AtCommandsContext>>) {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let ccx = AtCommandsContext::new_with_abort(
+            AppState::from_gcx(gcx.clone()).await,
+            4096,
+            20,
+            false,
+            Vec::new(),
+            "chat".to_string(),
+            None,
+            "model".to_string(),
+            None,
+            None,
+            None,
+        )
+        .await;
+        (gcx, Arc::new(AMutex::new(ccx)))
+    }
+
+    fn long_running_command(output: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!("[Console]::Out.Write('{output}'); Start-Sleep -Seconds 30")
+        } else {
+            format!("printf {output:?}; sleep 30")
+        }
+    }
+
+    fn only_message(messages: Vec<ContextEnum>) -> ChatMessage {
+        match messages.into_iter().next().unwrap() {
+            ContextEnum::ChatMessage(message) => message,
+            ContextEnum::ContextFile(_) => panic!("expected chat message"),
+        }
+    }
+
+    fn text(message: &ChatMessage) -> String {
+        match &message.content {
+            ChatContent::SimpleText(text) => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_service_uses_exec_registry_not_integration_sessions() {
+        let (gcx, ccx) = test_ccx().await;
+        let mut tool = ToolService {
+            name: "service_api".to_string(),
+            cfg: CmdlineToolConfig {
+                command: long_running_command("custom-ready"),
+                command_workdir: String::new(),
+                startup_wait: 1,
+                parameters: Vec::new(),
+                ..CmdlineToolConfig::default()
+            },
+            ..ToolService::default()
+        };
+        let (_, messages) = tool
+            .tool_execute(ccx, &"tool_call".to_string(), &args(vec![]))
+            .await
+            .unwrap();
+        let message = only_message(messages);
+        assert!(text(&message).contains("exec_service_service_api"));
+        assert!(gcx.integration_sessions.lock().await.is_empty());
+        let snapshot = gcx
+            .exec_registry
+            .kill(&ExecProcessId::for_service("service_api"))
+            .await
+            .unwrap();
+        assert_eq!(snapshot.status, ExecStatus::Killed);
+    }
+
+    #[test]
+    fn custom_service_args_still_validate_required_params() {
+        let cfg = CmdlineToolConfig {
+            parameters: vec![CmdlineParam {
+                name: "target".to_string(),
+                param_type: "string".to_string(),
+                description: String::new(),
+            }],
+            parameters_required: Some(vec!["target".to_string()]),
+            ..CmdlineToolConfig::default()
+        };
+        let err = parse_service_tool_args(&args(vec![]), &cfg).unwrap_err();
+        assert_eq!(err, "Missing required argument `target`");
+    }
+}

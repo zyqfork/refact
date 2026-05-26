@@ -12,7 +12,7 @@ use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::exec::{
     generate_short_description, sanitize_short_description, ExecMode, ExecOutputChunk,
     ExecOutputStream, ExecOwnerMeta, ExecProcessFilter, ExecProcessId, ExecProcessSnapshot,
-    ExecReadResult, ExecReadinessProbe, ExecSpawnRequest, ExecStatus,
+    ExecReadResult, ExecReadinessProbe, ExecServiceLookup, ExecSpawnRequest, ExecStatus,
 };
 use crate::files_correction::{
     canonical_path, canonicalize_normalized_path, check_if_its_inside_a_workspace_or_config,
@@ -20,6 +20,7 @@ use crate::files_correction::{
     preprocess_path_for_normalization,
 };
 use crate::global_context::GlobalContext;
+use crate::integrations::integr_abstract::IntegrationConfirmation;
 use crate::postprocessing::pp_command_output::{
     output_mini_postprocessing, parse_output_filter_args, OutputFilter,
 };
@@ -31,6 +32,66 @@ use crate::tools::tools_description::{
 use crate::worktrees::scope::ExecutionScope;
 
 const PROCESS_TRANSCRIPT_MAX_BYTES: usize = 2 * 1024 * 1024;
+const ASK_USER_DEFAULT: &[&str] = &[
+    "*rm*",
+    "*rmdir*",
+    "*del /s*",
+    "*deltree*",
+    "*mkfs*",
+    "*dd *",
+    "*format*",
+    "*> /dev/*",
+    ":(){ :|:& };:",
+    "*chmod -R*",
+    "*chown -R*",
+    "*chmod 777*",
+    "*chmod a+rwx*",
+    "*git push*",
+    "*git reset --hard*",
+    "curl * | sh",
+    "curl * | bash",
+    "wget * -O - | sh",
+    "wget * -O - | bash",
+    "*apt-get remove*",
+    "*apt-get purge*",
+    "*apt remove*",
+    "*apt purge*",
+    "*yum remove*",
+    "*yum erase*",
+    "*dnf remove*",
+    "*pacman -R*",
+    "*brew uninstall*",
+    "*docker rm*",
+    "*docker rmi*",
+    "*docker system prune*",
+    "*kubectl delete*",
+    "*kill -9*",
+    "*killall*",
+    "*pkill*",
+    "*shutdown*",
+    "*reboot*",
+    "*halt*",
+    "*poweroff*",
+    "*init 0*",
+    "*init 6*",
+    "*systemctl stop*",
+    "*systemctl disable*",
+    "*service * stop",
+    "*truncate -s 0*",
+    "*fdisk*",
+    "*parted*",
+    "*mkswap*",
+    "*swapon*",
+    "*swapoff*",
+    "*mount*",
+    "*umount*",
+    "*crontab -r*",
+    "*history -c*",
+    "*shred*",
+    "*wipe*",
+    "*srm*",
+];
+const DENY_DEFAULT: &[&str] = &["sudo*"];
 
 pub struct ToolProcessStart {
     pub config_path: String,
@@ -49,6 +110,10 @@ pub struct ToolProcessKill {
 }
 
 pub struct ToolProcessWait {
+    pub config_path: String,
+}
+
+pub struct ToolShellServiceAlias {
     pub config_path: String,
 }
 
@@ -85,6 +150,18 @@ struct ProcessStartArgs {
     scope_warnings: Vec<String>,
 }
 
+struct ShellServiceAliasArgs {
+    service_name: String,
+    action: String,
+    command: Option<String>,
+    workdir: Option<String>,
+    startup_wait_ms: Option<u64>,
+    startup_wait_port: Option<u16>,
+    startup_wait_keyword: Option<String>,
+    output_filter: Option<String>,
+    output_limit: Option<String>,
+}
+
 #[async_trait]
 impl Tool for ToolProcessStart {
     async fn tool_execute(
@@ -111,6 +188,27 @@ impl Tool for ToolProcessStart {
             )
             .await;
         let workspace = process_workspace(gcx.clone(), execution_scope.as_ref()).await;
+        if parsed.mode == ExecMode::Service && parsed.service_name.is_none() {
+            return Err("service mode requires service_name".to_string());
+        }
+        if let Some(service_name) = parsed.service_name.as_ref() {
+            let mut lookup = ExecServiceLookup::new(service_name.clone());
+            if !chat_id.is_empty() {
+                lookup = lookup.with_chat_id(chat_id.clone());
+            }
+            if let Some(workspace) = workspace.clone() {
+                lookup = lookup.with_workspace(workspace);
+            }
+            match exec_registry.find_service(lookup).await {
+                Some(existing) if !existing.status.is_terminal() => {
+                    return Err(format!(
+                        "Service '{}' is already running as {}. Use process_kill first.",
+                        service_name, existing.meta.process_id
+                    ));
+                }
+                Some(_) | None => {}
+            }
+        }
         let short_description = parsed
             .description
             .as_deref()
@@ -186,6 +284,27 @@ impl Tool for ToolProcessStart {
 
     fn tool_depends_on(&self) -> Vec<String> {
         vec![]
+    }
+
+    async fn command_to_match_against_confirm_deny(
+        &self,
+        ccx: Arc<AMutex<AtCommandsContext>>,
+        args: &HashMap<String, Value>,
+    ) -> Result<String, String> {
+        let (gcx, execution_scope) = {
+            let ccx_lock = ccx.lock().await;
+            (ccx_lock.app.gcx.clone(), ccx_lock.execution_scope.clone())
+        };
+        Ok(parse_start_args(gcx, args, execution_scope.as_ref())
+            .await?
+            .command)
+    }
+
+    fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
+        Some(IntegrationConfirmation {
+            ask_user: ASK_USER_DEFAULT.iter().map(|s| s.to_string()).collect(),
+            deny: DENY_DEFAULT.iter().map(|s| s.to_string()).collect(),
+        })
     }
 
     fn has_config_path(&self) -> Option<String> {
@@ -479,6 +598,141 @@ impl Tool for ToolProcessWait {
     }
 }
 
+#[async_trait]
+impl Tool for ToolShellServiceAlias {
+    async fn tool_execute(
+        &mut self,
+        ccx: Arc<AMutex<AtCommandsContext>>,
+        tool_call_id: &String,
+        args: &HashMap<String, Value>,
+    ) -> Result<(bool, Vec<ContextEnum>), String> {
+        let parsed = parse_shell_service_alias_args(args)?;
+        match parsed.action.as_str() {
+            "start" => {
+                let mut start = ToolProcessStart {
+                    config_path: self.config_path.clone(),
+                };
+                start
+                    .tool_execute(
+                        ccx,
+                        tool_call_id,
+                        &process_start_args_from_shell_service(&parsed)?,
+                    )
+                    .await
+            }
+            "stop" => {
+                let process_id = ExecProcessId::for_service(&parsed.service_name);
+                let mut kill = ToolProcessKill {
+                    config_path: self.config_path.clone(),
+                };
+                kill.tool_execute(
+                    ccx,
+                    tool_call_id,
+                    &make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+                )
+                .await
+            }
+            "status" | "logs" => {
+                let process_id = ExecProcessId::for_service(&parsed.service_name);
+                let mut read = ToolProcessRead {
+                    config_path: self.config_path.clone(),
+                };
+                let mut read_args = make_args_map(vec![
+                    ("process_id", json!(process_id.as_str())),
+                    ("stream", json!("all")),
+                ]);
+                if let Some(output_filter) = parsed.output_filter {
+                    read_args.insert("output_filter".to_string(), json!(output_filter));
+                }
+                if let Some(output_limit) = parsed.output_limit {
+                    read_args.insert("output_limit".to_string(), json!(output_limit));
+                }
+                read.tool_execute(ccx, tool_call_id, &read_args).await
+            }
+            "restart" => {
+                let process_id = ExecProcessId::for_service(&parsed.service_name);
+                let mut kill = ToolProcessKill {
+                    config_path: self.config_path.clone(),
+                };
+                let _ = kill
+                    .tool_execute(
+                        ccx.clone(),
+                        tool_call_id,
+                        &make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+                    )
+                    .await;
+                let mut start = ToolProcessStart {
+                    config_path: self.config_path.clone(),
+                };
+                start
+                    .tool_execute(
+                        ccx,
+                        tool_call_id,
+                        &process_start_args_from_shell_service(&parsed)?,
+                    )
+                    .await
+            }
+            _ => Err(format!("Unknown action: {}", parsed.action)),
+        }
+    }
+
+    fn tool_description(&self) -> ToolDesc {
+        ToolDesc {
+            name: "shell_service".to_string(),
+            display_name: "Shell Service".to_string(),
+            source: source(&self.config_path),
+            experimental: false,
+            allow_parallel: false,
+            description: "Legacy alias for runtime process service management. Prefer process_start with mode=service plus process_list/read/kill/wait.".to_string(),
+            input_schema: json_schema_from_params(
+                &[
+                    ("service_name", "string", "Unique service identifier."),
+                    ("action", "string", "Action: start, stop, status, logs, or restart."),
+                    ("command", "string", "Command required for start/restart."),
+                    ("workdir", "string", "Optional working directory."),
+                    ("startup_wait", "string", "Max seconds to wait for startup readiness. Default: 10."),
+                    ("startup_wait_port", "string", "Optional TCP port readiness check."),
+                    ("startup_wait_keyword", "string", "Optional stdout/stderr readiness keyword."),
+                    ("output_filter", "string", "Optional regex pattern to filter logs."),
+                    ("output_limit", "string", "Max lines to show, or all/full."),
+                ],
+                &["service_name", "action"],
+            ),
+            output_schema: None,
+            annotations: None,
+        }
+    }
+
+    async fn command_to_match_against_confirm_deny(
+        &self,
+        _ccx: Arc<AMutex<AtCommandsContext>>,
+        args: &HashMap<String, Value>,
+    ) -> Result<String, String> {
+        let parsed = parse_shell_service_alias_args(args)?;
+        if matches!(parsed.action.as_str(), "start" | "restart") {
+            return parsed
+                .command
+                .ok_or_else(|| "Command is required for start/restart action".to_string());
+        }
+        Ok(format!("shell_service {} {}", parsed.action, parsed.service_name))
+    }
+
+    fn confirm_deny_rules(&self) -> Option<IntegrationConfirmation> {
+        Some(IntegrationConfirmation {
+            ask_user: ASK_USER_DEFAULT.iter().map(|s| s.to_string()).collect(),
+            deny: DENY_DEFAULT.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    fn tool_depends_on(&self) -> Vec<String> {
+        vec![]
+    }
+
+    fn has_config_path(&self) -> Option<String> {
+        Some(self.config_path.clone())
+    }
+}
+
 fn source(config_path: &str) -> ToolSource {
     ToolSource {
         source_type: ToolSourceType::Builtin,
@@ -514,6 +768,13 @@ fn parse_required_string(args: &HashMap<String, Value>, name: &str) -> Result<St
         Some(v) => Err(format!("argument `{name}` is not a string: {v:?}")),
         None => Err(format!("Missing argument `{name}`")),
     }
+}
+
+fn make_args_map(entries: Vec<(&str, Value)>) -> HashMap<String, Value> {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect()
 }
 
 fn parse_optional_string(
@@ -717,6 +978,68 @@ fn parse_stream_selection(args: &HashMap<String, Value>) -> Result<ProcessStream
     }
 }
 
+fn parse_shell_service_alias_args(
+    args: &HashMap<String, Value>,
+) -> Result<ShellServiceAliasArgs, String> {
+    let service_name = parse_required_string(args, "service_name")?;
+    let action = parse_required_string(args, "action")?.to_lowercase();
+    if !["start", "stop", "status", "logs", "restart"].contains(&action.as_str()) {
+        return Err(format!(
+            "Invalid action '{}'. Must be one of: start, stop, status, logs, restart",
+            action
+        ));
+    }
+    let command = if matches!(action.as_str(), "start" | "restart") {
+        Some(parse_required_string(args, "command")?)
+    } else {
+        parse_optional_string(args, "command")?
+    };
+    let startup_wait_ms = parse_optional_u64(args, "startup_wait_ms")?.or_else(|| {
+        parse_optional_u64(args, "startup_wait")
+            .ok()
+            .flatten()
+            .map(|seconds| seconds.saturating_mul(1000))
+    });
+    Ok(ShellServiceAliasArgs {
+        service_name,
+        action,
+        command,
+        workdir: parse_optional_string(args, "workdir")?,
+        startup_wait_ms,
+        startup_wait_port: parse_optional_u16(args, "startup_wait_port")?,
+        startup_wait_keyword: parse_optional_string(args, "startup_wait_keyword")?,
+        output_filter: parse_optional_string(args, "output_filter")?,
+        output_limit: parse_optional_string(args, "output_limit")?,
+    })
+}
+
+fn process_start_args_from_shell_service(
+    parsed: &ShellServiceAliasArgs,
+) -> Result<HashMap<String, Value>, String> {
+    let command = parsed
+        .command
+        .as_ref()
+        .ok_or_else(|| "Command is required for start/restart action".to_string())?;
+    let mut result = make_args_map(vec![
+        ("command", json!(command)),
+        ("mode", json!("service")),
+        ("service_name", json!(parsed.service_name)),
+    ]);
+    if let Some(workdir) = parsed.workdir.as_ref() {
+        result.insert("workdir".to_string(), json!(workdir));
+    }
+    if let Some(startup_wait_ms) = parsed.startup_wait_ms {
+        result.insert("startup_wait_ms".to_string(), json!(startup_wait_ms));
+    }
+    if let Some(startup_wait_port) = parsed.startup_wait_port {
+        result.insert("startup_wait_port".to_string(), json!(startup_wait_port));
+    }
+    if let Some(startup_wait_keyword) = parsed.startup_wait_keyword.as_ref() {
+        result.insert("startup_wait_keyword".to_string(), json!(startup_wait_keyword));
+    }
+    Ok(result)
+}
+
 async fn require_process(
     registry: &crate::exec::ExecRegistry,
     process_id: &ExecProcessId,
@@ -894,7 +1217,11 @@ fn format_process_snapshot(title: &str, snapshot: &ExecProcessSnapshot) -> Strin
     let exit_code = exit_code(&snapshot.status)
         .map(|code| code.to_string())
         .unwrap_or_else(|| "<none>".to_string());
-    format!(
+    let failure_message = match &snapshot.status {
+        ExecStatus::Failed { message } => Some(message.clone()),
+        _ => None,
+    };
+    let mut out = format!(
         "{title}\nprocess_id: {}\nshort_description: {}\nstatus: {}\nmode: {}\nservice_name: {}\ncommand: {}\ncwd: {}\nstarted_at: {:?}\nexit_code: {}\n",
         snapshot.meta.process_id,
         snapshot.meta.short_description,
@@ -905,7 +1232,11 @@ fn format_process_snapshot(title: &str, snapshot: &ExecProcessSnapshot) -> Strin
         cwd,
         snapshot.meta.started_at_ms,
         exit_code
-    )
+    );
+    if let Some(message) = failure_message {
+        out.push_str(&format!("failure_reason: {}\n", message));
+    }
+    out
 }
 
 fn format_read_sections(
@@ -993,12 +1324,6 @@ mod tests {
     use crate::app_state::AppState;
     use crate::exec::{ExecProcessMeta, ExecStatusKind};
 
-    fn args(entries: Vec<(&str, Value)>) -> HashMap<String, Value> {
-        entries
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value))
-            .collect()
-    }
 
     async fn test_ccx() -> (Arc<GlobalContext>, Arc<AMutex<AtCommandsContext>>) {
         let gcx = crate::global_context::tests::make_test_gcx().await;
@@ -1150,7 +1475,7 @@ mod tests {
         let message = run_tool(
             &mut start,
             ccx.clone(),
-            args(vec![
+            make_args_map(vec![
                 ("command", json!(long_running_command("ready"))),
                 ("description", json!("Run background gremlin")),
                 ("startup_wait_ms", json!(100)),
@@ -1169,7 +1494,7 @@ mod tests {
         let mut list = ToolProcessList {
             config_path: String::new(),
         };
-        let listed = run_tool(&mut list, ccx.clone(), args(vec![]))
+        let listed = run_tool(&mut list, ccx.clone(), make_args_map(vec![]))
             .await
             .unwrap();
         assert!(text(&listed).contains(process_id.as_str()));
@@ -1181,7 +1506,7 @@ mod tests {
         let output = run_tool(
             &mut read,
             ccx.clone(),
-            args(vec![("process_id", json!(process_id.as_str()))]),
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
         )
         .await
         .unwrap();
@@ -1194,7 +1519,7 @@ mod tests {
         let killed = run_tool(
             &mut kill,
             ccx,
-            args(vec![("process_id", json!(process_id.as_str()))]),
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
         )
         .await
         .unwrap();
@@ -1210,7 +1535,7 @@ mod tests {
         let message = run_tool(
             &mut start,
             ccx.clone(),
-            args(vec![
+            make_args_map(vec![
                 ("command", json!(long_running_command("svc"))),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
@@ -1220,6 +1545,7 @@ mod tests {
         .await
         .unwrap();
         let process_id = process_id(&message);
+        assert_eq!(process_id, ExecProcessId::for_service("api"));
         assert_eq!(exec(&message)["mode"], "service");
         assert_eq!(exec(&message)["service_name"], "api");
 
@@ -1229,7 +1555,7 @@ mod tests {
         let listed = run_tool(
             &mut list,
             ccx.clone(),
-            args(vec![("status", json!("running")), ("scope", json!("chat"))]),
+            make_args_map(vec![("status", json!("running")), ("scope", json!("chat"))]),
         )
         .await
         .unwrap();
@@ -1241,10 +1567,140 @@ mod tests {
         run_tool(
             &mut kill,
             ccx,
-            args(vec![("process_id", json!(process_id.as_str()))]),
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_process_start_service_requires_service_name() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut start,
+            ccx,
+            make_args_map(vec![
+                ("command", json!(long_running_command("svc"))),
+                ("mode", json!("service")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "service mode requires service_name");
+    }
+
+    #[tokio::test]
+    async fn tool_process_start_service_duplicate_name_is_rejected() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let first = run_tool(
+            &mut start,
+            ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(long_running_command("svc"))),
+                ("mode", json!("service")),
+                ("service_name", json!("api")),
+                ("startup_wait_ms", json!(100)),
+            ]),
+        )
+        .await
+        .unwrap();
+        let process_id = process_id(&first);
+
+        let err = run_tool(
+            &mut start,
+            ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(long_running_command("svc2"))),
+                ("mode", json!("service")),
+                ("service_name", json!("api")),
+                ("startup_wait_ms", json!(100)),
+            ]),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("already running"));
+        assert!(err.contains(process_id.as_str()));
+
+        let mut kill = ToolProcessKill {
+            config_path: String::new(),
+        };
+        run_tool(
+            &mut kill,
+            ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_process_start_service_keyword_readiness_success() {
+        let (gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let command = if cfg!(target_os = "windows") {
+            "Start-Sleep -Milliseconds 200; [Console]::Out.Write('ready-keyword'); Start-Sleep -Seconds 30".to_string()
+        } else {
+            "sleep 0.2; printf ready-keyword; sleep 30".to_string()
+        };
+        let message = run_tool(
+            &mut start,
+            ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(command)),
+                ("mode", json!("service")),
+                ("service_name", json!("keyword")),
+                ("startup_wait_ms", json!(2000)),
+                ("startup_wait_keyword", json!("ready-keyword")),
+            ]),
+        )
+        .await
+        .unwrap();
+        let process_id = process_id(&message);
+        assert_eq!(exec(&message)["status"], "running");
+        wait_for_output(gcx, &process_id, "ready-keyword").await;
+
+        let mut kill = ToolProcessKill {
+            config_path: String::new(),
+        };
+        run_tool(
+            &mut kill,
+            ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_process_start_service_keyword_readiness_timeout_fails_and_stops() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let message = run_tool(
+            &mut start,
+            ccx,
+            make_args_map(vec![
+                ("command", json!(long_running_command("not-yet"))),
+                ("mode", json!("service")),
+                ("service_name", json!("timeout")),
+                ("startup_wait_ms", json!(100)),
+                ("startup_wait_keyword", json!("never-there")),
+            ]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exec(&message)["status"], "failed");
+        assert_eq!(message.tool_failed, Some(true));
+        assert!(text(&message).contains("startup readiness timed out"));
     }
 
     #[tokio::test]
@@ -1284,7 +1740,7 @@ mod tests {
         let message = run_tool(
             &mut read,
             ccx,
-            args(vec![
+            make_args_map(vec![
                 ("process_id", json!(process_id.as_str())),
                 ("since_seq", json!(1)),
                 ("stream", json!("stderr")),
@@ -1311,7 +1767,7 @@ mod tests {
         let err = run_tool(
             &mut kill,
             ccx,
-            args(vec![("process_id", json!("exec_missing"))]),
+            make_args_map(vec![("process_id", json!("exec_missing"))]),
         )
         .await
         .unwrap_err();
@@ -1327,7 +1783,7 @@ mod tests {
         let slow = run_tool(
             &mut start,
             ccx.clone(),
-            args(vec![
+            make_args_map(vec![
                 ("command", json!(long_running_command("slow"))),
                 ("startup_wait_ms", json!(50)),
             ]),
@@ -1342,7 +1798,7 @@ mod tests {
         let timed_out = run_tool(
             &mut wait,
             ccx.clone(),
-            args(vec![
+            make_args_map(vec![
                 ("process_id", json!(slow_process_id.as_str())),
                 ("timeout_ms", json!(50)),
             ]),
@@ -1358,7 +1814,7 @@ mod tests {
         run_tool(
             &mut kill,
             ccx.clone(),
-            args(vec![("process_id", json!(slow_process_id.as_str()))]),
+            make_args_map(vec![("process_id", json!(slow_process_id.as_str()))]),
         )
         .await
         .unwrap();
@@ -1366,7 +1822,7 @@ mod tests {
         let done = run_tool(
             &mut start,
             ccx.clone(),
-            args(vec![("command", json!(quick_command("done")))]),
+            make_args_map(vec![("command", json!(quick_command("done")))]),
         )
         .await
         .unwrap();
@@ -1374,7 +1830,7 @@ mod tests {
         let completed = run_tool(
             &mut wait,
             ccx,
-            args(vec![
+            make_args_map(vec![
                 ("process_id", json!(done_process_id.as_str())),
                 ("timeout_ms", json!(2000)),
             ]),
@@ -1392,6 +1848,81 @@ mod tests {
             config_path: String::new(),
         };
         assert!(kill.confirm_deny_rules().is_none());
+    }
+
+    #[tokio::test]
+    async fn tool_process_start_confirmation_matches_command_text() {
+        let (_gcx, ccx) = test_ccx().await;
+        let start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let command = "rm -rf target";
+        let matched = start
+            .match_against_confirm_deny(
+                ccx,
+                &make_args_map(vec![
+                    ("command", json!(command)),
+                    ("mode", json!("service")),
+                    ("service_name", json!("danger")),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(matched.command, command);
+        assert_eq!(matched.result, crate::tools::tools_description::MatchConfirmDenyResult::CONFIRMATION);
+    }
+
+    #[tokio::test]
+    async fn shell_service_alias_is_registered_and_uses_exec_registry() {
+        let (gcx, ccx) = test_ccx().await;
+        let names = crate::tools::tools_list::builtin_system_tools(String::new())
+            .into_iter()
+            .map(|tool| tool.tool_description().name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"shell_service".to_string()));
+
+        let mut alias = ToolShellServiceAlias {
+            config_path: String::new(),
+        };
+        let message = run_tool(
+            &mut alias,
+            ccx.clone(),
+            make_args_map(vec![
+                ("service_name", json!("alias")),
+                ("action", json!("start")),
+                ("command", json!(long_running_command("alias-ready"))),
+                ("startup_wait", json!("1")),
+            ]),
+        )
+        .await
+        .unwrap();
+        let process_id = process_id(&message);
+        assert_eq!(process_id, ExecProcessId::for_service("alias"));
+        assert!(gcx.integration_sessions.lock().await.is_empty());
+
+        let logs = run_tool(
+            &mut alias,
+            ccx.clone(),
+            make_args_map(vec![
+                ("service_name", json!("alias")),
+                ("action", json!("logs")),
+            ]),
+        )
+        .await
+        .unwrap();
+        assert!(text(&logs).contains("alias-ready"));
+
+        let stopped = run_tool(
+            &mut alias,
+            ccx,
+            make_args_map(vec![
+                ("service_name", json!("alias")),
+                ("action", json!("stop")),
+            ]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exec(&stopped)["status"], "killed");
     }
 
     #[tokio::test]
@@ -1424,7 +1955,7 @@ mod tests {
         let mut list = ToolProcessList {
             config_path: String::new(),
         };
-        let message = run_tool(&mut list, ccx, args(vec![("status", json!("completed"))]))
+        let message = run_tool(&mut list, ccx, make_args_map(vec![("status", json!("completed"))]))
             .await
             .unwrap();
         assert!(text(&message).contains(completed.meta.process_id.as_str()));

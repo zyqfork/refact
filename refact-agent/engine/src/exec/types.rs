@@ -25,6 +25,26 @@ impl ExecProcessId {
         Self(format!("exec_{}", Uuid::new_v4()))
     }
 
+    pub fn for_service(service_name: &str) -> Self {
+        let mut slug = String::new();
+        let mut previous_separator = false;
+        for c in service_name.chars() {
+            if c.is_ascii_alphanumeric() {
+                slug.push(c.to_ascii_lowercase());
+                previous_separator = false;
+            } else if !previous_separator {
+                slug.push('_');
+                previous_separator = true;
+            }
+        }
+        let slug = slug.trim_matches('_');
+        if slug.is_empty() {
+            Self("exec_service_service".to_string())
+        } else {
+            Self(format!("exec_service_{slug}"))
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -508,6 +528,18 @@ mod tests {
         assert!(
             id.as_str().starts_with("exec_"),
             "ID should start with 'exec_': {id}"
+        );
+    }
+
+    #[test]
+    fn test_service_process_id_is_predictable() {
+        assert_eq!(
+            ExecProcessId::for_service("API server!").as_str(),
+            "exec_service_api_server"
+        );
+        assert_eq!(
+            ExecProcessId::for_service("  ").as_str(),
+            "exec_service_service"
         );
     }
 

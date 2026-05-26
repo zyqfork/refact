@@ -14,6 +14,10 @@ pub(crate) enum ExecProcessCommand {
     Kill {
         response: oneshot::Sender<Result<ExecProcessSnapshot, String>>,
     },
+    Finish {
+        status: ExecStatus,
+        response: oneshot::Sender<Result<ExecProcessSnapshot, String>>,
+    },
 }
 
 pub(crate) struct ExecProcessRuntime {
@@ -108,6 +112,26 @@ impl ExecRegistry {
         let mut records = self.records.lock().await;
         records.insert(process_id, record);
         snapshot
+    }
+
+    pub async fn register_new(
+        &self,
+        meta: ExecProcessMeta,
+        transcript_limit_bytes: usize,
+    ) -> Result<ExecProcessSnapshot, String> {
+        let process_id = meta.process_id.clone();
+        let record = ExecProcessRecord::new(meta, transcript_limit_bytes);
+        let snapshot = record.snapshot.clone();
+        let mut records = self.records.lock().await;
+        match records
+            .get(&process_id)
+            .map(|existing| existing.snapshot.status.is_terminal())
+        {
+            Some(false) => return Err(format!("process already exists: {process_id}")),
+            Some(true) | None => {}
+        }
+        records.insert(process_id, record);
+        Ok(snapshot)
     }
 
     pub async fn register_with_child(
@@ -270,6 +294,22 @@ impl ExecRegistry {
     }
 
     pub async fn kill(&self, process_id: &ExecProcessId) -> Result<ExecProcessSnapshot, String> {
+        self.finish_process(process_id, None).await
+    }
+
+    pub(crate) async fn finish_with_status(
+        &self,
+        process_id: &ExecProcessId,
+        status: ExecStatus,
+    ) -> Result<ExecProcessSnapshot, String> {
+        self.finish_process(process_id, Some(status)).await
+    }
+
+    async fn finish_process(
+        &self,
+        process_id: &ExecProcessId,
+        status: Option<ExecStatus>,
+    ) -> Result<ExecProcessSnapshot, String> {
         let control_tx = {
             let records = self.records.lock().await;
             let record = records
@@ -285,11 +325,11 @@ impl ExecRegistry {
                 .ok_or_else(|| format!("process is not running: {process_id}"))?
         };
         let (response, rx) = oneshot::channel();
-        if control_tx
-            .send(ExecProcessCommand::Kill { response })
-            .await
-            .is_err()
-        {
+        let command = match status {
+            Some(status) => ExecProcessCommand::Finish { status, response },
+            None => ExecProcessCommand::Kill { response },
+        };
+        if control_tx.send(command).await.is_err() {
             return self.wait(process_id).await;
         }
         tokio::select! {

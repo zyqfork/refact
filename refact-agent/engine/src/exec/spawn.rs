@@ -1,7 +1,7 @@
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use process_wrap::tokio::{TokioChildWrapper, TokioCommandWrap};
 #[cfg(unix)]
@@ -14,14 +14,18 @@ use tokio::task::JoinHandle;
 
 use crate::exec::registry::{ExecProcessCommand, ExecProcessRuntime};
 use crate::exec::types::{
-    ExecMode, ExecOutputStream, ExecProcessMeta, ExecProcessSnapshot, ExecSpawnRequest, ExecStatus,
+    ExecMode, ExecOutputStream, ExecProcessId, ExecProcessMeta, ExecProcessSnapshot,
+    ExecReadinessProbe, ExecSpawnRequest, ExecStatus,
 };
 use crate::exec::ExecRegistry;
+use crate::integrations::process_io_utils::is_someone_listening_on_that_tcp_port;
 
 const PIPE_READ_BYTES: usize = 8192;
 const KILL_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 const KILL_PUMP_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const ABORT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const READINESS_PORT_CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub struct ExecSpawnResult {
     pub snapshot: ExecProcessSnapshot,
@@ -174,7 +178,7 @@ async fn status_or_timed_out(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> 
 
 async fn monitor_process(
     registry: ExecRegistry,
-    process_id: crate::exec::types::ExecProcessId,
+    process_id: ExecProcessId,
     child: Arc<Mutex<Box<dyn TokioChildWrapper>>>,
     mut control_rx: mpsc::Receiver<ExecProcessCommand>,
     timeout: Option<Duration>,
@@ -182,7 +186,7 @@ async fn monitor_process(
     stdout_task: JoinHandle<()>,
     stderr_task: JoinHandle<()>,
 ) {
-    let (terminal_status, kill_response) = loop {
+    let (terminal_status, finish_response) = loop {
         let abort_wait = async {
             loop {
                 tokio::time::sleep(ABORT_POLL_INTERVAL).await;
@@ -215,9 +219,15 @@ async fn monitor_process(
                         break (status_or_killed(&child).await, None);
                     }
                     command = control_rx.recv() => {
-                        if let Some(ExecProcessCommand::Kill { response }) = command {
-                            let status = status_or_killed(&child).await;
-                            break (status, Some(response));
+                        match command {
+                            Some(ExecProcessCommand::Kill { response }) => {
+                                let status = status_or_killed(&child).await;
+                                break (status, Some(response));
+                            }
+                            Some(ExecProcessCommand::Finish { status, response }) => {
+                                break (status, Some(response));
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -237,9 +247,15 @@ async fn monitor_process(
                         break (status_or_killed(&child).await, None);
                     }
                     command = control_rx.recv() => {
-                        if let Some(ExecProcessCommand::Kill { response }) = command {
-                            let status = status_or_killed(&child).await;
-                            break (status, Some(response));
+                        match command {
+                            Some(ExecProcessCommand::Kill { response }) => {
+                                let status = status_or_killed(&child).await;
+                                break (status, Some(response));
+                            }
+                            Some(ExecProcessCommand::Finish { status, response }) => {
+                                break (status, Some(response));
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -248,49 +264,79 @@ async fn monitor_process(
     };
 
     match terminal_status {
-        ExecStatus::TimedOut | ExecStatus::Killed => {
+        ExecStatus::Failed { .. } | ExecStatus::TimedOut | ExecStatus::Killed => {
             if let Err(error) = kill_and_reap(&child).await {
                 tracing::warn!("exec kill/reap failed for {process_id}: {error}");
             }
         }
-        ExecStatus::Starting
-        | ExecStatus::Running
-        | ExecStatus::Exited { .. }
-        | ExecStatus::Failed { .. } => {}
+        ExecStatus::Starting | ExecStatus::Running | ExecStatus::Exited { .. } => {}
     }
     match terminal_status {
-        ExecStatus::TimedOut | ExecStatus::Killed => {
+        ExecStatus::Failed { .. } | ExecStatus::TimedOut | ExecStatus::Killed => {
             finish_pumps_with_timeout(stdout_task, stderr_task, KILL_PUMP_DRAIN_TIMEOUT).await;
         }
-        ExecStatus::Starting
-        | ExecStatus::Running
-        | ExecStatus::Exited { .. }
-        | ExecStatus::Failed { .. } => {
+        ExecStatus::Starting | ExecStatus::Running | ExecStatus::Exited { .. } => {
             finish_pumps(stdout_task, stderr_task).await;
         }
     }
     let final_snapshot = registry.complete_status(&process_id, terminal_status).await;
-    if let Some(response) = kill_response {
+    if let Some(response) = finish_response {
         let _ = response.send(final_snapshot);
+    }
+}
+
+async fn wait_for_readiness(
+    registry: &ExecRegistry,
+    process_id: &ExecProcessId,
+    readiness: &ExecReadinessProbe,
+    startup_wait: Duration,
+) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        if let Some(snapshot) = registry.get(process_id).await {
+            if snapshot.status.is_terminal() {
+                return Err(format!(
+                    "process exited before startup readiness: {:?}",
+                    snapshot.status
+                ));
+            }
+        } else {
+            return Err(format!("process disappeared before startup readiness: {process_id}"));
+        }
+        let read = registry.read(process_id, 0, None).await;
+        if let Some(keyword) = readiness.wait_keyword.as_ref() {
+            if read.chunks.iter().any(|chunk| chunk.text.contains(keyword)) {
+                return Ok(());
+            }
+        }
+        if let Some(port) = readiness.wait_port {
+            if is_someone_listening_on_that_tcp_port(port, READINESS_PORT_CONNECT_TIMEOUT).await {
+                return Ok(());
+            }
+        }
+        if started.elapsed() >= startup_wait {
+            return Err(format!(
+                "startup readiness timed out after {:.3}s",
+                startup_wait.as_secs_f64()
+            ));
+        }
+        tokio::time::sleep(READINESS_POLL_INTERVAL).await;
     }
 }
 
 impl ExecRegistry {
     pub async fn spawn(&self, request: ExecSpawnRequest) -> Result<ExecSpawnResult, String> {
         let mut command = wrap_command(shell_command(&request)?);
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("failed to spawn command: {error}"))?;
-        let stdout = child
-            .stdout()
-            .take()
-            .ok_or_else(|| "failed to capture stdout".to_string())?;
-        let stderr = child
-            .stderr()
-            .take()
-            .ok_or_else(|| "failed to capture stderr".to_string())?;
         let mut meta = ExecProcessMeta::new(request.mode.clone(), request.command.clone())
             .with_owner(request.owner.clone());
+        if matches!(request.mode, ExecMode::Service) {
+            let service_name = request
+                .owner
+                .service_name
+                .as_deref()
+                .ok_or_else(|| "service mode requires service_name".to_string())?;
+            meta = meta.with_process_id(ExecProcessId::for_service(service_name));
+        }
         if let Some(cwd) = request.cwd.clone() {
             meta = meta.with_cwd(cwd);
         }
@@ -299,8 +345,31 @@ impl ExecRegistry {
         }
         let startup_wait = request.startup_wait;
         let process_id = meta.process_id.clone();
-        self.register(meta, request.output_limits.transcript_max_bytes)
-            .await;
+        self.register_new(meta, request.output_limits.transcript_max_bytes)
+            .await?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                self.remove(&process_id).await;
+                return Err(format!("failed to spawn command: {error}"));
+            }
+        };
+        let stdout = match child.stdout().take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = child.start_kill();
+                self.remove(&process_id).await;
+                return Err("failed to capture stdout".to_string());
+            }
+        };
+        let stderr = match child.stderr().take() {
+            Some(stderr) => stderr,
+            None => {
+                let _ = child.start_kill();
+                self.remove(&process_id).await;
+                return Err("failed to capture stderr".to_string());
+            }
+        };
         let child = Arc::new(Mutex::new(child));
         let stdout_task = pump_output(
             self.clone(),
@@ -340,7 +409,23 @@ impl ExecRegistry {
                 snapshot: self.wait(&process_id).await?,
             });
         }
-        if let Some(startup_wait) = startup_wait {
+        if let Some(readiness) = request.readiness.as_ref() {
+            let startup_wait = startup_wait.unwrap_or(Duration::from_secs(10));
+            if let Err(message) = wait_for_readiness(self, &process_id, readiness, startup_wait).await
+            {
+                if let Ok(snapshot) = self
+                    .finish_with_status(&process_id, ExecStatus::Failed { message: message.clone() })
+                    .await
+                {
+                    return Ok(ExecSpawnResult { snapshot });
+                }
+                let snapshot = self
+                    .mark_failed(&process_id, message)
+                    .await
+                    .unwrap_or_else(|_| snapshot.clone());
+                return Ok(ExecSpawnResult { snapshot });
+            }
+        } else if let Some(startup_wait) = startup_wait {
             tokio::time::sleep(startup_wait).await;
         }
         Ok(ExecSpawnResult {
