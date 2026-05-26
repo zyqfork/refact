@@ -182,8 +182,14 @@ export function drawBuddyHomeDoor(args: DrawBuddyWorldBaseArgs): void {
   );
 
   const sparkleY = y - 7 * scale + wave(frame, 18, 0, 2, args.reducedMotion);
-  fillPixelRect(ctx, x + 27 * scale, sparkleY, 3, 3, "#FDE68A");
-  fillPixelRect(ctx, x + 30 * scale, sparkleY + 3, 3, 3, palette.light);
+  drawSpark(
+    ctx,
+    x + 30 * scale,
+    sparkleY + 2 * scale,
+    1.8 * scale,
+    "#FDE68A",
+    0.82,
+  );
 }
 
 function drawTaskGrove(
@@ -437,22 +443,12 @@ export function drawWorldObject(
   }
 
   const glint = 0.38 + wave(args.frame, 20, item.x, 0.18, args.reducedMotion);
-  fillPixelRect(
-    args.ctx,
-    x + size + 4,
-    y - size + pulse,
-    3,
-    3,
-    "#FDE047",
-    glint,
-  );
-  fillPixelRect(
+  drawSpark(
     args.ctx,
     x + size + 7,
     y - size + 3 + pulse,
-    3,
-    3,
-    "#FFFFFF",
+    1.7,
+    "#FDE047",
     glint,
   );
 }

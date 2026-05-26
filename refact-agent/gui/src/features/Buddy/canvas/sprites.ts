@@ -1,4 +1,4 @@
-import { fillPixel, fillRect, strokeRect } from "./helpers";
+import { fillPixel, fillRect, strokeArc, strokeEllipse } from "./helpers";
 import { spriteColorRecord } from "./colorMap";
 import { drawEyes, drawMouth, drawEarOverlay } from "./eyes";
 import type { BuddyAnimState, ColorMap } from "../types";
@@ -302,16 +302,32 @@ export function drawSage(
   anim: BuddyAnimState,
 ): void {
   drawDaemon(ctx, ox, oy, m, anim);
-  strokeRect(ctx, ox + 7, oy + 7, 5, 4, m.accent);
-  strokeRect(ctx, ox + 15, oy + 7, 5, 4, m.accent);
+  strokeArc(
+    ctx,
+    ox + 9.5,
+    oy + 9,
+    2.5,
+    Math.PI * 0.05,
+    Math.PI * 1.95,
+    m.accent,
+  );
+  strokeArc(
+    ctx,
+    ox + 17.5,
+    oy + 9,
+    2.5,
+    Math.PI * 1.05,
+    Math.PI * 2.95,
+    m.accent,
+  );
   fillPixel(ctx, ox + 12, oy + 9, 3, 1, m.accent);
   fillPixel(ctx, ox + 11, oy + 15, 1, 1, m.accent);
   fillPixel(ctx, ox + 13, oy + 15, 1, 1, m.accent);
   fillPixel(ctx, ox + 12, oy + 16, 1, 1, m.accent);
   if (anim.auraPulseIntensity > 0) {
     ctx.globalAlpha = anim.auraPulseIntensity * 0.3;
-    const r = Math.round(12 + Math.sin(anim.frame * 0.05) * 3);
-    strokeRect(ctx, ox + 13 - r, oy + 9 - r, r * 2, r * 2, m.gold);
+    const r = 12 + Math.sin(anim.frame * 0.05) * 3;
+    strokeEllipse(ctx, ox + 13, oy + 9, r, r * 0.72, m.gold);
     ctx.globalAlpha = 1;
   }
 }

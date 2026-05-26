@@ -46,19 +46,42 @@ export function fillRect(
   ctx.fillRect(x | 0, y | 0, w, h);
 }
 
-export function strokeRect(
+export function strokeEllipse(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
-  w: number,
-  h: number,
+  radiusX: number,
+  radiusY: number,
   color: string,
+  lineWidth = 1,
 ): void {
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, w, 1);
-  ctx.fillRect(x, y + h - 1, w, 1);
-  ctx.fillRect(x, y, 1, h);
-  ctx.fillRect(x + w - 1, y, 1, h);
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.ellipse(x, y, radiusX, radiusY, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+export function strokeArc(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  startAngle: number,
+  endAngle: number,
+  color: string,
+  lineWidth = 1,
+): void {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.arc(x, y, radius, startAngle, endAngle);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export function fillText(

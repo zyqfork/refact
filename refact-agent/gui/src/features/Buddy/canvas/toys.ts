@@ -1,4 +1,3 @@
-import { strokeRect } from "./helpers";
 import { spawnSparks } from "./particles";
 import type { BuddyAnimState, ColorMap } from "../types";
 
@@ -68,20 +67,31 @@ export function renderToy(
     const binaryValue = Math.floor(anim.toyAnimPhase * 0.7) % 2;
     const spin = Math.abs(Math.sin(anim.toyAnimPhase * 0.5));
     ctx.fillStyle = "#FAFAFA";
-    ctx.fillRect(tx, ty, 10, 10);
-    strokeRect(ctx, tx, ty, 10, 10, "#334");
+    ctx.beginPath();
+    ctx.arc(tx + 5, ty + 5, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#334";
+    ctx.lineWidth = 1;
+    ctx.stroke();
     ctx.fillStyle = binaryValue ? "#22C55E" : "#3B82F6";
-    ctx.fillRect(tx + 2, ty + 2, 6, 6);
+    ctx.beginPath();
+    ctx.arc(tx + 5, ty + 5, 3, 0, Math.PI * 2);
+    ctx.fill();
     ctx.fillStyle = "#FFF";
     if (binaryValue) {
-      ctx.fillRect(tx + 4, ty + 4, 2, 2);
+      ctx.beginPath();
+      ctx.arc(tx + 5, ty + 5, 1, 0, Math.PI * 2);
+      ctx.fill();
     } else {
-      ctx.fillRect(tx + 2, ty + 2, 2, 2);
-      ctx.fillRect(tx + 6, ty + 6, 2, 2);
+      ctx.beginPath();
+      ctx.arc(tx + 3.5, ty + 3.5, 1, 0, Math.PI * 2);
+      ctx.arc(tx + 6.5, ty + 6.5, 1, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.globalAlpha = spin * 0.3;
-    ctx.fillStyle = "#FFF";
-    ctx.fillRect(tx, ty, 10, 2);
+    ctx.beginPath();
+    ctx.ellipse(tx + 5, ty + 3, 4.5, 1.3, 0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.globalAlpha = 1;
   }
 

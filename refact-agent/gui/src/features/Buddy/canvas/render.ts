@@ -1,4 +1,4 @@
-import { fillRect, fillPixel, strokeRect } from "./helpers";
+import { fillRect, fillPixel, strokeArc, strokeEllipse } from "./helpers";
 import { buildColorMap } from "./colorMap";
 import { drawStageCharacter } from "./sprites";
 import { renderWalkingFeet, renderToy } from "./toys";
@@ -183,7 +183,14 @@ export function renderFrame(
   }
   if (anim.idleAction === "confidentPose") {
     ctx.globalAlpha = 0.25 + Math.sin(anim.frame * 0.1) * 0.15;
-    strokeRect(ctx, ox - 2, oy - 2, spriteW + 4, spriteH + 4, pal.accent);
+    strokeEllipse(
+      ctx,
+      ox + spriteW / 2,
+      oy + spriteH / 2,
+      spriteW / 2 + 3,
+      spriteH / 2 + 2,
+      pal.accent,
+    );
     ctx.globalAlpha = 1;
   }
 
@@ -212,7 +219,16 @@ export function renderFrame(
 
   if (anim.idleAction === "spin" && anim.frame % 3 === 0) {
     ctx.globalAlpha = 0.18 + Math.sin(anim.frame * 0.4) * 0.12;
-    strokeRect(ctx, ox - 3, oy - 3, spriteW + 6, spriteH + 6, pal.accent);
+    const spinAngle = anim.frame * 0.12;
+    strokeArc(
+      ctx,
+      ox + spriteW / 2,
+      oy + spriteH / 2,
+      Math.max(spriteW, spriteH) / 2 + 4,
+      spinAngle,
+      spinAngle + Math.PI * 1.45,
+      pal.accent,
+    );
     ctx.globalAlpha = 1;
   }
 
