@@ -6,6 +6,7 @@ use crate::call_validation::{ChatContent, ChatMessage};
 use crate::global_context::GlobalContext;
 use crate::chat::diagnostics::{filter_ui_only_messages, is_ui_only_message};
 use crate::chat::history_limit::{compute_context_budget, ContextPressure};
+use crate::chat::linearize::apply_summarization_linearize;
 use crate::chat::trajectory_ops::approx_token_count;
 use crate::subchat::{SubchatConfig, ToolsPolicy, run_subchat};
 
@@ -146,6 +147,16 @@ fn visible_tier1_messages_with_original_indices(
         .unzip()
 }
 
+fn effective_context_budget_after_existing_summaries(
+    messages: &[ChatMessage],
+    effective_n_ctx: usize,
+) -> (usize, ContextPressure) {
+    let linearized_messages = apply_summarization_linearize(messages.to_vec());
+    let visible_messages = visible_tier1_messages(&linearized_messages);
+    let budget = compute_context_budget(&visible_messages, effective_n_ctx);
+    (budget.used_tokens_estimate, budget.pressure)
+}
+
 fn translate_summarized_range_to_original(summ_msg: &mut ChatMessage, original_indices: &[usize]) {
     if let Some((start, end)) = summ_msg.summarized_range {
         if let (Some(original_start), Some(original_end)) =
@@ -240,9 +251,10 @@ pub async fn tier1_summarize(
         "tier1_summarize requires pre-filtered (visible) messages"
     );
 
-    let budget = compute_context_budget(messages, n_ctx);
+    let (_, pressure_after_existing_summaries) =
+        effective_context_budget_after_existing_summaries(messages, n_ctx);
     if !matches!(
-        budget.pressure,
+        pressure_after_existing_summaries,
         ContextPressure::High | ContextPressure::Critical
     ) && !force_full_recompact
     {
@@ -465,19 +477,21 @@ pub async fn maybe_apply_tier1(
         return;
     }
 
-    let budget = compute_context_budget(&visible_messages, effective_n_ctx);
+    let raw_budget = compute_context_budget(&visible_messages, effective_n_ctx);
+    let (linearized_used_tokens, linearized_pressure) =
+        effective_context_budget_after_existing_summaries(&raw_messages, effective_n_ctx);
     let anchor_count = visible_messages
         .iter()
         .filter(|m| is_real_summarization_anchor(m))
         .count();
     let force_full_recompact = anchor_count >= MAX_TIER1_ANCHORS_BEFORE_MERGE
         && matches!(
-            budget.pressure,
+            linearized_pressure,
             ContextPressure::High | ContextPressure::Critical
         );
 
     if !matches!(
-        budget.pressure,
+        linearized_pressure,
         ContextPressure::High | ContextPressure::Critical
     ) && !force_full_recompact
     {
@@ -485,9 +499,12 @@ pub async fn maybe_apply_tier1(
     }
 
     warn!(
-        "Context at {:?} pressure (anchors: {}), attempting tier1 summarization (attempt {}/{}, full_recompact={})",
-        budget.pressure,
+        "Context at {:?} pressure after existing summaries (raw {:?}, anchors: {}, raw_tokens: {}, linearized_tokens: {}), attempting tier1 summarization (attempt {}/{}, full_recompact={})",
+        linearized_pressure,
+        raw_budget.pressure,
         anchor_count,
+        raw_budget.used_tokens_estimate,
+        linearized_used_tokens,
         *tier1_compact_count + 1,
         MAX_TIER1_COMPACT_ATTEMPTS,
         force_full_recompact,
@@ -507,27 +524,30 @@ pub async fn maybe_apply_tier1(
             let mut session = session_arc.lock().await;
             if force_full_recompact {
                 if let Some((orig_start, orig_end)) = summ_msg.summarized_range {
-                    let before = session.messages.len();
-                    let mut removed_in_range = 0usize;
-                    let mut idx = 0usize;
-                    session.messages.retain(|m| {
-                        let i = idx;
-                        idx += 1;
-                        if i < orig_start || i > orig_end {
-                            return true;
-                        }
-                        if !is_real_summarization_anchor(m) {
-                            return true;
-                        }
-                        match m.summarized_range {
-                            Some((s, e)) if s >= orig_start && e <= orig_end => {
-                                removed_in_range += 1;
-                                false
+                    let obsolete_anchor_ids: Vec<(String, bool)> = session
+                        .messages
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, msg)| {
+                            if !is_real_summarization_anchor(msg) {
+                                return None;
                             }
-                            _ => true,
-                        }
-                    });
-                    let removed_total = before.saturating_sub(session.messages.len());
+                            match msg.summarized_range {
+                                Some((s, e)) if s >= orig_start && e <= orig_end => {
+                                    Some((msg.message_id.clone(), idx <= orig_end))
+                                }
+                                _ => None,
+                            }
+                        })
+                        .collect();
+                    let removed_in_range = obsolete_anchor_ids
+                        .iter()
+                        .filter(|(_, before_new_end)| *before_new_end)
+                        .count();
+                    let removed_total = obsolete_anchor_ids.len();
+                    for (message_id, _) in obsolete_anchor_ids {
+                        session.remove_message(&message_id);
+                    }
                     info!(
                         "Tier1 full recompact removed {} obsolete summarization anchors",
                         removed_total
@@ -536,6 +556,7 @@ pub async fn maybe_apply_tier1(
                     summ_msg.summarized_range = Some((orig_start, new_end));
                 }
             }
+            session.thread.previous_response_id = None;
             session.add_message(summ_msg);
             session.cache_guard_force_next = true;
             info!(
@@ -740,25 +761,26 @@ mod tests {
         // Walks the message list, removes anchors whose range fits inside
         // the new summary's range, and returns the adjusted new_end.
         fn adjust(messages: &mut Vec<ChatMessage>, new_start: usize, new_end: usize) -> usize {
-            let mut removed_in_range = 0usize;
-            let mut idx = 0usize;
-            messages.retain(|m| {
-                let i = idx;
-                idx += 1;
-                if i < new_start || i > new_end {
-                    return true;
-                }
-                if !is_real_summarization_anchor(m) {
-                    return true;
-                }
-                match m.summarized_range {
-                    Some((s, e)) if s >= new_start && e <= new_end => {
-                        removed_in_range += 1;
-                        false
+            let obsolete_anchor_indices: Vec<usize> = messages
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, msg)| {
+                    if !is_real_summarization_anchor(msg) {
+                        return None;
                     }
-                    _ => true,
-                }
-            });
+                    match msg.summarized_range {
+                        Some((s, e)) if s >= new_start && e <= new_end => Some(idx),
+                        _ => None,
+                    }
+                })
+                .collect();
+            let removed_in_range = obsolete_anchor_indices
+                .iter()
+                .filter(|idx| **idx <= new_end)
+                .count();
+            for idx in obsolete_anchor_indices.into_iter().rev() {
+                messages.remove(idx);
+            }
             new_end.saturating_sub(removed_in_range)
         }
 
@@ -876,6 +898,25 @@ mod tests {
         let messages = vec![make_user_msg("hello"), make_assistant_msg("hi")];
         let budget = compute_context_budget(&messages, 1_000_000);
         assert!(matches!(budget.pressure, ContextPressure::Low));
+    }
+
+    #[test]
+    fn tier1_pressure_check_uses_existing_summaries() {
+        let large_summarized_text = "x".repeat(3_800);
+        let messages = vec![
+            make_user_msg(&large_summarized_text),
+            make_assistant_msg("answer"),
+            make_summarization_msg((0, 1)),
+            make_user_msg("follow up"),
+            make_assistant_msg("recent answer"),
+        ];
+
+        let raw_budget = compute_context_budget(&messages, 1_000);
+        let (_, linearized_pressure) =
+            effective_context_budget_after_existing_summaries(&messages, 1_000);
+
+        assert!(matches!(raw_budget.pressure, ContextPressure::Critical));
+        assert!(matches!(linearized_pressure, ContextPressure::Low));
     }
 
     #[test]

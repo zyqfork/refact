@@ -811,6 +811,7 @@ pub fn start_generation(
                                 context_limit_compact_count,
                                 affected_range,
                             ));
+                            session.thread.previous_response_id = None;
                             session.cache_guard_force_next = true;
                         }
                         continue;
