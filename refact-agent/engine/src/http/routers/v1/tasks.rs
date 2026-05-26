@@ -122,17 +122,10 @@ pub enum BoardPatch {
         report: String,
     },
     DeleteCard {
-        id: String,
+        card_id: String,
+        #[serde(default)]
+        force: Option<bool>,
     },
-}
-
-fn short_hex_id() -> String {
-    Uuid::new_v4()
-        .simple()
-        .to_string()
-        .chars()
-        .take(8)
-        .collect()
 }
 
 async fn enrich_task_with_session_state(gcx: Arc<GlobalContext>, task: &mut TaskMeta) {
@@ -284,11 +277,39 @@ pub async fn handle_get_task(
     })))
 }
 
+#[derive(Deserialize, Default)]
+pub struct DeleteTaskQuery {
+    #[serde(default)]
+    pub force: bool,
+}
+
 pub async fn handle_delete_task(
     State(app): State<AppState>,
     Path(task_id): Path<String>,
+    Query(query): Query<DeleteTaskQuery>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let gcx = app.gcx.clone();
+    if !query.force {
+        let board = storage::load_board(gcx.clone(), &task_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let active_card_ids: Vec<String> = board
+            .cards
+            .iter()
+            .filter(|c| {
+                c.column == "doing"
+                    || c.agent_worktree.is_some()
+                    || c.agent_branch.is_some()
+            })
+            .map(|c| c.id.clone())
+            .collect();
+        if !active_card_ids.is_empty() {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("task has active agent cards: {}", active_card_ids.join(", ")),
+            ));
+        }
+    }
     storage::delete_task(gcx, &task_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -388,13 +409,18 @@ pub async fn handle_get_board(
 }
 
 fn map_patch_board_error(error: String) -> (StatusCode, String) {
-    if error.starts_with("Board rev mismatch:") {
+    if error.starts_with("Board rev mismatch:") || error.starts_with("active agent card:") {
         return (StatusCode::CONFLICT, error);
     }
     if error.contains(" not found") {
         return (StatusCode::NOT_FOUND, error);
     }
-    if error.starts_with("Card ") || error.starts_with("Invalid column:") {
+    if error.starts_with("Card ")
+        || error.starts_with("Invalid column:")
+        || error == "comment body is empty"
+        || error == "invalid author_role"
+        || error == "reply_to references unknown comment"
+    {
         return (StatusCode::BAD_REQUEST, error);
     }
     (StatusCode::INTERNAL_SERVER_ERROR, error)
@@ -533,15 +559,28 @@ pub async fn handle_patch_board(
                 author_id,
                 reply_to,
             } => {
+                let valid_roles = ["planner", "agents", "user", "system", "http"];
+                if !valid_roles.contains(&author_role.as_str()) {
+                    return Err("invalid author_role".to_string());
+                }
+                let trimmed_body = body.trim();
+                if trimmed_body.is_empty() {
+                    return Err("comment body is empty".to_string());
+                }
                 let card = board
                     .get_card_mut(&card_id)
                     .ok_or_else(|| format!("Card {} not found", card_id))?;
+                if let Some(reply_id) = &reply_to {
+                    if !card.comments.iter().any(|c| &c.id == reply_id) {
+                        return Err("reply_to references unknown comment".to_string());
+                    }
+                }
                 card.comments.push(CardComment {
-                    id: short_hex_id(),
+                    id: Uuid::new_v4().to_string(),
                     author_role,
                     author_id,
                     timestamp: Utc::now().to_rfc3339(),
-                    body: truncate_chars(&body, 4000),
+                    body: truncate_chars(trimmed_body, 4000),
                     reply_to,
                 });
             }
@@ -552,8 +591,23 @@ pub async fn handle_patch_board(
                 card.final_report = Some(report);
                 card.final_report_structured = None;
             }
-            BoardPatch::DeleteCard { id } => {
-                board.cards.retain(|c| c.id != id);
+            BoardPatch::DeleteCard { card_id, force } => {
+                match board.cards.iter().position(|c| c.id == card_id) {
+                    None => return Err("card not found".to_string()),
+                    Some(idx) => {
+                        let is_active = {
+                            let card = &board.cards[idx];
+                            card.column == "doing"
+                                && (card.agent_chat_id.is_some()
+                                    || card.agent_worktree.is_some()
+                                    || card.agent_branch.is_some())
+                        };
+                        if is_active && !force.unwrap_or(false) {
+                            return Err(format!("active agent card: {}", card_id));
+                        }
+                        board.cards.remove(idx);
+                    }
+                }
             }
         }
 
@@ -1124,7 +1178,10 @@ pub async fn handle_tasks_subscribe(
         yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
 
         let mut rx = rx;
-        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(10),
+        );
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
@@ -1146,9 +1203,9 @@ pub async fn handle_tasks_subscribe(
                     }
                 }
                 _ = heartbeat.tick() => {
-                    let tasks = list_tasks_with_session_state(gcx.clone()).await.unwrap_or_default();
+                    let ts = Utc::now().to_rfc3339();
                     let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
-                    let envelope = TaskEventEnvelope { seq, event: TaskEvent::Snapshot { tasks } };
+                    let envelope = TaskEventEnvelope { seq, event: TaskEvent::Heartbeat { ts } };
                     let json = serde_json::to_string(&envelope).unwrap_or_default();
                     yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json));
                 }
@@ -1627,7 +1684,7 @@ mod tests {
                     body: "Looks good from the tiny chaos desk.".to_string(),
                     author_role: "planner".to_string(),
                     author_id: Some("planner-chat".to_string()),
-                    reply_to: Some("12345678".to_string()),
+                    reply_to: None,
                 },
             }),
         )
@@ -1641,8 +1698,367 @@ mod tests {
         assert_eq!(comment.author_role, "planner");
         assert_eq!(comment.author_id.as_deref(), Some("planner-chat"));
         assert_eq!(comment.body, "Looks good from the tiny chaos desk.");
-        assert_eq!(comment.reply_to.as_deref(), Some("12345678"));
-        assert_eq!(comment.id.len(), 8);
+        assert!(comment.reply_to.is_none());
+        assert_eq!(comment.id.len(), 36);
+        assert!(Uuid::parse_str(&comment.id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn add_comment_rejects_empty_body() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-empty-body").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-empty-body".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-empty-body".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 1,
+                patch: BoardPatch::AddComment {
+                    card_id: "card-a".to_string(),
+                    body: String::new(),
+                    author_role: "user".to_string(),
+                    author_id: None,
+                    reply_to: None,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn add_comment_rejects_whitespace_only_body() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-ws-body").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-ws-body".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-ws-body".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 1,
+                patch: BoardPatch::AddComment {
+                    card_id: "card-a".to_string(),
+                    body: "   \t\n  ".to_string(),
+                    author_role: "user".to_string(),
+                    author_id: None,
+                    reply_to: None,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn add_comment_validates_author_role_enum() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-role-enum").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-role-enum".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-role-enum".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 1,
+                patch: BoardPatch::AddComment {
+                    card_id: "card-a".to_string(),
+                    body: "Hello.".to_string(),
+                    author_role: "invalid_role".to_string(),
+                    author_id: None,
+                    reply_to: None,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn add_comment_rejects_unknown_reply_to() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-reply-to").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-reply-to".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-reply-to".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 1,
+                patch: BoardPatch::AddComment {
+                    card_id: "card-a".to_string(),
+                    body: "Reply to nothing.".to_string(),
+                    author_role: "user".to_string(),
+                    author_id: None,
+                    reply_to: Some("nonexistent-id".to_string()),
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn add_comment_returns_full_uuid_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-uuid-id").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-uuid-id".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-uuid-id".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 1,
+                patch: BoardPatch::AddComment {
+                    card_id: "card-a".to_string(),
+                    body: "Full UUID test.".to_string(),
+                    author_role: "user".to_string(),
+                    author_id: None,
+                    reply_to: None,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        let board = storage::load_board(gcx, "task-uuid-id").await.unwrap();
+        let comment = &board.get_card("card-a").unwrap().comments[0];
+
+        assert_eq!(comment.id.len(), 36);
+        assert!(Uuid::parse_str(&comment.id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_card_returns_404_for_missing_card() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-del-missing").await;
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-del-missing".to_string()),
+            Json(UpdateBoardRequest {
+                rev: 0,
+                patch: BoardPatch::DeleteCard {
+                    card_id: "nonexistent".to_string(),
+                    force: None,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_card_refuses_active_agent_card_without_force() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-del-active").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-del-active".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+        storage::update_board_atomic(gcx.clone(), "task-del-active", |board| {
+            if let Some(card) = board.get_card_mut("card-a") {
+                card.column = "doing".to_string();
+                card.agent_chat_id = Some("agent-chat".to_string());
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let board = storage::load_board(gcx.clone(), "task-del-active").await.unwrap();
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-del-active".to_string()),
+            Json(UpdateBoardRequest {
+                rev: board.rev,
+                patch: BoardPatch::DeleteCard {
+                    card_id: "card-a".to_string(),
+                    force: None,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status(result), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_card_with_force_removes_active_agent_card() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-del-force").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-del-force".to_string()),
+            Json(create_card_request(0, "card-a")),
+        )
+        .await
+        .unwrap();
+        storage::update_board_atomic(gcx.clone(), "task-del-force", |board| {
+            if let Some(card) = board.get_card_mut("card-a") {
+                card.column = "doing".to_string();
+                card.agent_chat_id = Some("agent-chat".to_string());
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let board = storage::load_board(gcx.clone(), "task-del-force").await.unwrap();
+
+        let result = handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-del-force".to_string()),
+            Json(UpdateBoardRequest {
+                rev: board.rev,
+                patch: BoardPatch::DeleteCard {
+                    card_id: "card-a".to_string(),
+                    force: Some(true),
+                },
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let board = storage::load_board(gcx, "task-del-force").await.unwrap();
+        assert!(board.get_card("card-a").is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_task_refuses_active_worktree_without_force() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-del-wt").await;
+        handle_patch_board(
+            State(app(gcx.clone())),
+            Path("task-del-wt".to_string()),
+            Json(create_card_request(0, "card-wt")),
+        )
+        .await
+        .unwrap();
+        storage::update_board_atomic(gcx.clone(), "task-del-wt", |board| {
+            if let Some(card) = board.get_card_mut("card-wt") {
+                card.agent_worktree = Some("/tmp/worktree".to_string());
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let result = handle_delete_task(
+            State(app(gcx.clone())),
+            Path("task-del-wt".to_string()),
+            Query(DeleteTaskQuery { force: false }),
+        )
+        .await;
+
+        let (status_code, msg) = result.unwrap_err();
+        assert_eq!(status_code, StatusCode::CONFLICT);
+        assert!(msg.contains("card-wt"));
+    }
+
+    #[tokio::test]
+    async fn tasks_subscribe_emits_heartbeat_not_snapshot() {
+        use futures::StreamExt;
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-hb").await;
+
+        let response = handle_tasks_subscribe(State(app(gcx.clone())))
+            .await
+            .unwrap();
+        let mut body_stream = response.into_body();
+
+        let chunk1 = body_stream.next().await.unwrap().unwrap();
+        let s1 = String::from_utf8(chunk1.to_vec()).unwrap();
+        let event1: serde_json::Value =
+            serde_json::from_str(s1.strip_prefix("data: ").unwrap().trim_end()).unwrap();
+        assert_eq!(event1["type"], "snapshot");
+
+        let ts = Utc::now().to_rfc3339();
+        let seq = gcx
+            .task_events_seq
+            .as_ref()
+            .unwrap()
+            .fetch_add(1, Ordering::SeqCst);
+        gcx.task_events_tx
+            .as_ref()
+            .unwrap()
+            .send(TaskEventEnvelope {
+                seq,
+                event: TaskEvent::Heartbeat { ts },
+            })
+            .ok();
+
+        let chunk2 = body_stream.next().await.unwrap().unwrap();
+        let s2 = String::from_utf8(chunk2.to_vec()).unwrap();
+        let event2: serde_json::Value =
+            serde_json::from_str(s2.strip_prefix("data: ").unwrap().trim_end()).unwrap();
+        assert_eq!(event2["type"], "heartbeat");
+        assert!(event2.get("tasks").is_none());
+    }
+
+    #[tokio::test]
+    async fn tasks_subscribe_does_not_emit_duplicate_initial_snapshot() {
+        use futures::StreamExt;
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = setup_task(temp.path(), "task-hb-dedup").await;
+
+        let response = handle_tasks_subscribe(State(app(gcx.clone())))
+            .await
+            .unwrap();
+        let mut body_stream = response.into_body();
+
+        let chunk1 = body_stream.next().await.unwrap().unwrap();
+        let s1 = String::from_utf8(chunk1.to_vec()).unwrap();
+        let event1: serde_json::Value =
+            serde_json::from_str(s1.strip_prefix("data: ").unwrap().trim_end()).unwrap();
+        assert_eq!(event1["type"], "snapshot");
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            body_stream.next(),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "No duplicate event should appear within 100ms of initial snapshot"
+        );
     }
 
     #[tokio::test]

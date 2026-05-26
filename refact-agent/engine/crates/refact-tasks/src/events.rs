@@ -24,6 +24,9 @@ pub enum TaskEvent {
         rev: u64,
         board: TaskBoard,
     },
+    Heartbeat {
+        ts: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,6 +89,24 @@ mod tests {
             }
             _ => panic!("unexpected event variant"),
         }
+    }
+
+    #[test]
+    fn heartbeat_event_serializes_to_heartbeat_type() {
+        let envelope = TaskEventEnvelope {
+            seq: 5,
+            event: TaskEvent::Heartbeat {
+                ts: "2026-01-01T00:00:00Z".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&envelope).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["seq"], 5);
+        assert_eq!(value["type"], "heartbeat");
+        assert_eq!(value["ts"], "2026-01-01T00:00:00Z");
+        assert!(value.get("tasks").is_none());
     }
 
     #[test]
