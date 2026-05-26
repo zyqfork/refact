@@ -88,6 +88,7 @@ pub mod lsp;
 
 pub mod agentic;
 pub mod constants;
+pub mod exec;
 pub mod ext;
 pub mod files_correction_cache;
 pub mod git;
