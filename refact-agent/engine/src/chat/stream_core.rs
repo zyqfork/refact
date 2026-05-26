@@ -25,6 +25,8 @@ lazy_static::lazy_static! {
         tokio::sync::Mutex::new(HashMap::new());
 }
 
+const OPENAI_CODEX_WEBSOCKET_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn merge_usage(existing: Option<ChatUsage>, incoming: ChatUsage) -> ChatUsage {
     match existing {
         None => incoming,
@@ -1255,6 +1257,7 @@ async fn ensure_openai_codex_websocket_connected(
         return Ok(());
     }
 
+    let connect_started_at = Instant::now();
     let mut request = websocket_endpoint
         .into_client_request()
         .map_err(|e| format!("OpenAI Codex WebSocket request build failed: {}", e))?;
@@ -1297,6 +1300,11 @@ async fn ensure_openai_codex_websocket_connected(
         session.turn_state = Some(turn_state.to_string());
     }
     session.connection = Some(websocket);
+    tracing::info!(
+        elapsed_ms = connect_started_at.elapsed().as_millis() as u64,
+        has_turn_state = session.turn_state.is_some(),
+        "OpenAI Codex WebSocket connected"
+    );
     Ok(())
 }
 
@@ -1321,6 +1329,18 @@ async fn run_openai_codex_websocket_exchange<C: StreamCollector>(
     .await?;
 
     let request_body = prepare_openai_codex_websocket_body(&http_parts.body, session, prewarm);
+    let request_kind = if prewarm {
+        "prewarm"
+    } else if request_body.get("previous_response_id").is_some() {
+        "incremental"
+    } else {
+        "full"
+    };
+    let request_input_items = request_body
+        .get("input")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
     let mut websocket = session
         .connection
         .take()
@@ -1416,7 +1436,25 @@ async fn run_openai_codex_websocket_exchange<C: StreamCollector>(
 
     session.last_request_body = Some(http_parts.body.clone());
     session.last_response = response_tracker.into_last_response();
+    let response_id = session
+        .last_response
+        .as_ref()
+        .map(|r| r.response_id.as_str())
+        .unwrap_or("");
+    let response_output_items = session
+        .last_response
+        .as_ref()
+        .map(|r| r.output_items.len())
+        .unwrap_or(0);
     session.connection = Some(websocket);
+    tracing::info!(
+        request_kind,
+        elapsed_ms = stream_started_at.elapsed().as_millis() as u64,
+        input_items = request_input_items,
+        response_id_present = !response_id.is_empty(),
+        output_items = response_output_items,
+        "OpenAI Codex WebSocket exchange completed"
+    );
     Ok(finalize_accumulators(accumulators, collector))
 }
 
@@ -1431,7 +1469,17 @@ async fn run_llm_websocket_request<C: StreamCollector>(
     collector: &mut C,
 ) -> Result<Vec<ChoiceFinal>, String> {
     session.turn_state = None;
-    if session.last_request_body.is_none() {
+    let should_prewarm = session.last_request_body.is_none();
+    let current_thread = std::thread::current();
+    let thread_name = current_thread.name().unwrap_or("unnamed");
+    tracing::info!(
+        prewarm = should_prewarm,
+        has_previous_request = session.last_request_body.is_some(),
+        body_bytes = http_parts.body.to_string().len(),
+        thread_name,
+        "OpenAI Codex WebSocket request starting"
+    );
+    if should_prewarm {
         let mut prewarm_collector = ReplayCollector::default();
         run_openai_codex_websocket_exchange(
             websocket_endpoint,
@@ -1482,6 +1530,73 @@ async fn run_llm_websocket_request<C: StreamCollector>(
         }
         other => other,
     }
+}
+
+type OpenAICodexWebSocketThreadResult = Result<
+    (Vec<ChoiceFinal>, ReplayCollector, OpenAICodexWebSocketSession),
+    (String, OpenAICodexWebSocketSession),
+>;
+
+async fn run_llm_websocket_request_on_large_stack(
+    wire_format: WireFormat,
+    websocket_endpoint: String,
+    http_parts: HttpParts,
+    auth_token: String,
+    abort_flag: Option<Arc<AtomicBool>>,
+    abort_notify: Option<Arc<tokio::sync::Notify>>,
+    mut session: OpenAICodexWebSocketSession,
+) -> OpenAICodexWebSocketThreadResult {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let spawn_result = std::thread::Builder::new()
+        .name("openai-codex-websocket".to_string())
+        .stack_size(OPENAI_CODEX_WEBSOCKET_THREAD_STACK_BYTES)
+        .spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => {
+                    let adapter = get_adapter(wire_format);
+                    let mut replay_collector = ReplayCollector::default();
+                    let outcome = runtime.block_on(run_llm_websocket_request(
+                        &websocket_endpoint,
+                        &http_parts,
+                        adapter,
+                        &auth_token,
+                        abort_flag,
+                        abort_notify,
+                        &mut session,
+                        &mut replay_collector,
+                    ));
+                    match outcome {
+                        Ok(results) => Ok((results, replay_collector, session)),
+                        Err(error) => Err((error, session)),
+                    }
+                }
+                Err(error) => Err((
+                    format!("OpenAI Codex WebSocket runtime build failed: {}", error),
+                    session,
+                )),
+            };
+            let _ = tx.send(result);
+        });
+
+    if let Err(error) = spawn_result {
+        return Err((
+            format!("OpenAI Codex WebSocket thread spawn failed: {}", error),
+            OpenAICodexWebSocketSession::default(),
+        ));
+    }
+
+    rx.await.map_err(|error| {
+        (
+            format!(
+                "OpenAI Codex WebSocket thread stopped before reporting result: {}",
+                error
+            ),
+            OpenAICodexWebSocketSession::default(),
+        )
+    })?
 }
 
 fn openai_codex_websocket_error_message(event: &Value) -> Option<String> {
@@ -1690,29 +1805,32 @@ pub async fn run_llm_stream<C: StreamCollector>(
         "LLM streaming request"
     );
 
+    let mut codex_http_fallback_reason: Option<String> = None;
     if params.allow_websocket {
         if let Some(websocket_endpoint) = openai_codex_websocket_endpoint(&params.model_rec) {
-            let mut websocket_session =
+            let websocket_session =
                 take_openai_codex_websocket_session(&app, params.chat_id.as_ref()).await;
             if !websocket_session.disabled {
-                let mut replay_collector = ReplayCollector::default();
-                match run_llm_websocket_request(
-                    websocket_endpoint,
-                    &http_parts,
-                    adapter,
-                    &params.model_rec.auth_token,
+                match run_llm_websocket_request_on_large_stack(
+                    wire_format,
+                    websocket_endpoint.to_string(),
+                    HttpParts {
+                        url: http_parts.url.clone(),
+                        headers: http_parts.headers.clone(),
+                        body: http_parts.body.clone(),
+                    },
+                    params.model_rec.auth_token.clone(),
                     params.abort_flag.clone(),
                     params.abort_notify.clone(),
-                    &mut websocket_session,
-                    &mut replay_collector,
+                    websocket_session,
                 )
                 .await
                 {
-                    Ok(results) => {
+                    Ok((results, replay_collector, returned_session)) => {
                         store_openai_codex_websocket_session(
                             &app,
                             params.chat_id.as_ref(),
-                            websocket_session,
+                            returned_session,
                         )
                         .await;
                         commit_cache_guard_snapshot_if_needed(
@@ -1724,27 +1842,28 @@ pub async fn run_llm_stream<C: StreamCollector>(
                         replay_collector.replay(collector);
                         return Ok(LlmStreamOutcome::Choices(results));
                     }
-                    Err(error) => {
+                    Err((error, mut returned_session)) => {
                         if abort_requested(params.abort_flag.as_ref()) || is_abort_error(&error) {
                             store_openai_codex_websocket_session(
                                 &app,
                                 params.chat_id.as_ref(),
-                                websocket_session,
+                                returned_session,
                             )
                             .await;
                             return Err(LlmStreamError::new(error, partial_output_emitted));
                         }
-                        websocket_session.disabled = true;
+                        returned_session.disabled = true;
                         clear_openai_codex_websocket_incremental_state(
-                            &mut websocket_session,
+                            &mut returned_session,
                             true,
                         );
                         store_openai_codex_websocket_session(
                             &app,
                             params.chat_id.as_ref(),
-                            websocket_session,
+                            returned_session,
                         )
                         .await;
+                        codex_http_fallback_reason = Some(format!("websocket_failed: {}", error));
                         tracing::warn!(
                         "OpenAI Codex WebSocket streaming failed; disabling WebSocket for this chat session and falling back to HTTP SSE: {}",
                         error
@@ -1752,6 +1871,7 @@ pub async fn run_llm_stream<C: StreamCollector>(
                     }
                 }
             } else {
+                codex_http_fallback_reason = Some("websocket_disabled_for_session".to_string());
                 store_openai_codex_websocket_session(
                     &app,
                     params.chat_id.as_ref(),
@@ -1759,7 +1879,23 @@ pub async fn run_llm_stream<C: StreamCollector>(
                 )
                 .await;
             }
+        } else if is_openai_codex_chatgpt_backend(&params.model_rec) {
+            codex_http_fallback_reason = Some("websocket_endpoint_missing".to_string());
         }
+    } else if is_openai_codex_chatgpt_backend(&params.model_rec) {
+        codex_http_fallback_reason = Some("websocket_not_allowed".to_string());
+    }
+
+    if is_openai_codex_chatgpt_backend(&params.model_rec) {
+        tracing::info!(
+            reason = codex_http_fallback_reason
+                .as_deref()
+                .unwrap_or("websocket_not_attempted"),
+            model = %params.llm_request.model_id,
+            messages_count = params.llm_request.messages.len(),
+            body_bytes = http_parts.body.to_string().len(),
+            "OpenAI Codex HTTP SSE request starting"
+        );
     }
 
     let mut response = send_llm_http_request(
