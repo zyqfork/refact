@@ -10,7 +10,7 @@ use serde_json::json;
 use tokio::sync::{Mutex as AMutex, broadcast};
 use tokio::fs;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::call_validation::{ChatMessage, ChatContent};
@@ -523,7 +523,7 @@ async fn validate_loaded_worktree_strict(
     match service.validate_worktree_meta_strict(&worktree).await {
         Ok(validated) => Some(validated),
         Err(e) => {
-            warn!(
+            debug!(
                 "Ignoring untrusted trajectory worktree metadata for chat {}: {}",
                 chat_id, e
             );
