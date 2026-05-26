@@ -6,9 +6,9 @@ use super::actor::BuddyService;
 use super::diagnostics::DiagnosticContext;
 use super::settings::BuddySettings;
 use super::types::{
-    BuddyActivity, BuddyFact, BuddyJobState, BuddyOnboarding, BuddyPersonalityProfile,
-    BuddyPetState, BuddyPulse, BuddyRuntimeEvent, BuddySpeechItem, BuddySuggestion,
-    BuddyWorkflowSummary,
+    BuddyActivity, BuddyBubblePolicy, BuddyFact, BuddyJobState, BuddyOnboarding,
+    BuddyPersonalityProfile, BuddyPetState, BuddyPulse, BuddyRuntimeEvent, BuddySpeechItem,
+    BuddySuggestion, BuddyWorkflowSummary,
 };
 use super::voice_service::SpeechIntent;
 use crate::buddy::autonomous_workflows::is_autonomous_workflow_id;
@@ -108,7 +108,24 @@ pub(crate) fn speech_runtime_event(
     event.persistent = speech.persistent;
     event.controls = speech.controls.clone();
     event.chat_id = speech.chat_id.clone();
+    event.bubble_policy = Some(speech_runtime_bubble_policy(intent));
     event
+}
+
+fn speech_runtime_bubble_policy(intent: SpeechIntent) -> BuddyBubblePolicy {
+    match intent {
+        SpeechIntent::Humor | SpeechIntent::Insight | SpeechIntent::MemoryPulseCommentary => {
+            BuddyBubblePolicy::Ambient
+        }
+        SpeechIntent::Greeting
+        | SpeechIntent::Tour
+        | SpeechIntent::Milestone
+        | SpeechIntent::Win
+        | SpeechIntent::QuestAccept
+        | SpeechIntent::QuestComplete
+        | SpeechIntent::Suggestion
+        | SpeechIntent::ErrorAlert => BuddyBubblePolicy::Durable,
+    }
 }
 
 fn speech_runtime_priority(intent: SpeechIntent) -> &'static str {
@@ -668,6 +685,47 @@ mod tests {
         assert!(service.active_speech.is_some());
     }
 
+    fn speech_item(intent: SpeechIntent) -> BuddySpeechItem {
+        BuddySpeechItem {
+            id: format!("speech-{}", crate::buddy::speech_policy::intent_key(intent)),
+            text: "test speech".to_string(),
+            mood: intent.mood().to_string(),
+            scope: "global".to_string(),
+            persistent: false,
+            ttl_seconds: 10,
+            dedupe_key: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            controls: vec![],
+            chat_id: None,
+        }
+    }
+
+    #[test]
+    fn speech_runtime_event_sets_ambient_policy_for_humor() {
+        let event = speech_runtime_event(
+            "test_job",
+            SpeechIntent::Humor,
+            &speech_item(SpeechIntent::Humor),
+            "Humor".to_string(),
+            None,
+        );
+
+        assert_eq!(event.bubble_policy, Some(BuddyBubblePolicy::Ambient));
+    }
+
+    #[test]
+    fn speech_runtime_event_sets_durable_policy_for_greeting() {
+        let event = speech_runtime_event(
+            "test_job",
+            SpeechIntent::Greeting,
+            &speech_item(SpeechIntent::Greeting),
+            "Greeting".to_string(),
+            None,
+        );
+
+        assert_eq!(event.bubble_policy, Some(BuddyBubblePolicy::Durable));
+    }
+
     #[tokio::test]
     async fn competing_speech_intents_pick_one_winner() {
         let dir = tempfile::tempdir().unwrap();
@@ -1050,6 +1108,7 @@ mod tests {
                 priority: "normal".to_string(),
                 created_at: chrono::Utc::now().to_rfc3339(),
                 ttl_ms: None,
+                bubble_policy: None,
                 speech_text: None,
                 scene: None,
                 duration_hint: None,

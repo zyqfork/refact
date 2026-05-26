@@ -14,6 +14,14 @@ pub struct BuddyOnboarding {
     pub last_greeting_version: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuddyBubblePolicy {
+    Ambient,
+    Durable,
+    EventOnce,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuddyRuntimeEvent {
     pub id: String,
@@ -27,6 +35,8 @@ pub struct BuddyRuntimeEvent {
     pub priority: String,
     pub created_at: String,
     pub ttl_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_policy: Option<BuddyBubblePolicy>,
     #[serde(default)]
     pub speech_text: Option<String>,
     #[serde(default)]
@@ -764,4 +774,47 @@ pub struct InvestigationContext {
     #[serde(default)]
     pub config_summary: String,
     pub initial_user_message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_runtime_event_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": "event-1",
+            "signal_type": "health",
+            "title": "Health",
+            "source": "test",
+            "status": "completed",
+            "priority": "normal",
+            "created_at": "2026-01-01T00:00:00Z"
+        })
+    }
+
+    #[test]
+    fn runtime_event_without_bubble_policy_deserializes_to_none() {
+        let event: BuddyRuntimeEvent =
+            serde_json::from_value(minimal_runtime_event_json()).unwrap();
+
+        assert_eq!(event.bubble_policy, None);
+        let serialized = serde_json::to_value(event).unwrap();
+        assert!(serialized.get("bubble_policy").is_none());
+    }
+
+    #[test]
+    fn runtime_event_round_trips_ambient_bubble_policy() {
+        let mut value = minimal_runtime_event_json();
+        value["bubble_policy"] = serde_json::json!("ambient");
+
+        let event: BuddyRuntimeEvent = serde_json::from_value(value).unwrap();
+        let serialized = serde_json::to_string(&event).unwrap();
+        let round_tripped: BuddyRuntimeEvent = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(event.bubble_policy, Some(BuddyBubblePolicy::Ambient));
+        assert_eq!(
+            round_tripped.bubble_policy,
+            Some(BuddyBubblePolicy::Ambient)
+        );
+    }
 }
