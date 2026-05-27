@@ -1470,20 +1470,65 @@ fn task_trajectory_context_from_path(
     None
 }
 
+fn is_under_task_root(path: &Path, task_roots: &[PathBuf]) -> bool {
+    task_roots.iter().any(|root| path.starts_with(root))
+}
+
 fn should_dispatch_trajectory_path(path: &Path, task_roots: &[PathBuf]) -> bool {
     if path.extension().and_then(|e| e.to_str()) != Some("json") {
         return false;
     }
-    let is_under_tasks = task_roots.iter().any(|root| path.starts_with(root));
-    if !is_under_tasks {
+    if !is_under_task_root(path, task_roots) {
         return true;
     }
     task_trajectory_context_from_path(path, task_roots).is_some()
 }
 
+async fn collect_task_trajectory_chat_ids_under_path(
+    path: &Path,
+    task_roots: &[PathBuf],
+) -> Vec<String> {
+    if !is_under_task_root(path, task_roots) {
+        return Vec::new();
+    }
+
+    let mut chat_ids = Vec::new();
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if should_dispatch_trajectory_path(&path, task_roots) {
+            if let Some(chat_id) = path.file_stem().and_then(|s| s.to_str()) {
+                chat_ids.push(chat_id.to_string());
+            }
+            continue;
+        }
+
+        let metadata = match fs::metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+
+        let mut entries = match fs::read_dir(&path).await {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            pending.push(entry.path());
+        }
+    }
+    chat_ids
+}
+
+enum TrajectoryWatcherMessage {
+    Trajectory { chat_id: String, is_remove: bool },
+    ScanPath(PathBuf),
+}
+
 pub fn start_trajectory_watcher(gcx: Arc<GlobalContext>) {
     let gcx_weak = Arc::downgrade(&gcx);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, bool)>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TrajectoryWatcherMessage>();
 
     tokio::spawn(async move {
         let trajectories_dirs = get_all_trajectories_dirs_from_weak(&gcx_weak).await;
@@ -1525,11 +1570,15 @@ pub fn start_trajectory_watcher(gcx: Arc<GlobalContext>) {
                     if path.extension().map(|e| e == "tmp").unwrap_or(false) {
                         continue;
                     }
-                    if !should_dispatch_trajectory_path(&path, &task_roots_for_callback) {
-                        continue;
-                    }
-                    if let Some(chat_id) = path.file_stem().and_then(|s| s.to_str()) {
-                        let _ = tx_clone.send((chat_id.to_string(), is_remove));
+                    if should_dispatch_trajectory_path(&path, &task_roots_for_callback) {
+                        if let Some(chat_id) = path.file_stem().and_then(|s| s.to_str()) {
+                            let _ = tx_clone.send(TrajectoryWatcherMessage::Trajectory {
+                                chat_id: chat_id.to_string(),
+                                is_remove,
+                            });
+                        }
+                    } else if !is_remove && is_under_task_root(&path, &task_roots_for_callback) {
+                        let _ = tx_clone.send(TrajectoryWatcherMessage::ScanPath(path));
                     }
                 }
             }
@@ -1565,10 +1614,12 @@ pub fn start_trajectory_watcher(gcx: Arc<GlobalContext>) {
 
         let mut pending: std::collections::HashMap<String, (Instant, bool)> =
             std::collections::HashMap::new();
+        let mut pending_scans: std::collections::HashMap<PathBuf, Instant> =
+            std::collections::HashMap::new();
         let debounce = timeouts().watcher_debounce;
 
         loop {
-            let timeout = if pending.is_empty() {
+            let timeout = if pending.is_empty() && pending_scans.is_empty() {
                 timeouts().watcher_idle
             } else {
                 timeouts().watcher_poll
@@ -1577,8 +1628,11 @@ pub fn start_trajectory_watcher(gcx: Arc<GlobalContext>) {
             tokio::select! {
                 msg = rx.recv() => {
                     match msg {
-                        Some((chat_id, is_remove)) => {
+                        Some(TrajectoryWatcherMessage::Trajectory { chat_id, is_remove }) => {
                             pending.insert(chat_id, (Instant::now(), is_remove));
+                        }
+                        Some(TrajectoryWatcherMessage::ScanPath(path)) => {
+                            pending_scans.insert(path, Instant::now());
                         }
                         None => break,
                     }
@@ -1587,6 +1641,21 @@ pub fn start_trajectory_watcher(gcx: Arc<GlobalContext>) {
                     if gcx_weak.upgrade().is_none() {
                         break;
                     }
+                }
+            }
+
+            let now = Instant::now();
+            let ready_scans: Vec<PathBuf> = pending_scans
+                .iter()
+                .filter(|(_, t)| now.duration_since(**t) >= debounce)
+                .map(|(path, _)| path.clone())
+                .collect();
+
+            for path in ready_scans {
+                pending_scans.remove(&path);
+                for chat_id in collect_task_trajectory_chat_ids_under_path(&path, &task_roots).await
+                {
+                    pending.insert(chat_id, (Instant::now(), false));
                 }
             }
 
