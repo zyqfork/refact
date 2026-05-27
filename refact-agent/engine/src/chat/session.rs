@@ -224,6 +224,13 @@ impl ChatSession {
                 .is_some_and(|deadline| *deadline > chrono::Utc::now())
     }
 
+    pub fn is_idle(&self) -> bool {
+        matches!(
+            self.runtime.state,
+            SessionState::Idle | SessionState::WaitingUserInput
+        )
+    }
+
     pub fn is_idle_for_cleanup(&self) -> bool {
         let is_idle_like = matches!(
             self.runtime.state,

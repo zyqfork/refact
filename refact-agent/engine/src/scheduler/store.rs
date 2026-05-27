@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 
 use super::types::ScheduledTask;
 
@@ -18,11 +18,22 @@ pub trait CronStore: Send + Sync {
         last_fired_at_ms: u64,
         fire_count: u32,
     ) -> Result<(), String>;
+    fn change_notify(&self) -> Arc<Notify>;
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct InMemoryCronStore {
     tasks: Arc<RwLock<HashMap<String, ScheduledTask>>>,
+    change_notify: Arc<Notify>,
+}
+
+impl Default for InMemoryCronStore {
+    fn default() -> Self {
+        Self {
+            tasks: Arc::new(RwLock::new(HashMap::new())),
+            change_notify: Arc::new(Notify::new()),
+        }
+    }
 }
 
 impl InMemoryCronStore {
@@ -38,6 +49,7 @@ impl InMemoryCronStore {
                     .map(|task| (task.id.clone(), task))
                     .collect(),
             )),
+            change_notify: Arc::new(Notify::new()),
         }
     }
 }
@@ -46,11 +58,16 @@ impl InMemoryCronStore {
 impl CronStore for InMemoryCronStore {
     async fn add(&self, task: ScheduledTask) -> Result<(), String> {
         self.tasks.write().await.insert(task.id.clone(), task);
+        self.change_notify.notify_waiters();
         Ok(())
     }
 
     async fn remove(&self, id: &str) -> Result<bool, String> {
-        Ok(self.tasks.write().await.remove(id).is_some())
+        let removed = self.tasks.write().await.remove(id).is_some();
+        if removed {
+            self.change_notify.notify_waiters();
+        }
+        Ok(removed)
     }
 
     async fn list(&self) -> Vec<ScheduledTask> {
@@ -77,7 +94,12 @@ impl CronStore for InMemoryCronStore {
             .ok_or_else(|| format!("Scheduled task {id} not found"))?;
         task.last_fired_at_ms = Some(last_fired_at_ms);
         task.fire_count = fire_count;
+        self.change_notify.notify_waiters();
         Ok(())
+    }
+
+    fn change_notify(&self) -> Arc<Notify> {
+        self.change_notify.clone()
     }
 }
 
@@ -138,6 +160,10 @@ impl CronStore for JsonFileCronStore {
             .update_fired(id, last_fired_at_ms, fire_count)
             .await?;
         self.persist().await
+    }
+
+    fn change_notify(&self) -> Arc<Notify> {
+        self.cache.change_notify()
     }
 }
 
