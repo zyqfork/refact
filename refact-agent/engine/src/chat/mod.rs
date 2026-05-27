@@ -6,6 +6,7 @@ pub mod diagnostics;
 mod generation;
 mod handlers;
 pub mod history_limit;
+pub mod internal_roles;
 pub mod linearize;
 pub(crate) mod openai_codex_ws;
 mod openai_merge;
