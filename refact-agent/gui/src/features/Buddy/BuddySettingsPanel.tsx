@@ -130,25 +130,34 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
           />
         </div>
         <div className={styles.row}>
-          <Text size="2">Message observation</Text>
+          <span className={styles.settingText}>
+            <Text size="2">Chat pattern observation</Text>
+            <small className={styles.settingDescription}>
+              Periodic background scan for retry/stuck chat patterns.
+              Independent from live chat reactions.
+            </small>
+          </span>
           <Switch
             checked={settings.message_observation_enabled}
             onCheckedChange={(v) => patch("message_observation_enabled", v)}
-            aria-label="message observation enabled"
+            aria-label="chat pattern observation enabled"
+            data-testid="buddy-toggle-chat-pattern-observation"
           />
         </div>
         <div className={styles.row}>
-          <div>
-            <Text size="2">Chat reactions</Text>
-            <Text size="1" color="gray">
-              Buddy may briefly inspect recent messages to make jokes, share
-              insights, or flag bug candidates. Text is redacted and not stored.
-            </Text>
-          </div>
+          <span className={styles.settingText}>
+            <Text size="2">Live chat reactions</Text>
+            <small className={styles.settingDescription}>
+              Pixel reacts to your messages with short comments, insights, or
+              bug-candidate flags. Redacted input is used transiently and not
+              stored.
+            </small>
+          </span>
           <Switch
             checked={settings.chat_reactions_enabled}
             onCheckedChange={(v) => patch("chat_reactions_enabled", v)}
-            aria-label="chat reactions enabled"
+            aria-label="live chat reactions enabled"
+            data-testid="buddy-toggle-live-chat-reactions"
           />
         </div>
         <div className={styles.row}>

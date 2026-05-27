@@ -10,6 +10,7 @@ import { BuddyHome } from "../features/Buddy/BuddyHome";
 import { BuddyDashboardScene } from "../features/Buddy/BuddyDashboardScene";
 import { BuddyActivityPanel } from "../features/Buddy/BuddyActivityPanel";
 import { BuddyRecentErrorsPanel } from "../features/Buddy/BuddyRecentErrorsPanel";
+import { BuddySettingsPanel } from "../features/Buddy/BuddySettingsPanel";
 import { formatCompactNumber } from "../features/Buddy/buddyUtils";
 import {
   addOpportunity,
@@ -509,6 +510,52 @@ describe("buddy UI polish", () => {
     expect(screen.getByText("Invalid activity time")).toBeInTheDocument();
     expect(screen.getByText("Runtime error")).toBeInTheDocument();
     expect(screen.queryByText("Invalid Date")).not.toBeInTheDocument();
+  });
+
+  it("BuddySettingsPanel_shows_chat_observation_and_reactions_as_independent", async () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    const snapshot = makeSnapshot();
+    snapshot.settings = {
+      ...snapshot.settings,
+      message_observation_enabled: false,
+      chat_reactions_enabled: true,
+      observers: {
+        ...snapshot.settings.observers,
+        chat_pattern: false,
+      },
+    };
+    store.dispatch(setBuddySnapshot(snapshot));
+
+    const { user } = render(<BuddySettingsPanel />, {
+      preloadedState: { ...CONFIG_STATE, buddy: store.getState().buddy },
+    });
+
+    const patternToggle = await screen.findByTestId(
+      "buddy-toggle-chat-pattern-observation",
+    );
+    const reactionsToggle = screen.getByTestId(
+      "buddy-toggle-live-chat-reactions",
+    );
+
+    expect(
+      screen.getByRole("switch", { name: /chat pattern observation enabled/i }),
+    ).toBe(patternToggle);
+    expect(
+      screen.getByRole("switch", { name: /live chat reactions enabled/i }),
+    ).toBe(reactionsToggle);
+    expect(screen.getByText("Chat pattern observation")).toBeInTheDocument();
+    expect(screen.getByText("Live chat reactions")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Independent from live chat reactions/i),
+    ).toBeVisible();
+    expect(screen.getByText(/Pixel reacts to your messages/i)).toBeVisible();
+    expect(patternToggle).toHaveAttribute("data-state", "unchecked");
+    expect(reactionsToggle).toHaveAttribute("data-state", "checked");
+
+    await user.click(patternToggle);
+
+    expect(patternToggle).toHaveAttribute("data-state", "checked");
+    expect(reactionsToggle).toHaveAttribute("data-state", "checked");
   });
 
   it("formatCompactNumber_truncates_decimal_values_below_1000", () => {
