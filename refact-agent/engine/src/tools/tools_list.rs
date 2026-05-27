@@ -403,6 +403,9 @@ async fn get_builtin_tools(gcx: Arc<GlobalContext>) -> Vec<ToolGroup> {
     ];
 
     let chat_management_tools: Vec<Box<dyn Tool + Send>> = vec![
+        Box::new(crate::tools::tool_set_plan::ToolSetPlan {
+            config_path: config_path.clone(),
+        }),
         Box::new(crate::tools::tool_compress_chat::ToolCompressChatProbe {
             config_path: config_path.clone(),
         }),

@@ -1,4 +1,4 @@
-schema_version: 19
+schema_version: 20
 id: task_planner
 title: Task Planner
 description: Task board management mode
@@ -399,6 +399,7 @@ tools:
   - doc_history
   - wait_agents
   - ask_questions
+  - set_plan
   - compress_chat_probe
   - compress_chat_apply
   - task_mem_search

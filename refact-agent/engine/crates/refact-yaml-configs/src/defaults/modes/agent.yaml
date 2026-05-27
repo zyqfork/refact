@@ -1,4 +1,4 @@
-schema_version: 17
+schema_version: 18
 id: agent
 title: Agent
 description: Full multi-step workflow with tools and editing capabilities
@@ -270,6 +270,7 @@ tools:
   - task_done
   - worktree_merge
   - ask_questions
+  - set_plan
   - compress_chat_probe
   - compress_chat_apply
   - handoff_to_mode
