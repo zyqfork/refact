@@ -63,6 +63,7 @@ impl Tool for ToolDelegate {
                     "target_files": {
                         "type": "array",
                         "items": { "type": "string" },
+                        "minItems": 1,
                         "description": "Files the delegate is expected to edit. Used for concurrency-overlap warnings."
                     },
                     "max_steps": {
@@ -79,7 +80,7 @@ impl Tool for ToolDelegate {
                         "description": "auto = push completion back to this chat (default). silent = do not push; you must poll with agent_result."
                     }
                 },
-                "required": ["description", "prompt", "expected_result"]
+                "required": ["description", "prompt", "expected_result", "target_files"]
             }),
             output_schema: None,
             annotations: None,
@@ -215,14 +216,24 @@ fn parse_delegate_args(args: &HashMap<String, Value>) -> Result<DelegateArgs, St
     let description = parse_required_string(args, "description")?;
     let prompt = parse_required_string(args, "prompt")?;
     let expected_result = parse_required_string(args, "expected_result")?;
-    let target_files = parse_optional_string_array(args, "target_files")?;
+    let target_files = parse_required_string_array(args, "target_files")?;
+    if target_files.is_empty() {
+        return Err(
+            "delegate() requires at least one target_file for scope and overlap detection. `target_files` must not be empty."
+                .to_string(),
+        );
+    }
     let max_steps = clamp_max_steps(parse_optional_usize(args, "max_steps", 25)?);
     let wait = parse_optional_bool(args, "wait", false)?;
     let notify_parent = parse_optional_string(args, "notify_parent")?
         .map(|s| match s.as_str() {
-            "silent" => NotifyParent::Silent,
-            _ => NotifyParent::Auto,
+            "auto" => Ok(NotifyParent::Auto),
+            "silent" => Ok(NotifyParent::Silent),
+            _ => Err(format!(
+                "Invalid notify_parent: '{s}'. Expected 'auto' or 'silent'."
+            )),
         })
+        .transpose()?
         .unwrap_or(NotifyParent::Auto);
     Ok(DelegateArgs {
         description,
@@ -237,7 +248,14 @@ fn parse_delegate_args(args: &HashMap<String, Value>) -> Result<DelegateArgs, St
 
 fn parse_required_string(args: &HashMap<String, Value>, key: &str) -> Result<String, String> {
     match args.get(key) {
-        Some(Value::String(s)) => Ok(s.clone()),
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Err(format!("argument `{key}` must not be empty"))
+            } else {
+                Ok(trimmed.to_string())
+            }
+        }
         Some(v) => Err(format!("argument `{key}` is not a string: {v:?}")),
         None => Err(format!("Missing argument `{key}`")),
     }
@@ -248,13 +266,13 @@ fn parse_optional_string(
     key: &str,
 ) -> Result<Option<String>, String> {
     match args.get(key) {
-        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(Value::String(s)) => Ok(Some(s.trim().to_string())),
         Some(v) => Err(format!("argument `{key}` is not a string: {v:?}")),
         None => Ok(None),
     }
 }
 
-fn parse_optional_string_array(
+fn parse_required_string_array(
     args: &HashMap<String, Value>,
     key: &str,
 ) -> Result<Vec<String>, String> {
@@ -262,14 +280,21 @@ fn parse_optional_string_array(
         Some(Value::Array(values)) => values
             .iter()
             .map(|v| match v {
-                Value::String(s) => Ok(s.clone()),
+                Value::String(s) => {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        Err(format!("argument `{key}` contains an empty string"))
+                    } else {
+                        Ok(trimmed.to_string())
+                    }
+                }
                 other => Err(format!(
                     "argument `{key}` contains a non-string value: {other:?}"
                 )),
             })
             .collect(),
         Some(v) => Err(format!("argument `{key}` is not a string array: {v:?}")),
-        None => Ok(Vec::new()),
+        None => Err(format!("Missing argument `{key}`")),
     }
 }
 
@@ -688,6 +713,7 @@ mod tests {
             ("description".to_string(), json!("fix retry parsing")),
             ("prompt".to_string(), json!("Edit retry parsing.")),
             ("expected_result".to_string(), json!("Retry parsing works.")),
+            ("target_files".to_string(), json!(["src/auth/retry.ts"])),
         ])
     }
 
@@ -720,15 +746,63 @@ mod tests {
         }
     }
 
+    fn parse_args_error(args: &HashMap<String, Value>) -> String {
+        match parse_delegate_args(args) {
+            Ok(_) => panic!("expected parse error"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn missing_required_fields_return_clear_errors() {
-        for key in ["description", "prompt", "expected_result"] {
+        for key in ["description", "prompt", "expected_result", "target_files"] {
             let mut args = base_args();
             args.remove(key);
             match parse_delegate_args(&args) {
                 Ok(_) => panic!("expected missing field error"),
                 Err(err) => assert_eq!(err, format!("Missing argument `{key}`")),
             }
+        }
+    }
+
+    #[test]
+    fn empty_target_files_returns_clear_error() {
+        let mut args = base_args();
+        args.insert("target_files".to_string(), json!([]));
+
+        let err = parse_args_error(&args);
+
+        assert!(
+            err.contains(
+                "delegate() requires at least one target_file for scope and overlap detection."
+            ),
+            "{err}"
+        );
+        assert!(err.contains("target_files"), "{err}");
+    }
+
+    #[test]
+    fn invalid_notify_parent_returns_clear_error() {
+        let mut args = base_args();
+        args.insert("notify_parent".to_string(), json!("invalid"));
+
+        let err = parse_args_error(&args);
+
+        assert_eq!(
+            err,
+            "Invalid notify_parent: 'invalid'. Expected 'auto' or 'silent'."
+        );
+    }
+
+    #[test]
+    fn empty_required_strings_return_clear_errors() {
+        for key in ["description", "prompt", "expected_result"] {
+            let mut args = base_args();
+            args.insert(key.to_string(), json!("   "));
+
+            let err = parse_args_error(&args);
+
+            assert_eq!(err, format!("argument `{key}` must not be empty"));
         }
     }
 
