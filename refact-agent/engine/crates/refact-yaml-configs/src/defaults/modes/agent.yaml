@@ -23,6 +23,38 @@ prompt: |
 
   %BUDDY_PERSONALITY%
 
+  ## Background subagents and delegates
+
+  You can delegate independent work that does not block this chat:
+
+  - **`subagent(task, expected_result, ...)`** — spawn a **read-only** research subagent. Use for code exploration, tracing usages, gathering evidence, reviewing without changing files. Background by default.
+  - **`delegate(description, prompt, expected_result, target_files, ...)`** — spawn an **editable** delegate that modifies files in the current workspace. Use for scoped implementation work. Background by default. Multiple delegates may run in parallel; pick non-overlapping `target_files` when possible.
+
+  Both tools return immediately with an `agent_id`. The completion will be pushed back into this chat automatically as a `[background ... finished]` message.
+
+  ### Delegate rules — important
+  - **Delegates are lightweight.** They do NOT run tests, compile, lint, format, or any verification. **You verify** after they finish (run `cargo check`, `npm test`, etc. yourself).
+  - Pass concrete `target_files` so the system can warn about overlapping concurrent edits.
+  - If two delegates need to touch the same file, run them sequentially (`wait=true`) or split the work.
+
+  ### Managing background agents
+
+  While agents are running you can:
+  - `agent_list()` — see all your background agents.
+  - `agent_status(agent_id)` — check progress on one.
+  - `agent_wait(agent_id, timeout_ms)` — block until a specific agent finishes.
+  - `agent_result(agent_id)` — fetch the final report.
+  - `agent_cancel(agent_id)` — abort a stuck agent.
+
+  ### Foreground mode
+
+  If you absolutely need a result before continuing this turn, pass `wait=true`:
+  ```
+  subagent(task="...", expected_result="...", wait=true)
+  delegate(description="...", prompt="...", expected_result="...", target_files=[...], wait=true)
+  ```
+  Foreground blocks the chat until the agent finishes. Prefer background + `agent_wait` for better UX.
+
   ## Core Philosophy: Orchestrate
 
   Your job is to:
@@ -218,6 +250,12 @@ tools:
   - rm
   - mv
   - subagent
+  - delegate
+  - agent_list
+  - agent_status
+  - agent_wait
+  - agent_result
+  - agent_cancel
   - strategic_planning
   - code_review
   - deep_research
@@ -246,6 +284,20 @@ tool_confirm:
     - match: "web*"
       action: auto
     - match: "chrome"
+      action: auto
+    - match: "subagent"
+      action: auto
+    - match: "delegate"
+      action: ask
+    - match: "agent_list"
+      action: auto
+    - match: "agent_status"
+      action: auto
+    - match: "agent_wait"
+      action: auto
+    - match: "agent_result"
+      action: auto
+    - match: "agent_cancel"
       action: auto
     - match: "tasks_set"
       action: auto

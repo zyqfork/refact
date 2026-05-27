@@ -1,5 +1,5 @@
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
@@ -15,6 +15,8 @@ use crate::agents::types::{
 use crate::app_state::AppState;
 use crate::call_validation::ChatMessage;
 use crate::chat::types::{ChatCommand, ChatSession};
+use crate::subchat::{SubchatConfig, SubchatResult};
+use serial_test::serial;
 
 fn create_request(parent_chat_id: &str, kind: BgAgentKind) -> CreateAgentRequest {
     CreateAgentRequest {
@@ -668,25 +670,202 @@ async fn spawn_and_wait_timeout_returns_error() {
     assert!(err.contains("not found") || err.contains("missing"));
 }
 
-fn spawn_request(parent_chat_id: &str) -> crate::agents::spawn::SpawnRequest {
+fn delegate_spawn_request(
+    parent_chat_id: &str,
+    target_file: &str,
+) -> crate::agents::spawn::SpawnRequest {
     crate::agents::spawn::SpawnRequest {
-        kind: BgAgentKind::Subagent,
+        kind: BgAgentKind::Delegate,
         parent_chat_id: parent_chat_id.to_string(),
         parent_root_chat_id: Some(parent_chat_id.to_string()),
         parent_tool_call_id: None,
         config_name: "test_spawn".to_string(),
-        title: "Test spawn".to_string(),
-        prompt: "prompt".to_string(),
+        title: format!("Edit {target_file}"),
+        prompt: format!("Edit {target_file}"),
         tools: None,
-        target_files: vec![],
+        target_files: vec![target_file.to_string()],
         max_steps: 1,
         model: "model".to_string(),
         parent_subchat_tx: None,
         parent_worktree: None,
         parent_task_meta: None,
         subchat_depth: 0,
-        notify_parent: crate::agents::spawn::NotifyParent::Silent,
+        notify_parent: crate::agents::spawn::NotifyParent::Auto,
     }
+}
+
+fn synthetic_completion_command_count(session: &ChatSession, marker: &str) -> usize {
+    session
+        .command_queue
+        .iter()
+        .filter(|request| match &request.command {
+            ChatCommand::UserMessage { content, .. } => {
+                content.as_str().map_or(false, |text| text.contains(marker))
+            }
+            _ => false,
+        })
+        .count()
+}
+
+fn install_spawn_runner(abort_seen: Arc<AtomicBool>) -> crate::agents::spawn::TestRunnerGuard {
+    crate::agents::spawn::install_test_runner(Arc::new(move |_gcx, messages, config| {
+        let abort_seen = abort_seen.clone();
+        Box::pin(async move { stub_spawn_runner(abort_seen, messages, config).await })
+    }))
+}
+
+async fn stub_spawn_runner(
+    abort_seen: Arc<AtomicBool>,
+    mut messages: Vec<ChatMessage>,
+    config: SubchatConfig,
+) -> Result<SubchatResult, String> {
+    if config.title.as_deref() == Some("Cancel me") {
+        loop {
+            if config
+                .abort_flag
+                .as_ref()
+                .map_or(false, |flag| flag.load(Ordering::SeqCst))
+            {
+                abort_seen.store(true, Ordering::SeqCst);
+                return Err("Aborted by test".to_string());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    let target = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.content_text_only())
+        .unwrap_or_else(|| "background work".to_string());
+    messages.push(ChatMessage::new(
+        "assistant".to_string(),
+        format!("Status: DONE\nCompleted {target}"),
+    ));
+    Ok(SubchatResult {
+        messages,
+        metering: serde_json::Map::new(),
+        chat_id: config.chat_id,
+    })
+}
+
+#[serial]
+#[tokio::test]
+async fn background_agent_final_integration_spawn_push_list_cancel_and_restart() {
+    let abort_seen = Arc::new(AtomicBool::new(false));
+    let _runner = install_spawn_runner(abort_seen.clone());
+    let (_gcx, app, session_arc) = app_with_parent_session("parent-final").await;
+    session_arc
+        .lock()
+        .await
+        .queue_processor_running
+        .store(true, Ordering::SeqCst);
+
+    let first = crate::agents::spawn::spawn_background_agent(
+        app.clone(),
+        delegate_spawn_request("parent-final", "src/frog.rs"),
+    )
+    .await
+    .expect("first spawn");
+    let warning = app
+        .agents
+        .overlap_warning("parent-final", &["src/frog.rs".to_string()])
+        .await
+        .expect("overlap warning");
+    assert!(warning.contains(&first.agent_id));
+
+    let second = crate::agents::spawn::spawn_background_agent(
+        app.clone(),
+        delegate_spawn_request("parent-final", "src/frog.rs"),
+    )
+    .await
+    .expect("second spawn");
+
+    let completed_first = first.completion_rx.await.expect("first completion");
+    let completed_second = second.completion_rx.await.expect("second completion");
+    assert_eq!(completed_first.status, BgAgentStatus::Completed);
+    assert_eq!(completed_second.status, BgAgentStatus::Completed);
+
+    {
+        let session = session_arc.lock().await;
+        assert_eq!(
+            synthetic_completion_command_count(&session, "[background delegate finished]"),
+            2
+        );
+    }
+
+    let listed = app
+        .agents
+        .list_for_parent("parent-final", AgentListFilter::default())
+        .await;
+    assert_eq!(listed.len(), 2);
+    assert!(listed
+        .iter()
+        .all(|record| record.status == BgAgentStatus::Completed));
+
+    let mut cancel_req = delegate_spawn_request("parent-final", "src/toad.rs");
+    cancel_req.title = "Cancel me".to_string();
+    cancel_req.prompt = "wait until cancelled".to_string();
+    cancel_req.notify_parent = crate::agents::spawn::NotifyParent::Silent;
+    let cancel_handle = crate::agents::spawn::spawn_background_agent(app.clone(), cancel_req)
+        .await
+        .expect("cancel spawn");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let cancelled = app
+        .agents
+        .cancel(
+            "parent-final",
+            &cancel_handle.agent_id,
+            Some("stop".to_string()),
+        )
+        .await
+        .expect("cancel");
+    assert_eq!(cancelled.status, BgAgentStatus::Cancelled);
+    let cancelled_final = cancel_handle
+        .completion_rx
+        .await
+        .expect("cancel completion");
+    assert_eq!(cancelled_final.status, BgAgentStatus::Cancelled);
+    assert!(abort_seen.load(Ordering::SeqCst));
+
+    let temp = tempdir().expect("tempdir");
+    let registry = BackgroundAgentRegistry::new(temp.path().to_path_buf())
+        .await
+        .expect("registry");
+    let active = create_agent(&registry, "restart-parent", BgAgentKind::Delegate).await;
+    registry
+        .mark_running(&active.agent_id, "restart-child".to_string())
+        .await
+        .expect("running");
+    drop(registry);
+    let restarted = BackgroundAgentRegistry::new(temp.path().to_path_buf())
+        .await
+        .expect("restart");
+    let interrupted = restarted
+        .get("restart-parent", &active.agent_id)
+        .await
+        .expect("interrupted");
+    assert_eq!(interrupted.status, BgAgentStatus::Interrupted);
+    let app = AppState {
+        agents: restarted,
+        ..app.clone()
+    };
+    app.chat
+        .sessions
+        .write()
+        .await
+        .insert("restart-parent".to_string(), session_arc.clone());
+    crate::agents::push::push_completion_to_parent(app, &interrupted)
+        .await
+        .expect("recovery push");
+    let session = session_arc.lock().await;
+    assert_eq!(
+        synthetic_completion_command_count(&session, "[background delegate finished]"),
+        3
+    );
 }
 
 #[tokio::test]
