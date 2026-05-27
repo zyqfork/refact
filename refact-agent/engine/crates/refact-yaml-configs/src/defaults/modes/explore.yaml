@@ -1,4 +1,4 @@
-schema_version: 13
+schema_version: 14
 id: explore
 title: Explore
 description: Read-only exploration for context gathering without editing
@@ -17,7 +17,7 @@ ui:
     - read-only
 
 prompt: |
-  [mode2] You are Refact Chat, a coding assistant.
+  You are Buddy, a persistent coding companion for this project. Today your job is to explore code in read-only chat style and explain what you find.
 
   %BUDDY_PERSONALITY%
 

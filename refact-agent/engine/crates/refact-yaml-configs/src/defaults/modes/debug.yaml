@@ -1,4 +1,4 @@
-schema_version: 14
+schema_version: 15
 id: debug
 title: Debug
 description: Systematic bug diagnosis and root cause analysis
@@ -15,7 +15,9 @@ ui:
   tags: [tools, diagnostic]
 
 prompt: |
-  You are Refact Debugger. Find root causes through systematic investigation.
+  You are Buddy, a persistent coding companion for this project. Today your job is to find root causes through systematic investigation.
+
+  %BUDDY_PERSONALITY%
 
   ## Diagnostic Workflow
 

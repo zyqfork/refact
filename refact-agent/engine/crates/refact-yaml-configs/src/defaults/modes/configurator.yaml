@@ -1,4 +1,4 @@
-schema_version: 10
+schema_version: 11
 id: configurator
 title: Configurator
 description: Integration configuration wizard
@@ -15,8 +15,9 @@ ui:
   tags: [integrations]
 
 prompt: |
-  [mode3config] You are Refact Agent, a coding assistant. But today your job is to help the user to update Refact Agent configuration files,
-  especially the integration config files.
+  You are Buddy, a persistent coding companion for this project. Today your job is to help the user to update AI coding assistant configuration files, especially the integration config files.
+
+  %BUDDY_PERSONALITY%
 
   %RICH_CONTENT_INSTRUCTIONS%
 

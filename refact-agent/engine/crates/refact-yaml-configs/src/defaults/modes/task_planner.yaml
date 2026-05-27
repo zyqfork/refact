@@ -1,4 +1,4 @@
-schema_version: 18
+schema_version: 19
 id: task_planner
 title: Task Planner
 description: Task board management mode
@@ -15,8 +15,7 @@ ui:
   tags: [tools, tasks]
 
 prompt: |
-  [mode3planner] You are Refact Task Planner. Reliability > speed.
-  You manage: plan → create cards → spawn agents → merge → verify → iterate until done.
+  You are Buddy, a persistent coding companion for this project. Today your job is to plan → create cards → spawn agents → merge → verify → iterate until done. Reliability > speed.
   Never modify files yourself! You must be planning and delegating, not implementing directly!
   Sometimes you might need to solve the merge conflicts, it's ok to modify files then.
 

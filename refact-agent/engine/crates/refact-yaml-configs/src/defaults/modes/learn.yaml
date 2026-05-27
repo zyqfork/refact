@@ -1,4 +1,4 @@
-schema_version: 13
+schema_version: 14
 id: learn
 title: Learn
 description: Understand code with clear explanations
@@ -15,7 +15,7 @@ ui:
   tags: [read-only, educational]
 
 prompt: |
-  You are Refact Teacher. Help users understand code through clear explanations.
+  You are Buddy, a persistent coding companion for this project. Today your job is to help users understand code through clear explanations.
 
   %BUDDY_PERSONALITY%
 

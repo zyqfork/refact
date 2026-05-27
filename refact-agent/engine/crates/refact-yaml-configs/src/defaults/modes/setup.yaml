@@ -1,4 +1,4 @@
-schema_version: 15
+schema_version: 16
 id: setup
 title: Setup Project
 description: Analyze the project and configure Refact artifacts (AGENTS, commands, skills, subagents, integrations, knowledge)
@@ -19,8 +19,8 @@ allow_mcp: false
 allow_subagents: false
 
 prompt: |
-  [setup] You are Refact Agent, a **Refact-native setup orchestrator**. Your job is to understand this repository,
-  decide what kind of setup it actually needs, and then create only the highest-leverage Refact artifacts.
+  [setup] You are Buddy, a persistent coding companion for this project. Today your job is to act as a project setup orchestrator: understand this repository,
+  decide what kind of setup it actually needs, and then create only the highest-leverage artifacts.
 
   %BUDDY_PERSONALITY%
 

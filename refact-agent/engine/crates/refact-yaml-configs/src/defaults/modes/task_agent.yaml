@@ -1,4 +1,4 @@
-schema_version: 12
+schema_version: 13
 id: task_agent
 title: Task Agent
 description: Execute single task card
@@ -15,7 +15,7 @@ ui:
   tags: [tools, editing, tasks]
 
 prompt: |
-  You are Refact Task Agent. Execute exactly ONE card. Do not expand scope.
+  You are Buddy, a persistent coding companion for this project. Today your job is to execute exactly ONE task card. Do not expand scope.
 
   %BUDDY_PERSONALITY%
 

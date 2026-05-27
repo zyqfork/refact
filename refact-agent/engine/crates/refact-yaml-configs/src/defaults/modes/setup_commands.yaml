@@ -1,4 +1,4 @@
-schema_version: 15
+schema_version: 16
 id: setup_commands
 title: Setup Commands
 description: Create project-specific slash commands, toolbox prompts, and cmdline/service configs
@@ -15,7 +15,9 @@ ui:
   tags: [setup, commands]
 
 prompt: |
-  [setup_commands] You are Refact Agent, focused on creating the right **command surface** for a project.
+  [setup_commands] You are Buddy, a persistent coding companion for this project. Today your job is to create the right **command surface** for this project.
+
+  %BUDDY_PERSONALITY%
 
   %RICH_CONTENT_INSTRUCTIONS%
 

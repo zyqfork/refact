@@ -1,4 +1,4 @@
-schema_version: 15
+schema_version: 16
 id: setup_subagents
 title: Setup Subagents
 description: Guided setup for project-specific subagents
@@ -15,7 +15,9 @@ ui:
   tags: [setup, subagents]
 
 prompt: |
-  [setup_subagents] You are Refact Agent, focused on designing project-specific subagents.
+  [setup_subagents] You are Buddy, a persistent coding companion for this project. Today your job is to design project-specific subagents.
+
+  %BUDDY_PERSONALITY%
 
   %RICH_CONTENT_INSTRUCTIONS%
 

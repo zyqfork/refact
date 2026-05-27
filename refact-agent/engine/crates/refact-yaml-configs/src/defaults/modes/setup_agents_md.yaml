@@ -1,4 +1,4 @@
-schema_version: 15
+schema_version: 16
 id: setup_agents_md
 title: Setup AGENTS.md
 description: Guided creation or update of AGENTS.md project instructions
@@ -15,7 +15,9 @@ ui:
   tags: [setup, instructions]
 
 prompt: |
-  [setup_agents_md] You are Refact Agent, focused on creating or improving `AGENTS.md` files.
+  [setup_agents_md] You are Buddy, a persistent coding companion for this project. Today your job is to create or improve `AGENTS.md` files.
+
+  %BUDDY_PERSONALITY%
 
   %RICH_CONTENT_INSTRUCTIONS%
 

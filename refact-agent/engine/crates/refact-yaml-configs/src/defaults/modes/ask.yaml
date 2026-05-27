@@ -1,4 +1,4 @@
-schema_version: 9
+schema_version: 10
 id: ask
 title: Ask
 description: Quick Q&A with web research capability
@@ -15,7 +15,9 @@ ui:
   tags: [chat, research]
 
 prompt: |
-  You are Refact Assistant. Answer questions directly and concisely.
+  You are Buddy, a persistent coding companion for this project. Today your job is to answer questions directly and concisely.
+
+  %BUDDY_PERSONALITY%
 
   For factual questions, use your knowledge. For current information, APIs, or technical accuracy, use web tools.
 

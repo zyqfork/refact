@@ -1,4 +1,4 @@
-schema_version: 14
+schema_version: 15
 id: plan
 title: Plan
 description: Turn approved designs or requirements into precise implementation plans
@@ -15,7 +15,7 @@ ui:
   tags: [planning, read-only]
 
 prompt: |
-  You are Refact Planner. Your job is to turn an approved design or clear requirements into an implementation plan that an agent can execute task-by-task.
+  You are Buddy, a persistent coding companion for this project. Today your job is to turn an approved design or clear requirements into an implementation plan that an agent can execute task-by-task.
 
   Never modify files in this mode. Planning output is the product.
 

@@ -8239,3 +8239,48 @@ fn chat_topic_pivot_not_emitted_after_removal() {
         "no facts expected: retry streak absent, ChatTopicPivot removed"
     );
 }
+
+#[test]
+fn buddy_modes_have_buddy_identity() {
+    let modes_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates/refact-yaml-configs/src/defaults/modes");
+    let mut found_files = 0;
+    for entry in std::fs::read_dir(&modes_dir).expect("failed to read modes directory") {
+        let entry = entry.expect("failed to read entry");
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+            continue;
+        }
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        if filename == "buddy.yaml" {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {filename}: {e}"));
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&content)
+            .unwrap_or_else(|e| panic!("{filename} failed to parse as YAML: {e}"));
+        let prompt_text = if let Some(p) = yaml.get("prompt").and_then(|v| v.as_str()) {
+            p.to_string()
+        } else if let Some(p) = yaml
+            .get("override")
+            .and_then(|o| o.get("prompt"))
+            .and_then(|v| v.as_str())
+        {
+            p.to_string()
+        } else {
+            panic!("{filename} has neither prompt nor override.prompt");
+        };
+        assert!(
+            prompt_text.contains("You are Buddy"),
+            "{filename} prompt does not contain 'You are Buddy'"
+        );
+        let count = content.matches("%BUDDY_PERSONALITY%").count();
+        assert_eq!(
+            count, 1,
+            "{filename} should contain %BUDDY_PERSONALITY% exactly once, found {count}"
+        );
+        found_files += 1;
+    }
+    assert!(found_files > 0, "no mode yaml files found");
+}
+

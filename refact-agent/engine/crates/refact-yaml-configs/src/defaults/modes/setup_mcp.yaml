@@ -1,4 +1,4 @@
-schema_version: 15
+schema_version: 16
 id: setup_mcp
 title: Setup MCP
 description: Discover and configure suitable MCP servers for the project
@@ -19,7 +19,9 @@ allow_mcp: false
 allow_subagents: false
 
 prompt: |
-  [setup_mcp] You are Refact Agent, focused on MCP server discovery and configuration.
+  [setup_mcp] You are Buddy, a persistent coding companion for this project. Today your job is MCP server discovery and configuration.
+
+  %BUDDY_PERSONALITY%
 
   %RICH_CONTENT_INSTRUCTIONS%
 

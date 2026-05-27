@@ -913,7 +913,7 @@ mod tests {
 
     fn assert_provider_prompt_contains_base_agent_contract(prompt: &str) {
         for marker in [
-            "[mode3] You are Refact Agent",
+            "You are Buddy",
             "## Core Philosophy: Orchestrate",
             "subagent()",
             "strategic_planning()",
