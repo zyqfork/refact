@@ -139,7 +139,7 @@ pub fn should_observe_thread(thread: &ThreadParams) -> bool {
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ChatReactionKind {
     Humor,
     Insight,
@@ -265,7 +265,7 @@ pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMe
             return;
         };
         let now = chrono::Utc::now();
-        if !svc.chat_reaction_limiter.allow(&accepted.chat_id, now) {
+        if !svc.chat_reaction_limiter.allow_kind(&accepted.chat_id, reaction.kind.clone(), now) {
             return;
         }
         build_reaction_event(&accepted.chat_id, &analysis, &reaction)
@@ -278,7 +278,7 @@ pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMe
 }
 
 pub struct ChatReactionLimiter {
-    per_chat_last_at: HashMap<String, DateTime<Utc>>,
+    pub(crate) per_chat_kind_last_at: HashMap<(String, ChatReactionKind), DateTime<Utc>>,
     global_hourly_count: u32,
     global_window_start: DateTime<Utc>,
 }
@@ -286,13 +286,16 @@ pub struct ChatReactionLimiter {
 impl ChatReactionLimiter {
     pub fn new() -> Self {
         Self {
-            per_chat_last_at: HashMap::new(),
+            per_chat_kind_last_at: HashMap::new(),
             global_hourly_count: 0,
             global_window_start: Utc::now(),
         }
     }
 
-    pub fn allow(&mut self, chat_id: &str, now: DateTime<Utc>) -> bool {
+    /// Per-kind cooldown prevents low-signal humor reactions from suppressing high-signal bug candidates.
+    pub fn allow_kind(&mut self, chat_id: &str, kind: ChatReactionKind, now: DateTime<Utc>) -> bool {
+        self.per_chat_kind_last_at
+            .retain(|_, last_at| (now - *last_at).num_seconds() < PER_CHAT_COOLDOWN_SECS);
         if (now - self.global_window_start).num_seconds() >= 3600 {
             self.global_hourly_count = 0;
             self.global_window_start = now;
@@ -300,14 +303,19 @@ impl ChatReactionLimiter {
         if self.global_hourly_count >= GLOBAL_HOURLY_CAP {
             return false;
         }
-        if let Some(last) = self.per_chat_last_at.get(chat_id) {
+        let key = (chat_id.to_string(), kind);
+        if let Some(last) = self.per_chat_kind_last_at.get(&key) {
             if (now - *last).num_seconds() < PER_CHAT_COOLDOWN_SECS {
                 return false;
             }
         }
-        self.per_chat_last_at.insert(chat_id.to_string(), now);
+        self.per_chat_kind_last_at.insert(key, now);
         self.global_hourly_count += 1;
         true
+    }
+
+    pub fn allow(&mut self, chat_id: &str, now: DateTime<Utc>) -> bool {
+        self.allow_kind(chat_id, ChatReactionKind::Humor, now)
     }
 }
 

@@ -640,15 +640,11 @@ impl BuddyService {
 
     pub fn enqueue_runtime_event(&mut self, event: BuddyRuntimeEvent) {
         let event = self.apply_runtime_dismissal_memory(event);
-        let _ = self.events_tx.send(BuddyEvent::RuntimeEvent {
-            event: event.clone(),
-        });
         let dedupe_key = event.dedupe_key.clone();
         let input_id = event.id.clone();
         let evicted = self.runtime_queue.enqueue(event);
-        // Persist the in-queue version: after coalesce that's an existing item
-        // (possibly with an older `id` and refreshed fields); on a fresh push
-        // it's the just-inserted event.
+        // Broadcast and persist the coalesced/stored event so SSE consumers and
+        // dismiss_runtime_event_by_id agree on the id after dedupe.
         let to_persist = if let Some(key) = dedupe_key.as_deref() {
             self.runtime_queue
                 .items
@@ -670,6 +666,9 @@ impl BuddyService {
                 .cloned()
         };
         if let Some(ev) = to_persist {
+            let _ = self.events_tx.send(BuddyEvent::RuntimeEvent {
+                event: ev.clone(),
+            });
             self.persist_event(ev);
         }
         if dedupe_key.is_some()

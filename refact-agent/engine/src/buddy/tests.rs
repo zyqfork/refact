@@ -8325,3 +8325,108 @@ fn buddy_modes_have_buddy_identity() {
     assert!(found_files > 0, "no mode yaml files found");
 }
 
+#[test]
+fn runtime_event_coalesce_broadcasts_stored_id() {
+    use super::state::default_buddy_state;
+    use super::settings::BuddySettings;
+
+    let (tx, mut rx) = broadcast::channel(16);
+    let mut svc = BuddyService::new(
+        std::env::temp_dir().join(format!("buddy-test-{}", uuid::Uuid::new_v4())),
+        default_buddy_state(),
+        BuddySettings::default(),
+        Vec::new(),
+        super::runtime_queue::RuntimeQueue::new(),
+        tx,
+        None,
+    );
+
+    let mut ev_a = super::actor::make_runtime_event("signal", "A", "src", "k", "started", None);
+    ev_a.id = "id-A".to_string();
+    svc.enqueue_runtime_event(ev_a);
+
+    let broadcast_a = rx.try_recv().unwrap();
+    match broadcast_a {
+        super::events::BuddyEvent::RuntimeEvent { event } => {
+            assert_eq!(event.id, "id-A");
+        }
+        other => panic!("expected RuntimeEvent, got {:?}", other),
+    }
+
+    let mut ev_b = super::actor::make_runtime_event("signal", "B", "src", "k", "started", None);
+    ev_b.id = "id-B".to_string();
+    svc.enqueue_runtime_event(ev_b);
+
+    let broadcast_b = rx.try_recv().unwrap();
+    match broadcast_b {
+        super::events::BuddyEvent::RuntimeEvent { event } => {
+            assert_eq!(event.id, "id-A", "coalesced broadcast must carry the stored id");
+        }
+        other => panic!("expected RuntimeEvent, got {:?}", other),
+    }
+
+    assert!(svc.dismiss_runtime_event_by_id("id-A"), "dismiss by id-A must succeed after coalesce");
+}
+
+#[tokio::test]
+async fn bug_reaction_not_blocked_by_humor_cooldown() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
+    *app.buddy.buddy.lock().await = Some(make_service());
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "chat-bug-humor".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText("make this nicer please give it a better look".to_string()),
+        },
+    )
+    .await;
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "chat-bug-humor".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText("the app crashed on save every time I try".to_string()),
+        },
+    )
+    .await;
+
+    let buddy_arc = app.buddy.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    let svc = lock.as_ref().unwrap();
+    let items: Vec<_> = svc.runtime_queue.items.iter().collect();
+    assert!(
+        items.iter().any(|e| e.signal_type == "speech_humor"),
+        "humor event must be in queue"
+    );
+    assert!(
+        items.iter().any(|e| e.signal_type == "chat_bug_candidate"),
+        "bug candidate event must not be blocked by humor cooldown"
+    );
+}
+
+#[test]
+fn limiter_prunes_stale_chat_ids() {
+    use super::chat_reactions::{ChatReactionKind, ChatReactionLimiter, PER_CHAT_COOLDOWN_SECS};
+
+    let mut lim = ChatReactionLimiter::new();
+    let t0 = chrono::Utc::now();
+    assert!(lim.allow_kind("chat-1", ChatReactionKind::Humor, t0));
+
+    let t1 = t0 + Duration::seconds(PER_CHAT_COOLDOWN_SECS + 1);
+    assert!(lim.allow_kind("chat-2", ChatReactionKind::Humor, t1));
+
+    assert!(
+        !lim.per_chat_kind_last_at
+            .contains_key(&("chat-1".to_string(), ChatReactionKind::Humor)),
+        "stale chat-1 entry must be pruned after second call"
+    );
+}
+
