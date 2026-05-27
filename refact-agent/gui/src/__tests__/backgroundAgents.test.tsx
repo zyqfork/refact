@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import { BackgroundAgentCard } from "../components/BackgroundAgentCard";
 import { ToolContent } from "../components/ChatContent/ToolsContent";
@@ -13,7 +13,10 @@ import {
   selectToolResultById,
 } from "../features/Chat/Thread/selectors";
 import type { Chat, ChatThreadRuntime } from "../features/Chat/Thread/types";
-import type { ChatEventEnvelope } from "../services/refact/chatSubscription";
+import {
+  subscribeToChatEvents,
+  type ChatEventEnvelope,
+} from "../services/refact/chatSubscription";
 import type {
   BackgroundAgentSummary,
   ChatMessages,
@@ -118,7 +121,7 @@ function makeState(id = chatId): Chat {
 
 function makeSnapshot(
   id: string,
-  backgroundAgents: BackgroundAgentSummary[],
+  backgroundAgents: unknown[],
   seq = "1",
 ): ChatEventEnvelope {
   return {
@@ -146,7 +149,7 @@ function makeSnapshot(
       queued_items: [],
     },
     messages: [],
-    background_agents: backgroundAgents,
+    background_agents: backgroundAgents as BackgroundAgentSummary[],
   };
 }
 
@@ -175,6 +178,44 @@ function renderToolContent(
     preloadedState: { chat: state },
   });
 }
+
+async function parseSnapshot(
+  backgroundAgents: unknown[],
+): Promise<ChatEventEnvelope> {
+  const onEvent = vi.fn<(event: ChatEventEnvelope) => void>();
+  const event = makeSnapshot(chatId, backgroundAgents);
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(`data: ${JSON.stringify(event)}\n\n`, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      ),
+    ),
+  );
+
+  subscribeToChatEvents(chatId, 8001, {
+    onEvent,
+    onError: vi.fn(),
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  expect(onEvent).toHaveBeenCalledTimes(1);
+  return onEvent.mock.calls[0][0];
+}
+
+async function reduceParsedSnapshot(backgroundAgents: unknown[]): Promise<Chat> {
+  const event = await parseSnapshot(backgroundAgents);
+  return chatReducer(makeState(), applyChatEvent(event));
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("background agents", () => {
   test("reducer adds agent on BackgroundAgentUpdated", () => {
@@ -242,6 +283,55 @@ describe("background agents", () => {
     expect(state.threads[chatId]?.background_agents).toEqual({
       [snapshotAgent.agent_id]: snapshotAgent,
     });
+  });
+
+  test("snapshot agent with null target_files defaults to empty list", async () => {
+    const agent = {
+      ...makeAgent({ agent_id: "null-target-files" }),
+      target_files: null,
+    };
+
+    const state = await reduceParsedSnapshot([agent]);
+
+    expect(
+      state.threads[chatId]?.background_agents[agent.agent_id]?.target_files,
+    ).toEqual([]);
+  });
+
+  test("snapshot agent with null agent_id is skipped", async () => {
+    const invalidAgent = {
+      ...makeAgent(),
+      agent_id: null,
+    };
+
+    const state = await reduceParsedSnapshot([invalidAgent]);
+
+    expect(state.threads[chatId]?.background_agents).toEqual({});
+  });
+
+  test("snapshot with valid, null, valid agents keeps the valid entries", async () => {
+    const first = makeAgent({ agent_id: "valid-1" });
+    const second = makeAgent({ agent_id: "valid-2" });
+
+    const state = await reduceParsedSnapshot([first, null, second]);
+
+    expect(state.threads[chatId]?.background_agents).toEqual({
+      [first.agent_id]: first,
+      [second.agent_id]: second,
+    });
+  });
+
+  test("empty snapshot background agent list produces empty state map", async () => {
+    const initial = makeState();
+    const oldAgent = makeAgent({ agent_id: "old-agent" });
+    const runtime = initial.threads[chatId];
+    if (!runtime) throw new Error("missing runtime");
+    runtime.background_agents = { [oldAgent.agent_id]: oldAgent };
+    const event = await parseSnapshot([]);
+
+    const state = chatReducer(initial, applyChatEvent(event));
+
+    expect(state.threads[chatId]?.background_agents).toEqual({});
   });
 
   test("selectBackgroundAgentsByThread returns the right map", () => {

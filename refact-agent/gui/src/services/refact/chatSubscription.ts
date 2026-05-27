@@ -72,8 +72,18 @@ export type RuntimeState = {
   queued_items: QueuedItem[];
 };
 
+type BackgroundAgentSummaryWithDefaults = Omit<
+  BackgroundAgentSummary,
+  "target_files" | "edited_files" | "step_count" | "change_seq"
+> & {
+  target_files?: string[] | null;
+  edited_files?: string[] | null;
+  step_count?: number | null;
+  change_seq?: number | null;
+};
+
 type BackgroundAgentSummaryWire =
-  | BackgroundAgentSummary
+  | BackgroundAgentSummaryWithDefaults
   | BackgroundAgentSummaryCamelCase;
 
 type BackgroundAgentSummaryCamelCase = {
@@ -84,17 +94,17 @@ type BackgroundAgentSummaryCamelCase = {
   status: BackgroundAgentSummary["status"];
   title: string;
   progress: string | null;
-  stepCount: number;
+  stepCount?: number | null;
   lastActivity: string | null;
-  targetFiles: string[];
-  editedFiles: string[];
+  targetFiles?: string[] | null;
+  editedFiles?: string[] | null;
   diffSummary: string | null;
   conflictSummary: string | null;
   resultSummary: string | null;
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
-  changeSeq: number;
+  changeSeq?: number | null;
 };
 
 export type DeltaOp =
@@ -541,6 +551,9 @@ function normalizeSeq(obj: EventEnvelope): void {
 
 function normalizeBackgroundAgentFields(obj: EventEnvelope): void {
   if (obj.type === "background_agent_updated") {
+    if (!isValidBackgroundAgent(obj.agent)) {
+      throw new Error("Invalid background agent");
+    }
     obj.agent = normalizeBackgroundAgentSummary(obj.agent);
     return;
   }
@@ -548,36 +561,60 @@ function normalizeBackgroundAgentFields(obj: EventEnvelope): void {
     const backgroundAgents = Array.isArray(obj.background_agents)
       ? obj.background_agents
       : [];
-    obj.background_agents = backgroundAgents.map((agent) =>
-      normalizeBackgroundAgentSummary(agent),
-    );
+    obj.background_agents = backgroundAgents
+      .filter(isValidBackgroundAgent)
+      .map((agent) => normalizeBackgroundAgentSummary(agent));
   }
+}
+
+function isValidBackgroundAgent(
+  agent: unknown,
+): agent is BackgroundAgentSummaryWire {
+  if (agent === null || typeof agent !== "object") return false;
+  const fields = agent as Record<string, unknown>;
+  if (typeof fields.kind !== "string") return false;
+  if (typeof fields.status !== "string") return false;
+  if ("agent_id" in fields) return typeof fields.agent_id === "string";
+  return typeof fields.agentId === "string";
+}
+
+function safeAgent(agent: BackgroundAgentSummaryWire): BackgroundAgentSummary {
+  if (!("agent_id" in agent)) {
+    return safeAgent({
+      agent_id: agent.agentId,
+      parent_chat_id: agent.parentChatId,
+      child_chat_id: agent.childChatId,
+      kind: agent.kind,
+      status: agent.status,
+      title: agent.title,
+      progress: agent.progress,
+      step_count: agent.stepCount,
+      last_activity: agent.lastActivity,
+      target_files: agent.targetFiles,
+      edited_files: agent.editedFiles,
+      diff_summary: agent.diffSummary,
+      conflict_summary: agent.conflictSummary,
+      result_summary: agent.resultSummary,
+      error: agent.error,
+      started_at: agent.startedAt,
+      finished_at: agent.finishedAt,
+      change_seq: agent.changeSeq,
+    });
+  }
+
+  return {
+    ...agent,
+    target_files: agent.target_files ?? [],
+    edited_files: agent.edited_files ?? [],
+    step_count: agent.step_count ?? 0,
+    change_seq: agent.change_seq ?? -1,
+  };
 }
 
 function normalizeBackgroundAgentSummary(
   agent: BackgroundAgentSummaryWire,
 ): BackgroundAgentSummary {
-  if ("agent_id" in agent) return agent;
-  return {
-    agent_id: agent.agentId,
-    parent_chat_id: agent.parentChatId,
-    child_chat_id: agent.childChatId,
-    kind: agent.kind,
-    status: agent.status,
-    title: agent.title,
-    progress: agent.progress,
-    step_count: agent.stepCount,
-    last_activity: agent.lastActivity,
-    target_files: agent.targetFiles,
-    edited_files: agent.editedFiles,
-    diff_summary: agent.diffSummary,
-    conflict_summary: agent.conflictSummary,
-    result_summary: agent.resultSummary,
-    error: agent.error,
-    started_at: agent.startedAt,
-    finished_at: agent.finishedAt,
-    change_seq: agent.changeSeq,
-  };
+  return safeAgent(agent);
 }
 
 export function applyDeltaOps(
