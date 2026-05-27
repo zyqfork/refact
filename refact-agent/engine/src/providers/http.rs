@@ -734,9 +734,10 @@ pub async fn handle_v1_provider_update(
             })?
         };
 
-    let (config_dir, registry_identity) = {
+    let (config_dir, registry_identity, registry_model_config) = {
         let registry = gcx.providers.read().await;
-        let registry_identity = if let Some(provider) = registry.get(&params.name) {
+        let registry_provider = registry.get(&params.name);
+        let registry_identity = if let Some(provider) = registry_provider {
             if provider.is_readonly() {
                 return Err(ScratchError::new(
                     StatusCode::FORBIDDEN,
@@ -751,10 +752,17 @@ pub async fn handle_v1_provider_update(
         } else {
             None
         };
-        (gcx.config_dir.clone(), registry_identity)
+        let registry_model_config =
+            registry_provider.map(ProviderModelConfigSnapshot::from_provider);
+        (
+            gcx.config_dir.clone(),
+            registry_identity,
+            registry_model_config,
+        )
     };
 
     let settings = strip_derived_fields(settings);
+    let model_config_fields = ProviderModelConfigFields::from_settings(&settings);
     let identity_cell = std::sync::Arc::new(std::sync::Mutex::new(None));
     let identity_out = identity_cell.clone();
     let config_dir_for_update = config_dir.clone();
@@ -784,7 +792,14 @@ pub async fn handle_v1_provider_update(
             } else {
                 strip_masked_secrets(settings)
             };
-            let merged_settings = settings_with_forced_identity(merged_settings, &identity)?;
+            let mut merged_settings = settings_with_forced_identity(merged_settings, &identity)?;
+            if let Some(snapshot) = registry_model_config.as_ref() {
+                merged_settings = apply_model_config_snapshot_for_omitted_fields(
+                    merged_settings,
+                    snapshot,
+                    model_config_fields,
+                )?;
+            }
             *identity_cell.lock().expect("identity lock poisoned") = Some(identity);
             Ok(merged_settings)
         },
@@ -1935,13 +1950,123 @@ fn ensure_yaml_identity_fields(
     identity: &HttpProviderIdentity,
 ) {
     yaml_map.insert(
-        serde_yaml::Value::String("base_provider".to_string()),
+        yaml_key("base_provider"),
         serde_yaml::Value::String(identity.base_provider.clone()),
     );
     yaml_map.insert(
-        serde_yaml::Value::String("display_name".to_string()),
+        yaml_key("display_name"),
         serde_yaml::Value::String(identity.display_name.clone()),
     );
+}
+
+#[derive(Clone, Copy, Default)]
+struct ProviderModelConfigFields {
+    enabled_models: bool,
+    disabled_models: bool,
+    custom_models: bool,
+    selected_providers: bool,
+}
+
+impl ProviderModelConfigFields {
+    fn from_settings(settings: &serde_yaml::Value) -> Self {
+        let Some(map) = settings.as_mapping() else {
+            return Self::default();
+        };
+        Self {
+            enabled_models: yaml_map_contains_key(map, "enabled_models"),
+            disabled_models: yaml_map_contains_key(map, "disabled_models"),
+            custom_models: yaml_map_contains_key(map, "custom_models"),
+            selected_providers: yaml_map_contains_key(map, "selected_providers"),
+        }
+    }
+}
+
+struct ProviderModelConfigSnapshot {
+    enabled_models: Vec<String>,
+    disabled_models: Vec<String>,
+    custom_models: HashMap<String, CustomModelConfig>,
+    selected_providers: HashMap<String, String>,
+}
+
+impl ProviderModelConfigSnapshot {
+    fn from_provider(provider: &dyn ProviderTrait) -> Self {
+        Self {
+            enabled_models: provider.enabled_models().to_vec(),
+            disabled_models: provider.disabled_models().to_vec(),
+            custom_models: provider.custom_models().clone(),
+            selected_providers: provider.selected_providers().clone(),
+        }
+    }
+}
+
+fn yaml_key(key: &str) -> serde_yaml::Value {
+    serde_yaml::Value::String(key.to_string())
+}
+
+fn yaml_map_contains_key(map: &serde_yaml::Mapping, key: &str) -> bool {
+    map.contains_key(&yaml_key(key))
+}
+
+fn insert_yaml_value<T: Serialize>(
+    yaml_map: &mut serde_yaml::Mapping,
+    key: &str,
+    value: &T,
+) -> Result<(), ScratchError> {
+    yaml_map.insert(
+        yaml_key(key),
+        serde_yaml::to_value(value).map_err(|e| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize {key}: {e}"),
+            )
+        })?,
+    );
+    Ok(())
+}
+
+fn apply_model_config_snapshot_for_omitted_fields(
+    yaml: serde_yaml::Value,
+    snapshot: &ProviderModelConfigSnapshot,
+    present_fields: ProviderModelConfigFields,
+) -> Result<serde_yaml::Value, ScratchError> {
+    let mut yaml_map = yaml.as_mapping().cloned().ok_or_else(|| {
+        ScratchError::new(
+            StatusCode::CONFLICT,
+            "Config file root is not a YAML mapping. Cannot safely reload.".to_string(),
+        )
+    })?;
+
+    if !present_fields.enabled_models
+        && (!snapshot.enabled_models.is_empty()
+            || yaml_map_contains_key(&yaml_map, "enabled_models"))
+    {
+        insert_yaml_value(&mut yaml_map, "enabled_models", &snapshot.enabled_models)?;
+    }
+    if !present_fields.disabled_models {
+        if snapshot.disabled_models.is_empty() {
+            yaml_map.remove(yaml_key("disabled_models"));
+        } else {
+            insert_yaml_value(&mut yaml_map, "disabled_models", &snapshot.disabled_models)?;
+        }
+    }
+    if !present_fields.custom_models
+        && (!snapshot.custom_models.is_empty() || yaml_map_contains_key(&yaml_map, "custom_models"))
+    {
+        insert_yaml_value(&mut yaml_map, "custom_models", &snapshot.custom_models)?;
+    }
+    if !present_fields.selected_providers {
+        if snapshot.selected_providers.is_empty() {
+            yaml_map.remove(yaml_key("selected_providers"));
+        } else {
+            insert_yaml_value(
+                &mut yaml_map,
+                "selected_providers",
+                &snapshot.selected_providers,
+            )?;
+        }
+    }
+
+    Ok(serde_yaml::Value::Mapping(yaml_map))
 }
 
 /// Helper function to patch provider config - only updates enabled_models/disabled_models and custom_models
@@ -1955,7 +2080,7 @@ async fn patch_provider_model_config(
     provider_name: &str,
 ) -> Result<(), ScratchError> {
     validate_instance_id_for_http(provider_name)?;
-    let (identity, enabled_models, disabled_models, custom_models, selected_providers) = {
+    let (identity, model_config) = {
         let registry = gcx.providers.read().await;
         let provider = registry.get(provider_name).ok_or_else(|| {
             ScratchError::new(
@@ -1965,10 +2090,7 @@ async fn patch_provider_model_config(
         })?;
         (
             identity_from_provider(provider),
-            provider.enabled_models().to_vec(),
-            provider.disabled_models().to_vec(),
-            provider.custom_models().clone(),
-            provider.selected_providers().clone(),
+            ProviderModelConfigSnapshot::from_provider(provider),
         )
     };
 
@@ -1989,55 +2111,32 @@ async fn patch_provider_model_config(
 
             ensure_yaml_identity_fields(&mut yaml_map, &identity);
 
-            yaml_map.insert(
-                serde_yaml::Value::String("enabled_models".to_string()),
-                serde_yaml::to_value(&enabled_models).map_err(|e| {
-                    ScratchError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to serialize enabled_models: {}", e),
-                    )
-                })?,
-            );
-            if !enabled_models.is_empty() {
-                yaml_map.insert(
-                    serde_yaml::Value::String("enabled".to_string()),
-                    serde_yaml::Value::Bool(true),
-                );
+            insert_yaml_value(
+                &mut yaml_map,
+                "enabled_models",
+                &model_config.enabled_models,
+            )?;
+            if !model_config.enabled_models.is_empty() {
+                yaml_map.insert(yaml_key("enabled"), serde_yaml::Value::Bool(true));
             }
-            if !disabled_models.is_empty() {
-                yaml_map.insert(
-                    serde_yaml::Value::String("disabled_models".to_string()),
-                    serde_yaml::to_value(&disabled_models).map_err(|e| {
-                        ScratchError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to serialize disabled_models: {}", e),
-                        )
-                    })?,
-                );
+            if !model_config.disabled_models.is_empty() {
+                insert_yaml_value(
+                    &mut yaml_map,
+                    "disabled_models",
+                    &model_config.disabled_models,
+                )?;
             } else {
-                yaml_map.remove(serde_yaml::Value::String("disabled_models".to_string()));
+                yaml_map.remove(yaml_key("disabled_models"));
             }
-            yaml_map.insert(
-                serde_yaml::Value::String("custom_models".to_string()),
-                serde_yaml::to_value(&custom_models).map_err(|e| {
-                    ScratchError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to serialize custom_models: {}", e),
-                    )
-                })?,
-            );
-            if selected_providers.is_empty() {
-                yaml_map.remove(serde_yaml::Value::String("selected_providers".to_string()));
+            insert_yaml_value(&mut yaml_map, "custom_models", &model_config.custom_models)?;
+            if model_config.selected_providers.is_empty() {
+                yaml_map.remove(yaml_key("selected_providers"));
             } else {
-                yaml_map.insert(
-                    serde_yaml::Value::String("selected_providers".to_string()),
-                    serde_yaml::to_value(&selected_providers).map_err(|e| {
-                        ScratchError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to serialize selected_providers: {}", e),
-                        )
-                    })?,
-                );
+                insert_yaml_value(
+                    &mut yaml_map,
+                    "selected_providers",
+                    &model_config.selected_providers,
+                )?;
             }
 
             Ok(serde_yaml::Value::Mapping(yaml_map))
