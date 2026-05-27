@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 
-use crate::exec::transcript::ExecTranscript;
+use crate::exec::transcript::{ExecRawCapture, ExecRawOutput, ExecTranscript};
 use crate::exec::types::{
     current_timestamp_ms, ExecOutputChunk, ExecOutputStream, ExecProcessFilter, ExecProcessId,
     ExecProcessMeta, ExecProcessSnapshot, ExecReadResult, ExecServiceLookup, ExecStatus,
@@ -39,16 +39,19 @@ impl Clone for ExecProcessRuntime {
 struct ExecProcessRecord {
     snapshot: ExecProcessSnapshot,
     transcript: ExecTranscript,
+    raw_capture: Option<ExecRawCapture>,
     child: Option<tokio::process::Child>,
     runtime: Option<ExecProcessRuntime>,
 }
 
 impl ExecProcessRecord {
-    fn new(meta: ExecProcessMeta, transcript_limit_bytes: usize) -> Self {
+    fn new(meta: ExecProcessMeta, transcript_limit_bytes: usize, capture_raw: bool) -> Self {
         let process_id = meta.process_id.clone();
+        let raw_capture = capture_raw.then(|| ExecRawCapture::foreground(process_id.clone()));
         Self {
             snapshot: ExecProcessSnapshot::new(meta),
             transcript: ExecTranscript::new(process_id, transcript_limit_bytes),
+            raw_capture,
             child: None,
             runtime: None,
         }
@@ -59,7 +62,7 @@ impl ExecProcessRecord {
         transcript_limit_bytes: usize,
         child: tokio::process::Child,
     ) -> Self {
-        let mut record = Self::new(meta, transcript_limit_bytes);
+        let mut record = Self::new(meta, transcript_limit_bytes, false);
         record.child = Some(child);
         record
     }
@@ -68,8 +71,9 @@ impl ExecProcessRecord {
         meta: ExecProcessMeta,
         transcript_limit_bytes: usize,
         runtime: ExecProcessRuntime,
+        capture_raw: bool,
     ) -> Self {
-        let mut record = Self::new(meta, transcript_limit_bytes);
+        let mut record = Self::new(meta, transcript_limit_bytes, capture_raw);
         record.runtime = Some(runtime);
         record
     }
@@ -151,7 +155,7 @@ impl ExecRegistry {
         transcript_limit_bytes: usize,
     ) -> ExecProcessSnapshot {
         let process_id = meta.process_id.clone();
-        let record = ExecProcessRecord::new(meta, transcript_limit_bytes);
+        let record = ExecProcessRecord::new(meta, transcript_limit_bytes, false);
         let snapshot = record.snapshot.clone();
         let mut records = self.records.lock().await;
         match records.get(&process_id) {
@@ -170,7 +174,7 @@ impl ExecRegistry {
         transcript_limit_bytes: usize,
     ) -> Result<ExecProcessSnapshot, String> {
         let process_id = meta.process_id.clone();
-        let record = ExecProcessRecord::new(meta, transcript_limit_bytes);
+        let record = ExecProcessRecord::new(meta, transcript_limit_bytes, false);
         let snapshot = record.snapshot.clone();
         let mut records = self.records.lock().await;
         match records
@@ -189,9 +193,11 @@ impl ExecRegistry {
         meta: ExecProcessMeta,
         transcript_limit_bytes: usize,
         runtime: ExecProcessRuntime,
+        capture_raw: bool,
     ) -> Result<ExecProcessSnapshot, String> {
         let process_id = meta.process_id.clone();
-        let record = ExecProcessRecord::with_runtime(meta, transcript_limit_bytes, runtime);
+        let record =
+            ExecProcessRecord::with_runtime(meta, transcript_limit_bytes, runtime, capture_raw);
         let snapshot = record.snapshot.clone();
         let mut records = self.records.lock().await;
         match records
@@ -276,7 +282,18 @@ impl ExecRegistry {
         let record = records
             .get_mut(process_id)
             .ok_or_else(|| format!("process not found: {process_id}"))?;
+        if let Some(raw_capture) = record.raw_capture.as_mut() {
+            raw_capture.append(&stream, &text);
+        }
         Ok(record.transcript.append_chunk(stream, text))
+    }
+
+    pub async fn read_raw_capture(&self, process_id: &ExecProcessId) -> Option<ExecRawOutput> {
+        let records = self.records.lock().await;
+        records
+            .get(process_id)
+            .and_then(|record| record.raw_capture.as_ref())
+            .map(ExecRawCapture::read)
     }
 
     pub async fn read(

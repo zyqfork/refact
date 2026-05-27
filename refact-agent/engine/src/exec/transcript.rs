@@ -1,3 +1,9 @@
+//! Execution output has two storage paths. Every process writes to a bounded transcript used by
+//! streaming UIs and background/service reads. Foreground processes also write to a raw capture
+//! before transcript eviction so final shell/cmdline output filters can see lines outside the
+//! transcript window. Raw foreground capture is explicitly capped at 16 MiB stdout and 4 MiB
+//! stderr; when a cap is hit the captured stream ends with an `[X bytes elided]` marker.
+
 use std::collections::VecDeque;
 
 use crate::exec::types::{
@@ -5,6 +11,8 @@ use crate::exec::types::{
 };
 
 pub const DEFAULT_MAX_BYTES: usize = 512 * 1024;
+pub const FOREGROUND_STDOUT_CAPTURE_MAX_BYTES: usize = 16 * 1024 * 1024;
+pub const FOREGROUND_STDERR_CAPTURE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
@@ -28,6 +36,116 @@ pub struct ExecTranscript {
     truncated_chunks: u64,
     current_bytes: usize,
     max_bytes: usize,
+}
+
+#[derive(Clone)]
+struct ExecRawStreamCapture {
+    text: String,
+    max_bytes: usize,
+    elided_bytes: usize,
+    hit_limit: bool,
+}
+
+impl ExecRawStreamCapture {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            text: String::new(),
+            max_bytes: max_bytes.max(1),
+            elided_bytes: 0,
+            hit_limit: false,
+        }
+    }
+
+    fn append(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.hit_limit {
+            self.elided_bytes = self.elided_bytes.saturating_add(text.len());
+            return;
+        }
+        let remaining = self.max_bytes.saturating_sub(self.text.len());
+        if remaining == 0 {
+            self.hit_limit = true;
+            self.elided_bytes = self.elided_bytes.saturating_add(text.len());
+            return;
+        }
+        let captured = truncate_to_char_boundary(text, remaining);
+        self.text.push_str(captured);
+        if captured.len() < text.len() {
+            self.hit_limit = true;
+        }
+        self.elided_bytes = self
+            .elided_bytes
+            .saturating_add(text.len().saturating_sub(captured.len()));
+    }
+
+    fn text_with_marker(&self) -> String {
+        let mut text = self.text.clone();
+        if self.elided_bytes > 0 {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(&format!("[{} bytes elided]\n", self.elided_bytes));
+        }
+        text
+    }
+}
+
+pub struct ExecRawCapture {
+    process_id: ExecProcessId,
+    stdout: ExecRawStreamCapture,
+    stderr: ExecRawStreamCapture,
+}
+
+impl ExecRawCapture {
+    pub fn foreground(process_id: ExecProcessId) -> Self {
+        Self {
+            process_id,
+            stdout: ExecRawStreamCapture::new(FOREGROUND_STDOUT_CAPTURE_MAX_BYTES),
+            stderr: ExecRawStreamCapture::new(FOREGROUND_STDERR_CAPTURE_MAX_BYTES),
+        }
+    }
+
+    pub fn append(&mut self, stream: &ExecOutputStream, text: &str) {
+        match stream {
+            ExecOutputStream::Stdout | ExecOutputStream::Combined => self.stdout.append(text),
+            ExecOutputStream::Stderr => self.stderr.append(text),
+        }
+    }
+
+    pub fn read(&self) -> ExecRawOutput {
+        ExecRawOutput {
+            process_id: self.process_id.clone(),
+            stdout: self.stdout.text_with_marker(),
+            stderr: self.stderr.text_with_marker(),
+            stdout_captured_bytes: self.stdout.text.len(),
+            stderr_captured_bytes: self.stderr.text.len(),
+            stdout_elided_bytes: self.stdout.elided_bytes,
+            stderr_elided_bytes: self.stderr.elided_bytes,
+            stdout_max_bytes: self.stdout.max_bytes,
+            stderr_max_bytes: self.stderr.max_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecRawOutput {
+    pub process_id: ExecProcessId,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_captured_bytes: usize,
+    pub stderr_captured_bytes: usize,
+    pub stdout_elided_bytes: usize,
+    pub stderr_elided_bytes: usize,
+    pub stdout_max_bytes: usize,
+    pub stderr_max_bytes: usize,
+}
+
+impl ExecRawOutput {
+    pub fn is_truncated(&self) -> bool {
+        self.stdout_elided_bytes > 0 || self.stderr_elided_bytes > 0
+    }
 }
 
 impl ExecTranscript {

@@ -2086,6 +2086,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_output_filter_uses_transcript() {
+        let (gcx, ccx) = test_ccx().await;
+        let snapshot = gcx
+            .exec_registry
+            .register(
+                ExecProcessMeta::new(ExecMode::Background, "test".to_string())
+                    .with_chat_id("chat")
+                    .with_short_description("Background transcript filter".to_string()),
+                64,
+            )
+            .await;
+        let process_id = snapshot.meta.process_id;
+        gcx.exec_registry.mark_started(&process_id).await.unwrap();
+        gcx.exec_registry
+            .append_output(
+                &process_id,
+                ExecOutputStream::Stdout,
+                "BACKGROUND_OLD_NEEDLE\n".to_string(),
+            )
+            .await
+            .unwrap();
+        for index in 0..8 {
+            gcx.exec_registry
+                .append_output(
+                    &process_id,
+                    ExecOutputStream::Stdout,
+                    format!("filler-line-{index:02}-xxxxxxxx\n"),
+                )
+                .await
+                .unwrap();
+        }
+
+        let mut read = ToolProcessRead {
+            config_path: String::new(),
+        };
+        let message = run_tool(
+            &mut read,
+            ccx,
+            make_args_map(vec![
+                ("process_id", json!(process_id.as_str())),
+                ("since_seq", json!(0)),
+                ("stream", json!("stdout")),
+                ("output_filter", json!("BACKGROUND_OLD_NEEDLE")),
+                ("output_limit", json!("4")),
+            ]),
+        )
+        .await
+        .unwrap();
+        let body = text(&message);
+
+        assert!(!body.contains("BACKGROUND_OLD_NEEDLE"));
+        assert_eq!(exec(&message)["transcript"]["since_seq"], 0);
+        assert!(
+            exec(&message)["transcript"]["dropped_bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(exec(&message)["stream"], "stdout");
+    }
+
+    #[tokio::test]
     async fn tool_process_kill_unknown_id_errors() {
         let (_gcx, ccx) = test_ccx().await;
         let mut kill = ToolProcessKill {

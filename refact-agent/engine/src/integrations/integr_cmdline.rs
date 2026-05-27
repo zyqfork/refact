@@ -20,7 +20,8 @@ use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::custom_error::YamlError;
 use crate::exec::{
     generate_short_description, sanitize_short_description, ExecMode, ExecOutputStream,
-    ExecOwnerMeta, ExecProcessSnapshot, ExecReadResult, ExecSpawnRequest, ExecStatus,
+    ExecOwnerMeta, ExecProcessSnapshot, ExecRawOutput, ExecReadResult, ExecSpawnRequest,
+    ExecStatus,
 };
 use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::{
@@ -235,6 +236,15 @@ fn collect_exec_output(read: &ExecReadResult) -> (String, String) {
     (stdout, stderr)
 }
 
+fn collect_foreground_output(
+    read: &ExecReadResult,
+    raw_output: Option<&ExecRawOutput>,
+) -> (String, String) {
+    raw_output
+        .map(|raw| (raw.stdout.clone(), raw.stderr.clone()))
+        .unwrap_or_else(|| collect_exec_output(read))
+}
+
 fn exec_status_label(status: &ExecStatus) -> &'static str {
     match status {
         ExecStatus::Starting => "starting",
@@ -365,7 +375,10 @@ pub async fn execute_blocking_command(
     let read = exec_registry
         .read(&result.snapshot.meta.process_id, 0, None)
         .await;
-    let (stdout, stderr) = collect_exec_output(&read);
+    let raw_output = exec_registry
+        .read_raw_capture(&result.snapshot.meta.process_id)
+        .await;
+    let (stdout, stderr) = collect_foreground_output(&read, raw_output.as_ref());
 
     let stdout = output_mini_postprocessing(&cfg.output_filter, &stdout);
     let stderr = output_mini_postprocessing(&cfg.output_filter, &stderr);
@@ -376,6 +389,19 @@ pub async fn execute_blocking_command(
             "⚠️ Output was truncated by exec transcript limits ({} bytes kept, {} bytes dropped, {} chunks truncated).\n",
             read.current_bytes, read.dropped_bytes, read.truncated_chunks
         ));
+    }
+    if let Some(raw_output) = raw_output.as_ref() {
+        if raw_output.is_truncated() {
+            out.push_str(&format!(
+                "⚠️ Raw foreground capture reached limits (stdout: {}/{} bytes kept, {} bytes elided; stderr: {}/{} bytes kept, {} bytes elided).\n",
+                raw_output.stdout_captured_bytes,
+                raw_output.stdout_max_bytes,
+                raw_output.stdout_elided_bytes,
+                raw_output.stderr_captured_bytes,
+                raw_output.stderr_max_bytes,
+                raw_output.stderr_elided_bytes
+            ));
+        }
     }
     append_status_line(&mut out, &result.snapshot.status, duration, timeout_secs);
     Ok((out, result.snapshot, duration))
@@ -669,6 +695,18 @@ mod tests {
         }
     }
 
+    fn late_marker_command(marker: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!(
+                "$chunk = ('f' * 1024) + \"`n\"; [Console]::Out.Write($chunk * 1024); [Console]::Out.Write('{marker}`n'); $tail = ('t' * 1024) + \"`n\"; [Console]::Out.Write($tail * 3072)"
+            )
+        } else {
+            format!(
+                "python3 -c 'import sys; sys.stdout.write((\"f\" * 1024 + \"\\n\") * 1024); sys.stdout.write(\"{marker}\\n\"); sys.stdout.write((\"t\" * 1024 + \"\\n\") * 3072)'"
+            )
+        }
+    }
+
     async fn run_tool(mut tool: ToolCmdline, args: HashMap<String, Value>) -> ChatMessage {
         let (_, ccx) = test_ccx().await;
         let (_, messages) = tool
@@ -830,6 +868,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(snapshot.status, ExecStatus::Killed);
+    }
+
+    #[tokio::test]
+    async fn configured_cmdline_output_filter_finds_late_match() {
+        let marker = "CMDLINE_FOREGROUND_LATE_MATCH";
+        let message = run_tool(
+            ToolCmdline {
+                name: "cmdline_filter".to_string(),
+                cfg: CmdlineToolConfig {
+                    command: late_marker_command(marker),
+                    description: "Find marker".to_string(),
+                    parameters: Vec::new(),
+                    timeout: "20".to_string(),
+                    output_filter: OutputFilter {
+                        grep: marker.to_string(),
+                        limit_lines: 8,
+                        limit_chars: 2000,
+                        ..OutputFilter::default()
+                    },
+                    ..CmdlineToolConfig::default()
+                },
+                ..ToolCmdline::default()
+            },
+            args(vec![]),
+        )
+        .await;
+        let body = text(&message);
+
+        assert!(body.contains(marker));
+        assert!(body.contains("filtered"));
+        assert_eq!(exec(&message)["status"], "exited");
     }
 
     #[tokio::test]

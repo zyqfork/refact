@@ -388,6 +388,7 @@ impl ExecRegistry {
                     control_tx,
                     terminal,
                 },
+                matches!(request.mode, ExecMode::Foreground),
             )
             .await
         {

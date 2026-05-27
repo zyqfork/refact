@@ -14,7 +14,8 @@ use crate::at_commands::at_file::return_one_candidate_or_a_good_error;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::exec::{
     generate_short_description, sanitize_short_description, ExecMode, ExecOutputStream,
-    ExecOwnerMeta, ExecProcessSnapshot, ExecReadResult, ExecSpawnRequest, ExecStatus,
+    ExecOwnerMeta, ExecProcessSnapshot, ExecRawOutput, ExecReadResult, ExecSpawnRequest,
+    ExecStatus,
 };
 use crate::files_correction::canonical_path;
 use crate::files_correction::canonicalize_normalized_path;
@@ -195,7 +196,10 @@ impl Tool for ToolShell {
         let read = exec_registry
             .read(&result.snapshot.meta.process_id, 0, None)
             .await;
-        let (stdout, stderr) = collect_exec_output(&read);
+        let raw_output = exec_registry
+            .read_raw_capture(&result.snapshot.meta.process_id)
+            .await;
+        let (stdout, stderr) = collect_foreground_output(&read, raw_output.as_ref());
         let filtered_stdout = output_mini_postprocessing(&output_filter, &stdout);
         let filtered_stderr = output_mini_postprocessing(&output_filter, &stderr);
 
@@ -209,6 +213,19 @@ impl Tool for ToolShell {
                 "⚠️ Output was truncated by exec transcript limits ({} bytes kept, {} bytes dropped, {} chunks truncated).\n",
                 read.current_bytes, read.dropped_bytes, read.truncated_chunks
             ));
+        }
+        if let Some(raw_output) = raw_output.as_ref() {
+            if raw_output.is_truncated() {
+                out.push_str(&format!(
+                    "⚠️ Raw foreground capture reached limits (stdout: {}/{} bytes kept, {} bytes elided; stderr: {}/{} bytes kept, {} bytes elided).\n",
+                    raw_output.stdout_captured_bytes,
+                    raw_output.stdout_max_bytes,
+                    raw_output.stdout_elided_bytes,
+                    raw_output.stderr_captured_bytes,
+                    raw_output.stderr_max_bytes,
+                    raw_output.stderr_elided_bytes
+                ));
+            }
         }
         append_status_line(&mut out, &result.snapshot.status, duration_secs, timeout);
 
@@ -282,6 +299,15 @@ fn collect_exec_output(read: &ExecReadResult) -> (String, String) {
         }
     }
     (stdout, stderr)
+}
+
+fn collect_foreground_output(
+    read: &ExecReadResult,
+    raw_output: Option<&ExecRawOutput>,
+) -> (String, String) {
+    raw_output
+        .map(|raw| (raw.stdout.clone(), raw.stderr.clone()))
+        .unwrap_or_else(|| collect_exec_output(read))
 }
 
 fn exec_status_label(status: &ExecStatus) -> &'static str {
@@ -636,6 +662,26 @@ mod tests {
         }
     }
 
+    fn late_marker_command(marker: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!(
+                "$chunk = ('f' * 1024) + \"`n\"; [Console]::Out.Write($chunk * 1024); [Console]::Out.Write('{marker}`n'); $tail = ('t' * 1024) + \"`n\"; [Console]::Out.Write($tail * 3072)"
+            )
+        } else {
+            format!(
+                "python3 -c 'import sys; sys.stdout.write((\"f\" * 1024 + \"\\n\") * 1024); sys.stdout.write(\"{marker}\\n\"); sys.stdout.write((\"t\" * 1024 + \"\\n\") * 3072)'"
+            )
+        }
+    }
+
+    fn above_raw_capture_limit_command() -> String {
+        if cfg!(target_os = "windows") {
+            "$max = 16 * 1024 * 1024; $tail = \"`nsmall1`nsmall2`nsmall3`nsmall4`n\"; $line = ('x' * 1024) + \"`n\"; $count = [math]::Floor(($max - $tail.Length - 64) / $line.Length); for ($i = 0; $i -lt $count; $i++) { [Console]::Out.Write($line) }; [Console]::Out.Write('x' * ($max - $tail.Length - 64 - ($count * $line.Length))); [Console]::Out.Write($tail); [Console]::Out.Write(('y' * 1024) * 1024)".to_string()
+        } else {
+            "python3 -c 'import sys; max_bytes = 16 * 1024 * 1024; tail = \"\\nsmall1\\nsmall2\\nsmall3\\nsmall4\\n\"; line = \"x\" * 1024 + \"\\n\"; count = (max_bytes - len(tail) - 64) // len(line); sys.stdout.write(line * count); sys.stdout.write(\"x\" * (max_bytes - len(tail) - 64 - count * len(line))); sys.stdout.write(tail); sys.stdout.write((\"y\" * 1024 + \"\\n\") * 1024)'".to_string()
+        }
+    }
+
     #[test]
     fn shell_tool_workdir_is_optional_in_schema() {
         let tool = ToolShell::default();
@@ -751,6 +797,40 @@ mod tests {
             .unwrap_or(&body);
         let line1_count = filtered_output.matches("line1").count();
         assert_eq!(line1_count, 1);
+    }
+
+    #[tokio::test]
+    async fn foreground_output_filter_finds_late_match() {
+        let marker = "MARKER_FOREGROUND_LATE_MATCH";
+        let message = run_shell(args(vec![
+            ("command", json!(late_marker_command(marker))),
+            ("timeout", json!(20)),
+            ("output_filter", json!(marker)),
+            ("output_limit", json!("8")),
+        ]))
+        .await;
+        let body = text(&message);
+
+        assert!(body.contains(marker));
+        assert!(body.contains("filtered"));
+        assert_eq!(exec(&message)["status"], "exited");
+    }
+
+    #[tokio::test]
+    async fn foreground_output_filter_bounded() {
+        let message = run_shell(args(vec![
+            ("command", json!(above_raw_capture_limit_command())),
+            ("timeout", json!(20)),
+            ("output_filter", json!("small|bytes elided")),
+            ("output_limit", json!("20")),
+        ]))
+        .await;
+        let body = text(&message);
+
+        assert!(body.contains("bytes elided]"));
+        assert!(body.contains("Raw foreground capture reached limits"));
+        assert!(body.len() < 100_000);
+        assert_eq!(exec(&message)["status"], "exited");
     }
 
     #[tokio::test]
