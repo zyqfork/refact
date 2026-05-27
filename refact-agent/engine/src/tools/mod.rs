@@ -27,6 +27,7 @@ pub mod tool_cmdline;
 mod tool_code_review;
 mod tool_compress_chat;
 pub mod tool_config_subagent;
+mod tool_cron_delete;
 mod tool_cron_list;
 mod tool_deep_research;
 pub mod tool_delegate;
