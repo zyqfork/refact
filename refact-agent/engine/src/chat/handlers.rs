@@ -18,7 +18,6 @@ use super::content::{validate_content_with_attachments, validate_context_files};
 use super::queue::process_command_queue;
 use super::trajectory_ops::sanitize_messages_for_model_switch;
 use super::trajectories::validate_trajectory_id;
-use crate::agents::types::{AgentListFilter, BackgroundAgentSummary};
 use crate::yaml_configs::customization_registry::{get_mode_config, map_legacy_mode_to_id};
 
 fn worktree_activation_message(worktree: &WorktreeMeta) -> ChatMessage {
@@ -52,26 +51,6 @@ fn command_error_response(status: StatusCode, code: &str, error: String) -> Resp
         .unwrap()
 }
 
-async fn snapshot_with_background_agents(
-    app: AppState,
-    chat_id: &str,
-    mut snapshot: ChatEvent,
-) -> ChatEvent {
-    if let ChatEvent::Snapshot {
-        background_agents, ..
-    } = &mut snapshot
-    {
-        *background_agents = app
-            .agents
-            .list_for_parent(chat_id, AgentListFilter::default())
-            .await
-            .iter()
-            .map(BackgroundAgentSummary::from)
-            .collect();
-    }
-    snapshot
-}
-
 fn spawn_pending_background_agent_flush(app: AppState, chat_id: String) {
     tokio::spawn(async move {
         let _ = crate::agents::push::flush_pending_pushes_for_parent(app, &chat_id).await;
@@ -93,11 +72,11 @@ pub async fn handle_v1_chat_subscribe(
     let session_arc = get_or_create_session_with_trajectory(app.clone(), &sessions, &chat_id).await;
     spawn_pending_background_agent_flush(app.clone(), chat_id.clone());
     let session = session_arc.lock().await;
-    let snapshot = session.snapshot();
     let mut rx = session.subscribe();
     let initial_seq = session.event_seq;
+    let snapshot = ChatSession::snapshot_with_agents(app.clone(), &session);
     drop(session);
-    let snapshot = snapshot_with_background_agents(app.clone(), &chat_id, snapshot).await;
+    let snapshot = snapshot.await;
 
     let initial_envelope = EventEnvelope {
         chat_id: chat_id.clone(),
@@ -146,13 +125,14 @@ pub async fn handle_v1_chat_subscribe(
                             // Re-subscribe BEFORE capturing event_seq so we don't miss events
                             // emitted between snapshot and the new receiver start.
                             rx = session.subscribe();
-                            let recovery_snapshot = session.snapshot();
                             let recovery_seq = session.event_seq;
+                            let recovery_snapshot = ChatSession::snapshot_with_agents(app.clone(), &session);
                             drop(session);
+                            let recovery_snapshot = recovery_snapshot.await;
                             let recovery_envelope = EventEnvelope {
                                 chat_id: chat_id_for_stream.clone(),
                                 seq: recovery_seq,
-                                event: snapshot_with_background_agents(app.clone(), &chat_id_for_stream, recovery_snapshot).await,
+                                event: recovery_snapshot,
                             };
                             match serde_json::to_string(&recovery_envelope) {
                                 Ok(json) => yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", json)),

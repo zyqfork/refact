@@ -1,12 +1,15 @@
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use crate::agents::types::{AgentCompletion, BgAgentKind, BgAgentStatus, CreateAgentRequest};
+    use crate::app_state::AppState;
     use crate::call_validation::{ChatMessage, ChatContent, ChatUsage, ChatToolCall, ChatToolFunction};
     use crate::scratchpads::multimodality::MultimodalElement;
     use crate::chat::types::{
-        BackgroundAgentSummary, BurstGuard, BurstGuardDecision, ChatEvent, DeltaOp, SessionState,
-        PauseReason, QueuedItem, RuntimeState, ThreadParams,
+        BackgroundAgentSummary, BurstGuard, BurstGuardDecision, ChatEvent, ChatSession, DeltaOp,
+        SessionState, PauseReason, QueuedItem, RuntimeState, ThreadParams,
     };
+    use std::collections::HashSet;
 
     fn extract_extra_fields(
         json_val: &serde_json::Value,
@@ -55,6 +58,20 @@ mod tests {
             started_at: Some("2026-05-27T00:00:00Z".to_string()),
             finished_at: None,
             change_seq: 7,
+        }
+    }
+
+    fn create_agent_request(parent_chat_id: &str, title: &str) -> CreateAgentRequest {
+        CreateAgentRequest {
+            parent_chat_id: parent_chat_id.to_string(),
+            parent_root_chat_id: Some(parent_chat_id.to_string()),
+            parent_tool_call_id: Some(format!("tool-{title}")),
+            kind: BgAgentKind::Delegate,
+            config_name: "delegate".to_string(),
+            title: title.to_string(),
+            prompt: format!("prompt for {title}"),
+            target_files: vec![format!("{title}.rs")],
+            model: "test-model".to_string(),
         }
     }
 
@@ -138,6 +155,91 @@ mod tests {
         let value = serde_json::to_value(background_agent_summary()).unwrap();
         assert_eq!(value["kind"], "delegate");
         assert_eq!(value["status"], "waiting_for_approval");
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_includes_background_agents() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let app = AppState::from_gcx(gcx).await;
+        let parent_chat_id = "parent-background-snapshot";
+        let session = ChatSession::new(parent_chat_id.to_string());
+
+        let (queued, _, _) = app
+            .agents
+            .create(create_agent_request(parent_chat_id, "queued"))
+            .await
+            .unwrap();
+        let (running, _, _) = app
+            .agents
+            .create(create_agent_request(parent_chat_id, "running"))
+            .await
+            .unwrap();
+        let (completed, _, _) = app
+            .agents
+            .create(create_agent_request(parent_chat_id, "completed"))
+            .await
+            .unwrap();
+        let (interrupted, _, _) = app
+            .agents
+            .create(create_agent_request(parent_chat_id, "interrupted"))
+            .await
+            .unwrap();
+        let (other_parent, _, _) = app
+            .agents
+            .create(create_agent_request("other-parent", "other"))
+            .await
+            .unwrap();
+
+        app.agents
+            .mark_running(&running.agent_id, "running-child".to_string())
+            .await
+            .unwrap();
+        app.agents
+            .mark_completed(
+                &completed.agent_id,
+                AgentCompletion {
+                    result_summary: "done".to_string(),
+                    edited_files: vec!["completed.rs".to_string()],
+                    diff_summary: Some("diff".to_string()),
+                    conflict_summary: None,
+                    child_chat_id: Some("completed-child".to_string()),
+                },
+            )
+            .await
+            .unwrap();
+        app.agents
+            .mark_interrupted(&interrupted.agent_id, "restart".to_string())
+            .await
+            .unwrap();
+
+        let snap = ChatSession::snapshot_with_agents(app, &session).await;
+
+        match snap {
+            ChatEvent::Snapshot {
+                background_agents, ..
+            } => {
+                let statuses: HashSet<_> = background_agents
+                    .iter()
+                    .map(|agent| agent.status.as_str())
+                    .collect();
+                let agent_ids: HashSet<_> = background_agents
+                    .iter()
+                    .map(|agent| agent.agent_id.as_str())
+                    .collect();
+
+                assert_eq!(background_agents.len(), 4);
+                assert!(agent_ids.contains(queued.agent_id.as_str()));
+                assert!(agent_ids.contains(running.agent_id.as_str()));
+                assert!(agent_ids.contains(completed.agent_id.as_str()));
+                assert!(agent_ids.contains(interrupted.agent_id.as_str()));
+                assert!(!agent_ids.contains(other_parent.agent_id.as_str()));
+                assert!(statuses.contains(BgAgentStatus::Queued.as_str()));
+                assert!(statuses.contains(BgAgentStatus::Running.as_str()));
+                assert!(statuses.contains(BgAgentStatus::Completed.as_str()));
+                assert!(statuses.contains(BgAgentStatus::Interrupted.as_str()));
+            }
+            _ => panic!("Expected Snapshot"),
+        }
     }
 
     #[test]

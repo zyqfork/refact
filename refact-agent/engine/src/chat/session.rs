@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, Mutex as AMutex, Notify, RwLock as ARwLock};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::agents::types::AgentListFilter;
 use crate::app_state::AppState;
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::chat::diagnostics::make_ui_only_error_message;
@@ -260,6 +261,13 @@ impl ChatSession {
     }
 
     pub fn snapshot(&self) -> ChatEvent {
+        self.snapshot_with_background_agents(Vec::new())
+    }
+
+    fn snapshot_with_background_agents(
+        &self,
+        background_agents: Vec<BackgroundAgentSummary>,
+    ) -> ChatEvent {
         let mut messages = self.messages.clone();
         if self.runtime.state == SessionState::Generating {
             if let Some(ref draft) = self.draft_message {
@@ -275,7 +283,28 @@ impl ChatSession {
             thread: self.thread.clone(),
             runtime,
             messages,
-            background_agents: vec![],
+            background_agents,
+        }
+    }
+
+    pub fn snapshot_with_agents(
+        app: AppState,
+        session: &ChatSession,
+    ) -> impl std::future::Future<Output = ChatEvent> + Send + 'static {
+        let chat_id = session.chat_id.clone();
+        let mut snapshot = session.snapshot();
+        async move {
+            let agents = app
+                .agents
+                .list_for_parent(&chat_id, AgentListFilter::default())
+                .await;
+            if let ChatEvent::Snapshot {
+                background_agents, ..
+            } = &mut snapshot
+            {
+                *background_agents = agents.iter().map(BackgroundAgentSummary::from).collect();
+            }
+            snapshot
         }
     }
 
