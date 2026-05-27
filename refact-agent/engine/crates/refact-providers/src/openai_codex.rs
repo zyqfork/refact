@@ -9,6 +9,10 @@ use tokio::sync::{Mutex as AMutex, MutexGuard};
 
 use refact_core::model_caps::ModelCapabilities;
 use refact_core::llm_types::WireFormat;
+use crate::llm_http_retry::{
+    insert_llm_http_header_retry_config, LLM_HTTP_HEADER_RETRY_MAX_ATTEMPTS_DEFAULT,
+    LLM_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_DEFAULT,
+};
 use crate::openai_codex_oauth::OAuthTokens;
 use crate::traits::{
     AvailableModel, CustomModelConfig, ModelPricing, ModelSource, ProviderRuntime, ProviderTrait,
@@ -21,12 +25,6 @@ const CHATGPT_CODEX_MODELS_URL: &str =
 const CHATGPT_CODEX_RESPONSES_WEBSOCKET_URL: &str = "wss://chatgpt.com/backend-api/codex/responses";
 pub const CODEX_WEBSOCKET_ENDPOINT_HEADER: &str =
     "x-refact-internal-openai-codex-websocket-endpoint";
-pub const CODEX_HTTP_HEADER_RETRY_ENABLED_HEADER: &str =
-    "x-refact-internal-openai-codex-http-header-retry-enabled";
-pub const CODEX_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_HEADER: &str =
-    "x-refact-internal-openai-codex-http-header-retry-timeout-seconds";
-pub const CODEX_HTTP_HEADER_RETRY_MAX_ATTEMPTS_HEADER: &str =
-    "x-refact-internal-openai-codex-http-header-retry-max-attempts";
 #[allow(dead_code)]
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 const CODEX_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
@@ -49,11 +47,11 @@ fn default_http_response_header_retry_enabled() -> bool {
 }
 
 fn default_http_response_header_retry_timeout_seconds() -> u64 {
-    10
+    LLM_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_DEFAULT
 }
 
 fn default_http_response_header_retry_max_attempts() -> usize {
-    10
+    LLM_HTTP_HEADER_RETRY_MAX_ATTEMPTS_DEFAULT
 }
 
 fn normalized_model_id(id: &str) -> String {
@@ -1313,17 +1311,11 @@ available:
                         CHATGPT_CODEX_RESPONSES_WEBSOCKET_URL.to_string(),
                     );
                 }
-                extra_headers.insert(
-                    CODEX_HTTP_HEADER_RETRY_ENABLED_HEADER.to_string(),
-                    self.http_response_header_retry_enabled.to_string(),
-                );
-                extra_headers.insert(
-                    CODEX_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_HEADER.to_string(),
-                    self.http_response_header_retry_timeout_seconds.to_string(),
-                );
-                extra_headers.insert(
-                    CODEX_HTTP_HEADER_RETRY_MAX_ATTEMPTS_HEADER.to_string(),
-                    self.http_response_header_retry_max_attempts.to_string(),
+                insert_llm_http_header_retry_config(
+                    &mut extra_headers,
+                    self.http_response_header_retry_enabled,
+                    self.http_response_header_retry_timeout_seconds,
+                    self.http_response_header_retry_max_attempts,
                 );
                 (
                     "https://chatgpt.com/backend-api/codex/responses".to_string(),
@@ -1641,21 +1633,21 @@ mod tests {
         assert_eq!(
             runtime
                 .extra_headers
-                .get(super::CODEX_HTTP_HEADER_RETRY_ENABLED_HEADER)
+                .get(crate::llm_http_retry::LLM_HTTP_HEADER_RETRY_ENABLED_HEADER)
                 .map(String::as_str),
             Some("true")
         );
         assert_eq!(
             runtime
                 .extra_headers
-                .get(super::CODEX_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_HEADER)
+                .get(crate::llm_http_retry::LLM_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_HEADER)
                 .map(String::as_str),
             Some("10")
         );
         assert_eq!(
             runtime
                 .extra_headers
-                .get(super::CODEX_HTTP_HEADER_RETRY_MAX_ATTEMPTS_HEADER)
+                .get(crate::llm_http_retry::LLM_HTTP_HEADER_RETRY_MAX_ATTEMPTS_HEADER)
                 .map(String::as_str),
             Some("10")
         );

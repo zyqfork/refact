@@ -9,6 +9,10 @@ use serde_json::json;
 use refact_core::model_caps::{resolve_model_caps, ModelCapabilities};
 use refact_core::llm_types::WireFormat;
 use crate::config::{is_legacy_refact_model, resolve_env_var};
+use crate::llm_http_retry::{
+    insert_llm_http_header_retry_config, LLM_HTTP_HEADER_RETRY_MAX_ATTEMPTS_DEFAULT,
+    LLM_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_DEFAULT,
+};
 use crate::traits::{
     AvailableModel, CustomModelConfig, ModelPricing, ModelSource, ProviderRuntime, ProviderTrait,
     merge_custom_models, parse_enabled_models, parse_custom_models, set_model_enabled_impl,
@@ -124,6 +128,14 @@ available:
             )
         };
 
+        let mut extra_headers = HashMap::new();
+        insert_llm_http_header_retry_config(
+            &mut extra_headers,
+            true,
+            LLM_HTTP_HEADER_RETRY_TIMEOUT_SECONDS_DEFAULT,
+            LLM_HTTP_HEADER_RETRY_MAX_ATTEMPTS_DEFAULT,
+        );
+
         Ok(ProviderRuntime {
             name: self.name().to_string(),
             display_name: self.display_name().to_string(),
@@ -136,7 +148,7 @@ available:
             api_key,
             auth_token: String::new(),
             tokenizer_api_key: String::new(),
-            extra_headers: HashMap::new(),
+            extra_headers,
             supports_cache_control: true,
             chat_models: Vec::new(),
             completion_models: Vec::new(),

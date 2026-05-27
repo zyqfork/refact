@@ -6,6 +6,7 @@ pub use refact_providers::config;
 pub use refact_providers::config_store;
 pub use refact_providers::identity;
 pub use refact_providers::instance;
+pub use refact_providers::llm_http_retry;
 pub use refact_providers::models_dev_provider;
 pub use refact_providers::traits;
 

@@ -2,6 +2,7 @@ pub mod config;
 pub mod config_store;
 pub mod identity;
 pub mod instance;
+pub mod llm_http_retry;
 pub mod models_dev_provider;
 pub mod oauth_refresh;
 mod registry;
