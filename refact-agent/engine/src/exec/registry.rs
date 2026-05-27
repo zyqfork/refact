@@ -134,9 +134,17 @@ enum ExecCleanupOutcome {
     },
 }
 
+
+enum ExecRemoveTargetKind {
+    Runtime,
+    Child,
+}
+
 struct ExecRemoveTarget {
     process_id: ExecProcessId,
-    runtime: ExecProcessRuntime,
+    kind: ExecRemoveTargetKind,
+    runtime: Option<ExecProcessRuntime>,
+    child: Option<tokio::process::Child>,
 }
 
 #[derive(Clone, Default)]
@@ -510,15 +518,35 @@ impl ExecRegistry {
     }
 
     async fn remove_target(&self, process_id: &ExecProcessId) -> Option<ExecRemoveTarget> {
-        let records = self.records.lock().await;
-        let record = records.get(process_id)?;
-        if record.snapshot.status.is_terminal() {
-            return None;
+        let mut records = self.records.lock().await;
+        let record = records.get_mut(process_id)?;
+        let is_terminal = record.snapshot.status.is_terminal();
+        if !is_terminal {
+            if let Some(runtime) = record.runtime.clone() {
+                return Some(ExecRemoveTarget {
+                    process_id: process_id.clone(),
+                    kind: ExecRemoveTargetKind::Runtime,
+                    runtime: Some(runtime),
+                    child: None,
+                });
+            }
+            if record.child.is_some() {
+                return Some(ExecRemoveTarget {
+                    process_id: process_id.clone(),
+                    kind: ExecRemoveTargetKind::Child,
+                    runtime: None,
+                    child: record.child.take(),
+                });
+            }
+        } else if record.child.is_some() {
+            return Some(ExecRemoveTarget {
+                process_id: process_id.clone(),
+                kind: ExecRemoveTargetKind::Child,
+                runtime: None,
+                child: record.child.take(),
+            });
         }
-        record.runtime.clone().map(|runtime| ExecRemoveTarget {
-            process_id: process_id.clone(),
-            runtime,
-        })
+        None
     }
 
     async fn stop_remove_target(
@@ -526,25 +554,65 @@ impl ExecRegistry {
         target: ExecRemoveTarget,
         timeout: Duration,
     ) -> Result<ExecProcessSnapshot, String> {
-        match tokio::time::timeout(timeout, self.kill(&target.process_id)).await {
-            Ok(Ok(snapshot)) => Ok(snapshot),
-            Ok(Err(message)) => {
-                let _ = self
-                    .mark_failed(&target.process_id, message.clone())
-                    .await?;
-                target.runtime.terminal.notify_waiters();
-                Err(message)
+        match target.kind {
+            ExecRemoveTargetKind::Runtime => {
+                match tokio::time::timeout(timeout, self.kill(&target.process_id)).await {
+                    Ok(Ok(snapshot)) => Ok(snapshot),
+                    Ok(Err(message)) => {
+                        let _ = self
+                            .mark_failed(&target.process_id, message.clone())
+                            .await?;
+                        if let Some(runtime) = target.runtime {
+                            runtime.terminal.notify_waiters();
+                        }
+                        Err(message)
+                    }
+                    Err(_) => {
+                        let message = format!(
+                            "timed out while removing process after {:.3}s",
+                            timeout.as_secs_f64()
+                        );
+                        let _ = self
+                            .mark_failed(&target.process_id, message.clone())
+                            .await?;
+                        if let Some(runtime) = target.runtime {
+                            runtime.terminal.notify_waiters();
+                        }
+                        Err(message)
+                    }
+                }
             }
-            Err(_) => {
-                let message = format!(
-                    "timed out while removing process after {:.3}s",
-                    timeout.as_secs_f64()
-                );
-                let _ = self
-                    .mark_failed(&target.process_id, message.clone())
-                    .await?;
-                target.runtime.terminal.notify_waiters();
-                Err(message)
+            ExecRemoveTargetKind::Child => {
+                let Some(mut child) = target.child else {
+                    return Err(format!("remove target has no child: {}", target.process_id));
+                };
+                #[cfg(unix)]
+                {
+                    if let Some(pid) = child.id() {
+                        let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                    }
+                }
+                let _ = child.start_kill();
+                match tokio::time::timeout(timeout, child.wait()).await {
+                    Ok(Ok(_)) => self.mark_killed(&target.process_id).await,
+                    Ok(Err(err)) => {
+                        let message = err.to_string();
+                        let _ = self
+                            .mark_failed(&target.process_id, message.clone())
+                            .await?;
+                        Err(message)
+                    }
+                    Err(_) => {
+                        let message = format!(
+                            "timed out while removing child process after {:.3}s",
+                            timeout.as_secs_f64()
+                        );
+                        let _ = self
+                            .mark_failed(&target.process_id, message.clone())
+                            .await?;
+                        Err(message)
+                    }
+                }
             }
         }
     }
@@ -1441,6 +1509,113 @@ mod tests {
         assert_eq!(summary.runtime_failed_count, 0);
         assert_eq!(summary.runtime_timed_out_count, 0);
         assert!(registry.get(&process_id).await.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remove_kills_registered_child() {
+        let registry = ExecRegistry::new();
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg("sleep 30");
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("spawn child");
+        let child_pid = child.id().expect("child pid");
+        let snapshot = registry
+            .register_with_child(
+                meta("exec_remove_child", ExecMode::Background, "sleep 30"),
+                DEFAULT_MAX_BYTES,
+                child,
+            )
+            .await;
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
+
+        assert!(process_exists(child_pid));
+        registry.remove(&snapshot.meta.process_id).await.unwrap();
+        assert!(!process_exists(child_pid));
+        assert!(registry.get(&snapshot.meta.process_id).await.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remove_by_owner_kills_registered_child() {
+        let registry = ExecRegistry::new();
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg("sleep 30");
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("spawn child");
+        let child_pid = child.id().expect("child pid");
+        let snapshot = registry
+            .register_with_child(
+                meta("exec_remove_child_owner", ExecMode::Background, "sleep 30")
+                    .with_chat_id("chat-owner-kill"),
+                DEFAULT_MAX_BYTES,
+                child,
+            )
+            .await;
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
+
+        assert!(process_exists(child_pid));
+        registry
+            .remove_by_owner(ExecProcessFilter {
+                chat_id: Some("chat-owner-kill".to_string()),
+                ..ExecProcessFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(!process_exists(child_pid));
+        assert!(registry.get(&snapshot.meta.process_id).await.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_failed_with_child_is_killed_on_remove() {
+        let registry = ExecRegistry::new();
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg("sleep 30");
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("spawn child");
+        let child_pid = child.id().expect("child pid");
+        let snapshot = registry
+            .register_with_child(
+                meta("exec_terminal_child", ExecMode::Background, "sleep 30"),
+                DEFAULT_MAX_BYTES,
+                child,
+            )
+            .await;
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
+        let summary = registry.cleanup_shutdown(Duration::ZERO).await;
+        assert_eq!(summary.child_timed_out_count, 1);
+        let retained = registry.get(&snapshot.meta.process_id).await.unwrap();
+        assert!(matches!(retained.status, ExecStatus::Failed { .. }));
+        assert!(process_exists(child_pid));
+
+        registry.remove(&snapshot.meta.process_id).await.unwrap();
+        assert!(!process_exists(child_pid));
+        assert!(registry.get(&snapshot.meta.process_id).await.is_none());
     }
 
     #[tokio::test]
