@@ -328,7 +328,9 @@ async fn push_if_card_current_and_live(
         });
     }
 
-    chat_facade.push_command(expected_chat_id, command).await?;
+    chat_facade
+        .push_priority_command(expected_chat_id, command)
+        .await?;
     Ok(PushReport {
         pushed: true,
         prior_state,

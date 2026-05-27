@@ -52,6 +52,7 @@ import {
   selectOpenTasksFromRoot,
   setTaskActiveChat,
   selectTaskActiveChat,
+  updatePlannerChat,
   PlannerInfo,
 } from "./tasksSlice";
 import {
@@ -184,6 +185,17 @@ function defaultTaskWorkspaceLayout() {
   };
 }
 
+function sameWaitingCards(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
 export const PlannerItem: React.FC<PlannerItemProps> = ({
   planner,
   isSelected,
@@ -201,7 +213,7 @@ export const PlannerItem: React.FC<PlannerItemProps> = ({
     ? title
     : formatPlannerDate(planner.createdAt);
 
-  const sessionState = runtime?.session_state;
+  const sessionState = runtime?.session_state ?? planner.sessionState;
   const isWaiting = sessionState === "waiting_user_input";
   const waitingCards = planner.waitingForCardIds ?? [];
   const showWaitingChips = isWaiting && waitingCards.length > 0;
@@ -810,7 +822,32 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
         }),
       );
 
-      if (currentTaskUI.plannerChats.some((p) => p.id === traj.id)) continue;
+      const existing = currentTaskUI.plannerChats.find((p) => p.id === traj.id);
+      if (existing) {
+        if (
+          existing.title !== traj.title ||
+          existing.updatedAt !== traj.updated_at ||
+          existing.sessionState !== traj.session_state ||
+          !sameWaitingCards(
+            existing.waitingForCardIds,
+            traj.waiting_for_card_ids,
+          )
+        ) {
+          dispatch(
+            updatePlannerChat({
+              taskId,
+              planner: {
+                id: traj.id,
+                title: traj.title,
+                updatedAt: traj.updated_at,
+                sessionState: traj.session_state,
+                waitingForCardIds: traj.waiting_for_card_ids,
+              },
+            }),
+          );
+        }
+        continue;
+      }
 
       dispatch(
         addPlannerChat({

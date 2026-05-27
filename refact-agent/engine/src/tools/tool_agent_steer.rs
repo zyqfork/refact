@@ -229,7 +229,7 @@ impl Tool for ToolAgentSteer {
         .await?;
 
         chat_facade
-            .push_command(
+            .push_priority_command(
                 &agent_chat_id,
                 ChatCommand::UserMessage {
                     content: Value::String(steer_message.clone()),

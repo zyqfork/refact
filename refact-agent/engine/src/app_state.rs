@@ -137,6 +137,47 @@ impl EngineChatSessionFacade {
     pub fn new(gcx: SharedGlobalContext) -> Self {
         Self { gcx }
     }
+
+    async fn enqueue_command(
+        &self,
+        chat_id: &str,
+        command: refact_chat_api::ChatCommand,
+        priority: bool,
+    ) -> Result<(), String> {
+        let app = AppState::from_gcx(self.gcx.clone()).await;
+        let session_arc = chat::get_or_create_session_with_trajectory(
+            app.clone(),
+            &self.gcx.chat_sessions,
+            chat_id,
+        )
+        .await;
+        let mut session = session_arc.lock().await;
+        let request = refact_chat_api::CommandRequest {
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            priority,
+            command,
+        };
+        if priority {
+            let insert_pos = session
+                .command_queue
+                .iter()
+                .position(|r| !r.priority)
+                .unwrap_or(session.command_queue.len());
+            session.command_queue.insert(insert_pos, request);
+        } else {
+            session.command_queue.push_back(request);
+        }
+        session.touch();
+        let processor_running = session.queue_processor_running.clone();
+        let queue_notify = session.queue_notify.clone();
+        drop(session);
+        if !processor_running.swap(true, Ordering::SeqCst) {
+            tokio::spawn(process_command_queue(app, session_arc, processor_running));
+        } else {
+            queue_notify.notify_one();
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -215,31 +256,15 @@ impl ChatSessionFacade for EngineChatSessionFacade {
         chat_id: &str,
         command: refact_chat_api::ChatCommand,
     ) -> Result<(), String> {
-        let app = AppState::from_gcx(self.gcx.clone()).await;
-        let session_arc = chat::get_or_create_session_with_trajectory(
-            app.clone(),
-            &self.gcx.chat_sessions,
-            chat_id,
-        )
-        .await;
-        let mut session = session_arc.lock().await;
-        session
-            .command_queue
-            .push_back(refact_chat_api::CommandRequest {
-                client_request_id: uuid::Uuid::new_v4().to_string(),
-                priority: false,
-                command,
-            });
-        session.touch();
-        let processor_running = session.queue_processor_running.clone();
-        let queue_notify = session.queue_notify.clone();
-        drop(session);
-        if !processor_running.swap(true, Ordering::SeqCst) {
-            tokio::spawn(process_command_queue(app, session_arc, processor_running));
-        } else {
-            queue_notify.notify_one();
-        }
-        Ok(())
+        self.enqueue_command(chat_id, command, false).await
+    }
+
+    async fn push_priority_command(
+        &self,
+        chat_id: &str,
+        command: refact_chat_api::ChatCommand,
+    ) -> Result<(), String> {
+        self.enqueue_command(chat_id, command, true).await
     }
 
     async fn session_state(

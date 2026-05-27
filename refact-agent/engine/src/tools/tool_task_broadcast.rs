@@ -308,7 +308,7 @@ async fn broadcast_to_target(
     }
 
     match chat_facade
-        .push_command(
+        .push_priority_command(
             &target.chat_id,
             user_message_command(broadcast_message.to_string()),
         )

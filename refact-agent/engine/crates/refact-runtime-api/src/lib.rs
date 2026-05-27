@@ -127,6 +127,13 @@ pub trait ChatSessionFacade: Send + Sync {
     async fn update_session(&self, chat_id: &str, update: ChatSessionUpdate) -> Result<(), String>;
     async fn create_session(&self, request: CreateSessionRequest) -> Result<(), String>;
     async fn push_command(&self, chat_id: &str, command: ChatCommand) -> Result<(), String>;
+    async fn push_priority_command(
+        &self,
+        chat_id: &str,
+        command: ChatCommand,
+    ) -> Result<(), String> {
+        self.push_command(chat_id, command).await
+    }
     async fn session_state(&self, chat_id: &str) -> Result<Option<SessionState>, String>;
     async fn maybe_save_session(&self, chat_id: &str) -> Result<(), String>;
     async fn save_trajectory_snapshot(&self, snapshot: TrajectorySnapshot) -> Result<(), String>;
