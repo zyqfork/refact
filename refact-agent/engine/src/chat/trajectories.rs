@@ -4647,8 +4647,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let project_hash =
-            crate::worktrees::service::project_hash_for_path(&source.canonicalize().unwrap());
+        let project_hash = crate::worktrees::service::project_hash_for_path(
+            &dunce::simplified(&source.canonicalize().unwrap()).to_path_buf(),
+        );
         let worktree_cache_dir = cache.join("worktrees").join(&project_hash);
         std::fs::create_dir_all(&worktree_cache_dir).unwrap();
         let agent_worktree = worktree_cache_dir.join("agent-worktree");
