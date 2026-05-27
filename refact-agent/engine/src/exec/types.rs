@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,75 @@ use uuid::Uuid;
 
 const SHORT_DESC_MAX_LEN: usize = 80;
 pub const DEFAULT_EXEC_OUTPUT_LIMIT_BYTES: usize = 512 * 1024;
+
+pub(crate) fn normalize_workspace_path(path: &Path) -> PathBuf {
+    let normalized = dunce::canonicalize(path).unwrap_or_else(|_| lexical_normalize_path(path));
+    normalize_windows_drive(normalized)
+}
+
+fn lexical_normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let last = normalized.components().next_back().map(|component| {
+                    (
+                        matches!(component, Component::Normal(_)),
+                        matches!(component, Component::ParentDir),
+                    )
+                });
+                match last {
+                    Some((true, _)) => {
+                        normalized.pop();
+                    }
+                    Some((_, true)) | None => normalized.push(".."),
+                    Some((false, false)) => {}
+                }
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+#[cfg(windows)]
+fn normalize_windows_drive(path: PathBuf) -> PathBuf {
+    let mut value = path.to_string_lossy().into_owned();
+    let bytes = value.as_bytes();
+    let drive_index = if bytes.get(1) == Some(&b':') {
+        Some(0)
+    } else if value.starts_with(r"\\?\") && bytes.get(5) == Some(&b':') {
+        Some(4)
+    } else {
+        None
+    };
+    if let Some(index) = drive_index {
+        let drive = value.as_bytes()[index];
+        if drive.is_ascii_uppercase() {
+            value.replace_range(
+                index..index + 1,
+                &(drive as char).to_ascii_lowercase().to_string(),
+            );
+        }
+    }
+    PathBuf::from(value)
+}
+
+#[cfg(not(windows))]
+fn normalize_windows_drive(path: PathBuf) -> PathBuf {
+    path
+}
+
+fn normalize_workspace_option(workspace: &Option<PathBuf>) -> Option<PathBuf> {
+    workspace.as_deref().map(normalize_workspace_path)
+}
 
 pub(crate) fn current_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
@@ -66,7 +135,7 @@ fn service_slug(service_name: &str) -> String {
 fn service_scope_hash(owner: &ExecOwnerMeta) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     owner.chat_id.hash(&mut hasher);
-    owner.workspace.hash(&mut hasher);
+    normalize_workspace_option(&owner.workspace).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -246,7 +315,7 @@ impl ExecSpawnRequest {
     }
 
     pub fn with_owner(mut self, owner: ExecOwnerMeta) -> Self {
-        self.owner = owner;
+        self.owner = owner.with_normalized_workspace();
         self
     }
 
@@ -313,6 +382,15 @@ pub struct ExecOwnerMeta {
 }
 
 impl ExecOwnerMeta {
+    pub(crate) fn with_normalized_workspace(mut self) -> Self {
+        self.workspace = normalize_workspace_option(&self.workspace);
+        self
+    }
+
+    fn normalized_workspace(&self) -> Option<PathBuf> {
+        normalize_workspace_option(&self.workspace)
+    }
+
     pub fn matches_filter(&self, filter: &ExecProcessFilter) -> bool {
         if let Some(chat_id) = filter.chat_id.as_ref() {
             if self.chat_id.as_ref() != Some(chat_id) {
@@ -330,7 +408,7 @@ impl ExecOwnerMeta {
             }
         }
         if let Some(workspace) = filter.workspace.as_ref() {
-            if self.workspace.as_ref() != Some(workspace) {
+            if self.normalized_workspace() != Some(normalize_workspace_path(workspace)) {
                 return false;
             }
         }
@@ -347,7 +425,7 @@ impl ExecOwnerMeta {
             }
         }
         if let Some(workspace) = lookup.workspace.as_ref() {
-            if self.workspace.as_ref() != Some(workspace) {
+            if self.normalized_workspace() != Some(normalize_workspace_path(workspace)) {
                 return false;
             }
         }
@@ -390,7 +468,7 @@ impl ExecProcessMeta {
     }
 
     pub fn with_owner(mut self, owner: ExecOwnerMeta) -> Self {
-        self.owner = owner;
+        self.owner = owner.with_normalized_workspace();
         self
     }
 
@@ -410,7 +488,7 @@ impl ExecProcessMeta {
     }
 
     pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
-        self.owner.workspace = Some(workspace);
+        self.owner.workspace = Some(normalize_workspace_path(&workspace));
         self
     }
 
@@ -466,7 +544,7 @@ impl ExecServiceLookup {
     }
 
     pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
-        self.workspace = Some(workspace);
+        self.workspace = Some(normalize_workspace_path(&workspace));
         self
     }
 }
@@ -562,10 +640,70 @@ mod tests {
 
         assert!(id_a.as_str().starts_with("exec_service_api_server_"));
         assert_ne!(id_a, id_b);
-        assert_eq!(id_a, ExecProcessId::for_service("API server!", &workspace_a));
+        assert_eq!(
+            id_a,
+            ExecProcessId::for_service("API server!", &workspace_a)
+        );
         assert!(ExecProcessId::for_service("  ", &workspace_a)
             .as_str()
             .starts_with("exec_service_service_"));
+    }
+
+    #[test]
+    fn test_service_process_id_normalizes_dot_workspace() {
+        let owner = ExecOwnerMeta {
+            workspace: Some(PathBuf::from("/tmp/ws")),
+            ..ExecOwnerMeta::default()
+        };
+        let owner_with_dot = ExecOwnerMeta {
+            workspace: Some(PathBuf::from("/tmp/ws/.")),
+            ..ExecOwnerMeta::default()
+        };
+
+        assert_eq!(
+            ExecProcessId::for_service("api", &owner),
+            ExecProcessId::for_service("api", &owner_with_dot)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_service_process_id_resolves_symlink_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let link = temp.path().join("link");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let real_owner = ExecOwnerMeta {
+            workspace: Some(real),
+            ..ExecOwnerMeta::default()
+        };
+        let link_owner = ExecOwnerMeta {
+            workspace: Some(link),
+            ..ExecOwnerMeta::default()
+        };
+
+        assert_eq!(
+            ExecProcessId::for_service("api", &real_owner),
+            ExecProcessId::for_service("api", &link_owner)
+        );
+    }
+
+    #[test]
+    fn test_service_process_id_keeps_distinct_absolute_workspaces() {
+        let first = ExecOwnerMeta {
+            workspace: Some(PathBuf::from("/tmp/ws-a")),
+            ..ExecOwnerMeta::default()
+        };
+        let second = ExecOwnerMeta {
+            workspace: Some(PathBuf::from("/tmp/ws-b")),
+            ..ExecOwnerMeta::default()
+        };
+
+        assert_ne!(
+            ExecProcessId::for_service("api", &first),
+            ExecProcessId::for_service("api", &second)
+        );
     }
 
     #[test]
@@ -738,6 +876,11 @@ mod tests {
             &ExecServiceLookup::new("svc")
                 .with_chat_id("chat-a")
                 .with_workspace(PathBuf::from("/workspace-a"))
+        ));
+        assert!(owner.matches_service_lookup(
+            &ExecServiceLookup::new("svc")
+                .with_chat_id("chat-a")
+                .with_workspace(PathBuf::from("/workspace-a/."))
         ));
         assert!(!owner.matches_service_lookup(
             &ExecServiceLookup::new("svc")

@@ -14,6 +14,7 @@ use crate::exec::{
     ExecOutputStream, ExecOwnerMeta, ExecReadResult, ExecReadinessProbe, ExecServiceLookup,
     ExecSpawnRequest, ExecStatus,
 };
+use crate::exec::types::normalize_workspace_path;
 use crate::global_context::GlobalContext;
 use crate::integrations::integr_abstract::{
     IntegrationCommon, IntegrationConfirmation, IntegrationTrait,
@@ -94,7 +95,9 @@ impl Tool for ToolService {
                 ccx_lock.chat_id.clone(),
             )
         };
-        let workspace = crate::files_correction::get_active_project_path(gcx.clone()).await;
+        let workspace = crate::files_correction::get_active_project_path(gcx.clone())
+            .await
+            .map(|path| normalize_workspace_path(&path));
         let output = match action.as_str() {
             "start" => {
                 start_service(
@@ -285,7 +288,7 @@ async fn start_service(
         chat_id: Some(chat_id.to_string()),
         tool_call_id: Some(tool_call_id.to_string()),
         service_name: Some(service_name.to_string()),
-        workspace,
+        workspace: workspace.map(|path| normalize_workspace_path(&path)),
     };
     let short_description = sanitize_short_description(&format!(
         "service {}: {}",

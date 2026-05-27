@@ -340,15 +340,16 @@ async fn wait_for_readiness(
 impl ExecRegistry {
     pub async fn spawn(&self, request: ExecSpawnRequest) -> Result<ExecSpawnResult, String> {
         let mut command = wrap_command(shell_command(&request)?);
+        let owner = request.owner.clone().with_normalized_workspace();
         let mut meta = ExecProcessMeta::new(request.mode.clone(), request.command.clone())
-            .with_owner(request.owner.clone());
+            .with_owner(owner.clone());
         if matches!(request.mode, ExecMode::Service) {
             let service_name = request
                 .owner
                 .service_name
                 .as_deref()
                 .ok_or_else(|| "service mode requires service_name".to_string())?;
-            meta = meta.with_process_id(ExecProcessId::for_service(service_name, &request.owner));
+            meta = meta.with_process_id(ExecProcessId::for_service(service_name, &owner));
         }
         if let Some(cwd) = request.cwd.clone() {
             meta = meta.with_cwd(cwd);

@@ -16,6 +16,7 @@ use crate::exec::{
     ExecOutputStream, ExecOwnerMeta, ExecProcessFilter, ExecProcessId, ExecProcessSnapshot,
     ExecReadResult, ExecReadinessProbe, ExecServiceLookup, ExecSpawnRequest, ExecStatus,
 };
+use crate::exec::types::normalize_workspace_path;
 use crate::files_correction::{
     canonical_path, canonicalize_normalized_path, check_if_its_inside_a_workspace_or_config,
     correct_to_nearest_dir_path, get_active_project_path, get_project_dirs,
@@ -192,7 +193,7 @@ impl Tool for ToolProcessStart {
         // Prefer an explicit workdir as the workspace scope so two callers in the
         // same chat/gcx but different workdirs do not collide on service IDs.
         let workspace = match parsed.workdir.clone() {
-            Some(workdir) => Some(workdir),
+            Some(workdir) => Some(normalize_workspace_path(&workdir)),
             None => process_workspace(gcx.clone(), execution_scope.as_ref()).await,
         };
         if parsed.mode == ExecMode::Service && parsed.service_name.is_none() {
@@ -638,9 +639,13 @@ impl Tool for ToolShellServiceAlias {
             }
             "stop" => {
                 let exec_registry = exec_registry_from_ccx(ccx.clone()).await;
-                let process_id =
-                    service_process_id(&exec_registry, &parsed.service_name, &chat_id, workspace.as_ref())
-                        .await?;
+                let process_id = service_process_id(
+                    &exec_registry,
+                    &parsed.service_name,
+                    &chat_id,
+                    workspace.as_ref(),
+                )
+                .await?;
                 let mut kill = ToolProcessKill {
                     config_path: self.config_path.clone(),
                 };
@@ -653,9 +658,13 @@ impl Tool for ToolShellServiceAlias {
             }
             "status" | "logs" => {
                 let exec_registry = exec_registry_from_ccx(ccx.clone()).await;
-                let process_id =
-                    service_process_id(&exec_registry, &parsed.service_name, &chat_id, workspace.as_ref())
-                        .await?;
+                let process_id = service_process_id(
+                    &exec_registry,
+                    &parsed.service_name,
+                    &chat_id,
+                    workspace.as_ref(),
+                )
+                .await?;
                 let mut read = ToolProcessRead {
                     config_path: self.config_path.clone(),
                 };
@@ -673,9 +682,13 @@ impl Tool for ToolShellServiceAlias {
             }
             "restart" => {
                 let exec_registry = exec_registry_from_ccx(ccx.clone()).await;
-                if let Ok(process_id) =
-                    service_process_id(&exec_registry, &parsed.service_name, &chat_id, workspace.as_ref())
-                        .await
+                if let Ok(process_id) = service_process_id(
+                    &exec_registry,
+                    &parsed.service_name,
+                    &chat_id,
+                    workspace.as_ref(),
+                )
+                .await
                 {
                     let mut kill = ToolProcessKill {
                         config_path: self.config_path.clone(),
@@ -995,9 +1008,11 @@ async fn process_workspace(
     execution_scope: Option<&ExecutionScope>,
 ) -> Option<PathBuf> {
     if let Some(scope) = active_execution_scope(execution_scope) {
-        return Some(scope.effective_root().to_path_buf());
+        return Some(normalize_workspace_path(scope.effective_root()));
     }
-    get_active_project_path(gcx).await
+    get_active_project_path(gcx)
+        .await
+        .map(|path| normalize_workspace_path(&path))
 }
 
 fn parse_list_status(args: &HashMap<String, Value>) -> Result<ProcessListStatus, String> {
@@ -1130,7 +1145,15 @@ fn matches_list_scope(
             chat_id.is_empty() || snapshot.meta.owner.chat_id.as_deref() == Some(chat_id)
         }
         ProcessListScope::Workspace => workspace
-            .map(|workspace| snapshot.meta.owner.workspace.as_ref() == Some(workspace))
+            .map(|workspace| {
+                snapshot
+                    .meta
+                    .owner
+                    .workspace
+                    .as_deref()
+                    .map(normalize_workspace_path)
+                    == Some(normalize_workspace_path(workspace))
+            })
             .unwrap_or(true),
         ProcessListScope::All => true,
     }
@@ -1609,7 +1632,10 @@ mod tests {
             workspace: None,
             tool_call_id: Some("tool_call".to_string()),
         };
-        assert_eq!(process_id, ExecProcessId::for_service("api", &expected_owner));
+        assert_eq!(
+            process_id,
+            ExecProcessId::for_service("api", &expected_owner)
+        );
         assert_eq!(exec(&message)["mode"], "service");
         assert_eq!(exec(&message)["service_name"], "api");
 
@@ -1861,6 +1887,83 @@ mod tests {
 
         gcx.exec_registry.kill(&first_process_id).await.unwrap();
         gcx.exec_registry.kill(&second_process_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_process_start_equivalent_workspace_rejects_duplicate_service() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        {
+            *gcx.documents_state.workspace_folders.lock().unwrap() = vec![workspace.clone()];
+        }
+        let ccx = Arc::new(AMutex::new(
+            AtCommandsContext::new_with_abort(
+                AppState::from_gcx(gcx.clone()).await,
+                4096,
+                20,
+                false,
+                Vec::new(),
+                "chat".to_string(),
+                None,
+                "model".to_string(),
+                None,
+                None,
+                None,
+            )
+            .await,
+        ));
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let first = run_tool(
+            &mut start,
+            ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(long_running_command("svc-a"))),
+                ("workdir", json!(workspace.to_string_lossy().to_string())),
+                ("mode", json!("service")),
+                ("service_name", json!("api")),
+                ("startup_wait_ms", json!(100)),
+            ]),
+        )
+        .await
+        .unwrap();
+        let first_process_id = process_id(&first);
+
+        let err = run_tool(
+            &mut start,
+            ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(long_running_command("svc-b"))),
+                (
+                    "workdir",
+                    json!(workspace.join(".").to_string_lossy().to_string()),
+                ),
+                ("mode", json!("service")),
+                ("service_name", json!("api")),
+                ("startup_wait_ms", json!(100)),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("already running"));
+        assert!(err.contains(first_process_id.as_str()));
+        assert_eq!(
+            gcx.exec_registry
+                .list(ExecProcessFilter {
+                    service_name: Some("api".to_string()),
+                    status: Some(ExecStatusKind::Running),
+                    ..ExecProcessFilter::default()
+                })
+                .await
+                .len(),
+            1
+        );
+
+        gcx.exec_registry.kill(&first_process_id).await.unwrap();
     }
 
     #[tokio::test]
@@ -2130,7 +2233,10 @@ mod tests {
             workspace: None,
             tool_call_id: Some("tool_call".to_string()),
         };
-        assert_eq!(process_id, ExecProcessId::for_service("alias", &expected_owner));
+        assert_eq!(
+            process_id,
+            ExecProcessId::for_service("alias", &expected_owner)
+        );
         assert!(gcx.integration_sessions.lock().await.is_empty());
 
         let logs = run_tool(
