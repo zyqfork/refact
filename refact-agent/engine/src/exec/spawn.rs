@@ -482,6 +482,22 @@ mod tests {
         assert!(!process_exists(process_id));
     }
 
+    async fn wait_for_registry_output(
+        registry: &ExecRegistry,
+        process_id: &ExecProcessId,
+        needle: &str,
+    ) {
+        for _ in 0..40 {
+            let read = registry.read(process_id, 0, None).await;
+            if read.chunks.iter().any(|chunk| chunk.text.contains(needle)) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let read = registry.read(process_id, 0, None).await;
+        panic!("process output did not contain {needle:?}: {:?}", read.chunks);
+    }
+
     #[cfg(unix)]
     fn process_exists(process_id: u32) -> bool {
         unsafe { libc::kill(process_id as i32, 0) == 0 }
@@ -658,11 +674,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].meta.process_id, result.snapshot.meta.process_id);
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let read = registry
-            .read(&result.snapshot.meta.process_id, 0, None)
-            .await;
-        assert!(read.chunks.iter().any(|chunk| chunk.text.contains("ready")));
+        wait_for_registry_output(&registry, &result.snapshot.meta.process_id, "ready").await;
 
         let killed = registry
             .kill(&result.snapshot.meta.process_id)
