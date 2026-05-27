@@ -16,25 +16,21 @@ use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tools::tools_description::{
     Tool, ToolDesc, ToolSource, ToolSourceType, json_schema_from_params,
 };
+use crate::yaml_configs::customization_registry::get_subagent_config;
 
-const FORBIDDEN_FOR_SUBAGENT: &[&str] = &[
-    "patch",
-    "write",
-    "text_edit",
-    "apply_patch",
-    "create_textdoc",
-    "replace_textdoc",
-    "update_textdoc",
-    "update_textdoc_anchored",
-    "update_textdoc_by_lines",
-    "update_textdoc_regex",
-    "undo_textdoc",
-    "mv",
-    "rm",
-    "shell",
-    "process_start",
-    "process_kill",
-    "shell_service",
+const ALLOWED_FOR_SUBAGENT: &[&str] = &[
+    "cat",
+    "tree",
+    "search_pattern",
+    "search_symbol_definition",
+    "search_semantic",
+    "knowledge",
+    "web",
+    "web_search",
+    "tasks_set",
+    "compress_chat_probe",
+    "compress_chat_apply",
+    "subagent_finish",
 ];
 
 #[derive(Clone)]
@@ -98,8 +94,6 @@ impl Tool for ToolSubagent {
         let max_steps = parse_max_steps(args)?;
         let wait = parse_optional_bool(args, "wait", false)?;
 
-        reject_forbidden_tools(&tools_arg)?;
-
         let (
             gcx,
             parent_chat_id,
@@ -125,6 +119,17 @@ impl Tool for ToolSubagent {
             )
         };
 
+        let configured_tools = get_subagent_config(gcx.clone(), "subagent", None)
+            .await
+            .ok_or_else(|| "subagent config 'subagent' not found".to_string())?
+            .tools;
+        let spawn_tools = if let Some(tools) = &tools_arg {
+            validate_read_only_tools(tools, &configured_tools)?;
+            Some(tools.clone())
+        } else {
+            Some(configured_tools)
+        };
+
         if subchat_depth >= MAX_SUBCHAT_DEPTH.saturating_sub(1) {
             return Err(format!(
                 "subchat depth limit ({MAX_SUBCHAT_DEPTH}) exceeded"
@@ -139,7 +144,7 @@ impl Tool for ToolSubagent {
             config_name: "subagent".to_string(),
             title: short_title("Subagent", &task),
             prompt: build_subagent_prompt(&task, &expected_result, &tools_arg, max_steps),
-            tools: tools_arg.clone(),
+            tools: spawn_tools,
             target_files: vec![],
             max_steps,
             model: current_model,
@@ -257,23 +262,38 @@ fn parse_optional_bool(
     }
 }
 
-fn reject_forbidden_tools(tools: &Option<Vec<String>>) -> Result<(), String> {
-    if let Some(bad) = tools
-        .iter()
-        .flatten()
-        .find(|tool| is_forbidden_for_subagent(tool))
-    {
+fn validate_read_only_tools(tools: &[String], configured_tools: &[String]) -> Result<(), String> {
+    if let Some(bad) = tools.iter().find(|tool| {
+        !is_allowed_for_subagent(tool) || !is_configured_for_subagent(tool, configured_tools)
+    }) {
         return Err(format!(
-            "subagent() is read-only. Tool '{}' is not allowed. Use `delegate()` for implementation/editing tasks.",
-            bad
+            "subagent() is read-only. Tool '{}' is not in the allowed set for read-only subagents ({}). Use delegate() for implementation/editing.",
+            bad,
+            format_allowed_tools(configured_tools)
         ));
     }
     Ok(())
 }
 
-fn is_forbidden_for_subagent(tool: &str) -> bool {
+fn is_allowed_for_subagent(tool: &str) -> bool {
     let normalized = tool.trim().to_ascii_lowercase();
-    FORBIDDEN_FOR_SUBAGENT.contains(&normalized.as_str())
+    ALLOWED_FOR_SUBAGENT.contains(&normalized.as_str())
+}
+
+fn is_configured_for_subagent(tool: &str, configured_tools: &[String]) -> bool {
+    let normalized = tool.trim().to_ascii_lowercase();
+    configured_tools
+        .iter()
+        .any(|configured| configured.trim().eq_ignore_ascii_case(&normalized))
+}
+
+fn format_allowed_tools(configured_tools: &[String]) -> String {
+    ALLOWED_FOR_SUBAGENT
+        .iter()
+        .copied()
+        .filter(|tool| is_configured_for_subagent(tool, configured_tools))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn short_title(prefix: &str, task: &str) -> String {
@@ -405,7 +425,7 @@ mod tests {
     use crate::app_state::AppState;
     use crate::call_validation::ChatMessage;
     use crate::caps::{BaseModelRecord, ChatModelRecord, CodeAssistantCaps};
-    use crate::subchat::SubchatResult;
+    use crate::subchat::{SubchatResult, ToolsPolicy};
     use serial_test::serial;
 
     fn args_with(task: &str, expected_result: &str) -> HashMap<String, Value> {
@@ -424,6 +444,25 @@ mod tests {
 
     fn message_text(message: &ChatMessage) -> String {
         message.content.content_text_only()
+    }
+
+    fn configured_read_only_tools() -> Vec<String> {
+        [
+            "tree",
+            "cat",
+            "search_pattern",
+            "search_symbol_definition",
+            "search_semantic",
+            "knowledge",
+            "web",
+            "web_search",
+            "compress_chat_probe",
+            "compress_chat_apply",
+            "tasks_set",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
     }
 
     async fn install_test_caps(gcx: Arc<crate::global_context::GlobalContext>) {
@@ -480,18 +519,44 @@ mod tests {
     }
 
     #[test]
-    fn edit_tool_rejection_reports_delegate_for_each_forbidden_tool() {
-        for tool in FORBIDDEN_FOR_SUBAGENT {
-            let tools = Some(vec![tool.to_string()]);
-            let error = reject_forbidden_tools(&tools).expect_err("forbidden tool");
-            assert_eq!(
-                error,
-                format!(
-                    "subagent() is read-only. Tool '{}' is not allowed. Use `delegate()` for implementation/editing tasks.",
-                    tool
-                )
-            );
-        }
+    fn delegate_tool_is_rejected_with_delegate_guidance() {
+        let configured_tools = configured_read_only_tools();
+        let error = validate_read_only_tools(&["delegate".to_string()], &configured_tools)
+            .expect_err("delegate should be rejected");
+
+        assert!(error.contains("Tool 'delegate'"));
+        assert!(error.contains("Use delegate() for implementation/editing."));
+        assert!(error.contains(&format!("({})", format_allowed_tools(&configured_tools))));
+        assert!(error.contains("cat, tree, search_pattern"));
+    }
+
+    #[test]
+    fn future_editing_tool_is_rejected() {
+        let configured_tools = configured_read_only_tools();
+        let error =
+            validate_read_only_tools(&["future_editing_tool".to_string()], &configured_tools)
+                .expect_err("unknown editing tool should be rejected");
+
+        assert!(error.contains("Tool 'future_editing_tool'"));
+        assert!(error.contains("not in the allowed set for read-only subagents"));
+        assert!(error.contains(&format_allowed_tools(&configured_tools)));
+    }
+
+    #[test]
+    fn editing_tool_is_rejected() {
+        let configured_tools = configured_read_only_tools();
+        let error = validate_read_only_tools(&["apply_patch".to_string()], &configured_tools)
+            .expect_err("editing tool should be rejected");
+
+        assert!(error.contains("Tool 'apply_patch'"));
+        assert!(error.contains("Use delegate() for implementation/editing."));
+    }
+
+    #[test]
+    fn cat_tool_is_accepted_when_configured() {
+        let configured_tools = configured_read_only_tools();
+
+        assert!(validate_read_only_tools(&["cat".to_string()], &configured_tools).is_ok());
     }
 
     #[test]
@@ -499,7 +564,9 @@ mod tests {
         let args = HashMap::from_iter([("tools".to_string(), json!("  ,  "))]);
         let tools = parse_optional_csv(&args, "tools").unwrap();
         assert_eq!(tools, None);
-        assert!(reject_forbidden_tools(&tools).is_ok());
+        let configured_tools = configured_read_only_tools();
+        let spawn_tools = tools.clone().or_else(|| Some(configured_tools.clone()));
+        assert_eq!(spawn_tools, Some(configured_tools));
         let prompt = build_subagent_prompt("look", "facts", &tools, 15);
         assert!(prompt.contains("configured `subagent` toolset (read-only)"));
     }
@@ -585,12 +652,19 @@ mod tests {
         let ccx = test_context("parent-wait").await;
         let captured_max_steps = Arc::new(StdMutex::new(None));
         let captured_config_name = Arc::new(StdMutex::new(None));
+        let captured_tools = Arc::new(StdMutex::new(None));
         let runner_steps = captured_max_steps.clone();
         let runner_config = captured_config_name.clone();
+        let runner_tools = captured_tools.clone();
         let _runner = crate::agents::spawn::install_test_runner(Arc::new(
             move |_gcx, mut messages, config| {
                 *runner_steps.lock().unwrap() = Some(config.max_steps);
                 *runner_config.lock().unwrap() = Some(config.tool_name.clone());
+                *runner_tools.lock().unwrap() = Some(match config.tools {
+                    ToolsPolicy::All => vec!["ALL".to_string()],
+                    ToolsPolicy::None => vec![],
+                    ToolsPolicy::Only(tools) => tools,
+                });
                 Box::pin(async move {
                     messages.push(ChatMessage::new(
                         "assistant".to_string(),
@@ -626,18 +700,20 @@ mod tests {
                 .and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            message
-                .extra
-                .get("background_agent_id")
-                .and_then(Value::as_str)
-                .unwrap()
-                .starts_with("bgagent-")
-        );
+        assert!(message
+            .extra
+            .get("background_agent_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .starts_with("bgagent-"));
         assert_eq!(*captured_max_steps.lock().unwrap(), Some(7));
         assert_eq!(
             captured_config_name.lock().unwrap().as_deref(),
             Some("subagent")
+        );
+        assert_eq!(
+            *captured_tools.lock().unwrap(),
+            Some(configured_read_only_tools())
         );
     }
 
