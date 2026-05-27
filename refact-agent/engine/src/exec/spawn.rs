@@ -142,6 +142,11 @@ async fn kill_and_reap(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> Result
     }
 }
 
+async fn kill_unregistered_child(mut child: Box<dyn TokioChildWrapper>) {
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(KILL_REAP_TIMEOUT, Box::into_pin(child.wait())).await;
+}
+
 async fn wait_child(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> Result<Option<i32>, String> {
     let mut child = child.lock().await;
     let status = Box::into_pin(child.wait())
@@ -227,7 +232,10 @@ async fn monitor_process(
                             Some(ExecProcessCommand::Finish { status, response }) => {
                                 break (status, Some(response));
                             }
-                            None => {}
+                            None => {
+                                let status = status_or_killed(&child).await;
+                                break (status, None);
+                            }
                         }
                     }
                 }
@@ -255,7 +263,10 @@ async fn monitor_process(
                             Some(ExecProcessCommand::Finish { status, response }) => {
                                 break (status, Some(response));
                             }
-                            None => {}
+                            None => {
+                                let status = status_or_killed(&child).await;
+                                break (status, None);
+                            }
                         }
                     }
                 }
@@ -347,32 +358,41 @@ impl ExecRegistry {
         }
         let startup_wait = request.startup_wait;
         let process_id = meta.process_id.clone();
-        self.register_new(meta, request.output_limits.transcript_max_bytes)
-            .await?;
         let mut child = match command.spawn() {
             Ok(child) => child,
-            Err(error) => {
-                self.remove(&process_id).await;
-                return Err(format!("failed to spawn command: {error}"));
-            }
+            Err(error) => return Err(format!("failed to spawn command: {error}")),
         };
         let stdout = match child.stdout().take() {
             Some(stdout) => stdout,
             None => {
-                let _ = child.start_kill();
-                self.remove(&process_id).await;
+                kill_unregistered_child(child).await;
                 return Err("failed to capture stdout".to_string());
             }
         };
         let stderr = match child.stderr().take() {
             Some(stderr) => stderr,
             None => {
-                let _ = child.start_kill();
-                self.remove(&process_id).await;
+                kill_unregistered_child(child).await;
                 return Err("failed to capture stderr".to_string());
             }
         };
         let child = Arc::new(Mutex::new(child));
+        let (control_tx, control_rx) = mpsc::channel(8);
+        let terminal = Arc::new(Notify::new());
+        if let Err(message) = self
+            .register_new_with_runtime(
+                meta,
+                request.output_limits.transcript_max_bytes,
+                ExecProcessRuntime {
+                    control_tx,
+                    terminal,
+                },
+            )
+            .await
+        {
+            kill_and_reap(&child).await?;
+            return Err(message);
+        }
         let stdout_task = pump_output(
             self.clone(),
             process_id.clone(),
@@ -385,8 +405,6 @@ impl ExecRegistry {
             ExecOutputStream::Stderr,
             stderr,
         );
-        let (control_tx, control_rx) = mpsc::channel(8);
-        let terminal = Arc::new(Notify::new());
         tokio::spawn(monitor_process(
             self.clone(),
             process_id.clone(),
@@ -397,14 +415,6 @@ impl ExecRegistry {
             stdout_task,
             stderr_task,
         ));
-        self.attach_runtime(
-            &process_id,
-            ExecProcessRuntime {
-                control_tx,
-                terminal,
-            },
-        )
-        .await?;
         let snapshot = self.mark_started(&process_id).await?;
         if matches!(request.mode, ExecMode::Foreground) {
             return Ok(ExecSpawnResult {
@@ -445,6 +455,7 @@ impl ExecRegistry {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
 
     use super::*;
     use crate::exec::types::{ExecProcessFilter, ExecStatusKind};
@@ -457,6 +468,36 @@ mod tests {
     #[cfg(not(windows))]
     fn shell_script(script: &str) -> String {
         script.to_string()
+    }
+
+    async fn assert_process_missing(process_id: u32) {
+        for _ in 0..20 {
+            if !process_exists(process_id) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!process_exists(process_id));
+    }
+
+    #[cfg(unix)]
+    fn process_exists(process_id: u32) -> bool {
+        unsafe { libc::kill(process_id as i32, 0) == 0 }
+    }
+
+    #[cfg(windows)]
+    fn process_exists(process_id: u32) -> bool {
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "if (Get-Process -Id {process_id} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}"
+                ),
+            ])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 
     #[tokio::test]
@@ -634,6 +675,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closed_channel_does_not_spin() {
+        let registry = ExecRegistry::new();
+        let command = if cfg!(windows) {
+            "[Console]::Out.Write('ready'); Start-Sleep -Seconds 30"
+        } else {
+            "printf ready; sleep 30"
+        };
+        let result = registry
+            .spawn(ExecSpawnRequest::background(shell_script(command)))
+            .await
+            .unwrap();
+        let process_id = result.snapshot.meta.process_id.clone();
+        let (replacement_tx, _replacement_rx) = mpsc::channel(1);
+        registry
+            .attach_runtime(
+                &process_id,
+                ExecProcessRuntime {
+                    control_tx: replacement_tx,
+                    terminal: Arc::new(Notify::new()),
+                },
+            )
+            .await
+            .unwrap();
+
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = registry.get(&process_id).await.unwrap();
+                if snapshot.status.is_terminal() {
+                    return snapshot;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("monitor should finish after control channel closes");
+
+        assert_eq!(snapshot.status, ExecStatus::Killed);
+    }
+
+    #[tokio::test]
+    async fn remove_kills_active_process() {
+        let registry = ExecRegistry::new();
+        let command = if cfg!(windows) {
+            "[Console]::Out.WriteLine($PID); Start-Sleep -Seconds 30"
+        } else {
+            "printf \"%s\\n\" $$; sleep 30"
+        };
+        let result = registry
+            .spawn(ExecSpawnRequest::background(shell_script(command)))
+            .await
+            .unwrap();
+        let process_id = result.snapshot.meta.process_id.clone();
+        let child_id = loop {
+            let read = registry.read(&process_id, 0, None).await;
+            if let Some(id) = read.chunks.iter().find_map(|chunk| {
+                chunk
+                    .text
+                    .lines()
+                    .find_map(|line| line.trim().parse::<u32>().ok())
+            }) {
+                break id;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        let removed = registry.remove(&process_id).await.unwrap().unwrap();
+
+        assert_eq!(removed.status, ExecStatus::Killed);
+        assert!(registry.get(&process_id).await.is_none());
+        assert_process_missing(child_id).await;
+    }
+
+    #[tokio::test]
+    async fn spawn_attach_failure_kills_child() {
+        let registry = ExecRegistry::new();
+        let owner = crate::exec::types::ExecOwnerMeta {
+            service_name: Some("dup".to_string()),
+            ..crate::exec::types::ExecOwnerMeta::default()
+        };
+        let first = registry
+            .spawn(
+                ExecSpawnRequest::service(shell_script(if cfg!(windows) {
+                    "Start-Sleep -Seconds 30"
+                } else {
+                    "sleep 30"
+                }))
+                .with_owner(owner.clone()),
+            )
+            .await
+            .unwrap();
+        let command = if cfg!(windows) {
+            "[Console]::Out.WriteLine($PID); Start-Sleep -Seconds 30"
+        } else {
+            "printf \"%s\\n\" $$; sleep 30"
+        };
+        let started = Instant::now();
+        let err = match registry
+            .spawn(
+                ExecSpawnRequest::service(shell_script(command))
+                    .with_owner(owner)
+                    .with_startup_wait(Duration::from_secs(30)),
+            )
+            .await
+        {
+            Ok(_) => panic!("duplicate service spawn should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("process already exists"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            registry
+                .get(&first.snapshot.meta.process_id)
+                .await
+                .unwrap()
+                .status,
+            ExecStatus::Running
+        );
+        registry
+            .kill(&first.snapshot.meta.process_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn service_ids_include_workspace_scope() {
         let registry = ExecRegistry::new();
         let first_workspace = tempfile::tempdir().unwrap();
@@ -673,7 +839,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_ne!(first.snapshot.meta.process_id, second.snapshot.meta.process_id);
+        assert_ne!(
+            first.snapshot.meta.process_id,
+            second.snapshot.meta.process_id
+        );
         assert_eq!(first.snapshot.status, ExecStatus::Running);
         assert_eq!(second.snapshot.status, ExecStatus::Running);
         assert_eq!(
@@ -703,8 +872,14 @@ mod tests {
             second.snapshot.meta.process_id
         );
 
-        registry.kill(&first.snapshot.meta.process_id).await.unwrap();
-        registry.kill(&second.snapshot.meta.process_id).await.unwrap();
+        registry
+            .kill(&first.snapshot.meta.process_id)
+            .await
+            .unwrap();
+        registry
+            .kill(&second.snapshot.meta.process_id)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -746,11 +921,20 @@ mod tests {
             .await
             .unwrap();
 
-        assert_ne!(first.snapshot.meta.process_id, second.snapshot.meta.process_id);
+        assert_ne!(
+            first.snapshot.meta.process_id,
+            second.snapshot.meta.process_id
+        );
         assert_eq!(first.snapshot.status, ExecStatus::Running);
         assert_eq!(second.snapshot.status, ExecStatus::Running);
 
-        registry.kill(&first.snapshot.meta.process_id).await.unwrap();
-        registry.kill(&second.snapshot.meta.process_id).await.unwrap();
+        registry
+            .kill(&first.snapshot.meta.process_id)
+            .await
+            .unwrap();
+        registry
+            .kill(&second.snapshot.meta.process_id)
+            .await
+            .unwrap();
     }
 }

@@ -10,6 +10,8 @@ use crate::exec::types::{
     ExecProcessMeta, ExecProcessSnapshot, ExecReadResult, ExecServiceLookup, ExecStatus,
 };
 
+const REMOVE_KILL_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub(crate) enum ExecProcessCommand {
     Kill {
         response: oneshot::Sender<Result<ExecProcessSnapshot, String>>,
@@ -62,6 +64,16 @@ impl ExecProcessRecord {
         record
     }
 
+    fn with_runtime(
+        meta: ExecProcessMeta,
+        transcript_limit_bytes: usize,
+        runtime: ExecProcessRuntime,
+    ) -> Self {
+        let mut record = Self::new(meta, transcript_limit_bytes);
+        record.runtime = Some(runtime);
+        record
+    }
+
     fn set_status(&mut self, status: ExecStatus) {
         if self.snapshot.status == status {
             return;
@@ -108,8 +120,19 @@ enum ExecCleanupTargetKind {
 enum ExecCleanupOutcome {
     NoChild,
     Stopped,
-    Failed(String),
-    TimedOut,
+    Failed {
+        message: String,
+        child: Option<tokio::process::Child>,
+    },
+    TimedOut {
+        message: String,
+        child: Option<tokio::process::Child>,
+    },
+}
+
+struct ExecRemoveTarget {
+    process_id: ExecProcessId,
+    runtime: ExecProcessRuntime,
 }
 
 #[derive(Clone, Default)]
@@ -155,6 +178,27 @@ impl ExecRegistry {
         Ok(snapshot)
     }
 
+    pub(crate) async fn register_new_with_runtime(
+        &self,
+        meta: ExecProcessMeta,
+        transcript_limit_bytes: usize,
+        runtime: ExecProcessRuntime,
+    ) -> Result<ExecProcessSnapshot, String> {
+        let process_id = meta.process_id.clone();
+        let record = ExecProcessRecord::with_runtime(meta, transcript_limit_bytes, runtime);
+        let snapshot = record.snapshot.clone();
+        let mut records = self.records.lock().await;
+        match records
+            .get(&process_id)
+            .map(|existing| existing.snapshot.status.is_terminal())
+        {
+            Some(false) => return Err(format!("process already exists: {process_id}")),
+            Some(true) | None => {}
+        }
+        records.insert(process_id, record);
+        Ok(snapshot)
+    }
+
     pub async fn register_with_child(
         &self,
         meta: ExecProcessMeta,
@@ -169,6 +213,7 @@ impl ExecRegistry {
         snapshot
     }
 
+    #[cfg(test)]
     pub(crate) async fn attach_runtime(
         &self,
         process_id: &ExecProcessId,
@@ -403,15 +448,99 @@ impl ExecRegistry {
         }
     }
 
-    pub async fn remove(&self, process_id: &ExecProcessId) -> Option<ExecProcessSnapshot> {
+    pub async fn remove(
+        &self,
+        process_id: &ExecProcessId,
+    ) -> Result<Option<ExecProcessSnapshot>, String> {
+        let Some(target) = self.remove_target(process_id).await else {
+            return Ok(self.remove_record(process_id).await);
+        };
+        self.stop_remove_target(target, REMOVE_KILL_TIMEOUT).await?;
+        Ok(self.remove_record(process_id).await)
+    }
+
+    pub async fn remove_by_owner(
+        &self,
+        filter: ExecProcessFilter,
+    ) -> Result<Vec<ExecProcessSnapshot>, String> {
+        let process_ids = {
+            let records = self.records.lock().await;
+            records
+                .iter()
+                .filter(|(_, record)| record.snapshot.meta.owner.matches_filter(&filter))
+                .filter(|(_, record)| {
+                    filter
+                        .status
+                        .map(|status| record.snapshot.status.kind() == status)
+                        .unwrap_or(true)
+                })
+                .map(|(process_id, _)| process_id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut removed = Vec::with_capacity(process_ids.len());
+        for process_id in process_ids {
+            if let Some(snapshot) = self.remove(&process_id).await? {
+                removed.push(snapshot);
+            }
+        }
+        Ok(removed)
+    }
+
+    async fn remove_target(&self, process_id: &ExecProcessId) -> Option<ExecRemoveTarget> {
+        let records = self.records.lock().await;
+        let record = records.get(process_id)?;
+        if record.snapshot.status.is_terminal() {
+            return None;
+        }
+        record.runtime.clone().map(|runtime| ExecRemoveTarget {
+            process_id: process_id.clone(),
+            runtime,
+        })
+    }
+
+    async fn stop_remove_target(
+        &self,
+        target: ExecRemoveTarget,
+        timeout: Duration,
+    ) -> Result<ExecProcessSnapshot, String> {
+        match tokio::time::timeout(timeout, self.kill(&target.process_id)).await {
+            Ok(Ok(snapshot)) => Ok(snapshot),
+            Ok(Err(message)) => {
+                let _ = self
+                    .mark_failed(&target.process_id, message.clone())
+                    .await?;
+                target.runtime.terminal.notify_waiters();
+                Err(message)
+            }
+            Err(_) => {
+                let message = format!(
+                    "timed out while removing process after {:.3}s",
+                    timeout.as_secs_f64()
+                );
+                let _ = self
+                    .mark_failed(&target.process_id, message.clone())
+                    .await?;
+                target.runtime.terminal.notify_waiters();
+                Err(message)
+            }
+        }
+    }
+
+    async fn remove_terminal_record(
+        &self,
+        process_id: &ExecProcessId,
+    ) -> Option<ExecProcessSnapshot> {
         let (snapshot, terminal) = {
             let mut records = self.records.lock().await;
-            records.remove(process_id).map(|record| {
-                (
-                    record.snapshot,
-                    record.runtime.map(|runtime| runtime.terminal),
-                )
-            })?
+            let record = records.get(process_id)?;
+            if !record.snapshot.status.is_terminal() {
+                return None;
+            }
+            let record = records.remove(process_id)?;
+            (
+                record.snapshot,
+                record.runtime.map(|runtime| runtime.terminal),
+            )
         };
         if let Some(terminal) = terminal {
             terminal.notify_waiters();
@@ -419,49 +548,24 @@ impl ExecRegistry {
         Some(snapshot)
     }
 
-    pub async fn remove_by_owner(&self, filter: ExecProcessFilter) -> Vec<ExecProcessSnapshot> {
-        let mut records = self.records.lock().await;
-        let process_ids = records
-            .iter()
-            .filter(|(_, record)| record.snapshot.meta.owner.matches_filter(&filter))
-            .filter(|(_, record)| {
-                filter
-                    .status
-                    .map(|status| record.snapshot.status.kind() == status)
-                    .unwrap_or(true)
-            })
-            .map(|(process_id, _)| process_id.clone())
-            .collect::<Vec<_>>();
-        let removed = process_ids
-            .into_iter()
-            .filter_map(|process_id| {
-                records.remove(&process_id).map(|record| {
-                    (
-                        record.snapshot,
-                        record.runtime.map(|runtime| runtime.terminal),
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        drop(records);
-        for (_, terminal) in &removed {
-            if let Some(terminal) = terminal {
-                terminal.notify_waiters();
-            }
+    async fn remove_record(&self, process_id: &ExecProcessId) -> Option<ExecProcessSnapshot> {
+        let (snapshot, terminal) = {
+            let mut records = self.records.lock().await;
+            let record = records.remove(process_id)?;
+            (
+                record.snapshot,
+                record.runtime.map(|runtime| runtime.terminal),
+            )
+        };
+        if let Some(terminal) = terminal {
+            terminal.notify_waiters();
         }
-        removed.into_iter().map(|(snapshot, _)| snapshot).collect()
+        Some(snapshot)
     }
 
     pub async fn cleanup_shutdown(&self, timeout: Duration) -> ExecShutdownCleanupSummary {
         let targets = self.collect_active_targets().await;
-        let process_ids = targets
-            .iter()
-            .map(|target| target.snapshot.meta.process_id.clone())
-            .collect::<Vec<_>>();
-        let mut summary = ExecShutdownCleanupSummary {
-            removed_count: targets.len(),
-            ..ExecShutdownCleanupSummary::default()
-        };
+        let mut summary = ExecShutdownCleanupSummary::default();
         let outcomes = futures::future::join_all(
             targets
                 .into_iter()
@@ -470,19 +574,28 @@ impl ExecRegistry {
         .await;
         for (process_id, short_description, kind, outcome) in outcomes {
             match outcome {
-                ExecCleanupOutcome::NoChild => {}
-                ExecCleanupOutcome::Stopped => match kind {
-                    ExecCleanupTargetKind::Runtime => {
-                        summary.runtime_stop_attempts += 1;
-                        summary.runtime_stopped_count += 1;
+                ExecCleanupOutcome::NoChild => {
+                    if self.remove_terminal_record(&process_id).await.is_some() {
+                        summary.removed_count += 1;
                     }
-                    ExecCleanupTargetKind::Child => {
-                        summary.child_stop_attempts += 1;
-                        summary.child_stopped_count += 1;
+                }
+                ExecCleanupOutcome::Stopped => {
+                    match kind {
+                        ExecCleanupTargetKind::Runtime => {
+                            summary.runtime_stop_attempts += 1;
+                            summary.runtime_stopped_count += 1;
+                        }
+                        ExecCleanupTargetKind::Child => {
+                            summary.child_stop_attempts += 1;
+                            summary.child_stopped_count += 1;
+                        }
+                        ExecCleanupTargetKind::NoChild => {}
                     }
-                    ExecCleanupTargetKind::NoChild => {}
-                },
-                ExecCleanupOutcome::Failed(message) => {
+                    if self.remove_terminal_record(&process_id).await.is_some() {
+                        summary.removed_count += 1;
+                    }
+                }
+                ExecCleanupOutcome::Failed { message, child } => {
                     match kind {
                         ExecCleanupTargetKind::Runtime => {
                             summary.runtime_stop_attempts += 1;
@@ -494,6 +607,8 @@ impl ExecRegistry {
                         }
                         ExecCleanupTargetKind::NoChild => {}
                     }
+                    self.keep_cleanup_failure(&process_id, message.clone(), child)
+                        .await;
                     tracing::warn!(
                         "exec cleanup: failed to stop {} ({}): {}",
                         process_id,
@@ -501,7 +616,7 @@ impl ExecRegistry {
                         message
                     );
                 }
-                ExecCleanupOutcome::TimedOut => {
+                ExecCleanupOutcome::TimedOut { message, child } => {
                     match kind {
                         ExecCleanupTargetKind::Runtime => {
                             summary.runtime_stop_attempts += 1;
@@ -513,6 +628,7 @@ impl ExecRegistry {
                         }
                         ExecCleanupTargetKind::NoChild => {}
                     }
+                    self.keep_cleanup_failure(&process_id, message, child).await;
                     tracing::warn!(
                         "exec cleanup: process {} ({}) did not stop within {:?}",
                         process_id,
@@ -522,10 +638,35 @@ impl ExecRegistry {
                 }
             }
         }
-        for process_id in process_ids {
-            let _ = self.remove(&process_id).await;
-        }
         summary
+    }
+
+    async fn keep_cleanup_failure(
+        &self,
+        process_id: &ExecProcessId,
+        message: String,
+        child: Option<tokio::process::Child>,
+    ) {
+        let terminal = {
+            let mut records = self.records.lock().await;
+            let Some(record) = records.get_mut(process_id) else {
+                return;
+            };
+            if record.child.is_none() {
+                record.child = child;
+            }
+            if record.snapshot.meta.ended_at_ms.is_none() {
+                record.snapshot.meta.ended_at_ms = Some(current_timestamp_ms());
+            }
+            record.snapshot.status = ExecStatus::Failed { message };
+            record
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.terminal.clone())
+        };
+        if let Some(terminal) = terminal {
+            terminal.notify_waiters();
+        }
     }
 
     async fn collect_active_targets(&self) -> Vec<ExecCleanupTarget> {
@@ -567,8 +708,17 @@ async fn cleanup_target(
     if target.runtime.is_some() && !target.snapshot.status.is_terminal() {
         let outcome = match tokio::time::timeout(timeout, registry.kill(&process_id)).await {
             Ok(Ok(_)) => ExecCleanupOutcome::Stopped,
-            Ok(Err(message)) => ExecCleanupOutcome::Failed(message),
-            Err(_) => ExecCleanupOutcome::TimedOut,
+            Ok(Err(message)) => ExecCleanupOutcome::Failed {
+                message,
+                child: None,
+            },
+            Err(_) => ExecCleanupOutcome::TimedOut {
+                message: format!(
+                    "timed out while stopping runtime process after {:.3}s",
+                    timeout.as_secs_f64()
+                ),
+                child: None,
+            },
         };
         return (
             process_id,
@@ -586,6 +736,27 @@ async fn cleanup_target(
         );
     };
 
+    if timeout.is_zero() {
+        #[cfg(unix)]
+        {
+            if let Some(pid) = child.id() {
+                let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            }
+        }
+        #[cfg(windows)]
+        {
+            let _ = child.start_kill();
+        }
+        return (
+            process_id,
+            short_description,
+            ExecCleanupTargetKind::Child,
+            ExecCleanupOutcome::TimedOut {
+                message: "timed out while stopping child process after 0.000s".to_string(),
+                child: Some(child),
+            },
+        );
+    }
     let mut kill_error = None;
     #[cfg(unix)]
     {
@@ -600,15 +771,36 @@ async fn cleanup_target(
         kill_error = Some(err.to_string());
     }
     let wait_result = tokio::time::timeout(timeout, child.wait()).await;
-    let outcome = match wait_result {
-        Ok(Ok(_)) => ExecCleanupOutcome::Stopped,
-        Ok(Err(err)) => ExecCleanupOutcome::Failed(err.to_string()),
-        Err(_) => ExecCleanupOutcome::TimedOut,
+    let (outcome, child) = match wait_result {
+        Ok(Ok(_)) => (ExecCleanupOutcome::Stopped, None),
+        Ok(Err(err)) => (
+            ExecCleanupOutcome::Failed {
+                message: err.to_string(),
+                child: None,
+            },
+            None,
+        ),
+        Err(_) => (
+            ExecCleanupOutcome::TimedOut {
+                message: format!(
+                    "timed out while stopping child process after {:.3}s",
+                    timeout.as_secs_f64()
+                ),
+                child: None,
+            },
+            Some(child),
+        ),
     };
     let outcome = match (outcome, kill_error) {
         (ExecCleanupOutcome::Stopped, _) => ExecCleanupOutcome::Stopped,
-        (_, Some(message)) => ExecCleanupOutcome::Failed(message),
-        (outcome, None) => outcome,
+        (_, Some(message)) => ExecCleanupOutcome::Failed { message, child },
+        (ExecCleanupOutcome::Failed { message, .. }, None) => {
+            ExecCleanupOutcome::Failed { message, child }
+        }
+        (ExecCleanupOutcome::TimedOut { message, .. }, None) => {
+            ExecCleanupOutcome::TimedOut { message, child }
+        }
+        (ExecCleanupOutcome::NoChild, None) => ExecCleanupOutcome::NoChild,
     };
     (
         process_id,
@@ -624,7 +816,7 @@ mod tests {
 
     use super::*;
     use crate::exec::transcript::DEFAULT_MAX_BYTES;
-    use crate::exec::types::{ExecMode, ExecStatusKind};
+    use crate::exec::types::{ExecMode, ExecOwnerMeta, ExecStatusKind};
 
     fn meta(process_id: &str, mode: ExecMode, command: &str) -> ExecProcessMeta {
         ExecProcessMeta::new(mode, command.to_string())
@@ -637,6 +829,11 @@ mod tests {
         } else {
             "printf ready; sleep 30".to_string()
         }
+    }
+
+    #[cfg(unix)]
+    fn process_exists(process_id: u32) -> bool {
+        unsafe { libc::kill(process_id as i32, 0) == 0 }
     }
 
     #[tokio::test]
@@ -846,7 +1043,10 @@ mod tests {
             )
             .await
             .unwrap();
-        registry.mark_started(&snapshot.meta.process_id).await.unwrap();
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
 
         let waited = tokio::time::timeout(
             Duration::from_millis(100),
@@ -886,7 +1086,10 @@ mod tests {
             )
             .await
             .unwrap();
-        registry.mark_started(&snapshot.meta.process_id).await.unwrap();
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
 
         let killed = tokio::time::timeout(
             Duration::from_millis(100),
@@ -947,7 +1150,7 @@ mod tests {
             .await;
         let process_id = snapshot.meta.process_id.clone();
 
-        assert_eq!(registry.remove(&process_id).await, Some(snapshot));
+        assert_eq!(registry.remove(&process_id).await.unwrap(), Some(snapshot));
         assert!(registry.get(&process_id).await.is_none());
     }
 
@@ -978,7 +1181,8 @@ mod tests {
                 chat_id: Some("chat-drop".to_string()),
                 ..ExecProcessFilter::default()
             })
-            .await;
+            .await
+            .unwrap();
         assert_eq!(removed.len(), 2);
         let remaining = registry.list(ExecProcessFilter::default()).await;
         assert_eq!(remaining.len(), 1);
@@ -986,6 +1190,54 @@ mod tests {
             remaining[0].meta.process_id,
             ExecProcessId("exec_keep".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn remove_by_owner_kills_active_processes() {
+        let registry = ExecRegistry::new();
+        let first = registry
+            .spawn(
+                crate::exec::ExecSpawnRequest::background(long_running_command()).with_owner(
+                    ExecOwnerMeta {
+                        chat_id: Some("chat-drop".to_string()),
+                        ..ExecOwnerMeta::default()
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        let second = registry
+            .spawn(
+                crate::exec::ExecSpawnRequest::background(long_running_command()).with_owner(
+                    ExecOwnerMeta {
+                        chat_id: Some("chat-drop".to_string()),
+                        ..ExecOwnerMeta::default()
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+
+        let removed = registry
+            .remove_by_owner(ExecProcessFilter {
+                chat_id: Some("chat-drop".to_string()),
+                ..ExecProcessFilter::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(removed.len(), 2);
+        assert!(removed
+            .iter()
+            .all(|snapshot| snapshot.status == ExecStatus::Killed));
+        assert!(registry
+            .get(&first.snapshot.meta.process_id)
+            .await
+            .is_none());
+        assert!(registry
+            .get(&second.snapshot.meta.process_id)
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -1065,10 +1317,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_timeout_keeps_record() {
+        let registry = ExecRegistry::new();
+        let mut command = if cfg!(target_os = "windows") {
+            let mut command = tokio::process::Command::new("powershell.exe");
+            command.arg("-Command").arg("Start-Sleep -Seconds 30");
+            command
+        } else {
+            let mut command = tokio::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let child = command.spawn().expect("spawn child");
+        let child_id = child.id().expect("child id");
+        let snapshot = registry
+            .register_with_child(
+                meta(
+                    &format!("exec_cleanup_timeout_pid_{child_id}"),
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                child,
+            )
+            .await;
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
+
+        let summary = registry.cleanup_shutdown(Duration::ZERO).await;
+        let retained = registry.get(&snapshot.meta.process_id).await.unwrap();
+
+        assert_eq!(summary.removed_count, 0);
+        assert_eq!(summary.child_stop_attempts, 1);
+        assert_eq!(summary.child_stopped_count, 0);
+        assert_eq!(summary.child_timed_out_count, 1);
+        assert!(matches!(retained.status, ExecStatus::Failed { .. }));
+        #[cfg(not(unix))]
+        let _ = child_id;
+        #[cfg(unix)]
+        assert!(process_exists(child_id));
+        let _ = registry.remove(&snapshot.meta.process_id).await;
+    }
+
+    #[tokio::test]
     async fn test_cleanup_shutdown_kills_runtime_background_process() {
         let registry = ExecRegistry::new();
         let result = registry
-            .spawn(crate::exec::ExecSpawnRequest::background(long_running_command()))
+            .spawn(crate::exec::ExecSpawnRequest::background(
+                long_running_command(),
+            ))
             .await
             .unwrap();
         let process_id = result.snapshot.meta.process_id.clone();
