@@ -65,6 +65,7 @@ pub struct SpawnRequest {
     pub config_name: String,
     pub title: String,
     pub prompt: String,
+    pub tools: Option<Vec<String>>,
     pub target_files: Vec<String>,
     pub max_steps: usize,
     pub model: String,
@@ -131,7 +132,7 @@ pub async fn spawn_background_agent(
     let parent_tool_call_id = req.parent_tool_call_id.clone();
     let parent_subchat_tx = req.parent_subchat_tx.clone();
     let max_steps = req.max_steps;
-    let tools = tools_for_kind(req.kind);
+    let tools = req.tools.clone().or_else(|| tools_for_kind(req.kind));
     let subchat_depth = req.subchat_depth;
     #[cfg(test)]
     let config = if config_name == "test_spawn" {
@@ -144,7 +145,7 @@ pub async fn spawn_background_agent(
             parent_id: Some(parent_chat_id.clone()),
             link_type: Some(link_type.clone()),
             root_chat_id: parent_root_chat_id.clone(),
-            tools: ToolsPolicy::from_option(tools.clone()),
+            tools: crate::subchat::ToolsPolicy::from_option(tools.clone()),
             max_steps,
             prepend_system_prompt: false,
             wrap_up: None,

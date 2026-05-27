@@ -151,6 +151,7 @@ impl Tool for ToolDelegate {
             config_name: "delegate_with_editing".to_string(),
             title: args.description.clone(),
             prompt,
+            tools: None,
             target_files: args.target_files.clone(),
             max_steps: args.max_steps,
             model: current_model,
