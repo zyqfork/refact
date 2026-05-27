@@ -149,7 +149,7 @@ struct ProcessStartArgs {
     service_name: Option<String>,
     startup_wait: Option<Duration>,
     readiness: Option<ExecReadinessProbe>,
-    description: Option<String>,
+    description: String,
     scope_warnings: Vec<String>,
 }
 
@@ -217,12 +217,7 @@ impl Tool for ToolProcessStart {
                 Some(_) | None => {}
             }
         }
-        let short_description = parsed
-            .description
-            .as_deref()
-            .map(sanitize_short_description)
-            .filter(|desc| !desc.is_empty())
-            .unwrap_or_else(|| generate_short_description(&parsed.command, &parsed.mode));
+        let short_description = sanitize_short_description(&parsed.description);
         let owner = ExecOwnerMeta {
             chat_id: Some(chat_id),
             tool_call_id: Some(tool_call_id.clone()),
@@ -275,15 +270,15 @@ impl Tool for ToolProcessStart {
             input_schema: json_schema_from_params(
                 &[
                     ("command", "string", "Command to start."),
+                    ("description", "string", "Required. A single concise active-voice sentence describing what the command does. Short for simple commands: 'Start development server'. More descriptive for piped/obscure commands: 'Build and tail log output in background'. Never use words like 'complex' or 'risk'."),
                     ("workdir", "string", "Optional working directory."),
                     ("mode", "string", "Optional mode: background or service. Default: background."),
                     ("service_name", "string", "Optional service name stored in process metadata."),
                     ("startup_wait_ms", "integer", "Optional milliseconds to wait before returning the initial snapshot."),
                     ("startup_wait_port", "integer", "Optional readiness port stored with startup metadata."),
                     ("startup_wait_keyword", "string", "Optional readiness keyword stored with startup metadata."),
-                    ("description", "string", "Optional short description shown in execution UI metadata."),
                 ],
-                &["command"],
+                &["command", "description"],
             ),
             output_schema: None,
             annotations: None,
@@ -912,7 +907,9 @@ async fn parse_start_args(
     let command = parse_required_string(args, "command")?;
     let mode = parse_start_mode(args)?;
     let service_name = parse_optional_string(args, "service_name")?;
-    let description = parse_optional_string(args, "description")?;
+    let description = parse_optional_string(args, "description")?.ok_or_else(|| {
+        "description is required and must be a non-empty single concise sentence".to_string()
+    })?;
     let raw_workdir = parse_optional_string(args, "workdir")?;
     let (workdir, scope_warnings) =
         resolve_process_workdir(gcx, raw_workdir.as_deref(), execution_scope).await?;
@@ -1091,8 +1088,10 @@ fn process_start_args_from_shell_service(
         .command
         .as_ref()
         .ok_or_else(|| "Command is required for start/restart action".to_string())?;
+    let description = generate_short_description(command, &ExecMode::Service);
     let mut result = make_args_map(vec![
         ("command", json!(command)),
+        ("description", json!(description)),
         ("mode", json!("service")),
         ("service_name", json!(parsed.service_name)),
     ]);
@@ -1503,7 +1502,7 @@ mod tests {
                 }
                 .tool_description()
             ),
-            vec!["command".to_string()]
+            vec!["command".to_string(), "description".to_string()]
         );
         assert!(required_names(
             ToolProcessList {
@@ -1618,6 +1617,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(long_running_command("svc"))),
+                ("description", json!("Start api service")),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
                 ("startup_wait_ms", json!(100)),
@@ -1674,6 +1674,7 @@ mod tests {
             ccx,
             make_args_map(vec![
                 ("command", json!(long_running_command("svc"))),
+                ("description", json!("Start service without name")),
                 ("mode", json!("service")),
             ]),
         )
@@ -1693,6 +1694,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(long_running_command("svc"))),
+                ("description", json!("Start first api service")),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
                 ("startup_wait_ms", json!(100)),
@@ -1707,6 +1709,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(long_running_command("svc2"))),
+                ("description", json!("Start duplicate api service")),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
                 ("startup_wait_ms", json!(100)),
@@ -1773,6 +1776,7 @@ mod tests {
             first_ccx,
             make_args_map(vec![
                 ("command", json!(long_running_command("svc-a"))),
+                ("description", json!("Start api service in chat-a")),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
                 ("startup_wait_ms", json!(100)),
@@ -1785,6 +1789,7 @@ mod tests {
             second_ccx,
             make_args_map(vec![
                 ("command", json!(long_running_command("svc-b"))),
+                ("description", json!("Start api service in chat-b")),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
                 ("startup_wait_ms", json!(100)),
@@ -1857,6 +1862,7 @@ mod tests {
             first_ccx,
             make_args_map(vec![
                 ("command", json!(long_running_command("svc-a"))),
+                ("description", json!("Start api service in workspace-a")),
                 ("workdir", json!(workspace_a.to_string_lossy().to_string())),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
@@ -1870,6 +1876,7 @@ mod tests {
             second_ccx,
             make_args_map(vec![
                 ("command", json!(long_running_command("svc-b"))),
+                ("description", json!("Start api service in workspace-b")),
                 ("workdir", json!(workspace_b.to_string_lossy().to_string())),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
@@ -1922,6 +1929,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(long_running_command("svc-a"))),
+                ("description", json!("Start api service in workspace")),
                 ("workdir", json!(workspace.to_string_lossy().to_string())),
                 ("mode", json!("service")),
                 ("service_name", json!("api")),
@@ -1937,6 +1945,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(long_running_command("svc-b"))),
+                ("description", json!("Start duplicate api service in equivalent workspace")),
                 (
                     "workdir",
                     json!(workspace.join(".").to_string_lossy().to_string()),
@@ -1982,6 +1991,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(command)),
+                ("description", json!("Start keyword readiness service")),
                 ("mode", json!("service")),
                 ("service_name", json!("keyword")),
                 ("startup_wait_ms", json!(2000)),
@@ -2017,6 +2027,7 @@ mod tests {
             ccx,
             make_args_map(vec![
                 ("command", json!(long_running_command("not-yet"))),
+                ("description", json!("Start service with readiness timeout")),
                 ("mode", json!("service")),
                 ("service_name", json!("timeout")),
                 ("startup_wait_ms", json!(100)),
@@ -2174,6 +2185,7 @@ mod tests {
             ccx.clone(),
             make_args_map(vec![
                 ("command", json!(long_running_command("slow"))),
+                ("description", json!("Start slow background process")),
                 ("startup_wait_ms", json!(50)),
             ]),
         )
@@ -2211,7 +2223,10 @@ mod tests {
         let done = run_tool(
             &mut start,
             ccx.clone(),
-            make_args_map(vec![("command", json!(quick_command("done")))]),
+            make_args_map(vec![
+                ("command", json!(quick_command("done"))),
+                ("description", json!("Run quick command for wait completion test")),
+            ]),
         )
         .await
         .unwrap();
@@ -2251,6 +2266,7 @@ mod tests {
                 ccx,
                 &make_args_map(vec![
                     ("command", json!(command)),
+                    ("description", json!("Remove build artifacts")),
                     ("mode", json!("service")),
                     ("service_name", json!("danger")),
                 ]),
@@ -2324,6 +2340,88 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(exec(&stopped)["status"], "killed");
+    }
+
+    #[tokio::test]
+    async fn description_required_rejects_missing() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut start,
+            ccx,
+            make_args_map(vec![("command", json!("printf hi"))]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "description is required and must be a non-empty single concise sentence"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_required_rejects_empty() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut start,
+            ccx,
+            make_args_map(vec![
+                ("command", json!("printf hi")),
+                ("description", json!("")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "description is required and must be a non-empty single concise sentence"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_required_rejects_whitespace() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut start,
+            ccx,
+            make_args_map(vec![
+                ("command", json!("printf hi")),
+                ("description", json!("  \t\n")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "description is required and must be a non-empty single concise sentence"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_accepted_when_present() {
+        let (_gcx, ccx) = test_ccx().await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let message = run_tool(
+            &mut start,
+            ccx,
+            make_args_map(vec![
+                ("command", json!(quick_command("hi"))),
+                ("description", json!("Run engine tests")),
+            ]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exec(&message)["short_description"], "Run engine tests");
     }
 
     #[tokio::test]

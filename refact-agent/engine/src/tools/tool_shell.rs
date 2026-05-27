@@ -13,9 +13,8 @@ use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::at_file::return_one_candidate_or_a_good_error;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::exec::{
-    generate_short_description, sanitize_short_description, ExecMode, ExecOutputStream,
-    ExecOwnerMeta, ExecProcessSnapshot, ExecRawOutput, ExecReadResult, ExecSpawnRequest,
-    ExecStatus,
+    sanitize_short_description, ExecOutputStream, ExecOwnerMeta, ExecProcessSnapshot, ExecRawOutput,
+    ExecReadResult, ExecSpawnRequest, ExecStatus,
 };
 use crate::files_correction::canonical_path;
 use crate::files_correction::canonicalize_normalized_path;
@@ -166,12 +165,8 @@ impl Tool for ToolShell {
             Some(workdir) => Some(workdir),
             None => get_active_project_path(gcx.clone()).await,
         };
-        let short_description = parsed
-            .description
-            .as_deref()
-            .map(sanitize_short_description)
-            .filter(|desc| !desc.is_empty())
-            .unwrap_or_else(|| generate_short_description(&parsed.command, &ExecMode::Foreground));
+        let short_description =
+            sanitize_short_description(parsed.description.as_deref().unwrap_or_default());
         let owner = ExecOwnerMeta {
             chat_id: Some(chat_id),
             tool_call_id: Some(tool_call_id.clone()),
@@ -258,7 +253,7 @@ impl Tool for ToolShell {
             experimental: false,
             allow_parallel: false,
             description: "Execute a single command, using the \"sh\" on unix-like systems and \"powershell.exe\" on windows. Use it for one-time tasks like dependencies installation. Don't call this unless you have to. Not suitable for regular work because it requires a confirmation at each step. Output is compressed by default - use output_filter and output_limit parameters to see specific parts if needed. In worktree-scoped chats, the default cwd and explicit workdir are enforced to the active worktree or privacy-permitted outside paths with visible warnings; the shell command text itself is not OS-sandboxed. Note: sudo commands cannot be run - if you need elevated privileges, ask the user to run them directly.".to_string(),
-            input_schema: json_schema_from_params(&[("command", "string", "shell command to execute"), ("workdir", "string", "workdir for the command"), ("timeout", "string", "Optional. Timeout in seconds for the command (default: 10). Use higher values for long-running commands."), ("description", "string", "Optional short description shown in execution UI metadata."), ("output_filter", "string", "Optional regex pattern to filter output lines. Only lines matching this pattern (and context) will be shown. Use to find specific errors or content in large outputs."), ("output_limit", "string", "Optional. Max lines to show (default: 40). Use higher values like '200' or 'all' to see more output.")], &["command"]),
+            input_schema: json_schema_from_params(&[("command", "string", "shell command to execute"), ("description", "string", "Required. A single concise active-voice sentence describing what the command does. Short for simple commands: 'List files in current directory'. More descriptive for piped/obscure commands: 'Find and delete all .tmp files recursively'. Never use words like 'complex' or 'risk'."), ("workdir", "string", "workdir for the command"), ("timeout", "string", "Optional. Timeout in seconds for the command (default: 10). Use higher values for long-running commands."), ("output_filter", "string", "Optional regex pattern to filter output lines. Only lines matching this pattern (and context) will be shown. Use to find specific errors or content in large outputs."), ("output_limit", "string", "Optional. Max lines to show (default: 40). Use higher values like '200' or 'all' to see more output.")], &["command", "description"]),
             output_schema: None,
             annotations: None,
         }
@@ -477,10 +472,20 @@ async fn parse_args_with_filter(
     };
 
     let description = match args.get("description") {
-        Some(Value::String(s)) if s.is_empty() => None,
+        Some(Value::String(s)) if s.trim().is_empty() => {
+            return Err(
+                "description is required and must be a non-empty single concise sentence"
+                    .to_string(),
+            );
+        }
         Some(Value::String(s)) => Some(s.clone()),
         Some(v) => return Err(format!("argument `description` is not a string: {:?}", v)),
-        None => None,
+        None => {
+            return Err(
+                "description is required and must be a non-empty single concise sentence"
+                    .to_string(),
+            );
+        }
     };
 
     Ok(ParsedShellArgs {
@@ -689,6 +694,7 @@ mod tests {
         let required = desc.input_schema["required"].as_array().unwrap().clone();
         let required_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(required_names.contains(&"command"));
+        assert!(required_names.contains(&"description"));
         assert!(!required_names.contains(&"workdir"));
     }
 
@@ -713,7 +719,8 @@ mod tests {
 
     #[tokio::test]
     async fn shell_exec_captures_stderr() {
-        let message = run_shell(args(vec![("command", json!(stderr_command()))])).await;
+        let message =
+            run_shell(args(vec![("command", json!(stderr_command())), ("description", json!("Capture stderr output"))])).await;
         let body = text(&message);
 
         assert!(body.contains("STDERR"));
@@ -723,7 +730,11 @@ mod tests {
 
     #[tokio::test]
     async fn shell_exec_reports_nonzero_exit() {
-        let message = run_shell(args(vec![("command", json!(nonzero_command()))])).await;
+        let message = run_shell(args(vec![
+            ("command", json!(nonzero_command())),
+            ("description", json!("Report nonzero exit code")),
+        ]))
+        .await;
         let body = text(&message);
 
         assert!(body.contains("bad"));
@@ -737,6 +748,7 @@ mod tests {
     async fn shell_exec_timeout_returns_partial_output_and_failed_metadata() {
         let message = run_shell(args(vec![
             ("command", json!(slow_command())),
+            ("description", json!("Run slow command with short timeout")),
             ("timeout", json!(1)),
         ]))
         .await;
@@ -761,6 +773,7 @@ mod tests {
                     &tool_call_id,
                     &args(vec![
                         ("command", json!(slow_command())),
+                        ("description", json!("Run slow command for abort test")),
                         ("timeout", json!(10)),
                     ]),
                 )
@@ -783,6 +796,7 @@ mod tests {
     async fn shell_exec_output_filter_is_applied() {
         let message = run_shell(args(vec![
             ("command", json!(multiline_command())),
+            ("description", json!("Print multiple lines and filter output")),
             ("output_filter", json!("line4")),
             ("output_limit", json!("3")),
         ]))
@@ -804,6 +818,7 @@ mod tests {
         let marker = "MARKER_FOREGROUND_LATE_MATCH";
         let message = run_shell(args(vec![
             ("command", json!(late_marker_command(marker))),
+            ("description", json!("Find late marker in large output")),
             ("timeout", json!(20)),
             ("output_filter", json!(marker)),
             ("output_limit", json!("8")),
@@ -820,6 +835,7 @@ mod tests {
     async fn foreground_output_filter_bounded() {
         let message = run_shell(args(vec![
             ("command", json!(above_raw_capture_limit_command())),
+            ("description", json!("Generate output above raw capture limit")),
             ("timeout", json!(20)),
             ("output_filter", json!("small|bytes elided")),
             ("output_limit", json!("20")),
@@ -842,5 +858,75 @@ mod tests {
         .await;
 
         assert_eq!(exec(&message)["short_description"], "Build thing");
+    }
+
+    #[tokio::test]
+    async fn description_required_rejects_missing() {
+        let ccx = ccx_with_abort(None).await;
+        let mut shell = ToolShell::default();
+        let err = shell
+            .tool_execute(
+                ccx,
+                &"shell".to_string(),
+                &args(vec![("command", json!(success_command()))]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "description is required and must be a non-empty single concise sentence"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_required_rejects_empty() {
+        let ccx = ccx_with_abort(None).await;
+        let mut shell = ToolShell::default();
+        let err = shell
+            .tool_execute(
+                ccx,
+                &"shell".to_string(),
+                &args(vec![
+                    ("command", json!(success_command())),
+                    ("description", json!("")),
+                ]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "description is required and must be a non-empty single concise sentence"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_required_rejects_whitespace() {
+        let ccx = ccx_with_abort(None).await;
+        let mut shell = ToolShell::default();
+        let err = shell
+            .tool_execute(
+                ccx,
+                &"shell".to_string(),
+                &args(vec![
+                    ("command", json!(success_command())),
+                    ("description", json!("  \t\n")),
+                ]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "description is required and must be a non-empty single concise sentence"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_accepted_when_present() {
+        let message = run_shell(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Run engine tests")),
+        ]))
+        .await;
+        assert_eq!(exec(&message)["short_description"], "Run engine tests");
     }
 }
