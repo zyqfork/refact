@@ -7817,6 +7817,47 @@ fn investigation_opportunity_carries_real_diagnostic_ids() {
 }
 
 #[tokio::test]
+async fn maybe_enqueue_chat_reaction_emits_chat_scoped_runtime_event() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction, INSIGHT_LINES};
+    use crate::buddy::types::BuddyBubblePolicy;
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let app = make_gcx_with_buddy().await;
+    let chat_id = "e2e-reaction-chat".to_string();
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: chat_id.clone(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText(
+                "please design a new caching architecture".to_string(),
+            ),
+        },
+    )
+    .await;
+
+    let buddy_arc = app.buddy.buddy.clone();
+    let lock = buddy_arc.lock().await;
+    let svc = lock.as_ref().unwrap();
+    let items: Vec<_> = svc.runtime_queue.items.iter().collect();
+    assert_eq!(items.len(), 1, "exactly one event must be enqueued");
+    let ev = &items[0];
+    assert_eq!(ev.chat_id.as_deref(), Some(chat_id.as_str()));
+    assert_eq!(ev.signal_type, "speech_insight");
+    assert_eq!(ev.bubble_policy, Some(BuddyBubblePolicy::Ambient));
+    let speech = ev.speech_text.as_ref().expect("speech_text must be set");
+    assert!(
+        INSIGHT_LINES.contains(&speech.as_str()),
+        "speech_text must be one of INSIGHT_LINES, got: {}",
+        speech
+    );
+    assert!(ev.ttl_ms.is_some(), "ttl_ms must be set");
+    assert!(ev.ttl_ms.unwrap() > 0, "ttl_ms must be positive");
+}
+
+#[tokio::test]
 async fn investigation_enrich_context_resolves_diagnostic_ids() {
     use super::diagnostics::diagnostic_id;
     use crate::http::routers::v1::buddy_opportunities::enrich_investigation_context;

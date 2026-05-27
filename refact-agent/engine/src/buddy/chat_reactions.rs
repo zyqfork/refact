@@ -14,24 +14,102 @@ pub const ANALYSIS_TEXT_MAX_CHARS: usize = 500;
 pub const PER_CHAT_COOLDOWN_SECS: i64 = 300;
 pub const GLOBAL_HOURLY_CAP: u32 = 10;
 
+// BUG keywords: exact-prefix token match prevents false positives from words like debug, latest,
+// contest (e.g. "debug" does not start with "bug"). Removed: fail, failing, broken (too noisy).
+// "timeout" stays as a token keyword; multi-word phrase "timed out" is also checked below.
+// Additional multi-word phrase triggers: "not working", "doesn't work", "does not work".
 const BUG_KEYWORDS: &[&str] = &[
-    "bug", "error", "crash", "panic", "timeout", "exception", "fail", "broken",
+    "bug",
+    "error",
+    "crash",
+    "panic",
+    "exception",
+    "traceback",
+    "regression",
+    "deadlock",
+    "timeout",
 ];
+
+// INSIGHT keywords: exact-prefix token match to avoid noise from plan->planning, test->testing,
+// perf->performance substring etc. Removed: plan, test, perf, improve, optimize, rewrite.
 const INSIGHT_KEYWORDS: &[&str] = &[
-    "plan",
-    "design",
-    "refactor",
-    "perf",
-    "performance",
-    "test",
-    "security",
     "architecture",
-    "improve",
-    "optimize",
+    "refactor",
+    "performance",
+    "security",
     "migrate",
-    "rewrite",
+    "migration",
+    "design",
     "review",
+    "tradeoff",
+    "deprecate",
+    "deprecated",
 ];
+
+pub const HUMOR_LINES: &[&str] = &[
+    "Tiny gremlin note: that idea has snack-sized boots — I'm watching the edges.",
+    "Pixel detective mode engaged. Snacks hidden in the margins.",
+    "Chaos ping: good thread, suspiciously cute.",
+    "Mild scheming intensifies. I will behave. Mostly.",
+];
+
+pub const INSIGHT_LINES: &[&str] = &[
+    "Tiny signal: this might want one assumption check before charging in.",
+    "Heads up — worth poking the edges before committing.",
+    "Quick read: looks reasonable; one small risk worth sanity-checking.",
+];
+
+pub const BUG_LINES: &[&str] = &[
+    "This smells bug-shaped. Want me to help isolate it?",
+    "Tiny alarm: this looks like a bug trail. I can dig deeper if you want.",
+    "Hmm, that pattern usually means something failed quietly. Want a closer look?",
+];
+
+fn stable_hash(text: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for byte in text.bytes() {
+        h ^= u64::from(byte);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn pick_template(lines: &[&'static str], seed: &str) -> &'static str {
+    lines[(stable_hash(seed) as usize) % lines.len()]
+}
+
+fn word_tokens(lower: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, ch) in lower.char_indices() {
+        let is_token = ch.is_ascii_alphanumeric() || ch == '_';
+        match (is_token, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                result.push(&lower[s..i]);
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        result.push(&lower[s..]);
+    }
+    result
+}
+
+fn has_bug_signal(lower: &str, tokens: &[&str]) -> bool {
+    if BUG_KEYWORDS
+        .iter()
+        .any(|kw| tokens.iter().any(|t| t.starts_with(kw)))
+    {
+        return true;
+    }
+    lower.contains("not working")
+        || lower.contains("doesn't work")
+        || lower.contains("does not work")
+        || lower.contains("timed out")
+}
 
 pub struct AcceptedUserMessage {
     pub chat_id: String,
@@ -93,28 +171,32 @@ pub fn prepare_analysis_text(raw: &str) -> Option<String> {
 
 pub fn classify_chat_reaction(text: &str, settings: &BuddySettings) -> Option<ChatReaction> {
     let lower = text.to_lowercase();
-    let kind = if BUG_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+    let tokens = word_tokens(&lower);
+    let kind = if has_bug_signal(&lower, &tokens) {
         ChatReactionKind::BugCandidate
-    } else if INSIGHT_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+    } else if INSIGHT_KEYWORDS
+        .iter()
+        .any(|kw| tokens.iter().any(|t| t.starts_with(kw)))
+    {
         ChatReactionKind::Insight
     } else if settings.humor_enabled && settings.humor_level != HumorLevel::Off {
         ChatReactionKind::Humor
     } else {
         return None;
     };
+    let reaction_text = match kind {
+        ChatReactionKind::Humor => pick_template(HUMOR_LINES, text).to_string(),
+        ChatReactionKind::Insight => pick_template(INSIGHT_LINES, text).to_string(),
+        ChatReactionKind::BugCandidate => pick_template(BUG_LINES, text).to_string(),
+    };
     Some(ChatReaction {
         kind,
-        text: text.to_string(),
+        text: reaction_text,
     })
 }
 
 fn message_hash(text: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for byte in text.bytes() {
-        h ^= u64::from(byte);
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}")
+    format!("{:016x}", stable_hash(text))
 }
 
 pub fn build_reaction_event(
@@ -386,5 +468,103 @@ mod tests {
         }
         let after_hour = now + Duration::seconds(3601);
         assert!(lim.allow("chat-fresh", after_hour));
+    }
+
+    #[test]
+    fn classify_humor_uses_template_not_echo() {
+        let s = BuddySettings::default();
+        let input = "make this nicer please give it a better look overall";
+        let reaction = classify_chat_reaction(input, &s).unwrap();
+        assert_eq!(reaction.kind, ChatReactionKind::Humor);
+        assert!(
+            HUMOR_LINES.contains(&reaction.text.as_str()),
+            "reaction.text must be one of HUMOR_LINES, got: {}",
+            reaction.text
+        );
+        assert!(
+            !reaction.text.contains(input),
+            "reaction.text must not echo the user message"
+        );
+    }
+
+    #[test]
+    fn classify_insight_uses_template() {
+        let s = BuddySettings::default();
+        let input = "design a new architecture for the service layer";
+        let reaction = classify_chat_reaction(input, &s).unwrap();
+        assert_eq!(reaction.kind, ChatReactionKind::Insight);
+        assert!(
+            INSIGHT_LINES.contains(&reaction.text.as_str()),
+            "reaction.text must be one of INSIGHT_LINES, got: {}",
+            reaction.text
+        );
+        assert!(
+            !reaction.text.contains(input),
+            "reaction.text must not echo the user message"
+        );
+    }
+
+    #[test]
+    fn classify_bug_uses_template() {
+        let s = BuddySettings::default();
+        let input = "the app crashed on save every time I try";
+        let reaction = classify_chat_reaction(input, &s).unwrap();
+        assert_eq!(reaction.kind, ChatReactionKind::BugCandidate);
+        assert!(
+            BUG_LINES.contains(&reaction.text.as_str()),
+            "reaction.text must be one of BUG_LINES, got: {}",
+            reaction.text
+        );
+        assert!(
+            !reaction.text.contains(input),
+            "reaction.text must not echo the user message"
+        );
+    }
+
+    #[test]
+    fn keywords_avoid_false_positive_debug_latest_contest() {
+        let s = BuddySettings::default();
+        let reaction = classify_chat_reaction(
+            "please look at the latest debug output and run the contest",
+            &s,
+        )
+        .unwrap();
+        assert_ne!(
+            reaction.kind,
+            ChatReactionKind::BugCandidate,
+            "debug/latest/contest must not trigger BugCandidate"
+        );
+    }
+
+    #[test]
+    fn keywords_match_multi_word_not_working_phrases() {
+        let s = BuddySettings::default();
+        let reaction =
+            classify_chat_reaction("the upload is not working anymore", &s).unwrap();
+        assert_eq!(
+            reaction.kind,
+            ChatReactionKind::BugCandidate,
+            "'not working' must classify as BugCandidate"
+        );
+    }
+
+    #[test]
+    fn reaction_event_speech_text_is_buddy_template() {
+        let s = BuddySettings::default();
+        let input = "design a new architecture for the service layer";
+        let reaction = classify_chat_reaction(input, &s).unwrap();
+        assert_eq!(reaction.kind, ChatReactionKind::Insight);
+        let ev = build_reaction_event("chat-template", input, &reaction);
+        let speech = ev.speech_text.expect("speech_text must be set");
+        assert!(
+            INSIGHT_LINES.contains(&speech.as_str()),
+            "speech_text must be one of INSIGHT_LINES, got: {}",
+            speech
+        );
+        assert!(
+            !speech.contains(input),
+            "speech_text must not contain raw analysis text"
+        );
+        assert_eq!(speech, reaction.text, "speech_text must equal reaction.text");
     }
 }
