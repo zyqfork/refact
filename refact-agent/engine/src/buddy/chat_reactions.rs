@@ -7,7 +7,8 @@ use crate::call_validation::ChatContent;
 use crate::chat::types::ThreadParams;
 
 use super::settings::{BuddySettings, HumorLevel};
-use super::types::{BuddyBubblePolicy, BuddyRuntimeEvent};
+use super::types::{BuddyBubblePolicy, BuddyPersonalityProfile, BuddyRuntimeEvent};
+use super::voice_service::{voice_service, ChatReactionSpeechIntent, VoiceCtx};
 
 pub const ANALYSIS_TEXT_MIN_CHARS: usize = 20;
 pub const ANALYSIS_TEXT_MAX_CHARS: usize = 500;
@@ -152,6 +153,13 @@ pub struct ChatReaction {
     pub text: String,
 }
 
+#[derive(Clone)]
+struct ChatReactionVoiceInputs {
+    persona: BuddyPersonalityProfile,
+    identity_name: String,
+    pulse_one_liner: String,
+}
+
 /// Chat reactions are independent of `message_observation_enabled`, which only gates the
 /// periodic ChatPatternObserver.
 pub fn settings_allow_chat_reactions(settings: &BuddySettings) -> bool {
@@ -170,30 +178,32 @@ pub fn prepare_analysis_text(raw: &str) -> Option<String> {
     Some(normalized.chars().take(ANALYSIS_TEXT_MAX_CHARS).collect())
 }
 
-pub fn classify_chat_reaction(text: &str, settings: &BuddySettings) -> Option<ChatReaction> {
+pub fn classify_chat_reaction_kind(
+    text: &str,
+    settings: &BuddySettings,
+) -> Option<ChatReactionKind> {
     let lower = text.to_lowercase();
     let tokens = word_tokens(&lower);
-    let kind = if has_bug_signal(&lower, &tokens) {
-        ChatReactionKind::BugCandidate
+    if has_bug_signal(&lower, &tokens) {
+        Some(ChatReactionKind::BugCandidate)
     } else if INSIGHT_KEYWORDS
         .iter()
         .any(|kw| tokens.iter().any(|t| t.starts_with(kw)))
     {
-        ChatReactionKind::Insight
+        Some(ChatReactionKind::Insight)
     } else if settings.humor_enabled && settings.humor_level != HumorLevel::Off {
-        ChatReactionKind::Humor
+        Some(ChatReactionKind::Humor)
     } else {
-        return None;
-    };
-    let reaction_text = match kind {
-        ChatReactionKind::Humor => pick_template(HUMOR_LINES, text).to_string(),
-        ChatReactionKind::Insight => pick_template(INSIGHT_LINES, text).to_string(),
-        ChatReactionKind::BugCandidate => pick_template(BUG_LINES, text).to_string(),
-    };
-    Some(ChatReaction {
-        kind,
-        text: reaction_text,
-    })
+        None
+    }
+}
+
+pub fn fallback_chat_reaction_text(kind: ChatReactionKind, seed: &str) -> String {
+    match kind {
+        ChatReactionKind::Humor => pick_template(HUMOR_LINES, seed).to_string(),
+        ChatReactionKind::Insight => pick_template(INSIGHT_LINES, seed).to_string(),
+        ChatReactionKind::BugCandidate => pick_template(BUG_LINES, seed).to_string(),
+    }
 }
 
 /// Produces a dedupe fingerprint for a chat reaction event.
@@ -252,6 +262,37 @@ pub fn build_reaction_event(
     }
 }
 
+async fn render_chat_reaction_text(
+    app: &AppState,
+    kind: &ChatReactionKind,
+    analysis_text: &str,
+    voice_inputs: &ChatReactionVoiceInputs,
+) -> String {
+    let fallback = fallback_chat_reaction_text(kind.clone(), analysis_text);
+    let intent = match kind {
+        ChatReactionKind::Humor => ChatReactionSpeechIntent::Humor,
+        ChatReactionKind::Insight => ChatReactionSpeechIntent::Insight,
+        ChatReactionKind::BugCandidate => ChatReactionSpeechIntent::BugCandidate,
+    };
+    let ctx = VoiceCtx {
+        persona: &voice_inputs.persona,
+        identity_name: voice_inputs.identity_name.as_str(),
+        pulse_one_liner: voice_inputs.pulse_one_liner.clone(),
+        workflow_id: Some("chat_reaction"),
+        workflow_summary: Some(analysis_text),
+    };
+    let rendered = voice_service()
+        .await
+        .render_chat_reaction(app.clone(), ctx, intent)
+        .await;
+    let redacted = refact_core::string_utils::redact_sensitive(&rendered);
+    if redacted.trim().is_empty() || redacted.contains("[REDACTED") {
+        fallback
+    } else {
+        redacted
+    }
+}
+
 pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMessage) {
     if !should_observe_thread(&accepted.thread) {
         return;
@@ -262,7 +303,7 @@ pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMe
         return;
     };
 
-    let event = {
+    let plan = {
         let mut svc_guard = app.buddy.buddy.lock().await;
         let Some(svc) = svc_guard.as_mut() else {
             return;
@@ -270,23 +311,40 @@ pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMe
         if !settings_allow_chat_reactions(&svc.settings) {
             return;
         }
-        let Some(reaction) = classify_chat_reaction(&analysis, &svc.settings) else {
+        let Some(kind) = classify_chat_reaction_kind(&analysis, &svc.settings) else {
             return;
         };
         let now = chrono::Utc::now();
         if !svc
             .chat_reaction_limiter
-            .allow_kind(&accepted.chat_id, reaction.kind.clone(), now)
+            .allow_kind(&accepted.chat_id, kind.clone(), now)
         {
             return;
         }
-        build_reaction_event(&accepted.chat_id, &analysis, &reaction)
+        let voice_inputs = ChatReactionVoiceInputs {
+            persona: svc.state.personality.clone(),
+            identity_name: svc.state.identity.name.clone(),
+            pulse_one_liner: format!(
+                "{} pending ops, {} stuck tasks",
+                svc.pulse.memory.pending_ops, svc.pulse.tasks.stuck
+            ),
+        };
+        (kind, voice_inputs)
     };
 
-    let mut svc_guard = app.buddy.buddy.lock().await;
-    if let Some(svc) = svc_guard.as_mut() {
-        svc.enqueue_runtime_event(event);
-    }
+    let app2 = app.clone();
+    let chat_id = accepted.chat_id.clone();
+    tokio::spawn(async move {
+        let (kind, voice_inputs) = plan;
+        let speech = render_chat_reaction_text(&app2, &kind, &analysis, &voice_inputs).await;
+        let event = build_reaction_event(&chat_id, &analysis, &ChatReaction { kind, text: speech });
+        let mut svc_guard = app2.buddy.buddy.lock().await;
+        if let Some(svc) = svc_guard.as_mut() {
+            if settings_allow_chat_reactions(&svc.settings) {
+                svc.enqueue_runtime_event(event);
+            }
+        }
+    });
 }
 
 pub struct ChatReactionLimiter {
@@ -340,6 +398,13 @@ impl ChatReactionLimiter {
 mod tests {
     use super::*;
     use chrono::Duration;
+
+    fn classify_chat_reaction(text: &str, settings: &BuddySettings) -> Option<ChatReaction> {
+        classify_chat_reaction_kind(text, settings).map(|kind| ChatReaction {
+            text: fallback_chat_reaction_text(kind.clone(), text),
+            kind,
+        })
+    }
 
     #[test]
     fn settings_allow_all_defaults() {
@@ -527,53 +592,47 @@ mod tests {
     }
 
     #[test]
-    fn classify_humor_uses_template_not_echo() {
-        let s = BuddySettings::default();
+    fn fallback_humor_uses_template_not_echo() {
         let input = "make this nicer please give it a better look overall";
-        let reaction = classify_chat_reaction(input, &s).unwrap();
-        assert_eq!(reaction.kind, ChatReactionKind::Humor);
+        let text = fallback_chat_reaction_text(ChatReactionKind::Humor, input);
         assert!(
-            HUMOR_LINES.contains(&reaction.text.as_str()),
-            "reaction.text must be one of HUMOR_LINES, got: {}",
-            reaction.text
+            HUMOR_LINES.contains(&text.as_str()),
+            "fallback must be one of HUMOR_LINES, got: {}",
+            text
         );
         assert!(
-            !reaction.text.contains(input),
-            "reaction.text must not echo the user message"
+            !text.contains(input),
+            "fallback must not echo the user message"
         );
     }
 
     #[test]
-    fn classify_insight_uses_template() {
-        let s = BuddySettings::default();
+    fn fallback_insight_uses_template() {
         let input = "design a new architecture for the service layer";
-        let reaction = classify_chat_reaction(input, &s).unwrap();
-        assert_eq!(reaction.kind, ChatReactionKind::Insight);
+        let text = fallback_chat_reaction_text(ChatReactionKind::Insight, input);
         assert!(
-            INSIGHT_LINES.contains(&reaction.text.as_str()),
-            "reaction.text must be one of INSIGHT_LINES, got: {}",
-            reaction.text
+            INSIGHT_LINES.contains(&text.as_str()),
+            "fallback must be one of INSIGHT_LINES, got: {}",
+            text
         );
         assert!(
-            !reaction.text.contains(input),
-            "reaction.text must not echo the user message"
+            !text.contains(input),
+            "fallback must not echo the user message"
         );
     }
 
     #[test]
-    fn classify_bug_uses_template() {
-        let s = BuddySettings::default();
+    fn fallback_bug_uses_template() {
         let input = "the app crashed on save every time I try";
-        let reaction = classify_chat_reaction(input, &s).unwrap();
-        assert_eq!(reaction.kind, ChatReactionKind::BugCandidate);
+        let text = fallback_chat_reaction_text(ChatReactionKind::BugCandidate, input);
         assert!(
-            BUG_LINES.contains(&reaction.text.as_str()),
-            "reaction.text must be one of BUG_LINES, got: {}",
-            reaction.text
+            BUG_LINES.contains(&text.as_str()),
+            "fallback must be one of BUG_LINES, got: {}",
+            text
         );
         assert!(
-            !reaction.text.contains(input),
-            "reaction.text must not echo the user message"
+            !text.contains(input),
+            "fallback must not echo the user message"
         );
     }
 

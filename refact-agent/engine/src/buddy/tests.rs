@@ -7818,11 +7818,14 @@ fn investigation_opportunity_carries_real_diagnostic_ids() {
 
 #[tokio::test]
 async fn maybe_enqueue_chat_reaction_emits_chat_scoped_runtime_event() {
-    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction, INSIGHT_LINES};
+    use super::chat_reactions::{AcceptedUserMessage, INSIGHT_LINES, maybe_enqueue_chat_reaction};
     use crate::buddy::types::BuddyBubblePolicy;
     use crate::call_validation::ChatContent;
     use crate::chat::types::ThreadParams;
 
+    let (service, _renderer) =
+        crate::buddy::voice_service::test_voice_service_with_responses(vec![None]);
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
     let app = make_gcx_with_buddy().await;
     let chat_id = "e2e-reaction-chat".to_string();
 
@@ -7838,12 +7841,7 @@ async fn maybe_enqueue_chat_reaction_emits_chat_scoped_runtime_event() {
     )
     .await;
 
-    let buddy_arc = app.buddy.buddy.clone();
-    let lock = buddy_arc.lock().await;
-    let svc = lock.as_ref().unwrap();
-    let items: Vec<_> = svc.runtime_queue.items.iter().collect();
-    assert_eq!(items.len(), 1, "exactly one event must be enqueued");
-    let ev = &items[0];
+    let ev = wait_for_runtime_event(&app, "speech_insight").await;
     assert_eq!(ev.chat_id.as_deref(), Some(chat_id.as_str()));
     assert_eq!(ev.signal_type, "speech_insight");
     assert_eq!(ev.bubble_policy, Some(BuddyBubblePolicy::Ambient));
@@ -7855,6 +7853,192 @@ async fn maybe_enqueue_chat_reaction_emits_chat_scoped_runtime_event() {
     );
     assert!(ev.ttl_ms.is_some(), "ttl_ms must be set");
     assert!(ev.ttl_ms.unwrap() > 0, "ttl_ms must be positive");
+}
+
+async fn wait_for_runtime_event(
+    app: &AppState,
+    signal_type: &str,
+) -> super::types::BuddyRuntimeEvent {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            {
+                let lock = app.buddy.buddy.lock().await;
+                if let Some(event) = lock.as_ref().and_then(|svc| {
+                    svc.runtime_queue
+                        .items
+                        .iter()
+                        .find(|event| event.signal_type == signal_type)
+                        .cloned()
+                }) {
+                    return event;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("runtime event {signal_type} did not arrive"))
+}
+
+#[tokio::test]
+async fn chat_reaction_uses_voice_service_when_available() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let (service, renderer) =
+        crate::buddy::voice_service::test_voice_service_with_responses(vec![Some(
+            "That's a clever rename — I'd sanity-check imports.".to_string(),
+        )]);
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app = make_gcx_with_buddy().await;
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "voice-reaction-chat".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText(
+                "please review this architecture refactor and rename imports".to_string(),
+            ),
+        },
+    )
+    .await;
+
+    let ev = wait_for_runtime_event(&app, "speech_insight").await;
+    assert_eq!(
+        ev.speech_text.as_deref(),
+        Some("That's a clever rename — I'd sanity-check imports.")
+    );
+    assert_eq!(ev.signal_type, "speech_insight");
+    assert_eq!(
+        renderer.intent_kinds(),
+        vec!["speech:chat_reaction_insight".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn chat_reaction_empty_voice_response_falls_back_to_template() {
+    use super::chat_reactions::{AcceptedUserMessage, INSIGHT_LINES, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let (service, _renderer) =
+        crate::buddy::voice_service::test_voice_service_with_responses(vec![None]);
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app = make_gcx_with_buddy().await;
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "fallback-reaction-chat".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText("design a new architecture for services".to_string()),
+        },
+    )
+    .await;
+
+    let ev = wait_for_runtime_event(&app, "speech_insight").await;
+    let speech = ev.speech_text.as_deref().unwrap_or_default();
+    assert!(
+        INSIGHT_LINES.contains(&speech),
+        "speech_text must fall back to INSIGHT_LINES, got: {}",
+        speech
+    );
+}
+
+#[tokio::test]
+async fn chat_reaction_generated_text_is_redacted_before_storage() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let (service, _renderer) = crate::buddy::voice_service::test_voice_service_with_responses(
+        vec![Some("hey use sk-FAKE12345 to test".to_string())],
+    );
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app = make_gcx_with_buddy().await;
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "redacted-reaction-chat".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText("design a security architecture review".to_string()),
+        },
+    )
+    .await;
+
+    let ev = wait_for_runtime_event(&app, "speech_insight").await;
+    let speech = ev.speech_text.as_deref().unwrap_or_default();
+    assert!(!speech.contains("FAKE12345"));
+    assert!(!speech.contains("sk-FAKE12345"));
+}
+
+#[tokio::test]
+async fn maybe_enqueue_chat_reaction_does_not_block_on_voice_service() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let (service, _renderer) =
+        crate::buddy::voice_service::test_voice_service_with_delayed_responses(
+            vec![Some("slow insight".to_string())],
+            std::time::Duration::from_millis(500),
+        );
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app = make_gcx_with_buddy().await;
+
+    let start = std::time::Instant::now();
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "non-blocking-reaction-chat".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText("design a new architecture for imports".to_string()),
+        },
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(50),
+        "maybe_enqueue_chat_reaction blocked for {:?}",
+        elapsed
+    );
+    let ev = wait_for_runtime_event(&app, "speech_insight").await;
+    assert_eq!(ev.speech_text.as_deref(), Some("slow insight"));
+}
+
+#[tokio::test]
+async fn maybe_enqueue_emits_when_message_observation_disabled() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let (service, _renderer) =
+        crate::buddy::voice_service::test_voice_service_with_responses(vec![None]);
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app = make_gcx_with_buddy().await;
+    {
+        let mut lock = app.buddy.buddy.lock().await;
+        let svc = lock.as_mut().unwrap();
+        svc.settings.message_observation_enabled = false;
+        svc.settings.chat_reactions_enabled = true;
+    }
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "message-observation-off-reaction-chat".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText("the upload is not working anymore".to_string()),
+        },
+    )
+    .await;
+
+    let ev = wait_for_runtime_event(&app, "chat_bug_candidate").await;
+    assert_eq!(ev.signal_type, "chat_bug_candidate");
 }
 
 #[tokio::test]
@@ -8380,6 +8564,9 @@ async fn bug_reaction_not_blocked_by_humor_cooldown() {
     use crate::call_validation::ChatContent;
     use crate::chat::types::ThreadParams;
 
+    let (service, _renderer) =
+        crate::buddy::voice_service::test_voice_service_with_responses(vec![None, None]);
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
     let gcx = crate::global_context::tests::make_test_gcx().await;
     let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
     *app.buddy.buddy.lock().await = Some(make_service());
@@ -8408,10 +8595,10 @@ async fn bug_reaction_not_blocked_by_humor_cooldown() {
     )
     .await;
 
-    let buddy_arc = app.buddy.buddy.clone();
-    let lock = buddy_arc.lock().await;
-    let svc = lock.as_ref().unwrap();
-    let items: Vec<_> = svc.runtime_queue.items.iter().collect();
+    let _ = wait_for_runtime_event(&app, "speech_humor").await;
+    let _ = wait_for_runtime_event(&app, "chat_bug_candidate").await;
+    let lock = app.buddy.buddy.lock().await;
+    let items: Vec<_> = lock.as_ref().unwrap().runtime_queue.items.iter().collect();
     assert!(
         items.iter().any(|e| e.signal_type == "speech_humor"),
         "humor event must be in queue"
