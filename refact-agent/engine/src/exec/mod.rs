@@ -1,3 +1,4 @@
+pub mod pty;
 pub mod registry;
 pub mod spawn;
 pub mod transcript;

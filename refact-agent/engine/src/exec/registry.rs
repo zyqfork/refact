@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ pub(crate) enum ExecProcessCommand {
 pub(crate) struct ExecProcessRuntime {
     pub control_tx: mpsc::Sender<ExecProcessCommand>,
     pub terminal: Arc<Notify>,
+    pub stdin_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
 }
 
 impl Clone for ExecProcessRuntime {
@@ -32,6 +34,7 @@ impl Clone for ExecProcessRuntime {
         Self {
             control_tx: self.control_tx.clone(),
             terminal: self.terminal.clone(),
+            stdin_writer: self.stdin_writer.clone(),
         }
     }
 }
@@ -314,6 +317,35 @@ impl ExecRegistry {
             .get(process_id)
             .map(|record| record.transcript.read(since_seq, limit))
             .unwrap_or_else(|| ExecReadResult::not_found(process_id.clone(), since_seq))
+    }
+
+    pub async fn write_stdin(
+        &self,
+        process_id: &ExecProcessId,
+        bytes: &[u8],
+    ) -> Result<usize, String> {
+        let writer = {
+            let records = self.records.lock().await;
+            let record = records
+                .get(process_id)
+                .ok_or_else(|| format!("process not found: {process_id}"))?;
+            if record.snapshot.status.is_terminal() {
+                return Err(format!("process is not running: {process_id}"));
+            }
+            record
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.stdin_writer.clone())
+                .ok_or_else(|| format!("process stdin is not available: {process_id}"))?
+        };
+        let mut writer = writer.lock().await;
+        writer
+            .write_all(bytes)
+            .map_err(|error| format!("failed to write stdin: {error}"))?;
+        writer
+            .flush()
+            .map_err(|error| format!("failed to flush stdin: {error}"))?;
+        Ok(bytes.len())
     }
 
     pub async fn set_status(
@@ -1156,6 +1188,7 @@ mod tests {
                 ExecProcessRuntime {
                     control_tx,
                     terminal: Arc::new(Notify::new()),
+                    stdin_writer: None,
                 },
             )
             .await
@@ -1199,6 +1232,7 @@ mod tests {
                 ExecProcessRuntime {
                     control_tx,
                     terminal: Arc::new(Notify::new()),
+                    stdin_writer: None,
                 },
             )
             .await

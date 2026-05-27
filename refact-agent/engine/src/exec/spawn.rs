@@ -1,8 +1,10 @@
+use std::io::{Read, Write};
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use portable_pty::{CommandBuilder, MasterPty};
 use process_wrap::tokio::{TokioChildWrapper, TokioCommandWrap};
 #[cfg(unix)]
 use process_wrap::tokio::ProcessGroup;
@@ -15,7 +17,7 @@ use tokio::task::JoinHandle;
 use crate::exec::registry::{ExecProcessCommand, ExecProcessRuntime};
 use crate::exec::types::{
     ExecMode, ExecOutputStream, ExecProcessId, ExecProcessMeta, ExecProcessSnapshot,
-    ExecReadinessProbe, ExecSpawnRequest, ExecStatus,
+    ExecReadinessProbe, ExecSpawnRequest, ExecStatus, EXEC_ENV_DEFAULTS,
 };
 use crate::exec::ExecRegistry;
 use crate::integrations::process_io_utils::is_someone_listening_on_that_tcp_port;
@@ -31,21 +33,82 @@ pub struct ExecSpawnResult {
     pub snapshot: ExecProcessSnapshot,
 }
 
-fn shell_command(request: &ExecSpawnRequest) -> Result<tokio::process::Command, String> {
+struct PtyRuntimeProcess {
+    child: Box<dyn portable_pty::Child + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    _master: Box<dyn MasterPty + Send>,
+}
+
+enum RuntimeChild {
+    Tokio(Box<dyn TokioChildWrapper>),
+    Pty(PtyRuntimeProcess),
+}
+
+impl RuntimeChild {
+    fn is_pty(&self) -> bool {
+        matches!(self, RuntimeChild::Pty(_))
+    }
+
+    fn start_kill(&mut self) -> Result<(), String> {
+        match self {
+            RuntimeChild::Tokio(child) => child
+                .start_kill()
+                .map_err(|error| format!("failed to kill process: {error}")),
+            RuntimeChild::Pty(process) => {
+                #[cfg(unix)]
+                {
+                    if let Ok(mut writer) = process.writer.try_lock() {
+                        let _ = writer.write_all(&[3]);
+                        let _ = writer.flush();
+                    }
+                }
+                process
+                    .child
+                    .kill()
+                    .map_err(|error| format!("failed to kill process: {error}"))
+            }
+        }
+    }
+
+    fn try_wait_exit_code(&mut self) -> Result<Option<Option<i32>>, String> {
+        match self {
+            RuntimeChild::Tokio(child) => child
+                .try_wait()
+                .map(|status| status.map(|status| status.code()))
+                .map_err(|error| format!("failed to check process status: {error}")),
+            RuntimeChild::Pty(process) => process
+                .child
+                .try_wait()
+                .map(|status| status.map(|status| Some(status.exit_code() as i32)))
+                .map_err(|error| format!("failed to check process status: {error}")),
+        }
+    }
+}
+
+fn shell_parts() -> (&'static str, &'static str) {
+    if cfg!(target_os = "windows") {
+        ("powershell.exe", "-Command")
+    } else {
+        ("sh", "-c")
+    }
+}
+
+fn ensure_command_is_not_empty(request: &ExecSpawnRequest) -> Result<(), String> {
     if request.command.trim().is_empty() {
         return Err("Command is empty".to_string());
     }
+    Ok(())
+}
 
-    let shell = if cfg!(target_os = "windows") {
-        "powershell.exe"
-    } else {
-        "sh"
-    };
-    let shell_arg = if cfg!(target_os = "windows") {
-        "-Command"
-    } else {
-        "-c"
-    };
+fn apply_exec_env_defaults_to_pty(command: &mut CommandBuilder) {
+    for (key, value) in EXEC_ENV_DEFAULTS {
+        command.env(key, value);
+    }
+}
+
+fn shell_command(request: &ExecSpawnRequest) -> Result<tokio::process::Command, String> {
+    ensure_command_is_not_empty(request)?;
+    let (shell, shell_arg) = shell_parts();
     let mut command = tokio::process::Command::new(shell);
     command.kill_on_drop(true);
     command.arg(shell_arg).arg(&request.command);
@@ -59,6 +122,46 @@ fn shell_command(request: &ExecSpawnRequest) -> Result<tokio::process::Command, 
         command.env(key, value);
     }
     Ok(command)
+}
+
+fn pty_command(request: &ExecSpawnRequest) -> Result<CommandBuilder, String> {
+    ensure_command_is_not_empty(request)?;
+    let (shell, shell_arg) = shell_parts();
+    let mut command = CommandBuilder::new(shell);
+    command.arg(shell_arg);
+    command.arg(&request.command);
+    if let Some(cwd) = request.cwd.as_ref() {
+        command.cwd(cwd.as_os_str());
+    }
+    apply_exec_env_defaults_to_pty(&mut command);
+    for (key, value) in &request.env {
+        command.env(key, value);
+    }
+    Ok(command)
+}
+
+fn build_process_meta(
+    request: &ExecSpawnRequest,
+) -> Result<(ExecProcessMeta, ExecProcessId), String> {
+    let owner = request.owner.clone().with_normalized_workspace();
+    let mut meta = ExecProcessMeta::new(request.mode.clone(), request.command.clone())
+        .with_owner(owner.clone());
+    if matches!(request.mode, ExecMode::Service) {
+        let service_name = request
+            .owner
+            .service_name
+            .as_deref()
+            .ok_or_else(|| "service mode requires service_name".to_string())?;
+        meta = meta.with_process_id(ExecProcessId::for_service(service_name, &owner));
+    }
+    if let Some(cwd) = request.cwd.clone() {
+        meta = meta.with_cwd(cwd);
+    }
+    if let Some(short_description) = request.short_description.clone() {
+        meta = meta.with_short_description(short_description);
+    }
+    let process_id = meta.process_id.clone();
+    Ok((meta, process_id))
 }
 
 fn wrap_command(command: tokio::process::Command) -> TokioCommandWrap {
@@ -102,6 +205,36 @@ fn pump_output(
     })
 }
 
+fn pump_blocking_output(
+    registry: ExecRegistry,
+    process_id: crate::exec::types::ExecProcessId,
+    stream: ExecOutputStream,
+    mut reader: Box<dyn Read + Send>,
+) -> JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        let mut buffer = [0; PIPE_READ_BYTES];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let text = output_to_text(&buffer[..bytes_read]);
+                    if !text.is_empty() {
+                        let _ = futures::executor::block_on(registry.append_output(
+                            &process_id,
+                            stream.clone(),
+                            text,
+                        ));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("exec output pump failed for {process_id}: {error}");
+                    break;
+                }
+            }
+        }
+    })
+}
+
 async fn await_pump(handle: JoinHandle<()>) {
     let _ = handle.await;
 }
@@ -124,10 +257,28 @@ async fn finish_pumps_with_timeout(
     }
 }
 
-async fn kill_and_reap(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> Result<(), String> {
-    let mut child = child.lock().await;
-    let kill_result = child.start_kill();
-    let wait_result = tokio::time::timeout(KILL_REAP_TIMEOUT, Box::into_pin(child.wait())).await;
+async fn kill_and_reap(child: &Arc<Mutex<RuntimeChild>>) -> Result<(), String> {
+    let kill_result = {
+        let mut child = child.lock().await;
+        child.start_kill()
+    };
+    let wait_result = tokio::time::timeout(KILL_REAP_TIMEOUT, wait_child_by_polling(child)).await;
+    kill_reap_result(kill_result, wait_result)
+}
+
+async fn wait_child_by_polling(child: &Arc<Mutex<RuntimeChild>>) -> Result<Option<i32>, String> {
+    loop {
+        match try_wait_child(child).await? {
+            Some(exit_code) => return Ok(exit_code),
+            None => tokio::time::sleep(ABORT_POLL_INTERVAL).await,
+        }
+    }
+}
+
+fn kill_reap_result(
+    kill_result: Result<(), String>,
+    wait_result: Result<Result<Option<i32>, String>, tokio::time::error::Elapsed>,
+) -> Result<(), String> {
     match (kill_result, wait_result) {
         (Ok(()), Ok(Ok(_))) => Ok(()),
         (Err(kill_error), Ok(Ok(_))) => Err(format!("failed to kill process: {kill_error}")),
@@ -147,25 +298,31 @@ async fn kill_unregistered_child(mut child: Box<dyn TokioChildWrapper>) {
     let _ = tokio::time::timeout(KILL_REAP_TIMEOUT, Box::into_pin(child.wait())).await;
 }
 
-async fn wait_child(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> Result<Option<i32>, String> {
+async fn wait_child(child: &Arc<Mutex<RuntimeChild>>) -> Result<Option<i32>, String> {
+    let is_pty = {
+        let child = child.lock().await;
+        child.is_pty()
+    };
+    if is_pty {
+        return wait_child_by_polling(child).await;
+    }
+
     let mut child = child.lock().await;
+    let RuntimeChild::Tokio(child) = &mut *child else {
+        unreachable!();
+    };
     let status = Box::into_pin(child.wait())
         .await
         .map_err(|error| format!("failed to wait for process: {error}"))?;
     Ok(status.code())
 }
 
-async fn try_wait_child(
-    child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>,
-) -> Result<Option<Option<i32>>, String> {
+async fn try_wait_child(child: &Arc<Mutex<RuntimeChild>>) -> Result<Option<Option<i32>>, String> {
     let mut child = child.lock().await;
-    child
-        .try_wait()
-        .map(|status| status.map(|status| status.code()))
-        .map_err(|error| format!("failed to check process status: {error}"))
+    child.try_wait_exit_code()
 }
 
-async fn status_or_killed(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> ExecStatus {
+async fn status_or_killed(child: &Arc<Mutex<RuntimeChild>>) -> ExecStatus {
     match try_wait_child(child).await {
         Ok(Some(exit_code)) => ExecStatus::Exited { exit_code },
         Ok(None) => ExecStatus::Killed,
@@ -173,7 +330,7 @@ async fn status_or_killed(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> Exe
     }
 }
 
-async fn status_or_timed_out(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> ExecStatus {
+async fn status_or_timed_out(child: &Arc<Mutex<RuntimeChild>>) -> ExecStatus {
     match try_wait_child(child).await {
         Ok(Some(exit_code)) => ExecStatus::Exited { exit_code },
         Ok(None) => ExecStatus::TimedOut,
@@ -184,7 +341,7 @@ async fn status_or_timed_out(child: &Arc<Mutex<Box<dyn TokioChildWrapper>>>) -> 
 async fn monitor_process(
     registry: ExecRegistry,
     process_id: ExecProcessId,
-    child: Arc<Mutex<Box<dyn TokioChildWrapper>>>,
+    child: Arc<Mutex<RuntimeChild>>,
     mut control_rx: mpsc::Receiver<ExecProcessCommand>,
     timeout: Option<Duration>,
     abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -339,26 +496,13 @@ async fn wait_for_readiness(
 
 impl ExecRegistry {
     pub async fn spawn(&self, request: ExecSpawnRequest) -> Result<ExecSpawnResult, String> {
+        if request.tty {
+            return self.spawn_pty(request).await;
+        }
+
         let mut command = wrap_command(shell_command(&request)?);
-        let owner = request.owner.clone().with_normalized_workspace();
-        let mut meta = ExecProcessMeta::new(request.mode.clone(), request.command.clone())
-            .with_owner(owner.clone());
-        if matches!(request.mode, ExecMode::Service) {
-            let service_name = request
-                .owner
-                .service_name
-                .as_deref()
-                .ok_or_else(|| "service mode requires service_name".to_string())?;
-            meta = meta.with_process_id(ExecProcessId::for_service(service_name, &owner));
-        }
-        if let Some(cwd) = request.cwd.clone() {
-            meta = meta.with_cwd(cwd);
-        }
-        if let Some(short_description) = request.short_description.clone() {
-            meta = meta.with_short_description(short_description);
-        }
+        let (meta, process_id) = build_process_meta(&request)?;
         let startup_wait = request.startup_wait;
-        let process_id = meta.process_id.clone();
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => return Err(format!("failed to spawn command: {error}")),
@@ -377,7 +521,7 @@ impl ExecRegistry {
                 return Err("failed to capture stderr".to_string());
             }
         };
-        let child = Arc::new(Mutex::new(child));
+        let child = Arc::new(Mutex::new(RuntimeChild::Tokio(child)));
         let (control_tx, control_rx) = mpsc::channel(8);
         let terminal = Arc::new(Notify::new());
         if let Err(message) = self
@@ -387,6 +531,7 @@ impl ExecRegistry {
                 ExecProcessRuntime {
                     control_tx,
                     terminal,
+                    stdin_writer: None,
                 },
                 matches!(request.mode, ExecMode::Foreground),
             )
@@ -407,6 +552,89 @@ impl ExecRegistry {
             ExecOutputStream::Stderr,
             stderr,
         );
+        tokio::spawn(monitor_process(
+            self.clone(),
+            process_id.clone(),
+            child,
+            control_rx,
+            request.timeout,
+            request.abort_flag.clone(),
+            stdout_task,
+            stderr_task,
+        ));
+        let snapshot = self.mark_started(&process_id).await?;
+        if matches!(request.mode, ExecMode::Foreground) {
+            return Ok(ExecSpawnResult {
+                snapshot: self.wait(&process_id).await?,
+            });
+        }
+        if let Some(readiness) = request.readiness.as_ref() {
+            let startup_wait = startup_wait.unwrap_or(Duration::from_secs(10));
+            if let Err(message) =
+                wait_for_readiness(self, &process_id, readiness, startup_wait).await
+            {
+                if let Ok(snapshot) = self
+                    .finish_with_status(
+                        &process_id,
+                        ExecStatus::Failed {
+                            message: message.clone(),
+                        },
+                    )
+                    .await
+                {
+                    return Ok(ExecSpawnResult { snapshot });
+                }
+                let snapshot = self
+                    .mark_failed(&process_id, message)
+                    .await
+                    .unwrap_or_else(|_| snapshot.clone());
+                return Ok(ExecSpawnResult { snapshot });
+            }
+        } else if let Some(startup_wait) = startup_wait {
+            tokio::time::sleep(startup_wait).await;
+        }
+        Ok(ExecSpawnResult {
+            snapshot: self.get(&process_id).await.unwrap_or(snapshot),
+        })
+    }
+
+    async fn spawn_pty(&self, request: ExecSpawnRequest) -> Result<ExecSpawnResult, String> {
+        let command = pty_command(&request)?;
+        let (meta, process_id) = build_process_meta(&request)?;
+        let startup_wait = request.startup_wait;
+        let (pty_handle, child) =
+            crate::exec::pty::spawn_pty(command, crate::exec::pty::default_pty_size())?;
+        let stdin_writer = Arc::new(Mutex::new(pty_handle.writer));
+        let child = Arc::new(Mutex::new(RuntimeChild::Pty(PtyRuntimeProcess {
+            child,
+            writer: stdin_writer.clone(),
+            _master: pty_handle.master,
+        })));
+        let (control_tx, control_rx) = mpsc::channel(8);
+        let terminal = Arc::new(Notify::new());
+        if let Err(message) = self
+            .register_new_with_runtime(
+                meta,
+                request.output_limits.transcript_max_bytes,
+                ExecProcessRuntime {
+                    control_tx,
+                    terminal,
+                    stdin_writer: Some(stdin_writer),
+                },
+                matches!(request.mode, ExecMode::Foreground),
+            )
+            .await
+        {
+            kill_and_reap(&child).await?;
+            return Err(message);
+        }
+        let stdout_task = pump_blocking_output(
+            self.clone(),
+            process_id.clone(),
+            ExecOutputStream::Combined,
+            pty_handle.reader,
+        );
+        let stderr_task = tokio::spawn(async {});
         tokio::spawn(monitor_process(
             self.clone(),
             process_id.clone(),
@@ -519,6 +747,31 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn tty_false_unchanged() {
+        let registry = ExecRegistry::new();
+        let command = if cfg!(windows) {
+            "[Console]::Out.Write('hi')"
+        } else {
+            "printf hi"
+        };
+        let result = registry
+            .spawn(ExecSpawnRequest::foreground(shell_script(command)).with_tty(false))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.snapshot.status,
+            ExecStatus::Exited { exit_code: Some(0) }
+        );
+        let read = registry
+            .read(&result.snapshot.meta.process_id, 0, None)
+            .await;
+        assert_eq!(read.chunks.len(), 1);
+        assert_eq!(read.chunks[0].stream, ExecOutputStream::Stdout);
+        assert_eq!(read.chunks[0].text, "hi");
     }
 
     #[tokio::test]
@@ -716,6 +969,7 @@ mod tests {
                 ExecProcessRuntime {
                     control_tx: replacement_tx,
                     terminal: Arc::new(Notify::new()),
+                    stdin_writer: None,
                 },
             )
             .await

@@ -10,6 +10,18 @@ use uuid::Uuid;
 
 const SHORT_DESC_MAX_LEN: usize = 80;
 pub const DEFAULT_EXEC_OUTPUT_LIMIT_BYTES: usize = 512 * 1024;
+pub const EXEC_ENV_DEFAULTS: &[(&str, &str)] = &[
+    ("NO_COLOR", "1"),
+    ("TERM", "dumb"),
+    ("LANG", "C.UTF-8"),
+    ("LC_CTYPE", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
+    ("COLORTERM", ""),
+    ("PAGER", "cat"),
+    ("GIT_PAGER", "cat"),
+    ("GH_PAGER", "cat"),
+    ("REFACT_EXEC", "1"),
+];
 
 pub(crate) fn normalize_workspace_path(path: &Path) -> PathBuf {
     let normalized = dunce::canonicalize(path).unwrap_or_else(|_| lexical_normalize_path(path));
@@ -242,6 +254,7 @@ pub struct ExecSpawnRequest {
     pub cwd: Option<PathBuf>,
     pub env: HashMap<String, String>,
     pub mode: ExecMode,
+    pub tty: bool,
     pub timeout: Option<Duration>,
     pub startup_wait: Option<Duration>,
     pub readiness: Option<ExecReadinessProbe>,
@@ -258,6 +271,7 @@ impl ExecSpawnRequest {
             cwd: None,
             env: HashMap::new(),
             mode,
+            tty: false,
             timeout: None,
             startup_wait: None,
             readiness: None,
@@ -296,6 +310,11 @@ impl ExecSpawnRequest {
 
     pub fn with_env_map(mut self, env: HashMap<String, String>) -> Self {
         self.env = env;
+        self
+    }
+
+    pub fn with_tty(mut self, tty: bool) -> Self {
+        self.tty = tty;
         self
     }
 
