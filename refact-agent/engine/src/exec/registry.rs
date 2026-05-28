@@ -169,6 +169,21 @@ fn status_exit_code(status: &ExecStatus) -> Option<i32> {
     }
 }
 
+fn stop_rejected_child(mut child: tokio::process::Child, process_group_isolated: bool) {
+    #[cfg(unix)]
+    {
+        if process_group_isolated {
+            if let Some(pid) = child.id() {
+                let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            }
+        }
+    }
+    let _ = child.start_kill();
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+}
+
 async fn write_stdin_bytes(
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     bytes: Vec<u8>,
@@ -369,10 +384,16 @@ impl ExecRegistry {
         &self,
         meta: ExecProcessMeta,
         transcript_limit_bytes: usize,
-        mut child: tokio::process::Child,
+        child: tokio::process::Child,
         process_group_isolated: bool,
-    ) -> ExecProcessSnapshot {
+    ) -> Result<ExecProcessSnapshot, String> {
         let process_id = meta.process_id.clone();
+        if !process_group_isolated {
+            stop_rejected_child(child, false);
+            return Err(format!(
+                "register_with_child requires process_group_isolated=true for cleanup guarantees: {process_id}"
+            ));
+        }
         let mut records = self.records.lock().await;
         if let Some(existing) = records.get(&process_id) {
             if !existing.snapshot.status.is_terminal()
@@ -381,26 +402,19 @@ impl ExecRegistry {
             {
                 let snapshot = existing.snapshot.clone();
                 drop(records);
-                #[cfg(unix)]
-                {
-                    if process_group_isolated {
-                        if let Some(pid) = child.id() {
-                            let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-                        }
-                    }
-                }
-                let _ = child.start_kill();
-                tokio::spawn(async move {
-                    let _ = child.wait().await;
-                });
-                return snapshot;
+                stop_rejected_child(child, process_group_isolated);
+                return Ok(snapshot);
             }
         }
-        let record =
-            ExecProcessRecord::with_child(meta, transcript_limit_bytes, child, process_group_isolated);
+        let record = ExecProcessRecord::with_child(
+            meta,
+            transcript_limit_bytes,
+            child,
+            process_group_isolated,
+        );
         let snapshot = record.snapshot.clone();
         records.insert(process_id, record);
-        snapshot
+        Ok(snapshot)
     }
 
     #[cfg(test)]
@@ -2198,7 +2212,8 @@ mod tests {
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
         registry
             .mark_started(&snapshot.meta.process_id)
             .await
@@ -2226,6 +2241,13 @@ mod tests {
             command.arg("30");
             command
         };
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
         let child = command.spawn().expect("spawn child");
         let child_id = child.id().expect("child id");
         let snapshot = registry
@@ -2237,9 +2259,10 @@ mod tests {
                 ),
                 DEFAULT_MAX_BYTES,
                 child,
-                false,
+                true,
             )
-            .await;
+            .await
+            .unwrap();
         registry
             .mark_started(&snapshot.meta.process_id)
             .await
@@ -2303,7 +2326,8 @@ mod tests {
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
         registry
             .mark_started(&snapshot.meta.process_id)
             .await
@@ -2337,7 +2361,8 @@ mod tests {
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
         registry
             .mark_started(&snapshot.meta.process_id)
             .await
@@ -2376,7 +2401,8 @@ mod tests {
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
         registry
             .mark_started(&snapshot.meta.process_id)
             .await
@@ -2532,7 +2558,8 @@ mod tests {
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
         let process_id = snapshot.meta.process_id.clone();
         registry.mark_started(&process_id).await.unwrap();
 
@@ -2676,16 +2703,28 @@ mod tests {
             cmd.arg("-c").arg("sleep 1");
             cmd
         };
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
         let child = command.spawn().expect("spawn child");
         let second = registry
             .register_with_child(
-                meta("exec_child_guard_active", ExecMode::Background, "echo replacement")
-                    .with_chat_id("chat-b"),
+                meta(
+                    "exec_child_guard_active",
+                    ExecMode::Background,
+                    "echo replacement",
+                )
+                .with_chat_id("chat-b"),
                 DEFAULT_MAX_BYTES,
                 child,
-                false,
+                true,
             )
-            .await;
+            .await
+            .unwrap();
 
         let stored = registry.get(&process_id).await.unwrap();
         assert_eq!(second, stored);
@@ -2827,13 +2866,18 @@ mod tests {
 
         let second = registry
             .register_with_child(
-                meta("exec_child_dup_kill", ExecMode::Background, "echo replacement")
-                    .with_chat_id("chat-b"),
+                meta(
+                    "exec_child_dup_kill",
+                    ExecMode::Background,
+                    "echo replacement",
+                )
+                .with_chat_id("chat-b"),
                 DEFAULT_MAX_BYTES,
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
 
         let stored = registry.get(&process_id).await.unwrap();
         assert_eq!(second, stored);
@@ -2880,40 +2924,113 @@ mod tests {
                 child,
                 true,
             )
-            .await;
+            .await
+            .unwrap();
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         let group_alive = unsafe { libc::kill(-(child_pid as i32), 0) == 0 };
-        assert!(!group_alive, "process group should be fully killed including descendants");
+        assert!(
+            !group_alive,
+            "process group should be fully killed including descendants"
+        );
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn register_with_child_non_isolated_cleanup_succeeds() {
+    async fn register_with_child_isolated_cleanup_succeeds() {
         let registry = ExecRegistry::new();
         let mut command = tokio::process::Command::new("sh");
         command.arg("-c").arg("sleep 30");
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
         let child = command.spawn().expect("spawn child");
         let child_pid = child.id().expect("child pid");
         let snapshot = registry
             .register_with_child(
-                meta("exec_non_isolated_cleanup", ExecMode::Background, "sleep 30"),
+                meta("exec_isolated_cleanup", ExecMode::Background, "sleep 30"),
                 DEFAULT_MAX_BYTES,
                 child,
-                false,
+                true,
             )
-            .await;
-        registry.mark_started(&snapshot.meta.process_id).await.unwrap();
+            .await
+            .unwrap();
+        registry
+            .mark_started(&snapshot.meta.process_id)
+            .await
+            .unwrap();
 
         assert!(process_exists(child_pid));
 
-        let removed = registry.remove(&snapshot.meta.process_id).await.unwrap().unwrap();
+        let removed = registry
+            .remove(&snapshot.meta.process_id)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert!(removed.status.is_terminal());
         assert!(registry.get(&snapshot.meta.process_id).await.is_none());
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!process_exists(child_pid));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn register_with_child_rejects_non_isolated_shell_with_descendant() {
+        let registry = ExecRegistry::new();
+        let temp = tempfile::tempdir().unwrap();
+        let pid_path = temp.path().join("descendant.pid");
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg(format!(
+            "sleep 30 & printf %s $! > {}; sleep 30",
+            pid_path.display()
+        ));
+        let child = command.spawn().expect("spawn child");
+        let child_pid = child.id().expect("child pid");
+
+        for _ in 0..20 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let descendant_pid = std::fs::read_to_string(&pid_path)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+
+        let error = registry
+            .register_with_child(
+                meta(
+                    "exec_reject_non_isolated_child",
+                    ExecMode::Background,
+                    "sleep 30 & sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                child,
+                false,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("process_group_isolated=true"));
+        assert!(registry
+            .get(&ExecProcessId("exec_reject_non_isolated_child".to_string()))
+            .await
+            .is_none());
+        for _ in 0..20 {
+            if !process_exists(child_pid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(!process_exists(child_pid));
+        let _ = unsafe { libc::kill(descendant_pid, libc::SIGKILL) };
+        let _ = unsafe { libc::waitpid(descendant_pid, std::ptr::null_mut(), 0) };
     }
 
     #[tokio::test]
@@ -3012,6 +3129,13 @@ mod tests {
             command.arg("30");
             command
         };
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
         let child = command.spawn().expect("spawn child");
         let snapshot = registry
             .register_with_child(
@@ -3022,9 +3146,10 @@ mod tests {
                 ),
                 DEFAULT_MAX_BYTES,
                 child,
-                false,
+                true,
             )
-            .await;
+            .await
+            .unwrap();
         let process_id = snapshot.meta.process_id.clone();
         registry.mark_started(&process_id).await.unwrap();
         registry
@@ -3196,7 +3321,10 @@ mod tests {
             .unwrap();
 
         let first_result = registry.remove(&process_id).await;
-        assert!(first_result.is_err(), "first remove must fail when runtime does not respond");
+        assert!(
+            first_result.is_err(),
+            "first remove must fail when runtime does not respond"
+        );
         assert!(
             registry.get(&process_id).await.is_some(),
             "record must be retained after first failed remove"
