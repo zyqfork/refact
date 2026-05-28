@@ -308,6 +308,7 @@
 
 .rowFlexBottom {
   grid-template-rows: clamp(180px, 30vh, 360px);
+  grid-auto-rows: clamp(180px, 30vh, 360px);
   min-height: 0;
 }
 
@@ -387,6 +388,7 @@
 @media (max-width: 520px) {
   .rowFlexBottom {
     grid-template-rows: auto;
+    grid-auto-rows: auto;
     min-height: 0;
   }
   .panelScroll {

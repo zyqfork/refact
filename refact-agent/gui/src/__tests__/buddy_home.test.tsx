@@ -169,6 +169,23 @@ function readCssBlock(source: string, selector: string): string {
   throw new Error(`Unclosed CSS block for ${selector}`);
 }
 
+function readCssMediaBlock(source: string, query: string): string {
+  const marker = `@media ${query}`;
+  const start = source.indexOf(marker);
+  if (start === -1) {
+    throw new Error(`Missing CSS media block for ${query}`);
+  }
+  const open = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = open; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) return source.slice(open + 1, i);
+  }
+  throw new Error(`Unclosed CSS media block for ${query}`);
+}
+
 function makeConversation(
   overrides?: Partial<BuddyConversationEntry>,
 ): BuddyConversationEntry {
@@ -3642,11 +3659,12 @@ describe("BuddyHome_bottom_row_bounded_scroll", () => {
     expect(panel.className).toContain("panelScroll");
   });
 
-  it("rowFlexBottom block bounds bottom row sizing", async () => {
+  it("rowFlexBottom block bounds explicit and implicit bottom row sizing", async () => {
     const css = await readGuiSource("features/Buddy/BuddyHome.module.css");
     const block = readCssBlock(css, ".rowFlexBottom");
 
     expect(block).toContain("grid-template-rows: clamp(180px, 30vh, 360px)");
+    expect(block).toContain("grid-auto-rows: clamp(180px, 30vh, 360px)");
     expect(block).toContain("min-height: 0");
     expect(css).not.toContain("max-height: 860px");
   });
@@ -3680,5 +3698,37 @@ describe("BuddyHome_bottom_row_bounded_scroll", () => {
     expect(block).toContain("overflow-x: hidden");
     expect(css).not.toContain("@media (max-width: 720px)");
     expect(css).toContain("@media (max-width: 520px)");
+  });
+
+  it("common IDE stacked media rule does not disable internal bottom scrolling", async () => {
+    const homeCss = await readGuiSource("features/Buddy/BuddyHome.module.css");
+    const homeStackedBlock = readCssMediaBlock(homeCss, "(max-width: 720px)");
+    const recentChatsCss = await readGuiSource(
+      "features/Buddy/BuddyRecentChats.module.css",
+    );
+
+    expect(homeStackedBlock).not.toContain("grid-template-rows: auto");
+    expect(homeStackedBlock).not.toContain("grid-auto-rows: auto");
+    expect(homeStackedBlock).not.toContain("overflow-y: visible");
+    expect(homeStackedBlock).not.toContain("overflow: visible");
+    expect(recentChatsCss).not.toContain("@media (max-width: 720px)");
+  });
+
+  it("tiny width media rule intentionally allows natural bottom-panel expansion", async () => {
+    const homeCss = await readGuiSource("features/Buddy/BuddyHome.module.css");
+    const homeTinyBlock = readCssMediaBlock(homeCss, "(max-width: 520px)");
+    const recentChatsCss = await readGuiSource(
+      "features/Buddy/BuddyRecentChats.module.css",
+    );
+    const recentChatsTinyBlock = readCssMediaBlock(
+      recentChatsCss,
+      "(max-width: 520px)",
+    );
+
+    expect(homeTinyBlock).toContain("grid-template-rows: auto");
+    expect(homeTinyBlock).toContain("grid-auto-rows: auto");
+    expect(homeTinyBlock).toContain("overflow: visible");
+    expect(homeTinyBlock).toContain("overflow-y: visible");
+    expect(recentChatsTinyBlock).toContain("overflow-y: visible");
   });
 });
