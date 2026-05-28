@@ -492,7 +492,6 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(true)),
             Some(Arc::new(Notify::new())),
-            |_| async { false },
         )
         .await;
 
@@ -506,12 +505,7 @@ mod tests {
         let abort_notify = Arc::new(Notify::new());
         let run = tokio::spawn({
             let abort_flag = abort_flag.clone();
-            async move {
-                sleep_with_ticks(2_000, None, abort_flag, Some(abort_notify), |_| async {
-                    false
-                })
-                .await
-            }
+            async move { sleep_with_ticks(2_000, None, abort_flag, Some(abort_notify)).await }
         });
 
         sleep(Duration::from_millis(20)).await;
@@ -558,8 +552,8 @@ mod tests {
             config_path: String::new(),
         };
         let args = HashMap::from([
-            ("duration_ms".to_string(), json!(100)),
-            ("tick_interval_ms".to_string(), json!(50)),
+            ("duration_ms".to_string(), json!(5_100)),
+            ("tick_interval_ms".to_string(), json!(5_000)),
             ("description".to_string(), json!("wait")),
         ]);
         let run = tokio::spawn(async move {
@@ -567,7 +561,7 @@ mod tests {
                 .await
                 .unwrap()
         });
-        tokio::time::advance(Duration::from_millis(150)).await;
+        tokio::time::advance(Duration::from_millis(5_100)).await;
         let (_, results) = run.await.unwrap();
 
         let mut session = session_arc.lock().await;

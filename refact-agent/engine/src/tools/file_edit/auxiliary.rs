@@ -1686,7 +1686,10 @@ mod tests {
                 .tool_execute(
                     ccx.clone(),
                     &tool_call_id,
-                    &args(vec![("command", json!(pwd_command()))]),
+                    &args(vec![
+                        ("command", json!(pwd_command())),
+                        ("description", json!("Print the active worktree directory")),
+                    ]),
                 )
                 .await
                 .unwrap();
@@ -1708,6 +1711,7 @@ mod tests {
                     &tool_call_id,
                     &args(vec![
                         ("command", json!(pwd_command())),
+                        ("description", json!("Print the mapped workdir directory")),
                         ("workdir", path_value(&f.source.join("src"))),
                     ]),
                 )
@@ -1723,6 +1727,7 @@ mod tests {
                     &tool_call_id,
                     &args(vec![
                         ("command", json!(pwd_command())),
+                        ("description", json!("Print the outside workdir directory")),
                         ("workdir", path_value(&f.outside)),
                     ]),
                 )

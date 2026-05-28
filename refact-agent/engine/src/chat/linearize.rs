@@ -34,7 +34,10 @@ fn summary_content(msg: &ChatMessage) -> String {
 
 pub fn apply_summarization_linearize(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     if !messages.iter().any(|m| is_authoritative_summary(m)) {
-        return messages;
+        return messages
+            .into_iter()
+            .filter(|message| message.role != "summarization")
+            .collect();
     }
 
     let summaries: Vec<(usize, usize, String)> = messages

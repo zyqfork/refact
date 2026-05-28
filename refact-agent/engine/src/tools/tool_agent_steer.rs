@@ -726,9 +726,43 @@ mod tests {
             test_card("doing", Some("agent-chat-1".to_string())),
         )
         .await;
+        let mut tool_result = ChatMessage::new("tool".to_string(), "x".repeat(80_000));
+        tool_result.tool_call_id = "call-large".to_string();
         let messages = vec![
             ChatMessage::new("user".to_string(), "hi".to_string()),
-            ChatMessage::new("tool".to_string(), "x".repeat(40_000)),
+            ChatMessage {
+                role: "context_file".to_string(),
+                content: ChatContent::ContextFiles(vec![refact_core::chat_types::ContextFile {
+                    file_name: "foo.rs".to_string(),
+                    file_content: "old".to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "context_file".to_string(),
+                content: ChatContent::ContextFiles(vec![refact_core::chat_types::ContextFile {
+                    file_name: "foo.rs".to_string(),
+                    file_content: "new".to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                tool_calls: Some(vec![refact_core::chat_types::ChatToolCall {
+                    id: "call-large".to_string(),
+                    tool_type: "function".to_string(),
+                    function: refact_core::chat_types::ChatToolFunction {
+                        name: "shell".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                    index: Some(0),
+                    extra_content: None,
+                }]),
+                ..Default::default()
+            },
+            tool_result,
         ];
         let mock = Arc::new(MockChatFacade::with_messages(
             SessionState::Completed,

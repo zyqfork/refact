@@ -53,8 +53,7 @@ fn snapshot_chronological_plan_wire_body() {
   "max_tokens": 4096,
   "stream_options": {
     "include_usage": true
-  },
-  "temperature": 1.0
+  }
 }
 "###);
 }
