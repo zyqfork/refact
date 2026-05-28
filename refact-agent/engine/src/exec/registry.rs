@@ -14,7 +14,10 @@ use crate::exec::types::{
     ExecStatus, ExecWriteStdinResult,
 };
 
+#[cfg(not(test))]
 const REMOVE_KILL_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const REMOVE_KILL_TIMEOUT: Duration = Duration::from_millis(200);
 const PROCESS_COMPLETION_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_OUTPUT_CHANNEL_CAPACITY: usize = 4096;
 const STDIN_OUTPUT_QUIET_PERIOD: Duration = Duration::from_millis(100);
@@ -231,6 +234,7 @@ enum ExecCleanupOutcome {
 
 enum ExecRemoveTargetKind {
     Runtime,
+    TerminalRuntime,
     Child,
 }
 
@@ -862,6 +866,13 @@ impl ExecRegistry {
                 runtime: None,
                 child: record.child.take(),
             });
+        } else if let Some(runtime) = record.runtime.clone() {
+            return Some(ExecRemoveTarget {
+                process_id: process_id.clone(),
+                kind: ExecRemoveTargetKind::TerminalRuntime,
+                runtime: Some(runtime),
+                child: None,
+            });
         }
         None
     }
@@ -895,6 +906,45 @@ impl ExecRegistry {
                         if let Some(runtime) = target.runtime {
                             runtime.terminal.notify_waiters();
                         }
+                        Err(message)
+                    }
+                }
+            }
+            ExecRemoveTargetKind::TerminalRuntime => {
+                let Some(runtime) = target.runtime else {
+                    return Err(format!(
+                        "terminal remove target has no runtime: {}",
+                        target.process_id
+                    ));
+                };
+                let (response_tx, response_rx) = oneshot::channel();
+                if runtime
+                    .control_tx
+                    .send(ExecProcessCommand::Kill {
+                        response: response_tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    runtime.terminal.notify_waiters();
+                    return self
+                        .get(&target.process_id)
+                        .await
+                        .ok_or_else(|| format!("process not found: {}", target.process_id));
+                }
+                match tokio::time::timeout(timeout, response_rx).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) => self
+                        .get(&target.process_id)
+                        .await
+                        .ok_or_else(|| format!("process not found: {}", target.process_id)),
+                    Err(_) => {
+                        let message = format!(
+                            "timed out while removing terminal runtime process after {:.3}s",
+                            timeout.as_secs_f64()
+                        );
+                        self.keep_remove_failure(&target.process_id, message.clone(), None)
+                            .await;
                         Err(message)
                     }
                 }
@@ -2766,5 +2816,143 @@ mod tests {
 
         let group_alive = unsafe { libc::kill(-(child_pid as i32), 0) == 0 };
         assert!(!group_alive, "process group should be fully killed including descendants");
+    }
+
+    #[tokio::test]
+    async fn terminal_failed_runtime_remove_sends_kill_and_retains_on_no_response() {
+        let registry = ExecRegistry::new();
+        let (control_tx, mut control_rx) = mpsc::channel::<ExecProcessCommand>(1);
+        let runtime = ExecProcessRuntime {
+            control_tx,
+            terminal: Arc::new(Notify::new()),
+            stdin_writer: None,
+        };
+        let snapshot = registry
+            .register_new_with_runtime(
+                meta(
+                    "exec_terminal_runtime_kill",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                runtime,
+                false,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry
+            .mark_failed(&process_id, "simulated failure".to_string())
+            .await
+            .unwrap();
+
+        let result = registry.remove(&process_id).await;
+
+        let kill_received = matches!(
+            control_rx.try_recv(),
+            Ok(ExecProcessCommand::Kill { .. })
+        );
+        assert!(kill_received, "Kill command must be sent to runtime on remove");
+        assert!(
+            result.is_err(),
+            "remove must fail when runtime does not respond"
+        );
+        assert!(
+            registry.get(&process_id).await.is_some(),
+            "record must be retained after failed remove"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_failed_runtime_remove_succeeds_when_runtime_already_exited() {
+        let registry = ExecRegistry::new();
+        let (control_tx, control_rx) = mpsc::channel::<ExecProcessCommand>(1);
+        drop(control_rx);
+        let runtime = ExecProcessRuntime {
+            control_tx,
+            terminal: Arc::new(Notify::new()),
+            stdin_writer: None,
+        };
+        let snapshot = registry
+            .register_new_with_runtime(
+                meta(
+                    "exec_terminal_runtime_exited",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                runtime,
+                false,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry
+            .mark_failed(&process_id, "simulated failure".to_string())
+            .await
+            .unwrap();
+
+        let result = registry.remove(&process_id).await;
+
+        assert!(
+            result.unwrap().is_some(),
+            "remove must succeed when runtime channel is closed"
+        );
+        assert!(
+            registry.get(&process_id).await.is_none(),
+            "record must be gone after successful remove"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_runtime_remove_can_retry_after_timeout() {
+        let registry = ExecRegistry::new();
+        let (control_tx, mut control_rx) = mpsc::channel::<ExecProcessCommand>(2);
+        let runtime = ExecProcessRuntime {
+            control_tx,
+            terminal: Arc::new(Notify::new()),
+            stdin_writer: None,
+        };
+        let snapshot = registry
+            .register_new_with_runtime(
+                meta(
+                    "exec_terminal_runtime_retry",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                runtime,
+                false,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry
+            .mark_failed(&process_id, "simulated failure".to_string())
+            .await
+            .unwrap();
+
+        let first_result = registry.remove(&process_id).await;
+        assert!(first_result.is_err(), "first remove must fail when runtime does not respond");
+        assert!(
+            registry.get(&process_id).await.is_some(),
+            "record must be retained after first failed remove"
+        );
+
+        let _ = control_rx.try_recv();
+        drop(control_rx);
+
+        let second_result = registry.remove(&process_id).await;
+        assert!(
+            second_result.unwrap().is_some(),
+            "second remove must succeed when runtime channel is closed"
+        );
+        assert!(
+            registry.get(&process_id).await.is_none(),
+            "record must be gone after second remove"
+        );
     }
 }
