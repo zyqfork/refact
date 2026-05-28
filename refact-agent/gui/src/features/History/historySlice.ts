@@ -103,6 +103,8 @@ export type HistoryState = {
   pagination: {
     cursor: string | null;
     hasMore: boolean;
+    totalCount: number | null;
+    generation: number;
   };
 };
 
@@ -201,6 +203,8 @@ const initialState: HistoryState = {
   pagination: {
     cursor: null,
     hasMore: true,
+    totalCount: null,
+    generation: 0,
   },
 };
 
@@ -415,13 +419,24 @@ export const historySlice = createSlice({
 
     replaceSnapshotHistory: (
       state,
-      action: PayloadAction<TrajectoryMeta[]>,
+      action: PayloadAction<{
+        items: TrajectoryMeta[];
+        append?: boolean;
+        pagination?: {
+          cursor: string | null;
+          hasMore: boolean;
+          totalCount?: number | null;
+        };
+      }>,
     ) => {
-      const snapshotIds = new Set(action.payload.map((m) => m.id));
-      state.chats = Object.fromEntries(
-        Object.entries(state.chats).filter(([id]) => snapshotIds.has(id)),
-      );
-      for (const meta of action.payload) {
+      const { items, append = false, pagination } = action.payload;
+      const snapshotIds = new Set(items.map((m) => m.id));
+      if (!append) {
+        state.chats = Object.fromEntries(
+          Object.entries(state.chats).filter(([id]) => snapshotIds.has(id)),
+        );
+      }
+      for (const meta of items) {
         if (!(meta.id in state.chats)) {
           state.chats[meta.id] = trajectoryMetaToHistoryItem(meta);
         } else {
@@ -454,15 +469,34 @@ export const historySlice = createSlice({
           existing.total_cost_usd = meta.total_cost_usd;
         }
       }
-      state.pagination = { cursor: null, hasMore: false };
+      if (pagination) {
+        state.pagination.cursor = pagination.cursor;
+        state.pagination.hasMore = pagination.hasMore;
+        state.pagination.totalCount = pagination.totalCount ?? null;
+        if (!append) {
+          state.pagination.generation += 1;
+        }
+      } else if (!append) {
+        state.pagination.cursor = null;
+        state.pagination.hasMore = false;
+        state.pagination.totalCount = items.length;
+        state.pagination.generation += 1;
+      }
     },
 
     setPagination: (
       state,
-      action: PayloadAction<{ cursor: string | null; hasMore: boolean }>,
+      action: PayloadAction<{
+        cursor: string | null;
+        hasMore: boolean;
+        totalCount?: number | null;
+      }>,
     ) => {
       state.pagination.cursor = action.payload.cursor;
       state.pagination.hasMore = action.payload.hasMore;
+      if ("totalCount" in action.payload) {
+        state.pagination.totalCount = action.payload.totalCount ?? null;
+      }
     },
 
     deleteChatById: (state, action: PayloadAction<string>) => {
@@ -644,7 +678,12 @@ export const historySlice = createSlice({
         chats: {},
         isLoading: false,
         loadError: null,
-        pagination: { cursor: null, hasMore: true },
+        pagination: {
+          cursor: null,
+          hasMore: true,
+          totalCount: null,
+          generation: 0,
+        },
       };
     },
 

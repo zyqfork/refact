@@ -98,6 +98,7 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
   const history = useAppSelector((state) => state.history.chats, {
     devModeChecks: { stabilityCheck: "never" },
   });
+  const historyPagination = useAppSelector((state) => state.history.pagination);
 
   const [searchQuery, setSearchQuery] = useState("");
   const deferredQuery = useDeferredValue(searchQuery);
@@ -184,6 +185,14 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
     }
   }, [hasMore, isLoadingMore, loadMoreAsync]);
 
+  const totalLabel = showLoading
+    ? "Loading"
+    : historyPagination.totalCount !== null
+      ? `${historyPagination.totalCount} total`
+      : historyPagination.hasMore
+        ? `${filteredTree.length}+ total`
+        : `${filteredTree.length} total`;
+
   return (
     <div className={styles.section} data-collapsed={collapsed || undefined}>
       <div className={styles.header}>
@@ -198,7 +207,7 @@ export const ChatsSection: React.FC<ChatsSectionProps> = ({
           </Text>
           <Flex align="center" gap="1">
             <Text size="1" color="gray">
-              {showLoading ? "Loading" : `${filteredTree.length} total`}
+              {totalLabel}
             </Text>
             {collapsed ? (
               <ChevronDownIcon width={12} height={12} color="var(--gray-9)" />

@@ -1,60 +1,79 @@
 import { useCallback, useState, useRef } from "react";
 import { useAppDispatch } from "./useAppDispatch";
 import { useAppSelector } from "./useAppSelector";
+import type { AppDispatch, RootState } from "../app/store";
 import { trajectoriesApi } from "../services/refact/trajectories";
-import {
-  hydrateHistoryFromMeta,
-  setPagination,
-} from "../features/History/historySlice";
+import { replaceSnapshotHistory } from "../features/History/historySlice";
 
-export function useLoadMoreHistory() {
-  const dispatch = useAppDispatch();
+type LoadMoreHistoryOptions = {
+  dispatchOverride?: AppDispatch;
+};
+
+export function useLoadMoreHistory(options: LoadMoreHistoryOptions = {}) {
+  const appDispatch = useAppDispatch();
+  const dispatch = options.dispatchOverride ?? appDispatch;
   const pagination = useAppSelector((state) => state.history.pagination);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
-  const cursorRef = useRef<string | null>(null);
 
   const loadMore = useCallback(async () => {
     if (loadingRef.current || !pagination.hasMore) return;
     if (!pagination.cursor) return;
-    if (cursorRef.current === pagination.cursor) return;
 
     loadingRef.current = true;
-    cursorRef.current = pagination.cursor;
     setIsLoading(true);
     setError(null);
 
-    try {
-      const result = await dispatch(
-        trajectoriesApi.endpoints.listTrajectoriesPaginated.initiate(
-          {
-            limit: 50,
-            cursor: pagination.cursor,
-          },
-          { forceRefetch: true },
-        ),
-      ).unwrap();
+    const requestedCursor = pagination.cursor;
+    const requestedGeneration = pagination.generation;
+    const request = dispatch(
+      trajectoriesApi.endpoints.listTrajectoriesPaginated.initiate(
+        {
+          limit: 50,
+          cursor: requestedCursor,
+        },
+        { forceRefetch: true, subscribe: false },
+      ),
+    );
 
-      dispatch(hydrateHistoryFromMeta(result.items));
+    try {
+      const result = await request.unwrap();
+
+      const latestPagination = dispatch(
+        (_, getState: () => RootState) => getState().history.pagination,
+      );
+      if (
+        latestPagination.cursor !== requestedCursor ||
+        latestPagination.generation !== requestedGeneration
+      ) {
+        return;
+      }
+
       dispatch(
-        setPagination({
-          cursor: result.next_cursor,
-          hasMore: result.has_more,
+        replaceSnapshotHistory({
+          items: result.items,
+          append: true,
+          pagination: {
+            cursor: result.next_cursor,
+            hasMore: result.has_more,
+            totalCount: result.total_count,
+          },
         }),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load more");
     } finally {
+      request.unsubscribe();
       loadingRef.current = false;
       setIsLoading(false);
     }
-  }, [dispatch, pagination.hasMore, pagination.cursor]);
+  }, [dispatch, pagination.hasMore, pagination.cursor, pagination.generation]);
 
   const retry = useCallback(() => {
     setError(null);
-    cursorRef.current = null;
-  }, []);
+    void loadMore();
+  }, [loadMore]);
 
   return {
     loadMore,

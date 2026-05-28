@@ -19,7 +19,7 @@ use crate::ext::hooks_runner::{HookPayload, get_project_dir_string, run_hooks};
 use super::types::*;
 use super::types::{session_idle_timeout, session_cleanup_interval};
 use super::config::limits;
-use super::trajectories::TrajectoryEvent;
+use super::trajectories::{task_context_from_task_meta, trajectory_meta_title, TrajectoryEvent};
 
 pub(super) fn has_displayable_assistant_content(message: &ChatMessage) -> bool {
     let has_text_content = match &message.content {
@@ -835,6 +835,8 @@ impl ChatSession {
                 .root_chat_id
                 .clone()
                 .unwrap_or_else(|| self.chat_id.clone());
+            let (task_id, task_role, agent_id, card_id) =
+                task_context_from_task_meta(self.thread.task_meta.as_ref());
             let event = TrajectoryEvent {
                 event_type: "updated".to_string(),
                 id: self.chat_id.clone(),
@@ -847,6 +849,10 @@ impl ChatSession {
                 parent_id: self.thread.parent_id.clone(),
                 link_type: self.thread.link_type.clone(),
                 root_chat_id: Some(effective_root),
+                task_id,
+                task_role,
+                agent_id,
+                card_id,
                 model: Some(self.thread.model.clone()),
                 mode: Some(self.thread.mode.clone()),
                 worktree: self.thread.worktree.clone(),
@@ -1197,11 +1203,13 @@ impl ChatSession {
                 .root_chat_id
                 .clone()
                 .unwrap_or_else(|| self.chat_id.clone());
+            let (task_id, task_role, agent_id, card_id) =
+                task_context_from_task_meta(self.thread.task_meta.as_ref());
             let event = TrajectoryEvent {
                 event_type: "updated".to_string(),
                 id: self.chat_id.clone(),
                 updated_at: Some(chrono::Utc::now().to_rfc3339()),
-                title: Some(title),
+                title: Some(trajectory_meta_title(&title)),
                 is_title_generated: Some(self.thread.is_title_generated),
                 session_state: Some(self.runtime.state.to_string()),
                 error: self.runtime.error.clone(),
@@ -1209,6 +1217,10 @@ impl ChatSession {
                 parent_id: self.thread.parent_id.clone(),
                 link_type: self.thread.link_type.clone(),
                 root_chat_id: Some(effective_root),
+                task_id,
+                task_role,
+                agent_id,
+                card_id,
                 model: Some(self.thread.model.clone()),
                 mode: Some(self.thread.mode.clone()),
                 worktree: self.thread.worktree.clone(),

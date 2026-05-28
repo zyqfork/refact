@@ -24,7 +24,6 @@ import {
   updateChatMetaById,
   setHistoryLoading,
   setHistoryLoadError,
-  setPagination,
 } from "../features/History/historySlice";
 import type { ChatHistoryItem } from "../features/History/historySlice";
 import {
@@ -453,7 +452,9 @@ export function useSidebarSubscription() {
 
   const upsertTaskInList = useCallback(
     (task: TaskMeta) => {
-      const filtered = taskListRef.current.filter((item) => item.id !== task.id);
+      const filtered = taskListRef.current.filter(
+        (item) => item.id !== task.id,
+      );
       taskListRef.current = [task, ...filtered].sort((a, b) =>
         b.updated_at.localeCompare(a.updated_at),
       );
@@ -476,7 +477,10 @@ export function useSidebarSubscription() {
     (event: Extract<SidebarSectionUpdate, { type: string }>) => {
       if (event.type === "snapshot") {
         replaceTaskList(event.tasks);
-      } else if (event.type === "task_created" || event.type === "task_updated") {
+      } else if (
+        event.type === "task_created" ||
+        event.type === "task_updated"
+      ) {
         upsertTaskInList(event.meta);
       } else if (event.type === "task_deleted") {
         deleteTaskFromList(event.task_id);
@@ -506,18 +510,26 @@ export function useSidebarSubscription() {
     (
       trajectories: TrajectoryMeta[],
       error?: string,
-      pagination?: { next_cursor: string | null; has_more: boolean },
+      pagination?: {
+        next_cursor: string | null;
+        has_more: boolean;
+        total_count: number;
+      },
     ) => {
       if (trajectories.length > 0 || !error) {
-        dispatch(replaceSnapshotHistory(trajectoryItemsFromMeta(trajectories)));
-        if (pagination) {
-          dispatch(
-            setPagination({
-              cursor: pagination.next_cursor,
-              hasMore: pagination.has_more,
-            }),
-          );
-        }
+        dispatch(
+          replaceSnapshotHistory({
+            items: trajectoryItemsFromMeta(trajectories),
+            append: false,
+            pagination: pagination
+              ? {
+                  cursor: pagination.next_cursor,
+                  hasMore: pagination.has_more,
+                  totalCount: pagination.total_count,
+                }
+              : undefined,
+          }),
+        );
       }
       dispatch(setHistoryLoadError(error ?? null));
       dispatch(setHistoryLoading(false));
@@ -623,7 +635,7 @@ export function useSidebarSubscription() {
           !workspaceRootsEqual(serverWorkspaceRootsRef.current, workspaceRoots);
         if (workspaceChanged) {
           dispatch(sidebarWorkspaceChanged({ subscriptionId }));
-          dispatch(replaceSnapshotHistory([]));
+          dispatch(replaceSnapshotHistory({ items: [] }));
           taskListRef.current = [];
           flushTaskList();
           dispatch(setHistoryLoading(true));

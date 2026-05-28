@@ -56,6 +56,7 @@ export const ConnectionStatusIndicator: React.FC = () => {
         setPagination({
           cursor: trajectoriesResult.next_cursor,
           hasMore: trajectoriesResult.has_more,
+          totalCount: trajectoriesResult.total_count,
         }),
       );
     } finally {

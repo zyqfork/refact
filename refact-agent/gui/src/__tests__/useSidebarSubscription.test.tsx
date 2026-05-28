@@ -736,9 +736,10 @@ describe("useSidebarSubscription", () => {
     const store = renderSidebarSubscription();
 
     await waitFor(() => {
-      expect(store.getState().history.pagination).toEqual({
+      expect(store.getState().history.pagination).toMatchObject({
         cursor: "next-page",
         hasMore: true,
+        totalCount: 51,
       });
       expect(store.getState().history.isLoading).toBe(false);
     });

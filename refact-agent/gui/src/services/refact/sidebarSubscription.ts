@@ -108,7 +108,7 @@ export type SidebarSubscriptionCallbacks = {
 };
 
 const IDLE_TIMEOUT_MS = 30_000;
-const MAX_SSE_BLOCK_BYTES = 1024 * 1024;
+const MAX_SSE_BLOCK_BYTES = 4 * 1024 * 1024;
 
 function hasArrayProperty(obj: Record<string, unknown>, key: string): boolean {
   return Array.isArray(obj[key]);

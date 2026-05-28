@@ -29,7 +29,12 @@ function createHistoryItem(
   };
 }
 
-const defaultPagination = { cursor: null, hasMore: true };
+const defaultPagination = {
+  cursor: null,
+  hasMore: true,
+  totalCount: null,
+  generation: 0,
+};
 
 describe("getHistoryTree", () => {
   it("returns empty array for empty state", () => {
@@ -255,12 +260,159 @@ describe("getHistoryTree", () => {
 });
 
 describe("pagination reducers", () => {
+  it("replaceSnapshotHistory stores pagination metadata with first page", () => {
+    const state: HistoryState = {
+      chats: {},
+      isLoading: false,
+      loadError: null,
+      pagination: {
+        cursor: null,
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
+    };
+
+    const result = historySlice.reducer(
+      state,
+      historySlice.actions.replaceSnapshotHistory({
+        items: [
+          {
+            id: "chat1",
+            title: "Test Chat",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+            model: "gpt-4",
+            mode: "AGENT",
+            message_count: 5,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+            tasks_total: 0,
+            tasks_done: 0,
+            tasks_failed: 0,
+          },
+        ],
+        pagination: { cursor: "next-cursor", hasMore: true, totalCount: 10 },
+      }),
+    );
+
+    expect(result.pagination).toEqual({
+      cursor: "next-cursor",
+      hasMore: true,
+      totalCount: 10,
+      generation: 1,
+    });
+    expect(result.chats.chat1).toBeDefined();
+  });
+
+  it("replaceSnapshotHistory keeps pagination when appending without new metadata", () => {
+    const state: HistoryState = {
+      chats: {
+        chat1: createHistoryItem("chat1", "First"),
+      },
+      isLoading: false,
+      loadError: null,
+      pagination: {
+        cursor: "page-2",
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
+    };
+
+    const result = historySlice.reducer(
+      state,
+      historySlice.actions.replaceSnapshotHistory({
+        append: true,
+        items: [
+          {
+            id: "chat2",
+            title: "Second",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+            model: "gpt-4",
+            mode: "AGENT",
+            message_count: 5,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+            tasks_total: 0,
+            tasks_done: 0,
+            tasks_failed: 0,
+          },
+        ],
+      }),
+    );
+
+    expect(result.chats.chat1).toBeDefined();
+    expect(result.chats.chat2).toBeDefined();
+    expect(result.pagination).toEqual({
+      cursor: "page-2",
+      hasMore: true,
+      totalCount: null,
+      generation: 0,
+    });
+  });
+
+  it("replaceSnapshotHistory appends later pages without pruning existing chats", () => {
+    const state: HistoryState = {
+      chats: {
+        chat1: createHistoryItem("chat1", "First"),
+      },
+      isLoading: false,
+      loadError: null,
+      pagination: {
+        cursor: "page-2",
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
+    };
+
+    const result = historySlice.reducer(
+      state,
+      historySlice.actions.replaceSnapshotHistory({
+        append: true,
+        items: [
+          {
+            id: "chat2",
+            title: "Second",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+            model: "gpt-4",
+            mode: "AGENT",
+            message_count: 5,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+            tasks_total: 0,
+            tasks_done: 0,
+            tasks_failed: 0,
+          },
+        ],
+        pagination: { cursor: null, hasMore: false, totalCount: 2 },
+      }),
+    );
+
+    expect(result.chats.chat1).toBeDefined();
+    expect(result.chats.chat2).toBeDefined();
+    expect(result.pagination).toEqual({
+      cursor: null,
+      hasMore: false,
+      totalCount: 2,
+      generation: 0,
+    });
+  });
+
   it("setPagination updates cursor and hasMore", () => {
     const state: HistoryState = {
       chats: {},
       isLoading: false,
       loadError: null,
-      pagination: { cursor: null, hasMore: true },
+      pagination: {
+        cursor: null,
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(
@@ -280,7 +432,12 @@ describe("pagination reducers", () => {
       chats: {},
       isLoading: false,
       loadError: null,
-      pagination: { cursor: "some-cursor", hasMore: true },
+      pagination: {
+        cursor: "some-cursor",
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(
@@ -302,7 +459,12 @@ describe("error handling reducers", () => {
       chats: {},
       isLoading: true,
       loadError: null,
-      pagination: { cursor: "some-cursor", hasMore: true },
+      pagination: {
+        cursor: "some-cursor",
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(
@@ -321,7 +483,12 @@ describe("error handling reducers", () => {
       chats: {},
       isLoading: false,
       loadError: "Previous error",
-      pagination: { cursor: null, hasMore: true },
+      pagination: {
+        cursor: null,
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(
@@ -337,7 +504,12 @@ describe("error handling reducers", () => {
       chats: {},
       isLoading: false,
       loadError: "Previous error",
-      pagination: { cursor: null, hasMore: true },
+      pagination: {
+        cursor: null,
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(
@@ -356,7 +528,12 @@ describe("session_state handling", () => {
       chats: {},
       isLoading: false,
       loadError: null,
-      pagination: { cursor: null, hasMore: true },
+      pagination: {
+        cursor: null,
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(
@@ -393,7 +570,12 @@ describe("session_state handling", () => {
       },
       isLoading: false,
       loadError: null,
-      pagination: { cursor: null, hasMore: true },
+      pagination: {
+        cursor: null,
+        hasMore: true,
+        totalCount: null,
+        generation: 0,
+      },
     };
 
     const result = historySlice.reducer(

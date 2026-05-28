@@ -156,7 +156,12 @@ describe("Dashboard progressive sidebar readiness", () => {
           chats: {},
           isLoading: false,
           loadError: null,
-          pagination: { cursor: null, hasMore: false },
+          pagination: {
+            cursor: null,
+            hasMore: false,
+            totalCount: null,
+            generation: 0,
+          },
         },
         current_project: {
           name: "",
@@ -201,7 +206,12 @@ describe("Dashboard progressive sidebar readiness", () => {
           chats: {},
           isLoading: true,
           loadError: null,
-          pagination: { cursor: null, hasMore: false },
+          pagination: {
+            cursor: null,
+            hasMore: false,
+            totalCount: null,
+            generation: 0,
+          },
         },
       },
     });
@@ -235,7 +245,12 @@ describe("Dashboard progressive sidebar readiness", () => {
           chats: {},
           isLoading: false,
           loadError: null,
-          pagination: { cursor: null, hasMore: false },
+          pagination: {
+            cursor: null,
+            hasMore: false,
+            totalCount: null,
+            generation: 0,
+          },
         },
         sidebar: READY_SIDEBAR,
       },
@@ -265,7 +280,12 @@ describe("Dashboard progressive sidebar readiness", () => {
           chats: {},
           isLoading: false,
           loadError: null,
-          pagination: { cursor: null, hasMore: false },
+          pagination: {
+            cursor: null,
+            hasMore: false,
+            totalCount: null,
+            generation: 0,
+          },
         },
         sidebar: {
           subscriptionId: "test-sidebar",
@@ -293,7 +313,12 @@ describe("Dashboard progressive sidebar readiness", () => {
           chats: {},
           isLoading: false,
           loadError: null,
-          pagination: { cursor: null, hasMore: false },
+          pagination: {
+            cursor: null,
+            hasMore: false,
+            totalCount: null,
+            generation: 0,
+          },
         },
         sidebar: {
           subscriptionId: "test-sidebar",
@@ -397,7 +422,12 @@ describe("Dashboard progressive sidebar readiness", () => {
           chats: {},
           isLoading: false,
           loadError: "trajectory boom",
-          pagination: { cursor: null, hasMore: false },
+          pagination: {
+            cursor: null,
+            hasMore: false,
+            totalCount: null,
+            generation: 0,
+          },
         },
         sidebar: READY_SIDEBAR,
       },

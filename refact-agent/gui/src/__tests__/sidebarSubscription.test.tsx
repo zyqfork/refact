@@ -317,8 +317,8 @@ describe("useSidebarSubscription", () => {
     disconnect();
   });
 
-  it("sse_block_exceeding_1mib_triggers_reconnect", async () => {
-    server.use(sidebarRawHandler([`data: ${"x".repeat(1024 * 1024 + 1)}`]));
+  it("sse_block_exceeding_4mib_triggers_reconnect", async () => {
+    server.use(sidebarRawHandler([`data: ${"x".repeat(4 * 1024 * 1024 + 1)}`]));
     const { errors, disconnect } = subscribeForTest();
 
     await waitFor(() => {

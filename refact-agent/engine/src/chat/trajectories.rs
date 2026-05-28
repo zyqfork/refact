@@ -92,6 +92,7 @@ use super::config::timeouts;
 use super::SessionsMap;
 
 const TITLE_GENERATION_SUBAGENT_ID: &str = "title_generation";
+const TRAJECTORY_META_TITLE_MAX_CHARS: usize = 120;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrajectoryEvent {
@@ -117,6 +118,14 @@ pub struct TrajectoryEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_chat_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -132,11 +141,17 @@ pub struct TrajectoryEvent {
     pub tasks_done: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tasks_failed: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_cache_creation_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
 }
 
@@ -220,6 +235,20 @@ pub struct TrajectoryData {
     pub messages: Vec<serde_json::Value>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrajectoryListData {
+    id: String,
+    updated_at: String,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+struct TrajectoryListCandidate {
+    id: String,
+    updated_at: String,
+    path: PathBuf,
 }
 
 pub struct LoadedTrajectory {
@@ -344,7 +373,7 @@ pub(crate) async fn list_task_trajectory_dirs(gcx: &Arc<GlobalContext>) -> Vec<P
         };
         while let Ok(Some(task_entry)) = task_entries.next_entry().await {
             let task_dir = task_entry.path();
-            if !task_dir.is_dir() {
+            if !is_real_dir(&task_dir).await {
                 continue;
             }
             for role in ["planner", "agents"] {
@@ -358,7 +387,7 @@ pub(crate) async fn list_task_trajectory_dirs(gcx: &Arc<GlobalContext>) -> Vec<P
 async fn collect_existing_dirs(root: PathBuf, dirs: &mut Vec<PathBuf>) {
     let mut pending = vec![root];
     while let Some(dir) = pending.pop() {
-        if !dir.is_dir() {
+        if !is_real_dir(&dir).await {
             continue;
         }
         dirs.push(dir.clone());
@@ -368,7 +397,7 @@ async fn collect_existing_dirs(root: PathBuf, dirs: &mut Vec<PathBuf>) {
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if path.is_dir() {
+            if is_real_dir(&path).await {
                 pending.push(path);
             }
         }
@@ -1182,7 +1211,7 @@ pub async fn save_trajectory_snapshot(
                 event_type: "updated".to_string(),
                 id: snapshot.chat_id.clone(),
                 updated_at: Some(updated_at),
-                title: Some(snapshot.title.clone()),
+                title: Some(trajectory_meta_title(&snapshot.title)),
                 is_title_generated: Some(snapshot.is_title_generated),
                 session_state: Some(session_state),
                 error: session_error,
@@ -1190,6 +1219,10 @@ pub async fn save_trajectory_snapshot(
                 parent_id: snapshot.parent_id.clone(),
                 link_type: snapshot.link_type.clone(),
                 root_chat_id: Some(effective_root),
+                task_id: None,
+                task_role: None,
+                agent_id: None,
+                card_id: None,
                 model: Some(snapshot.model.clone()),
                 mode: Some(snapshot.mode.clone()),
                 worktree: snapshot.worktree.clone(),
@@ -1320,6 +1353,10 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
                 parent_id: None,
                 link_type: None,
                 root_chat_id: None,
+                task_id: None,
+                task_role: None,
+                agent_id: None,
+                card_id: None,
                 model: None,
                 mode: None,
                 worktree: None,
@@ -1368,7 +1405,7 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
             let tok = calculate_token_totals_from_chat_messages(&t.messages);
             (
                 Some(t.updated_at),
-                Some(t.thread.title),
+                Some(trajectory_meta_title(&t.thread.title)),
                 Some(t.thread.is_title_generated),
                 Some(t.messages.len()),
                 t.thread.parent_id,
@@ -1405,6 +1442,10 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
                 parent_id,
                 link_type,
                 root_chat_id,
+                task_id: None,
+                task_role: None,
+                agent_id: None,
+                card_id: None,
                 model,
                 mode,
                 worktree,
@@ -1547,11 +1588,7 @@ async fn collect_task_trajectory_chat_ids_under_path(
             continue;
         }
 
-        let metadata = match fs::metadata(&path).await {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-        if !metadata.is_dir() {
+        if !is_real_dir(&path).await {
             continue;
         }
 
@@ -1869,6 +1906,16 @@ fn build_title_generation_context(messages: &[serde_json::Value]) -> String {
     context
 }
 
+fn truncate_text_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return text.chars().take(max_chars).collect();
+    }
+    text.chars().take(max_chars - 3).collect::<String>() + "..."
+}
+
 fn clean_generated_title(raw_title: &str) -> String {
     let cleaned = raw_title
         .trim()
@@ -1880,11 +1927,32 @@ fn clean_generated_title(raw_title: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    if cleaned.chars().count() > 60 {
-        cleaned.chars().take(57).collect::<String>() + "..."
-    } else {
-        cleaned
-    }
+    truncate_text_chars(&cleaned, 60)
+}
+
+pub(crate) fn trajectory_meta_title(title: &str) -> String {
+    let cleaned = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_text_chars(&cleaned, TRAJECTORY_META_TITLE_MAX_CHARS)
+}
+
+pub(crate) fn task_context_from_task_meta(
+    task_meta: Option<&super::types::TaskMeta>,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    task_meta
+        .map(|meta| {
+            (
+                Some(meta.task_id.clone()),
+                Some(meta.role.clone()),
+                meta.agent_id.clone(),
+                meta.card_id.clone(),
+            )
+        })
+        .unwrap_or((None, None, None, None))
 }
 
 async fn generate_title_llm(
@@ -2025,7 +2093,7 @@ fn spawn_title_generation_task(
             event_type: "updated".to_string(),
             id: id.clone(),
             updated_at: Some(updated_at),
-            title: Some(title.clone()),
+            title: Some(trajectory_meta_title(&title)),
             is_title_generated: Some(true),
             session_state: Some(session_state),
             error: session_error,
@@ -2033,6 +2101,10 @@ fn spawn_title_generation_task(
             parent_id: None,
             link_type: None,
             root_chat_id: None,
+            task_id: None,
+            task_role: None,
+            agent_id: None,
+            card_id: None,
             model: None,
             mode: None,
             worktree,
@@ -2455,7 +2527,7 @@ fn trajectory_data_to_meta(data: &TrajectoryData) -> TrajectoryMeta {
 
     TrajectoryMeta {
         id: data.id.clone(),
-        title: data.title.clone(),
+        title: trajectory_meta_title(&data.title),
         created_at: data.created_at.clone(),
         updated_at: data.updated_at.clone(),
         model: data.model.clone(),
@@ -2540,6 +2612,65 @@ fn apply_task_trajectory_context(path: &Path, task_roots: &[PathBuf], meta: &mut
     }
 }
 
+async fn collect_trajectory_list_candidates(
+    gcx: &Arc<GlobalContext>,
+    cursor_filter: Option<&(String, String)>,
+) -> Vec<TrajectoryListCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    for trajectories_dir in list_trajectory_dirs(gcx).await {
+        if !is_real_dir(&trajectories_dir).await {
+            continue;
+        }
+        let mut entries = match fs::read_dir(&trajectories_dir).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path).await else {
+                continue;
+            };
+            let Ok(data) = serde_json::from_str::<TrajectoryListData>(&content) else {
+                continue;
+            };
+            if data.extra.get("buddy_meta").map_or(false, |v| !v.is_null()) {
+                continue;
+            }
+            if !seen_ids.insert(data.id.clone()) {
+                continue;
+            }
+            if let Some((cursor_updated_at, cursor_id)) = cursor_filter {
+                if !cursor_precedes_item(
+                    (data.updated_at.as_str(), data.id.as_str()),
+                    (cursor_updated_at.as_str(), cursor_id.as_str()),
+                ) {
+                    continue;
+                }
+            }
+            candidates.push(TrajectoryListCandidate {
+                id: data.id,
+                updated_at: data.updated_at,
+                path,
+            });
+        }
+    }
+
+    candidates
+}
+
+async fn is_real_dir(path: &Path) -> bool {
+    matches!(fs::symlink_metadata(path).await, Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink())
+}
+
+fn cursor_precedes_item(item: (&str, &str), cursor: (&str, &str)) -> bool {
+    item < cursor
+}
+
 pub async fn list_trajectories_page(
     app: AppState,
     limit: usize,
@@ -2554,65 +2685,36 @@ pub async fn list_trajectories_page(
         None => None,
     };
 
-    let mut all_items: Vec<TrajectoryMeta> = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-    let task_roots = get_all_task_roots(gcx.clone()).await;
-
-    for trajectories_dir in list_trajectory_dirs(&gcx).await {
-        if !trajectories_dir.exists() {
-            continue;
-        }
-        let mut entries = match fs::read_dir(&trajectories_dir).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(content) = fs::read_to_string(&path).await {
-                if let Ok(data) = serde_json::from_str::<TrajectoryData>(&content) {
-                    if data.extra.get("buddy_meta").map_or(false, |v| !v.is_null()) {
-                        continue;
-                    }
-                    if seen_ids.insert(data.id.clone()) {
-                        let mut meta = trajectory_data_to_meta_validated(app.clone(), &data).await;
-                        apply_task_trajectory_context(&path, &task_roots, &mut meta);
-                        all_items.push(meta);
-                    }
-                }
-            }
-        }
-    }
-    enrich_with_session_state(app, &mut all_items).await;
-    all_items.sort_by(|a, b| match b.updated_at.cmp(&a.updated_at) {
+    let mut candidates = collect_trajectory_list_candidates(&gcx, cursor_filter.as_ref()).await;
+    let total_count = if cursor_filter.is_none() {
+        candidates.len()
+    } else {
+        collect_trajectory_list_candidates(&gcx, None).await.len()
+    };
+    candidates.sort_by(|a, b| match b.updated_at.cmp(&a.updated_at) {
         std::cmp::Ordering::Equal => b.id.cmp(&a.id),
         other => other,
     });
 
-    let total_count = all_items.len();
+    let has_more = candidates.len() > limit;
+    let page_candidates: Vec<TrajectoryListCandidate> =
+        candidates.into_iter().take(limit).collect();
+    let task_roots = get_all_task_roots(gcx.clone()).await;
+    let mut items = Vec::with_capacity(page_candidates.len());
 
-    let start_idx = if let Some((cursor_updated_at, cursor_id)) = cursor_filter {
-        all_items
-            .iter()
-            .position(|item| {
-                (item.updated_at.as_str(), item.id.as_str())
-                    < (cursor_updated_at.as_str(), cursor_id.as_str())
-            })
-            .unwrap_or(all_items.len())
-    } else {
-        0
-    };
+    for candidate in page_candidates {
+        let Ok(content) = fs::read_to_string(&candidate.path).await else {
+            continue;
+        };
+        let Ok(data) = serde_json::from_str::<TrajectoryData>(&content) else {
+            continue;
+        };
+        let mut meta = trajectory_data_to_meta_validated(app.clone(), &data).await;
+        apply_task_trajectory_context(&candidate.path, &task_roots, &mut meta);
+        items.push(meta);
+    }
 
-    let page_items: Vec<TrajectoryMeta> = all_items
-        .into_iter()
-        .skip(start_idx)
-        .take(limit + 1)
-        .collect();
-
-    let has_more = page_items.len() > limit;
-    let items: Vec<TrajectoryMeta> = page_items.into_iter().take(limit).collect();
+    enrich_with_session_state(app, &mut items).await;
 
     let next_cursor = if has_more {
         items
@@ -2824,6 +2926,12 @@ pub async fn handle_v1_trajectories_save(
     let (tasks_total, tasks_done, tasks_failed) =
         calculate_task_progress_from_messages(&data.messages);
     let token_totals = calculate_token_totals_from_messages(&data.messages);
+    let (task_id, task_role, agent_id, card_id) = data
+        .extra
+        .get("task_meta")
+        .and_then(|value| serde_json::from_value::<super::types::TaskMeta>(value.clone()).ok())
+        .map(|meta| task_context_from_task_meta(Some(&meta)))
+        .unwrap_or((None, None, None, None));
     let event = TrajectoryEvent {
         event_type: if is_new {
             "created".to_string()
@@ -2832,7 +2940,7 @@ pub async fn handle_v1_trajectories_save(
         },
         id: id.clone(),
         updated_at: Some(data.updated_at.clone()),
-        title: Some(data.title.clone()),
+        title: Some(trajectory_meta_title(&data.title)),
         is_title_generated: Some(is_title_generated),
         session_state: Some(session_state),
         error: session_error,
@@ -2840,6 +2948,10 @@ pub async fn handle_v1_trajectories_save(
         parent_id,
         link_type,
         root_chat_id: Some(effective_root),
+        task_id,
+        task_role,
+        agent_id,
+        card_id,
         model: Some(data.model.clone()),
         mode: Some(data.mode.clone()),
         worktree,
@@ -2897,6 +3009,10 @@ pub async fn handle_v1_trajectories_delete(
         parent_id: None,
         link_type: None,
         root_chat_id: None,
+        task_id: None,
+        task_role: None,
+        agent_id: None,
+        card_id: None,
         model: None,
         mode: None,
         worktree: None,
@@ -3409,6 +3525,47 @@ mod tests {
     }
 
     #[test]
+    fn test_trajectory_meta_title_truncates_oversized_stored_title() {
+        let long_title = "A".repeat(1024 * 1024);
+        let result = trajectory_meta_title(&long_title);
+        assert_eq!(result.chars().count(), TRAJECTORY_META_TITLE_MAX_CHARS);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_trajectory_meta_uses_bounded_title() {
+        let data = TrajectoryData {
+            id: "big-title-chat".to_string(),
+            title: "B".repeat(1024 * 1024),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            model: "model".to_string(),
+            mode: "agent".to_string(),
+            tool_use: "agent".to_string(),
+            messages: Vec::new(),
+            extra: serde_json::Map::new(),
+        };
+        let meta = trajectory_data_to_meta(&data);
+        assert_eq!(meta.title.chars().count(), TRAJECTORY_META_TITLE_MAX_CHARS);
+    }
+
+    #[test]
+    fn test_cursor_precedes_item_matches_descending_order() {
+        assert!(cursor_precedes_item(
+            ("2024-01-01T00:00:00Z", "a"),
+            ("2024-01-02T00:00:00Z", "b"),
+        ));
+        assert!(cursor_precedes_item(
+            ("2024-01-01T00:00:00Z", "a"),
+            ("2024-01-01T00:00:00Z", "b"),
+        ));
+        assert!(!cursor_precedes_item(
+            ("2024-01-03T00:00:00Z", "a"),
+            ("2024-01-02T00:00:00Z", "b"),
+        ));
+    }
+
+    #[test]
     fn test_extract_first_user_message_string_content() {
         let messages = vec![
             json!({"role": "system", "content": "You are helpful"}),
@@ -3762,6 +3919,10 @@ mod tests {
             parent_id: Some("parent-123".to_string()),
             link_type: Some("subagent".to_string()),
             root_chat_id: Some("root-123".to_string()),
+            task_id: Some("task-123".to_string()),
+            task_role: Some("agents".to_string()),
+            agent_id: Some("agent-123".to_string()),
+            card_id: Some("card-123".to_string()),
             model: Some("gpt-4".to_string()),
             mode: Some("AGENT".to_string()),
             worktree: None,
@@ -3785,6 +3946,10 @@ mod tests {
         assert_eq!(json["message_count"], 5);
         assert_eq!(json["parent_id"], "parent-123");
         assert_eq!(json["link_type"], "subagent");
+        assert_eq!(json["task_id"], "task-123");
+        assert_eq!(json["task_role"], "agents");
+        assert_eq!(json["agent_id"], "agent-123");
+        assert_eq!(json["card_id"], "card-123");
         assert_eq!(json["total_lines_added"], 100);
         assert_eq!(json["total_lines_removed"], 50);
         assert_eq!(json["tasks_total"], 5);
@@ -3796,6 +3961,48 @@ mod tests {
         assert_eq!(json["total_cache_read_tokens"], 100);
         assert_eq!(json["total_cache_creation_tokens"], 50);
         assert!((json["total_cost_usd"].as_f64().unwrap() - 0.042).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_trajectory_event_serialization_skips_none_metric_fields() {
+        let event = TrajectoryEvent {
+            event_type: "updated".to_string(),
+            id: "chat-no-metrics".to_string(),
+            updated_at: None,
+            title: Some("Retitled".to_string()),
+            is_title_generated: None,
+            session_state: None,
+            error: None,
+            message_count: None,
+            parent_id: None,
+            link_type: None,
+            root_chat_id: None,
+            task_id: None,
+            task_role: None,
+            agent_id: None,
+            card_id: None,
+            model: None,
+            mode: None,
+            worktree: None,
+            total_lines_added: None,
+            total_lines_removed: None,
+            tasks_total: None,
+            tasks_done: None,
+            tasks_failed: None,
+            total_prompt_tokens: None,
+            total_completion_tokens: None,
+            total_tokens: None,
+            total_cache_read_tokens: None,
+            total_cache_creation_tokens: None,
+            total_cost_usd: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json.get("total_prompt_tokens").is_none());
+        assert!(json.get("total_completion_tokens").is_none());
+        assert!(json.get("total_tokens").is_none());
+        assert!(json.get("total_cache_read_tokens").is_none());
+        assert!(json.get("total_cache_creation_tokens").is_none());
+        assert!(json.get("total_cost_usd").is_none());
     }
 
     #[test]
