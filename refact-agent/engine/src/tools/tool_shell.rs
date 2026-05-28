@@ -110,6 +110,7 @@ const ASK_USER_DEFAULT: &[&str] = &[
 ];
 
 const DENY_DEFAULT: &[&str] = &["sudo*"];
+const MAX_SHELL_TIMEOUT_SECS: u64 = 3600;
 const SHELL_TRANSCRIPT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const TTY_DESCRIPTION: &str = "If true, run the command attached to a pseudo-terminal (PTY). Enables interactive stdin via process_write_stdin and merges stdout+stderr into a single combined stream. Defeats some pipe-only output buffering. Defaults to false.";
 
@@ -484,11 +485,11 @@ async fn parse_args_with_filter(
 
     let timeout = match args.get("timeout") {
         Some(Value::String(s)) if s.is_empty() => None,
-        Some(Value::String(s)) => Some(
+        Some(Value::String(s)) => Some(validate_shell_timeout_secs(
             s.parse::<u64>()
                 .map_err(|_| "argument `timeout` must be seconds as an integer".to_string())?,
-        ),
-        Some(Value::Number(n)) => n.as_u64(),
+        )?),
+        Some(Value::Number(n)) => Some(parse_numeric_shell_timeout(n)?),
         Some(v) => {
             return Err(format!(
                 "argument `timeout` is not a string or number: {:?}",
@@ -530,6 +531,27 @@ async fn parse_args_with_filter(
         tty,
         scope_warnings,
     })
+}
+
+fn parse_numeric_shell_timeout(n: &serde_json::Number) -> Result<u64, String> {
+    let Some(secs) = n.as_u64() else {
+        return Err(format!(
+            "timeout must be a positive integer (seconds), got {n}"
+        ));
+    };
+    validate_shell_timeout_secs(secs)
+}
+
+fn validate_shell_timeout_secs(secs: u64) -> Result<u64, String> {
+    if secs == 0 {
+        return Err("timeout must be > 0 seconds".to_string());
+    }
+    if secs > MAX_SHELL_TIMEOUT_SECS {
+        return Err(format!(
+            "timeout exceeds maximum of {MAX_SHELL_TIMEOUT_SECS} seconds"
+        ));
+    }
+    Ok(secs)
 }
 
 async fn resolve_shell_workdir(
@@ -641,6 +663,15 @@ mod tests {
             .await
             .unwrap();
         only_chat_message(messages)
+    }
+
+    async fn shell_error(args: HashMap<String, Value>) -> String {
+        let ccx = ccx_with_abort(None).await;
+        let mut shell = ToolShell::default();
+        shell
+            .tool_execute(ccx, &"shell".to_string(), &args)
+            .await
+            .unwrap_err()
     }
 
     fn only_chat_message(messages: Vec<ContextEnum>) -> ChatMessage {
@@ -858,6 +889,78 @@ mod tests {
         assert!(body.contains("timed out"));
         assert_eq!(exec(&message)["status"], "timed_out");
         assert_eq!(message.tool_failed, Some(true));
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_rejects_negative() {
+        let err = shell_error(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Reject negative timeout")),
+            ("timeout", json!(-1)),
+        ]))
+        .await;
+
+        assert_eq!(err, "timeout must be a positive integer (seconds), got -1");
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_rejects_fractional() {
+        let err = shell_error(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Reject fractional timeout")),
+            ("timeout", json!(1.5)),
+        ]))
+        .await;
+
+        assert_eq!(err, "timeout must be a positive integer (seconds), got 1.5");
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_rejects_zero() {
+        let err = shell_error(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Reject zero timeout")),
+            ("timeout", json!(0)),
+        ]))
+        .await;
+
+        assert_eq!(err, "timeout must be > 0 seconds");
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_rejects_above_max() {
+        let err = shell_error(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Reject above max timeout")),
+            ("timeout", json!(99_999_999)),
+        ]))
+        .await;
+
+        assert_eq!(err, "timeout exceeds maximum of 3600 seconds");
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_accepts_positive() {
+        let message = run_shell(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Accept positive timeout")),
+            ("timeout", json!(30)),
+        ]))
+        .await;
+
+        assert_eq!(exec(&message)["timeout_secs"], 30);
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_accepts_string() {
+        let message = run_shell(args(vec![
+            ("command", json!(success_command())),
+            ("description", json!("Accept string timeout")),
+            ("timeout", json!("60")),
+        ]))
+        .await;
+
+        assert_eq!(exec(&message)["timeout_secs"], 60);
     }
 
     #[tokio::test]
