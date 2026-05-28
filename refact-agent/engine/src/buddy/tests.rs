@@ -407,6 +407,179 @@ fn test_settings_null_prompt_clears_value() {
     assert!(req.personality_prompt.is_none());
 }
 
+#[test]
+fn test_settings_request_parses_full_contract() {
+    let json = r#"{
+        "enabled": false,
+        "auto_diagnostics": false,
+        "auto_issue_creation": true,
+        "personality_prompt": "be nice",
+        "clear_personality_prompt": true,
+        "autonomous_chats_enabled": false,
+        "proactive_enabled": false,
+        "message_observation_enabled": false,
+        "chat_reactions_enabled": false,
+        "housekeeping_enabled": false,
+        "humor_enabled": false,
+        "humor_level": "normal",
+        "autonomy_level": "safe_auto",
+        "quiet_mode": true,
+        "daily_digest_hour": null,
+        "observers": {
+            "task_health": false,
+            "trajectory_clutter": false,
+            "chat_pattern": false,
+            "customization_drift": false,
+            "memory_garden": false,
+            "mcp_auth": false,
+            "git_pressure": false,
+            "diagnostic_cluster": false,
+            "provider_health": false
+        },
+        "palette_index": 3
+    }"#;
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest =
+        serde_json::from_str(json).unwrap();
+
+    assert_eq!(req.clear_personality_prompt, Some(true));
+    assert_eq!(req.personality_prompt, Some(Some("be nice".to_string())));
+    assert_eq!(req.daily_digest_hour, Some(None));
+    assert_eq!(req.humor_level, Some(HumorLevel::Normal));
+    assert_eq!(req.autonomy_level, Some(AutonomyLevel::SafeAuto));
+    assert_eq!(req.palette_index, Some(3));
+    assert!(req.observers.is_some());
+}
+
+#[test]
+fn test_settings_request_rejects_invalid_digest_hour() {
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest =
+        serde_json::from_str(r#"{"daily_digest_hour": 24}"#).unwrap();
+    let err = req.validate().unwrap_err();
+
+    assert_eq!(err.status_code, hyper::StatusCode::BAD_REQUEST);
+    assert!(err.message.contains("daily_digest_hour"));
+}
+
+#[test]
+fn test_settings_request_rejects_unknown_observer() {
+    let err = serde_json::from_str::<crate::http::routers::v1::buddy::BuddySettingsRequest>(
+        r#"{"observers":{"auth":false}}"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("unknown field"));
+}
+
+#[test]
+fn test_settings_request_rejects_unknown_top_level_field() {
+    let err = serde_json::from_str::<crate::http::routers::v1::buddy::BuddySettingsRequest>(
+        r#"{"not_a_real_setting":true}"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("unknown field"));
+}
+
+#[test]
+fn test_settings_request_apply_updates_full_contract() {
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest = serde_json::from_str(
+        r#"{
+            "personality_prompt": "new prompt",
+            "clear_personality_prompt": true,
+            "chat_reactions_enabled": false,
+            "quiet_mode": true,
+            "humor_enabled": false,
+            "humor_level": "normal",
+            "autonomy_level": "safe_auto",
+            "daily_digest_hour": 7,
+            "observers": { "chat_pattern": false, "provider_health": false }
+        }"#,
+    )
+    .unwrap();
+    let mut settings = BuddySettings::default();
+    settings.personality_prompt = Some("old prompt".to_string());
+
+    let persona_dirty = req.apply_to_settings(&mut settings);
+
+    assert!(persona_dirty);
+    assert_eq!(settings.personality_prompt, None);
+    assert!(!settings.chat_reactions_enabled);
+    assert!(settings.quiet_mode);
+    assert!(!settings.humor_enabled);
+    assert_eq!(settings.humor_level, HumorLevel::Normal);
+    assert_eq!(settings.autonomy_level, AutonomyLevel::SafeAuto);
+    assert_eq!(settings.daily_digest_hour, Some(7));
+    assert!(!settings.observers.chat_pattern);
+    assert!(!settings.observers.provider_health);
+    assert!(settings.observers.task_health);
+}
+
+#[tokio::test]
+async fn test_settings_update_hot_applies_and_emits_event() {
+    let app = make_gcx_with_buddy().await;
+    let mut rx = {
+        let buddy_arc = app.buddy.buddy.clone();
+        let lock = buddy_arc.lock().await;
+        lock.as_ref().unwrap().events_tx.subscribe()
+    };
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest = serde_json::from_str(
+        r#"{
+            "chat_reactions_enabled": false,
+            "quiet_mode": true,
+            "humor_level": "normal",
+            "autonomy_level": "safe_auto",
+            "daily_digest_hour": null,
+            "observers": { "chat_pattern": false, "mcp_auth": false }
+        }"#,
+    )
+    .unwrap();
+
+    let response = crate::http::routers::v1::buddy::handle_v1_buddy_settings_update(
+        axum::extract::State(app.clone()),
+        axum::Json(req),
+    )
+    .await
+    .unwrap();
+    let returned: BuddySettings = serde_json::from_value(response.0).unwrap();
+
+    assert!(!returned.chat_reactions_enabled);
+    assert!(returned.quiet_mode);
+    assert_eq!(returned.humor_level, HumorLevel::Normal);
+    assert_eq!(returned.autonomy_level, AutonomyLevel::SafeAuto);
+    assert_eq!(returned.daily_digest_hour, None);
+    assert!(!returned.observers.chat_pattern);
+    assert!(!returned.observers.mcp_auth);
+
+    let (project_root, settings) = {
+        let buddy_arc = app.buddy.buddy.clone();
+        let lock = buddy_arc.lock().await;
+        let svc = lock.as_ref().unwrap();
+        (svc.project_root.clone(), svc.settings.clone())
+    };
+    assert_eq!(
+        settings.chat_reactions_enabled,
+        returned.chat_reactions_enabled
+    );
+    assert_eq!(settings.quiet_mode, returned.quiet_mode);
+    assert_eq!(settings.daily_digest_hour, None);
+    let persisted = super::settings::load_settings(&project_root).await;
+    assert_eq!(
+        persisted.chat_reactions_enabled,
+        returned.chat_reactions_enabled
+    );
+    assert_eq!(persisted.daily_digest_hour, None);
+
+    let mut saw_settings_changed = false;
+    while let Ok(event) = rx.try_recv() {
+        if let super::events::BuddyEvent::SettingsChanged { settings } = event {
+            assert!(!settings.chat_reactions_enabled);
+            assert!(settings.quiet_mode);
+            saw_settings_changed = true;
+        }
+    }
+    assert!(saw_settings_changed);
+}
+
 #[tokio::test]
 async fn test_bootstrap_no_overwrite() {
     let dir = tempfile::tempdir().unwrap();

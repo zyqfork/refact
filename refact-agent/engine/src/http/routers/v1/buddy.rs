@@ -9,7 +9,9 @@ use crate::buddy::diagnostics::DiagnosticContext;
 use crate::buddy::events::BuddyEvent;
 use crate::buddy::memory_lifecycle::{apply_memory_lifecycle_op_status, MemoryOpStatus};
 use crate::buddy::pulse_inject::build_buddy_pulse_payload;
-use crate::buddy::settings::MAX_PALETTE_INDEX;
+use crate::buddy::settings::{
+    AutonomyLevel, BuddySettings, HumorLevel, ObserverToggles, MAX_PALETTE_INDEX,
+};
 use crate::buddy::storage::{enqueue_memory_op, load_memory_ops};
 use crate::buddy::types::{BuddyActivity, BuddyCareAction, BuddyConversationEntry, BuddySuggestion};
 use crate::buddy::user_activity::time_of_day_pattern;
@@ -198,28 +200,206 @@ pub async fn handle_v1_buddy_settings_get(
     }
 }
 
+fn deserialize_optional_field<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObserverTogglesPatch {
+    pub task_health: Option<bool>,
+    pub trajectory_clutter: Option<bool>,
+    pub chat_pattern: Option<bool>,
+    pub customization_drift: Option<bool>,
+    pub memory_garden: Option<bool>,
+    pub mcp_auth: Option<bool>,
+    pub git_pressure: Option<bool>,
+    pub diagnostic_cluster: Option<bool>,
+    pub provider_health: Option<bool>,
+}
+
+impl ObserverTogglesPatch {
+    fn apply_to(&self, observers: &mut ObserverToggles) {
+        if let Some(v) = self.task_health {
+            observers.task_health = v;
+        }
+        if let Some(v) = self.trajectory_clutter {
+            observers.trajectory_clutter = v;
+        }
+        if let Some(v) = self.chat_pattern {
+            observers.chat_pattern = v;
+        }
+        if let Some(v) = self.customization_drift {
+            observers.customization_drift = v;
+        }
+        if let Some(v) = self.memory_garden {
+            observers.memory_garden = v;
+        }
+        if let Some(v) = self.mcp_auth {
+            observers.mcp_auth = v;
+        }
+        if let Some(v) = self.git_pressure {
+            observers.git_pressure = v;
+        }
+        if let Some(v) = self.diagnostic_cluster {
+            observers.diagnostic_cluster = v;
+        }
+        if let Some(v) = self.provider_health {
+            observers.provider_health = v;
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuddySettingsRequest {
     pub enabled: Option<bool>,
     pub auto_diagnostics: Option<bool>,
     pub auto_issue_creation: Option<bool>,
-    pub personality_prompt: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub personality_prompt: Option<Option<String>>,
     pub clear_personality_prompt: Option<bool>,
+    pub autonomous_chats_enabled: Option<bool>,
     pub proactive_enabled: Option<bool>,
+    pub message_observation_enabled: Option<bool>,
+    pub chat_reactions_enabled: Option<bool>,
+    pub housekeeping_enabled: Option<bool>,
+    pub humor_enabled: Option<bool>,
+    pub humor_level: Option<HumorLevel>,
+    pub autonomy_level: Option<AutonomyLevel>,
+    pub quiet_mode: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub daily_digest_hour: Option<Option<u8>>,
+    pub observers: Option<ObserverTogglesPatch>,
     pub palette_index: Option<usize>,
+}
+
+impl BuddySettingsRequest {
+    pub(crate) fn validate(&self) -> Result<(), ScratchError> {
+        if let Some(pi) = self.palette_index {
+            if pi > MAX_PALETTE_INDEX {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    "palette_index must be 0-7".to_string(),
+                ));
+            }
+        }
+        if let Some(Some(hour)) = self.daily_digest_hour {
+            if hour > 23 {
+                return Err(ScratchError::new(
+                    StatusCode::BAD_REQUEST,
+                    "daily_digest_hour must be null or 0-23".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn apply_to_settings(&self, settings: &mut BuddySettings) -> bool {
+        let mut persona_dirty = false;
+        if let Some(v) = self.enabled {
+            settings.enabled = v;
+        }
+        if let Some(v) = self.auto_diagnostics {
+            settings.auto_diagnostics = v;
+        }
+        if let Some(v) = self.auto_issue_creation {
+            settings.auto_issue_creation = v;
+        }
+        if self.clear_personality_prompt.unwrap_or(false) {
+            settings.personality_prompt = None;
+            persona_dirty = true;
+        } else if let Some(prompt) = &self.personality_prompt {
+            settings.personality_prompt = prompt.clone();
+            persona_dirty = true;
+        }
+        if let Some(v) = self.autonomous_chats_enabled {
+            settings.autonomous_chats_enabled = v;
+        }
+        if let Some(v) = self.proactive_enabled {
+            settings.proactive_enabled = v;
+        }
+        if let Some(v) = self.message_observation_enabled {
+            settings.message_observation_enabled = v;
+        }
+        if let Some(v) = self.chat_reactions_enabled {
+            settings.chat_reactions_enabled = v;
+        }
+        if let Some(v) = self.housekeeping_enabled {
+            settings.housekeeping_enabled = v;
+        }
+        if let Some(v) = self.humor_enabled {
+            settings.humor_enabled = v;
+            persona_dirty = true;
+        }
+        if let Some(v) = self.humor_level {
+            settings.humor_level = v;
+            persona_dirty = true;
+        }
+        if let Some(v) = self.autonomy_level {
+            settings.autonomy_level = v;
+            persona_dirty = true;
+        }
+        if let Some(v) = self.quiet_mode {
+            settings.quiet_mode = v;
+        }
+        if let Some(v) = self.daily_digest_hour {
+            settings.daily_digest_hour = v;
+        }
+        if let Some(observers) = &self.observers {
+            observers.apply_to(&mut settings.observers);
+        }
+        persona_dirty
+    }
 }
 
 pub async fn handle_v1_buddy_settings_update(
     State(app): State<AppState>,
     axum::Json(req): axum::Json<BuddySettingsRequest>,
 ) -> Result<axum::Json<serde_json::Value>, ScratchError> {
-    if let Some(pi) = req.palette_index {
-        if pi > MAX_PALETTE_INDEX {
-            return Err(ScratchError::new(
-                StatusCode::BAD_REQUEST,
-                "palette_index must be 0-7".to_string(),
-            ));
+    req.validate()?;
+
+    let buddy_arc = app.buddy.buddy.clone();
+    let updated = {
+        let mut lock = buddy_arc.lock().await;
+        if let Some(service) = lock.as_mut() {
+            if req.apply_to_settings(&mut service.settings) {
+                crate::buddy::state::mark_persona_cache_dirty();
+            }
+            if let Some(pi) = req.palette_index {
+                service.state.identity.palette_index = pi;
+                crate::buddy::state::mark_persona_cache_dirty();
+                crate::buddy::state::sync_state(&mut service.state);
+                service.dirty = true;
+                let _ = service.events_tx.send(BuddyEvent::StateUpdated {
+                    state: service.state.clone(),
+                });
+            }
+            Some((
+                service.project_root.clone(),
+                service.settings.clone(),
+                service.events_tx.clone(),
+            ))
+        } else {
+            None
         }
+    };
+    if let Some((project_root, new_settings, tx)) = updated {
+        crate::buddy::settings::save_settings(&project_root, &new_settings)
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let _ = tx.send(BuddyEvent::SettingsChanged {
+            settings: new_settings.clone(),
+        });
+        return Ok(axum::Json(serde_json::to_value(new_settings).map_err(
+            |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        )?));
     }
 
     let project_root = crate::files_correction::get_project_dirs(app.gcx.clone())
@@ -233,59 +413,16 @@ pub async fn handle_v1_buddy_settings_update(
             )
         })?;
 
-    let buddy_arc = app.buddy.buddy.clone();
-    let events_tx = {
-        let mut lock = buddy_arc.lock().await;
-        if let Some(service) = lock.as_mut() {
-            if let Some(v) = req.enabled {
-                service.settings.enabled = v;
-            }
-            if let Some(v) = req.auto_diagnostics {
-                service.settings.auto_diagnostics = v;
-            }
-            if let Some(v) = req.auto_issue_creation {
-                service.settings.auto_issue_creation = v;
-            }
-            if req.clear_personality_prompt.unwrap_or(false) {
-                service.settings.personality_prompt = None;
-                crate::buddy::state::mark_persona_cache_dirty();
-            } else if let Some(prompt) = &req.personality_prompt {
-                service.settings.personality_prompt = Some(prompt.clone());
-                crate::buddy::state::mark_persona_cache_dirty();
-            }
-            if let Some(v) = req.proactive_enabled {
-                service.settings.proactive_enabled = v;
-            }
-            if let Some(pi) = req.palette_index {
-                service.state.identity.palette_index = pi;
-                crate::buddy::state::mark_persona_cache_dirty();
-                crate::buddy::state::sync_state(&mut service.state);
-                service.dirty = true;
-                let _ = service.events_tx.send(BuddyEvent::StateUpdated {
-                    state: service.state.clone(),
-                });
-            }
-            Some((service.settings.clone(), service.events_tx.clone()))
-        } else {
-            None
-        }
-    };
-    if let Some((new_settings, tx)) = events_tx {
-        crate::buddy::settings::save_settings(&project_root, &new_settings)
-            .await
-            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-        let _ = tx.send(BuddyEvent::SettingsChanged {
-            settings: new_settings.clone(),
-        });
-        return Ok(axum::Json(serde_json::to_value(new_settings).map_err(
-            |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        )?));
+    let mut new_settings = crate::buddy::settings::load_settings(&project_root).await;
+    if req.apply_to_settings(&mut new_settings) {
+        crate::buddy::state::mark_persona_cache_dirty();
     }
-
-    Ok(axum::Json(
-        serde_json::to_value(crate::buddy::settings::BuddySettings::default())
-            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-    ))
+    crate::buddy::settings::save_settings(&project_root, &new_settings)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(axum::Json(serde_json::to_value(new_settings).map_err(
+        |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    )?))
 }
 
 #[derive(Debug, Deserialize)]

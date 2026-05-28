@@ -21,5 +21,10 @@ pub async fn load_settings(project_root: &Path) -> BuddySettings {
 
 pub async fn save_settings(project_root: &Path, settings: &BuddySettings) -> Result<(), String> {
     let path = project_root.join(".refact/buddy/settings.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create dir {:?}: {}", parent, e))?;
+    }
     super::storage::atomic_write_json(&path, settings).await
 }
