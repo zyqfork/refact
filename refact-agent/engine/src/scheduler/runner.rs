@@ -366,6 +366,15 @@ impl CronRunner {
                 return Ok(false);
             }
             session.add_message(event_message);
+            if let Some(ref mode) = mode {
+                session.enqueue_priority_command(CommandRequest {
+                    client_request_id: format!("cron-set-mode-{}", Uuid::new_v4()),
+                    priority: true,
+                    command: ChatCommand::SetParams {
+                        patch: json!({"mode": mode}),
+                    },
+                });
+            }
             session.enqueue_priority_command(CommandRequest {
                 client_request_id: format!("cron-fire-{}", Uuid::new_v4()),
                 priority: true,
@@ -376,15 +385,6 @@ impl CronRunner {
                     suppress_auto_enrichment: false,
                 },
             });
-            if let Some(ref mode) = mode {
-                session.command_queue.push_front(CommandRequest {
-                    client_request_id: format!("cron-set-mode-{}", Uuid::new_v4()),
-                    priority: true,
-                    command: ChatCommand::SetParams {
-                        patch: json!({"mode": mode}),
-                    },
-                });
-            }
             session.queue_processor_running.clone()
         };
 
@@ -1141,5 +1141,78 @@ mod tests {
             .iter()
             .any(|req| matches!(&req.command, ChatCommand::SetParams { .. }));
         assert!(!has_set_params, "No SetParams should be in queue when task has no mode");
+    }
+
+    #[tokio::test]
+    async fn fire_mode_with_non_empty_priority_queue_preserves_existing_order() {
+        let now = now_ms();
+        let store = Arc::new(InMemoryCronStore::new());
+        let mut task = due_task("cron_mode_nonempty_queue", now);
+        task.mode = Some("explore".to_string());
+        store.add(task).await.unwrap();
+        let gcx = gcx_with_session(SessionState::Idle).await;
+
+        {
+            let session_arc = session(&gcx).await;
+            let mut session = session_arc.lock().await;
+            session.command_queue.push_back(CommandRequest {
+                client_request_id: "pre-existing-priority".to_string(),
+                priority: true,
+                command: ChatCommand::SetParams {
+                    patch: json!({"temperature": 0.5}),
+                },
+            });
+        }
+
+        let mut runner = CronRunner::new(store.clone(), gcx.clone());
+        runner.fire_due_tasks(now).await;
+
+        let session_arc = session(&gcx).await;
+        let session = session_arc.lock().await;
+        let queue: Vec<_> = session.command_queue.iter().collect();
+        assert_eq!(queue.len(), 3, "queue must have pre-existing + SetParams(mode) + UserMessage");
+        assert!(
+            matches!(&queue[0].command, ChatCommand::SetParams { patch }
+                if patch.get("temperature").is_some()),
+            "pre-existing priority item must stay first"
+        );
+        assert!(
+            matches!(&queue[1].command, ChatCommand::SetParams { patch }
+                if patch.get("mode").and_then(|v| v.as_str()) == Some("explore")),
+            "scheduled SetParams must follow existing priority items"
+        );
+        assert!(
+            matches!(&queue[2].command, ChatCommand::UserMessage { .. }),
+            "UserMessage must immediately follow SetParams"
+        );
+    }
+
+    #[tokio::test]
+    async fn fire_mode_is_persistent_no_auto_restore() {
+        // SetParams applied at fire time permanently changes the chat mode.
+        // No restore command is queued after the UserMessage — this is intentional:
+        // a scheduled task that needs a specific mode changes the session mode for
+        // all subsequent turns until the user or another command changes it back.
+        let now = now_ms();
+        let store = Arc::new(InMemoryCronStore::new());
+        let mut task = due_task("cron_mode_persist", now);
+        task.mode = Some("agent".to_string());
+        store.add(task).await.unwrap();
+        let gcx = gcx_with_session(SessionState::Idle).await;
+        let mut runner = CronRunner::new(store.clone(), gcx.clone());
+
+        runner.fire_due_tasks(now).await;
+
+        let session_arc = session(&gcx).await;
+        let session = session_arc.lock().await;
+        let set_params_count = session
+            .command_queue
+            .iter()
+            .filter(|req| matches!(&req.command, ChatCommand::SetParams { .. }))
+            .count();
+        assert_eq!(
+            set_params_count, 1,
+            "exactly one SetParams (the mode change) must be queued; no auto-restore"
+        );
     }
 }
