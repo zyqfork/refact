@@ -1,4 +1,4 @@
-use refact_core::chat_types::{ChatContent, ChatMessage};
+use refact_core::chat_types::{ChatContent, ChatMessage, ChatToolCall, ChatToolFunction};
 use refact_llm::adapter::{AdapterSettings, LlmWireAdapter};
 use refact_llm::canonical::LlmRequest;
 use serde_json::{Value, json};
@@ -167,4 +167,51 @@ fn tool_message(call_id: &str, index: usize, seed: u64) -> ChatMessage {
         tool_call_id: call_id.to_string(),
         ..Default::default()
     }
+}
+
+pub fn tool_ordering_messages(hidden_role: &str) -> Vec<ChatMessage> {
+    let hidden = match hidden_role {
+        "plan" => plan_message("agent", 1, "plan after result"),
+        "event" => event_message(
+            "tick",
+            "tool.sleep",
+            json!({"elapsed_ms": 50, "remaining_ms": 50}),
+            "tick",
+        ),
+        other => panic!("unsupported hidden role {other}"),
+    };
+    vec![
+        ChatMessage::new("user".to_string(), "run tool".to_string()),
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText(String::new()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call_order".to_string(),
+                index: Some(0),
+                function: ChatToolFunction {
+                    name: "set_plan".to_string(),
+                    arguments: r#"{"content":"plan"}"#.to_string(),
+                },
+                tool_type: "function".to_string(),
+                extra_content: None,
+            }]),
+            ..Default::default()
+        },
+        tool_message("call_order", 0, 0),
+        hidden,
+    ]
+}
+
+pub fn assert_tool_result_immediately_follows_tool_call(body: &Value) {
+    let wire_messages = body["messages"].as_array().unwrap();
+    let tool_index = wire_messages
+        .iter()
+        .position(|message| message["role"] == "tool")
+        .expect("tool result missing from wire body");
+    let prior = &wire_messages[tool_index - 1];
+    assert_eq!(prior["role"], "assistant");
+    assert!(
+        prior.get("tool_calls").is_some(),
+        "prior message: {prior:?}"
+    );
 }

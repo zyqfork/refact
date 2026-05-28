@@ -1344,6 +1344,9 @@ pub async fn process_tool_calls_once(
             for result_msg in tool_results {
                 session.add_message(result_msg);
             }
+            session.drain_post_tool_side_effects();
+        } else {
+            session.clear_post_tool_side_effects();
         }
         if tool_initiated_stop {
             // Tools that intentionally stop the current turn always apply their intended state.

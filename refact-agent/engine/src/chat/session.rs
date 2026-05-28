@@ -175,6 +175,7 @@ impl ChatSession {
             cache_guard_force_next: false,
             task_agent_error: None,
             pending_browser_message: None,
+            post_tool_side_effects: VecDeque::new(),
             active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
@@ -234,6 +235,7 @@ impl ChatSession {
             cache_guard_force_next: false,
             task_agent_error: None,
             pending_browser_message: None,
+            post_tool_side_effects: VecDeque::new(),
             active_command: ActiveCommandContext::default(),
             skills_available_count: 0,
             skills_included: Vec::new(),
@@ -411,6 +413,23 @@ impl ChatSession {
         self.messages.push(message.clone());
         self.emit(ChatEvent::MessageAdded { message, index });
         self.increment_version();
+        self.touch();
+    }
+
+    pub fn queue_post_tool_side_effect(&mut self, message: ChatMessage) {
+        self.post_tool_side_effects.push_back(message);
+        self.touch();
+    }
+
+    pub fn drain_post_tool_side_effects(&mut self) {
+        let side_effects = std::mem::take(&mut self.post_tool_side_effects);
+        for message in side_effects {
+            self.add_message(message);
+        }
+    }
+
+    pub fn clear_post_tool_side_effects(&mut self) {
+        self.post_tool_side_effects.clear();
         self.touch();
     }
 

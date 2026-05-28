@@ -2,9 +2,10 @@ use refact_core::chat_types::ChatMessage;
 use refact_llm::adapters::openai_chat::OpenAiChatAdapter;
 
 use super::wire_soak_helpers::{
-    assert_no_literal_role_strings_in_body, assert_no_plan_history_in_body,
-    assert_plan_count_in_body, chronological_plan_messages, default_settings,
-    generate_mixed_corpus, lower_body, three_plan_versions,
+    assert_tool_result_immediately_follows_tool_call, assert_no_literal_role_strings_in_body,
+    assert_no_plan_history_in_body, assert_plan_count_in_body, chronological_plan_messages,
+    default_settings, generate_mixed_corpus, lower_body, three_plan_versions,
+    tool_ordering_messages,
 };
 
 fn lower_openai_chat(messages: Vec<ChatMessage>) -> serde_json::Value {
@@ -98,4 +99,18 @@ fn assert_mixed_corpus_renders_each_plan_message() {
 
     assert_plan_count_in_body(&body, 5);
     assert_no_plan_history_in_body(&body);
+}
+
+#[test]
+fn provider_tool_result_ordering_survives_plan_side_effect() {
+    let body = lower_openai_chat(tool_ordering_messages("plan"));
+
+    assert_tool_result_immediately_follows_tool_call(&body);
+}
+
+#[test]
+fn provider_tool_result_ordering_survives_event_side_effect() {
+    let body = lower_openai_chat(tool_ordering_messages("event"));
+
+    assert_tool_result_immediately_follows_tool_call(&body);
 }

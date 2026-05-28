@@ -8,6 +8,8 @@ use tokio::sync::Mutex as AMutex;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::chat::internal_roles::{self, EventSubkind};
+use crate::chat::plan_role::PlanInstallReport;
+use crate::chat::types::ChatSession;
 use crate::tools::tools_description::{
     json_schema_from_params, Tool, ToolDesc, ToolSource, ToolSourceType,
 };
@@ -77,9 +79,8 @@ impl Tool for ToolSetPlan {
         let report = {
             let mut session = session_arc.lock().await;
             let current_mode = map_legacy_mode_to_id(&session.thread.mode).to_string();
-            let report =
-                crate::chat::plan_role::install_plan(&mut session, &current_mode, &content);
-            session.add_message(internal_roles::event(
+            let report = queue_plan_side_effect(&mut session, &current_mode, &content);
+            session.queue_post_tool_side_effect(internal_roles::event(
                 EventSubkind::SystemNotice,
                 "tool.set_plan",
                 json!({"version": report.version, "summary": summary}),
@@ -105,6 +106,49 @@ impl Tool for ToolSetPlan {
     }
 }
 
+fn queue_plan_side_effect(session: &mut ChatSession, mode: &str, body: &str) -> PlanInstallReport {
+    let previous = current_plan_including_queued(session);
+    let version = previous
+        .and_then(plan_version)
+        .map_or(1, |version| version + 1);
+    let supersedes = previous.map(|message| message.message_id.clone());
+    session.queue_post_tool_side_effect(internal_roles::plan(
+        mode,
+        version,
+        body,
+        supersedes.clone(),
+    ));
+    PlanInstallReport {
+        version,
+        supersedes,
+    }
+}
+
+fn current_plan_including_queued(session: &ChatSession) -> Option<&ChatMessage> {
+    session
+        .messages
+        .iter()
+        .chain(session.post_tool_side_effects.iter())
+        .enumerate()
+        .filter_map(|(index, message)| {
+            plan_version(message).map(|version| (index, version, message))
+        })
+        .max_by_key(|(index, version, _)| (*version, *index))
+        .map(|(_, _, message)| message)
+}
+
+fn plan_version(message: &ChatMessage) -> Option<u32> {
+    if message.role != internal_roles::PLAN_ROLE {
+        return None;
+    }
+    message
+        .extra
+        .get("plan")?
+        .get("version")?
+        .as_u64()
+        .and_then(|version| u32::try_from(version).ok())
+}
+
 fn string_arg(args: &HashMap<String, Value>, name: &str) -> Result<String, String> {
     match args.get(name) {
         Some(Value::String(value)) => Ok(value.clone()),
@@ -128,8 +172,11 @@ fn optional_string_arg(
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::call_validation::{ChatToolCall, ChatToolFunction};
     use crate::chat::internal_roles::{EVENT_ROLE, PLAN_ROLE};
     use crate::chat::types::{ChatEvent, ChatSession, EventEnvelope};
+    use crate::llm::adapter::{AdapterSettings, LlmWireAdapter};
+    use crate::llm::adapters::openai_chat::OpenAiChatAdapter;
     use crate::tools::tools_list::get_tools_for_mode;
 
     const CHAT_ID: &str = "set-plan-chat";
@@ -199,6 +246,61 @@ mod tests {
         serde_json::from_str::<EventEnvelope>(&json).unwrap().event
     }
 
+    fn assistant_tool_call(tool_call_id: &str, name: &str, arguments: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText(String::new()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: tool_call_id.to_string(),
+                index: Some(0),
+                function: ChatToolFunction {
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                },
+                tool_type: "function".to_string(),
+                extra_content: None,
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn default_settings() -> AdapterSettings {
+        AdapterSettings {
+            api_key: "test-key".to_string(),
+            auth_token: String::new(),
+            endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
+            extra_headers: Default::default(),
+            model_name: "gpt-4.1".to_string(),
+            supports_tools: true,
+            supports_reasoning: true,
+            reasoning_type: None,
+            supports_temperature: true,
+            supports_max_completion_tokens: false,
+            eof_is_done: false,
+            supports_web_search: false,
+            supports_cache_control: false,
+        }
+    }
+
+    fn assert_openai_tool_result_not_preceded_by_hidden_role(messages: Vec<ChatMessage>) {
+        let req = crate::llm::canonical::LlmRequest::new("gpt-4.1".to_string(), messages);
+        let body = OpenAiChatAdapter
+            .build_http(&req, &default_settings())
+            .unwrap()
+            .body;
+        let wire_messages = body["messages"].as_array().unwrap();
+        let tool_index = wire_messages
+            .iter()
+            .position(|message| message["role"] == "tool")
+            .expect("tool result missing from wire messages");
+        let prior = &wire_messages[tool_index - 1];
+        assert_eq!(prior["role"], "assistant");
+        assert!(
+            prior.get("tool_calls").is_some(),
+            "prior message: {prior:?}"
+        );
+    }
+
     #[tokio::test]
     async fn happy_path() {
         let (gcx, ccx, mut rx) = ccx_for_session("agent").await;
@@ -228,23 +330,36 @@ mod tests {
             .cloned()
             .unwrap();
         let mut session = session_arc.lock().await;
-        assert_eq!(session.messages.len(), 2);
-        assert_eq!(session.messages[0].role, PLAN_ROLE);
-        assert_eq!(content_text(&session.messages[0]), "## Plan\n- do it");
-        assert_eq!(session.messages[0].extra["plan"]["version"], json!(1));
-        assert_eq!(session.messages[0].extra["plan"]["mode"], json!("agent"));
-        assert_eq!(session.messages[1].role, EVENT_ROLE);
-        assert_eq!(content_text(&session.messages[1]), "Plan updated to v1");
+        assert!(session.messages.is_empty());
+        assert_eq!(session.post_tool_side_effects.len(), 2);
+        assert_eq!(session.post_tool_side_effects[0].role, PLAN_ROLE);
         assert_eq!(
-            session.messages[1].extra["event"],
+            content_text(&session.post_tool_side_effects[0]),
+            "## Plan\n- do it"
+        );
+        assert_eq!(
+            session.post_tool_side_effects[0].extra["plan"]["version"],
+            json!(1)
+        );
+        assert_eq!(
+            session.post_tool_side_effects[0].extra["plan"]["mode"],
+            json!("agent")
+        );
+        assert_eq!(session.post_tool_side_effects[1].role, EVENT_ROLE);
+        assert_eq!(
+            content_text(&session.post_tool_side_effects[1]),
+            "Plan updated to v1"
+        );
+        assert_eq!(
+            session.post_tool_side_effects[1].extra["event"],
             json!({
                 "subkind": "system_notice",
                 "source": "tool.set_plan",
                 "payload": {"version": 1, "summary": "new direction"}
             })
         );
-        let first_plan_id = session.messages[0].message_id.clone();
-        drop(session);
+        let first_plan_id = session.post_tool_side_effects[0].message_id.clone();
+        session.drain_post_tool_side_effects();
 
         match event_from_json(rx.try_recv().unwrap()) {
             ChatEvent::MessageAdded { message, index } => {
@@ -260,6 +375,7 @@ mod tests {
             }
             other => panic!("expected event MessageAdded, got {other:?}"),
         }
+        drop(session);
 
         let mut tool = ToolSetPlan {
             config_path: String::new(),
@@ -269,11 +385,57 @@ mod tests {
             .await
             .unwrap();
         session = session_arc.lock().await;
-        assert_eq!(session.messages[2].extra["plan"]["version"], json!(2));
         assert_eq!(
-            session.messages[2].extra["plan"]["supersedes"],
+            session.post_tool_side_effects[0].extra["plan"]["version"],
+            json!(2)
+        );
+        assert_eq!(
+            session.post_tool_side_effects[0].extra["plan"]["supersedes"],
             json!(first_plan_id)
         );
+    }
+
+    #[tokio::test]
+    async fn set_plan_side_effects_are_after_tool_result() {
+        let (gcx, ccx, _rx) = ccx_for_session("agent").await;
+        let session_arc = gcx
+            .chat_sessions
+            .read()
+            .await
+            .get(CHAT_ID)
+            .cloned()
+            .unwrap();
+        session_arc.lock().await.add_message(assistant_tool_call(
+            "call-plan",
+            "set_plan",
+            r#"{"content":"new"}"#,
+        ));
+
+        let mut tool = ToolSetPlan {
+            config_path: String::new(),
+        };
+        let args = HashMap::from([("content".to_string(), json!("new"))]);
+        let (_, results) = tool
+            .tool_execute(ccx, &"call-plan".to_string(), &args)
+            .await
+            .unwrap();
+
+        let mut session = session_arc.lock().await;
+        for message in results {
+            let ContextEnum::ChatMessage(message) = message else {
+                panic!("expected chat message")
+            };
+            session.add_message(message);
+        }
+        session.drain_post_tool_side_effects();
+
+        let roles: Vec<_> = session
+            .messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect();
+        assert_eq!(roles, vec!["assistant", "tool", "plan", "event"]);
+        assert_openai_tool_result_not_preceded_by_hidden_role(session.messages.clone());
     }
 
     #[tokio::test]

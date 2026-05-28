@@ -91,17 +91,22 @@ impl Tool for ToolSleep {
             request.tick_interval_ms,
             abort_flag,
             abort_notify,
-            |tick| inject_tick(app.clone(), chat_id.clone(), tick),
         )
         .await;
+        let SleepOutcome {
+            slept_ms,
+            interrupted,
+            ticks,
+        } = outcome;
+        queue_ticks(app.clone(), chat_id.clone(), ticks).await;
 
         let body = json!({
-            "slept_ms": outcome.slept_ms,
-            "interrupted": outcome.interrupted,
+            "slept_ms": slept_ms,
+            "interrupted": interrupted,
         });
         let mut extra = serde_json::Map::new();
         extra.insert("sleep".to_string(), body.clone());
-        let mut messages = vec![ContextEnum::ChatMessage(ChatMessage {
+        let messages = vec![ContextEnum::ChatMessage(ChatMessage {
             role: "tool".to_string(),
             content: ChatContent::SimpleText(body.to_string()),
             tool_calls: None,
@@ -111,10 +116,9 @@ impl Tool for ToolSleep {
             extra,
             ..Default::default()
         })];
-        messages.extend(outcome.ticks.into_iter().map(ContextEnum::ChatMessage));
         tracing::info!(
-            slept_ms = outcome.slept_ms,
-            interrupted = outcome.interrupted,
+            slept_ms = slept_ms,
+            interrupted = interrupted,
             description = %request.description,
             "sleep tool completed"
         );
@@ -178,17 +182,12 @@ fn optional_u64(args: &HashMap<String, Value>, name: &str) -> Result<Option<u64>
         .transpose()
 }
 
-async fn sleep_with_ticks<F, Fut>(
+async fn sleep_with_ticks(
     duration_ms: u64,
     tick_interval_ms: Option<u64>,
     abort_flag: Arc<AtomicBool>,
     abort_notify: Option<Arc<Notify>>,
-    mut on_tick: F,
-) -> SleepOutcome
-where
-    F: FnMut(ChatMessage) -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
+) -> SleepOutcome {
     let started = Instant::now();
     let end = TokioInstant::now() + Duration::from_millis(duration_ms);
     let mut ticks = Vec::new();
@@ -241,10 +240,7 @@ where
             } => {
                 let elapsed_ms = elapsed_ms(started).min(duration_ms);
                 let remaining_ms = duration_ms.saturating_sub(elapsed_ms);
-                let tick = tick_event(elapsed_ms, remaining_ms);
-                if !on_tick(tick.clone()).await {
-                    ticks.push(tick);
-                }
+                ticks.push(tick_event(elapsed_ms, remaining_ms));
             }
         }
     }
@@ -298,22 +294,30 @@ async fn find_abort_notify(
     Some(abort_notify)
 }
 
-async fn inject_tick(app: crate::app_state::AppState, chat_id: String, tick: ChatMessage) -> bool {
+async fn queue_ticks(app: crate::app_state::AppState, chat_id: String, ticks: Vec<ChatMessage>) {
+    if ticks.is_empty() {
+        return;
+    }
     let session = {
         let sessions = app.chat.sessions.read().await;
         sessions.get(&chat_id).cloned()
     };
     if let Some(session) = session {
-        session.lock().await.add_message(tick);
-        true
-    } else {
-        false
+        let mut session = session.lock().await;
+        for tick in ticks {
+            session.queue_post_tool_side_effect(tick);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::at_commands::at_commands::AtCommandsContext;
+    use crate::call_validation::{ChatToolCall, ChatToolFunction};
+    use crate::chat::types::ChatSession;
+    use crate::llm::adapter::{AdapterSettings, LlmWireAdapter};
+    use crate::llm::adapters::openai_chat::OpenAiChatAdapter;
     use std::sync::atomic::AtomicBool;
 
     fn sleep_args(tick_interval_ms: Option<u64>, description: &str) -> HashMap<String, Value> {
@@ -374,16 +378,87 @@ mod tests {
         assert_eq!(request.description, "wait");
     }
 
+    const CHAT_ID: &str = "sleep-chat";
+
+    async fn make_ccx(
+        gcx: Arc<crate::global_context::GlobalContext>,
+    ) -> Arc<AMutex<AtCommandsContext>> {
+        Arc::new(AMutex::new(
+            AtCommandsContext::new_from_app(
+                crate::app_state::AppState::from_gcx(gcx).await,
+                4096,
+                20,
+                false,
+                vec![],
+                CHAT_ID.to_string(),
+                None,
+                "model".to_string(),
+                None,
+                None,
+            )
+            .await,
+        ))
+    }
+
+    fn assistant_tool_call(tool_call_id: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText(String::new()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: tool_call_id.to_string(),
+                index: Some(0),
+                function: ChatToolFunction {
+                    name: "sleep".to_string(),
+                    arguments: r#"{"duration_ms":100,"tick_interval_ms":50,"description":"wait"}"#
+                        .to_string(),
+                },
+                tool_type: "function".to_string(),
+                extra_content: None,
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn default_settings() -> AdapterSettings {
+        AdapterSettings {
+            api_key: "test-key".to_string(),
+            auth_token: String::new(),
+            endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
+            extra_headers: Default::default(),
+            model_name: "gpt-4.1".to_string(),
+            supports_tools: true,
+            supports_reasoning: true,
+            reasoning_type: None,
+            supports_temperature: true,
+            supports_max_completion_tokens: false,
+            eof_is_done: false,
+            supports_web_search: false,
+            supports_cache_control: false,
+        }
+    }
+
+    fn assert_openai_tool_result_not_preceded_by_hidden_role(messages: Vec<ChatMessage>) {
+        let req = crate::llm::canonical::LlmRequest::new("gpt-4.1".to_string(), messages);
+        let body = OpenAiChatAdapter
+            .build_http(&req, &default_settings())
+            .unwrap()
+            .body;
+        let wire_messages = body["messages"].as_array().unwrap();
+        let tool_index = wire_messages
+            .iter()
+            .position(|message| message["role"] == "tool")
+            .expect("tool result missing from wire messages");
+        let prior = &wire_messages[tool_index - 1];
+        assert_eq!(prior["role"], "assistant");
+        assert!(
+            prior.get("tool_calls").is_some(),
+            "prior message: {prior:?}"
+        );
+    }
+
     #[tokio::test]
     async fn short_sleep_returns_correct_slept_ms() {
-        let outcome = sleep_with_ticks(
-            120,
-            None,
-            Arc::new(AtomicBool::new(false)),
-            None,
-            |_| async { false },
-        )
-        .await;
+        let outcome = sleep_with_ticks(120, None, Arc::new(AtomicBool::new(false)), None).await;
 
         assert!(!outcome.interrupted);
         assert!(
@@ -399,7 +474,7 @@ mod tests {
         let abort_flag = Arc::new(AtomicBool::new(false));
         let run = tokio::spawn({
             let abort_flag = abort_flag.clone();
-            async move { sleep_with_ticks(2_000, None, abort_flag, None, |_| async { false }).await }
+            async move { sleep_with_ticks(2_000, None, abort_flag, None).await }
         });
 
         sleep(Duration::from_millis(120)).await;
@@ -452,14 +527,8 @@ mod tests {
 
     #[tokio::test]
     async fn tick_interval_injects_n_events() {
-        let outcome = sleep_with_ticks(
-            600,
-            Some(200),
-            Arc::new(AtomicBool::new(false)),
-            None,
-            |_| async { false },
-        )
-        .await;
+        let outcome =
+            sleep_with_ticks(600, Some(200), Arc::new(AtomicBool::new(false)), None).await;
 
         assert!(!outcome.interrupted);
         assert!(
@@ -469,5 +538,54 @@ mod tests {
         );
         assert!(outcome.ticks.iter().all(|message| message.role == "event"));
         assert_eq!(outcome.ticks[0].extra["event"]["subkind"], json!("tick"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_tick_side_effects_are_after_tool_result() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let session_arc = Arc::new(AMutex::new(ChatSession::new(CHAT_ID.to_string())));
+        gcx.chat_sessions
+            .write()
+            .await
+            .insert(CHAT_ID.to_string(), session_arc.clone());
+        session_arc
+            .lock()
+            .await
+            .add_message(assistant_tool_call("call-sleep"));
+
+        let ccx = make_ccx(gcx).await;
+        let mut tool = ToolSleep {
+            config_path: String::new(),
+        };
+        let args = HashMap::from([
+            ("duration_ms".to_string(), json!(100)),
+            ("tick_interval_ms".to_string(), json!(50)),
+            ("description".to_string(), json!("wait")),
+        ]);
+        let run = tokio::spawn(async move {
+            tool.tool_execute(ccx, &"call-sleep".to_string(), &args)
+                .await
+                .unwrap()
+        });
+        tokio::time::advance(Duration::from_millis(150)).await;
+        let (_, results) = run.await.unwrap();
+
+        let mut session = session_arc.lock().await;
+        for message in results {
+            let ContextEnum::ChatMessage(message) = message else {
+                panic!("expected chat message")
+            };
+            session.add_message(message);
+        }
+        session.drain_post_tool_side_effects();
+
+        let roles: Vec<_> = session
+            .messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect();
+        assert_eq!(roles, vec!["assistant", "tool", "event"]);
+        assert_eq!(session.messages[2].extra["event"]["subkind"], json!("tick"));
+        assert_openai_tool_result_not_preceded_by_hidden_role(session.messages.clone());
     }
 }

@@ -115,6 +115,7 @@ pub struct ChatSession {
     pub cache_guard_force_next: bool,
     pub task_agent_error: Option<String>,
     pub pending_browser_message: Option<PendingBrowserMessage>,
+    pub post_tool_side_effects: VecDeque<ChatMessage>,
     pub active_command: ActiveCommandContext,
     pub skills_available_count: usize,
     pub skills_included: Vec<String>,

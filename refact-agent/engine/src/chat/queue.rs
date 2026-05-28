@@ -1853,6 +1853,7 @@ async fn handle_tool_decisions(
             for result_msg in tool_results {
                 session.add_message(result_msg);
             }
+            session.drain_post_tool_side_effects();
             if tool_initiated_stop {
                 session.set_runtime_state(final_state, None);
             } else {
