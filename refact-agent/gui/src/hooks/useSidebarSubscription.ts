@@ -230,7 +230,6 @@ export function useSidebarSubscription() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const tasksSnapshotRef = useRef<TaskMeta[] | null>(null);
   const generationRef = useRef(0);
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   const connectRef = useRef<() => void>(() => {});
@@ -421,18 +420,6 @@ export function useSidebarSubscription() {
     [dispatch],
   );
 
-  const updateListTasksCache = useCallback(
-    (updater: (draft: TaskMeta[]) => void) => {
-      const next = [...(tasksSnapshotRef.current ?? [])];
-      updater(next);
-      tasksSnapshotRef.current = next;
-      void dispatch(
-        tasksApi.util.upsertQueryData("listTasks", undefined, next),
-      );
-    },
-    [dispatch],
-  );
-
   const processTaskEvent = useCallback(
     (event: Extract<SidebarSectionUpdate, { type: string }>) => {
       dispatch(
@@ -440,74 +427,8 @@ export function useSidebarSubscription() {
           event as Parameters<typeof taskSseEventReceived>[0],
         ),
       );
-      switch (event.type) {
-        case "snapshot":
-          tasksSnapshotRef.current = event.tasks;
-          void dispatch(
-            tasksApi.util.upsertQueryData("listTasks", undefined, event.tasks),
-          );
-          break;
-
-        case "task_created":
-          updateListTasksCache((draft) => {
-            const exists = draft.some((t) => t.id === event.task_id);
-            if (!exists) {
-              draft.unshift(event.meta);
-            }
-          });
-          break;
-
-        case "task_updated":
-          updateListTasksCache((draft) => {
-            const index = draft.findIndex((t) => t.id === event.task_id);
-            if (index >= 0) {
-              const existing = draft[index];
-              draft[index] = {
-                ...event.meta,
-                planner_session_state:
-                  event.meta.planner_session_state ??
-                  existing.planner_session_state,
-              };
-            } else {
-              draft.unshift(event.meta);
-            }
-            draft.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-          });
-          dispatch(
-            tasksApi.util.updateQueryData(
-              "getTask",
-              event.task_id,
-              (existing) => ({
-                ...event.meta,
-                planner_session_state:
-                  event.meta.planner_session_state ??
-                  existing.planner_session_state,
-              }),
-            ),
-          );
-          break;
-
-        case "task_deleted":
-          updateListTasksCache((draft) => {
-            const index = draft.findIndex((t) => t.id === event.task_id);
-            if (index >= 0) {
-              draft.splice(index, 1);
-            }
-          });
-          break;
-
-        case "board_changed":
-          dispatch(
-            tasksApi.util.updateQueryData(
-              "getBoard",
-              event.task_id,
-              () => event.board,
-            ),
-          );
-          break;
-      }
     },
-    [dispatch, updateListTasksCache],
+    [dispatch],
   );
 
   const processWorkspaceSnapshot = useCallback(
@@ -547,7 +468,6 @@ export function useSidebarSubscription() {
 
   const processTasksSnapshot = useCallback(
     (tasks: TaskMeta[]) => {
-      tasksSnapshotRef.current = tasks;
       void dispatch(
         tasksApi.util.upsertQueryData("listTasks", undefined, tasks),
       );
@@ -646,7 +566,6 @@ export function useSidebarSubscription() {
           !workspaceRootsEqual(serverWorkspaceRootsRef.current, workspaceRoots);
         if (workspaceChanged) {
           dispatch(sidebarWorkspaceChanged({ subscriptionId }));
-          tasksSnapshotRef.current = null;
           dispatch(replaceSnapshotHistory([]));
           void dispatch(
             tasksApi.util.upsertQueryData("listTasks", undefined, []),
@@ -860,7 +779,6 @@ export function useSidebarSubscription() {
     if (!reconnectingSameEndpoint) {
       dispatch(resetSidebarState({ lspPort: port }));
       serverWorkspaceRootsRef.current = undefined;
-      tasksSnapshotRef.current = null;
       void prepareInitialHistory(generation);
     }
 

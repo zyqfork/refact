@@ -1032,11 +1032,6 @@ export const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ taskId }) => {
       void deletePlannerChat({ taskId, chatId })
         .unwrap()
         .then(() => {
-          dispatch(
-            tasksApi.util.invalidateTags([
-              { type: "TaskTrajectories", id: taskId },
-            ]),
-          );
           showNotification("Planner chat deleted.");
         })
         .catch((err: unknown) => {

@@ -1348,37 +1348,74 @@ startListening({
   effect: (action, listenerApi) => {
     const event = action.payload;
     switch (event.type) {
+      case "snapshot":
+        void listenerApi.dispatch(
+          tasksApi.util.upsertQueryData("listTasks", undefined, event.tasks),
+        );
+        break;
       case "task_created":
-        listenerApi.dispatch(
-          tasksApi.util.invalidateTags([{ type: "Tasks", id: "LIST" }]),
+        void listenerApi.dispatch(
+          tasksApi.util.updateQueryData("listTasks", undefined, (draft) => {
+            if (!draft.some((t) => t.id === event.task_id)) {
+              draft.unshift(event.meta);
+            }
+          }),
         );
         break;
       case "task_updated":
-        listenerApi.dispatch(
-          tasksApi.util.invalidateTags([
-            { type: "Tasks", id: event.task_id },
-            "Tasks",
-          ]),
+        void listenerApi.dispatch(
+          tasksApi.util.updateQueryData("listTasks", undefined, (draft) => {
+            const index = draft.findIndex((t) => t.id === event.task_id);
+            if (index >= 0) {
+              const existing = draft[index];
+              draft[index] = {
+                ...event.meta,
+                planner_session_state:
+                  event.meta.planner_session_state ??
+                  existing.planner_session_state,
+              };
+            } else {
+              draft.unshift(event.meta);
+            }
+            draft.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+          }),
+        );
+        void listenerApi.dispatch(
+          tasksApi.util.updateQueryData(
+            "getTask",
+            event.task_id,
+            (existing) => ({
+              ...event.meta,
+              planner_session_state:
+                event.meta.planner_session_state ??
+                existing.planner_session_state,
+            }),
+          ),
         );
         break;
       case "task_deleted":
-        listenerApi.dispatch(
-          tasksApi.util.invalidateTags([
-            { type: "Tasks", id: event.task_id },
-            { type: "Tasks", id: "LIST" },
-            { type: "Board", id: event.task_id },
-            { type: "TaskTrajectories", id: `${event.task_id}/planner` },
-            "Tasks",
-          ]),
+        void listenerApi.dispatch(
+          tasksApi.util.updateQueryData("listTasks", undefined, (draft) => {
+            const index = draft.findIndex((t) => t.id === event.task_id);
+            if (index >= 0) {
+              draft.splice(index, 1);
+            }
+          }),
         );
         break;
       case "board_changed":
-        listenerApi.dispatch(
+        void listenerApi.dispatch(
+          tasksApi.util.updateQueryData(
+            "getBoard",
+            event.task_id,
+            () => event.board,
+          ),
+        );
+        // Planner trajectory metadata (waiting_for_card_ids, session state) is
+        // not included in the board payload, so invalidate to keep it fresh.
+        void listenerApi.dispatch(
           tasksApi.util.invalidateTags([
-            { type: "Board", id: event.task_id },
-            { type: "Tasks", id: event.task_id },
             { type: "TaskTrajectories", id: `${event.task_id}/planner` },
-            "Tasks",
           ]),
         );
         break;

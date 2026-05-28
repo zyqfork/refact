@@ -778,8 +778,9 @@ describe("TaskWorkspace worktree actions", () => {
 });
 
 describe("TaskWorkspace SSE invalidation", () => {
-  it("simulated_board_changed_event_refreshes_board", async () => {
+  it("simulated_board_changed_event_updates_board_without_refetch", async () => {
     const card = makeCard();
+    const updatedCard = makeCard({ title: "Updated board card" });
     let boardFetchCount = 0;
     server.use(...taskWorkspaceHandlers(card, []));
     server.use(
@@ -801,11 +802,12 @@ describe("TaskWorkspace SSE invalidation", () => {
         type: "board_changed",
         task_id: TASK_ID,
         rev: 2,
-        board: makeBoard(card),
+        board: makeBoard(updatedCard),
       }),
     );
 
-    await waitFor(() => expect(boardFetchCount).toBeGreaterThan(initialCount));
+    await screen.findAllByText(updatedCard.title);
+    expect(boardFetchCount).toBe(initialCount);
   });
 
   it("selected_card_modal_shows_latest_data_after_board_refresh", async () => {
