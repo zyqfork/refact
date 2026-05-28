@@ -11,6 +11,7 @@ use crate::agents::types::AgentListFilter;
 use crate::app_state::AppState;
 use crate::call_validation::{ChatContent, ChatMessage};
 use crate::chat::diagnostics::make_ui_only_error_message;
+use crate::chat::internal_roles::{event, EventSubkind};
 use crate::ext::hooks::HookEvent;
 use crate::ext::hooks_runner::{HookPayload, get_project_dir_string, run_hooks};
 
@@ -60,6 +61,30 @@ pub fn create_sessions_map() -> SessionsMap {
 pub struct ToolDecisionOutcome {
     pub accepted_ids: Vec<String>,
     pub denied_ids: Vec<String>,
+}
+
+fn tool_decision_message(decision: &str, tool_call_ids: Vec<String>, scope: &str) -> ChatMessage {
+    let count = tool_call_ids.len();
+    let verb = if decision == "approve" {
+        "approved"
+    } else {
+        "rejected"
+    };
+    let noun = if count == 1 {
+        "tool call"
+    } else {
+        "tool calls"
+    };
+    event(
+        EventSubkind::ToolDecision,
+        "chat.session",
+        json!({
+            "tool_call_ids": tool_call_ids,
+            "decision": decision,
+            "scope": scope,
+        }),
+        format!("User {verb} {count} {noun} ({scope})"),
+    )
 }
 
 impl ChatSession {
@@ -930,6 +955,18 @@ impl ChatSession {
             .any(|r| r.tool_call_id == tool_call_id)
     }
 
+    pub(super) fn add_tool_decision_event(
+        &mut self,
+        decision: &str,
+        tool_call_ids: Vec<String>,
+        scope: &str,
+    ) {
+        if tool_call_ids.is_empty() {
+            return;
+        }
+        self.add_message(tool_decision_message(decision, tool_call_ids, scope));
+    }
+
     pub fn process_tool_decisions(
         &mut self,
         decisions: &[ToolDecisionItem],
@@ -956,6 +993,8 @@ impl ChatSession {
         self.runtime.pause_reasons.retain(|r| {
             !accepted_ids.contains(&r.tool_call_id) && !denied_ids.contains(&r.tool_call_id)
         });
+        self.add_tool_decision_event("approve", accepted_ids.clone(), "once");
+        self.add_tool_decision_event("reject", denied_ids.clone(), "once");
         let after_len = self.runtime.pause_reasons.len();
 
         for denied_id in &denied_ids {

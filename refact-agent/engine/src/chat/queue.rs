@@ -1644,6 +1644,18 @@ async fn handle_tool_decisions(
             if accepted_any {
                 session.cache_guard_force_next = true;
             }
+            let approved_ids = decisions
+                .iter()
+                .filter(|d| d.accepted)
+                .map(|d| d.tool_call_id.clone())
+                .collect::<Vec<_>>();
+            let rejected_ids = decisions
+                .iter()
+                .filter(|d| !d.accepted)
+                .map(|d| d.tool_call_id.clone())
+                .collect::<Vec<_>>();
+            session.add_tool_decision_event("approve", approved_ids, "once");
+            session.add_tool_decision_event("reject", rejected_ids, "once");
             session.runtime.pause_reasons.clear();
             session.runtime.accepted_tool_ids.clear();
             session.runtime.auto_approved_tool_ids.clear();
