@@ -315,17 +315,21 @@ impl Tool for ToolProcessList {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let (gcx, exec_registry, execution_scope, chat_id) = {
+        let (gcx, exec_registry, execution_scope, chat_id, task_role) = {
             let ccx_lock = ccx.lock().await;
             (
                 ccx_lock.app.gcx.clone(),
                 ccx_lock.app.runtime.exec_registry.clone(),
                 ccx_lock.execution_scope.clone(),
                 ccx_lock.chat_id.clone(),
+                ccx_lock.task_meta.as_ref().map(|meta| meta.role.clone()),
             )
         };
         let status = parse_list_status(args)?;
         let scope = parse_list_scope(args)?;
+        if scope == ProcessListScope::All && task_role.as_deref() != Some("planner") {
+            return Err("process_list scope=all requires planner/admin context".to_string());
+        }
         let workspace = process_workspace(gcx, execution_scope.as_ref()).await;
         let snapshots = exec_registry
             .list(ExecProcessFilter::default())
@@ -402,12 +406,24 @@ impl Tool for ToolProcessRead {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let exec_registry = {
+        let (gcx, exec_registry, execution_scope, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            ccx_lock.app.runtime.exec_registry.clone()
+            (
+                ccx_lock.app.gcx.clone(),
+                ccx_lock.app.runtime.exec_registry.clone(),
+                ccx_lock.execution_scope.clone(),
+                ccx_lock.chat_id.clone(),
+            )
         };
         let process_id = parse_process_id(args)?;
-        let snapshot = require_process(&exec_registry, &process_id).await?;
+        let snapshot = authorize_process_access(
+            gcx,
+            exec_registry.as_ref(),
+            execution_scope.as_ref(),
+            &chat_id,
+            &process_id,
+        )
+        .await?;
         let since_seq = parse_optional_u64(args, "since_seq")?.unwrap_or(0);
         let stream = parse_stream_selection(args)?;
         let from_disk = parse_optional_bool(args, "from_disk")?.unwrap_or(false);
@@ -488,12 +504,24 @@ impl Tool for ToolProcessKill {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let exec_registry = {
+        let (gcx, exec_registry, execution_scope, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            ccx_lock.app.runtime.exec_registry.clone()
+            (
+                ccx_lock.app.gcx.clone(),
+                ccx_lock.app.runtime.exec_registry.clone(),
+                ccx_lock.execution_scope.clone(),
+                ccx_lock.chat_id.clone(),
+            )
         };
         let process_id = parse_process_id(args)?;
-        require_process(&exec_registry, &process_id).await?;
+        authorize_process_access(
+            gcx,
+            exec_registry.as_ref(),
+            execution_scope.as_ref(),
+            &chat_id,
+            &process_id,
+        )
+        .await?;
         let snapshot = exec_registry.kill(&process_id).await?;
         let content = format_process_snapshot("Process killed", &snapshot);
         Ok(tool_result(
@@ -538,12 +566,24 @@ impl Tool for ToolProcessWait {
         tool_call_id: &String,
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
-        let exec_registry = {
+        let (gcx, exec_registry, execution_scope, chat_id) = {
             let ccx_lock = ccx.lock().await;
-            ccx_lock.app.runtime.exec_registry.clone()
+            (
+                ccx_lock.app.gcx.clone(),
+                ccx_lock.app.runtime.exec_registry.clone(),
+                ccx_lock.execution_scope.clone(),
+                ccx_lock.chat_id.clone(),
+            )
         };
         let process_id = parse_process_id(args)?;
-        require_process(&exec_registry, &process_id).await?;
+        authorize_process_access(
+            gcx.clone(),
+            exec_registry.as_ref(),
+            execution_scope.as_ref(),
+            &chat_id,
+            &process_id,
+        )
+        .await?;
         let timeout_ms = parse_optional_u64(args, "timeout_ms")?;
         let (snapshot, timed_out) = if let Some(timeout_ms) = timeout_ms {
             match tokio::time::timeout(
@@ -553,7 +593,17 @@ impl Tool for ToolProcessWait {
             .await
             {
                 Ok(result) => (result?, false),
-                Err(_) => (require_process(&exec_registry, &process_id).await?, true),
+                Err(_) => (
+                    authorize_process_access(
+                        gcx,
+                        exec_registry.as_ref(),
+                        execution_scope.as_ref(),
+                        &chat_id,
+                        &process_id,
+                    )
+                    .await?,
+                    true,
+                ),
             }
         } else {
             (exec_registry.wait(&process_id).await?, false)
@@ -1169,14 +1219,17 @@ fn process_start_args_from_shell_service(
     Ok(result)
 }
 
-async fn require_process(
+async fn authorize_process_access(
+    gcx: Arc<GlobalContext>,
     registry: &crate::exec::ExecRegistry,
+    execution_scope: Option<&ExecutionScope>,
+    chat_id: &str,
     process_id: &ExecProcessId,
 ) -> Result<ExecProcessSnapshot, String> {
+    let workspace = process_workspace(gcx, execution_scope).await;
     registry
-        .get(process_id)
+        .authorize_process_access(process_id, chat_id, workspace.as_deref())
         .await
-        .ok_or_else(|| format!("process not found: {process_id}"))
 }
 
 fn matches_list_status(snapshot: &ExecProcessSnapshot, status: ProcessListStatus) -> bool {
@@ -1494,22 +1547,46 @@ mod tests {
     use crate::exec::{ExecProcessMeta, ExecStatusKind};
 
     async fn test_ccx() -> (Arc<GlobalContext>, Arc<AMutex<AtCommandsContext>>) {
+        test_ccx_with_chat("chat").await
+    }
+
+    async fn test_ccx_with_chat(
+        chat_id: &str,
+    ) -> (Arc<GlobalContext>, Arc<AMutex<AtCommandsContext>>) {
         let gcx = crate::global_context::tests::make_test_gcx().await;
+        (gcx.clone(), test_ccx_for_gcx(gcx, chat_id, None).await)
+    }
+
+    async fn test_ccx_for_gcx(
+        gcx: Arc<GlobalContext>,
+        chat_id: &str,
+        task_role: Option<&str>,
+    ) -> Arc<AMutex<AtCommandsContext>> {
         let ccx = AtCommandsContext::new_with_abort(
-            AppState::from_gcx(gcx.clone()).await,
+            AppState::from_gcx(gcx).await,
             4096,
             20,
             false,
             Vec::new(),
-            "chat".to_string(),
+            chat_id.to_string(),
             None,
             "model".to_string(),
-            None,
+            task_role.map(task_meta),
             None,
             None,
         )
         .await;
-        (gcx, Arc::new(AMutex::new(ccx)))
+        Arc::new(AMutex::new(ccx))
+    }
+
+    fn task_meta(role: &str) -> crate::chat::types::TaskMeta {
+        crate::chat::types::TaskMeta {
+            task_id: "task".to_string(),
+            role: role.to_string(),
+            agent_id: None,
+            card_id: None,
+            planner_chat_id: None,
+        }
     }
 
     async fn test_ccx_for_workspace(
@@ -1605,6 +1682,26 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         panic!("output did not contain {needle}");
+    }
+
+    async fn register_test_process(
+        gcx: &GlobalContext,
+        process_id: &str,
+        chat_id: &str,
+        workspace: Option<PathBuf>,
+    ) -> ExecProcessId {
+        let mut meta = ExecProcessMeta::new(ExecMode::Background, "test".to_string())
+            .with_process_id(ExecProcessId(process_id.to_string()))
+            .with_chat_id(chat_id)
+            .with_short_description("Authorization test".to_string());
+        if let Some(workspace) = workspace {
+            meta = meta.with_workspace(workspace);
+        }
+        let snapshot = gcx
+            .exec_registry
+            .register(meta, PROCESS_TRANSCRIPT_MAX_BYTES)
+            .await;
+        snapshot.meta.process_id
     }
 
     fn required_names(desc: ToolDesc) -> Vec<String> {
@@ -2229,6 +2326,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_read_denies_cross_chat_process() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let owner_ccx = test_ccx_for_gcx(gcx.clone(), "chat-a", None).await;
+        let other_ccx = test_ccx_for_gcx(gcx.clone(), "chat-b", None).await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let started = run_tool(
+            &mut start,
+            owner_ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(long_running_command("secret"))),
+                ("description", json!("Run owned process")),
+                ("startup_wait_ms", json!(100)),
+            ]),
+        )
+        .await
+        .unwrap();
+        let process_id = process_id(&started);
+
+        let mut read = ToolProcessRead {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut read,
+            other_ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, format!("process access denied: {process_id}"));
+
+        let output = run_tool(
+            &mut read,
+            owner_ccx.clone(),
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exec(&output)["process_id"], process_id.as_str());
+
+        gcx.exec_registry.kill(&process_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn process_kill_denies_cross_chat_process() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let owner_ccx = test_ccx_for_gcx(gcx.clone(), "chat-a", None).await;
+        let other_ccx = test_ccx_for_gcx(gcx.clone(), "chat-b", None).await;
+        let mut start = ToolProcessStart {
+            config_path: String::new(),
+        };
+        let started = run_tool(
+            &mut start,
+            owner_ccx.clone(),
+            make_args_map(vec![
+                ("command", json!(long_running_command("kill-secret"))),
+                ("description", json!("Run process for kill auth")),
+                ("startup_wait_ms", json!(100)),
+            ]),
+        )
+        .await
+        .unwrap();
+        let process_id = process_id(&started);
+
+        let mut kill = ToolProcessKill {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut kill,
+            other_ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, format!("process access denied: {process_id}"));
+        assert_eq!(
+            gcx.exec_registry.get(&process_id).await.unwrap().status,
+            ExecStatus::Running
+        );
+
+        let killed = run_tool(
+            &mut kill,
+            owner_ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exec(&killed)["status"], "killed");
+    }
+
+    #[tokio::test]
+    async fn process_wait_denies_cross_chat_process() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let owner_ccx = test_ccx_for_gcx(gcx.clone(), "chat-a", None).await;
+        let other_ccx = test_ccx_for_gcx(gcx.clone(), "chat-b", None).await;
+        let process_id = register_test_process(&gcx, "exec_wait_owned", "chat-a", None).await;
+        gcx.exec_registry
+            .mark_exited(&process_id, Some(0))
+            .await
+            .unwrap();
+
+        let mut wait = ToolProcessWait {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut wait,
+            other_ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, format!("process access denied: {process_id}"));
+
+        let completed = run_tool(
+            &mut wait,
+            owner_ccx,
+            make_args_map(vec![("process_id", json!(process_id.as_str()))]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exec(&completed)["status"], "exited");
+    }
+
+    #[tokio::test]
     async fn background_output_filter_uses_transcript() {
         let (gcx, ccx) = test_ccx().await;
         let snapshot = gcx
@@ -2680,5 +2902,65 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn process_list_all_rejected_without_planner_context() {
+        let (gcx, ccx) = test_ccx_with_chat("chat-a").await;
+        let process_id = register_test_process(&gcx, "exec_hidden_from_all", "chat-b", None).await;
+        let mut list = ToolProcessList {
+            config_path: String::new(),
+        };
+
+        let err = run_tool(
+            &mut list,
+            ccx,
+            make_args_map(vec![("scope", json!("all")), ("status", json!("all"))]),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, "process_list scope=all requires planner/admin context");
+        assert!(gcx.exec_registry.get(&process_id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn process_list_current_scope_still_allows_owned_process() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let owned = register_test_process(&gcx, "exec_list_owned", "chat-a", None).await;
+        let other = register_test_process(&gcx, "exec_list_other", "chat-b", None).await;
+        let ccx = test_ccx_for_gcx(gcx, "chat-a", None).await;
+        let mut list = ToolProcessList {
+            config_path: String::new(),
+        };
+
+        let listed = run_tool(&mut list, ccx, HashMap::new()).await.unwrap();
+
+        assert!(text(&listed).contains(owned.as_str()));
+        assert!(!text(&listed).contains(other.as_str()));
+        assert_eq!(exec(&listed)["count"], 1);
+    }
+
+    #[tokio::test]
+    async fn planner_can_list_all_processes() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let owned = register_test_process(&gcx, "exec_planner_list_owned", "chat-a", None).await;
+        let other = register_test_process(&gcx, "exec_planner_list_other", "chat-b", None).await;
+        let ccx = test_ccx_for_gcx(gcx, "planner-chat", Some("planner")).await;
+        let mut list = ToolProcessList {
+            config_path: String::new(),
+        };
+
+        let listed = run_tool(
+            &mut list,
+            ccx,
+            make_args_map(vec![("scope", json!("all")), ("status", json!("all"))]),
+        )
+        .await
+        .unwrap();
+
+        assert!(text(&listed).contains(owned.as_str()));
+        assert!(text(&listed).contains(other.as_str()));
+        assert_eq!(exec(&listed)["count"], 2);
     }
 }
