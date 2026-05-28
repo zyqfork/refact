@@ -23,7 +23,6 @@ use refact_runtime_api::{ChatSessionFacade, SessionState};
 const MAX_REPORT_CHARS: usize = 4096;
 const MAX_DOCUMENTS: usize = 6;
 const MAX_ACTIVITY: usize = 10;
-const STUCK_AFTER_MINUTES: i64 = 15;
 
 pub struct ToolTaskOverview;
 
@@ -197,7 +196,7 @@ enum OverviewAgentState {
     Paused,
 }
 
-fn classify_agent(status: &AgentStatus, now: DateTime<Utc>) -> OverviewAgentState {
+fn classify_agent(status: &AgentStatus, _now: DateTime<Utc>) -> OverviewAgentState {
     match status.column.as_str() {
         "done" => OverviewAgentState::Done,
         "failed" | "regressed" => OverviewAgentState::Failed,
@@ -212,23 +211,31 @@ fn classify_agent(status: &AgentStatus, now: DateTime<Utc>) -> OverviewAgentStat
             }
             if matches!(
                 status.session_state,
-                Some(SessionState::Paused | SessionState::WaitingUserInput)
+                Some(
+                    SessionState::Paused
+                        | SessionState::WaitingUserInput
+                        | SessionState::WaitingIde
+                )
             ) {
                 return OverviewAgentState::Paused;
             }
-            if status
-                .last_activity_at
-                .map(|last| {
-                    now.signed_duration_since(last) >= Duration::minutes(STUCK_AFTER_MINUTES)
-                })
-                .unwrap_or(false)
-            {
+            if matches!(
+                status.session_state,
+                Some(SessionState::Generating | SessionState::ExecutingTools)
+            ) {
+                return OverviewAgentState::Running;
+            }
+            if generation_loop_is_off(status) {
                 return OverviewAgentState::Stuck;
             }
             OverviewAgentState::Running
         }
         _ => OverviewAgentState::Running,
     }
+}
+
+fn generation_loop_is_off(status: &AgentStatus) -> bool {
+    matches!(status.session_state, Some(SessionState::Idle) | None)
 }
 
 fn render_agent_health(statuses: &[AgentStatus], now: DateTime<Utc>) -> String {
@@ -870,6 +877,44 @@ mod tests {
         assert_eq!(desc.input_schema["required"], json!([]));
         assert!(desc.input_schema["properties"].get("task_id").is_some());
         assert!(desc.description.contains("Planner-only"));
+    }
+
+    fn status(id: &str, session_state: Option<SessionState>, minutes_ago: i64) -> AgentStatus {
+        let ts = fixed_now() - Duration::minutes(minutes_ago);
+        AgentStatus {
+            card_id: id.to_string(),
+            card_title: format!("{} title", id),
+            agent_chat_id: format!("agent-{}", id),
+            column: "doing".to_string(),
+            priority: "P0".to_string(),
+            session_state,
+            last_status_update: None,
+            last_activity_at: Some(ts),
+            final_report: None,
+            last_tool_name: None,
+            change_seq: ts.timestamp() as u64,
+        }
+    }
+
+    #[test]
+    fn task_overview_counts_old_active_generation_as_running() {
+        let statuses = vec![
+            status("T-1", Some(SessionState::Generating), 30),
+            status("T-2", Some(SessionState::ExecutingTools), 30),
+        ];
+        let output = render_agent_health(&statuses, fixed_now());
+
+        assert!(output.contains("🔄 2 running"));
+        assert!(output.contains("🔴 0 stuck"));
+    }
+
+    #[test]
+    fn task_overview_counts_off_generation_loop_as_stuck() {
+        let statuses = vec![status("T-1", Some(SessionState::Idle), 2)];
+        let output = render_agent_health(&statuses, fixed_now());
+
+        assert!(output.contains("🔄 0 running"));
+        assert!(output.contains("🔴 1 stuck"));
     }
 
     #[tokio::test]

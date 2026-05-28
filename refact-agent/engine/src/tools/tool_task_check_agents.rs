@@ -15,7 +15,6 @@ use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType
 use refact_runtime_api::{ChatSessionFacade, SessionState};
 
 const DEFAULT_LIMIT: usize = 20;
-const STUCK_AFTER_MINUTES: i64 = 15;
 
 pub struct ToolTaskCheckAgents;
 
@@ -478,7 +477,7 @@ fn latest_timestamp(
     times.into_iter().flatten().max()
 }
 
-fn classify_agent_status(status: &AgentStatus, now: DateTime<Utc>) -> AgentStateKind {
+fn classify_agent_status(status: &AgentStatus, _now: DateTime<Utc>) -> AgentStateKind {
     match status.column.as_str() {
         "done" => AgentStateKind::Done,
         "failed" => AgentStateKind::Failed,
@@ -493,11 +492,21 @@ fn classify_agent_status(status: &AgentStatus, now: DateTime<Utc>) -> AgentState
             }
             if matches!(
                 status.session_state,
-                Some(SessionState::Paused | SessionState::WaitingUserInput)
+                Some(
+                    SessionState::Paused
+                        | SessionState::WaitingUserInput
+                        | SessionState::WaitingIde
+                )
             ) {
                 return AgentStateKind::Paused;
             }
-            if is_stale(status, now) {
+            if matches!(
+                status.session_state,
+                Some(SessionState::Generating | SessionState::ExecutingTools)
+            ) {
+                return AgentStateKind::Running;
+            }
+            if generation_loop_is_off(status) {
                 return AgentStateKind::Stuck;
             }
             AgentStateKind::Running
@@ -506,11 +515,8 @@ fn classify_agent_status(status: &AgentStatus, now: DateTime<Utc>) -> AgentState
     }
 }
 
-fn is_stale(status: &AgentStatus, now: DateTime<Utc>) -> bool {
-    status
-        .last_activity_at
-        .map(|last| now.signed_duration_since(last) >= Duration::minutes(STUCK_AFTER_MINUTES))
-        .unwrap_or(false)
+fn generation_loop_is_off(status: &AgentStatus) -> bool {
+    matches!(status.session_state, Some(SessionState::Idle) | None)
 }
 
 pub(crate) fn has_active_agent_statuses(statuses: &[AgentStatus]) -> bool {
@@ -772,7 +778,7 @@ impl AgentAlerts {
 
 fn format_alerts(alerts: &AgentAlerts) -> String {
     format!(
-        "⚠️  Alerts: {} stuck (>15min), {} failed, {} needing approval\n\n",
+        "⚠️  Alerts: {} stuck, {} failed, {} needing approval\n\n",
         alerts.stuck, alerts.failed, alerts.paused
     )
 }
@@ -1182,16 +1188,41 @@ mod tests {
     }
 
     #[test]
+    fn active_generation_loop_is_not_stuck_only_because_activity_is_old() {
+        let statuses = vec![
+            status("T-1", "P0", "doing", Some(SessionState::Generating), 30),
+            status("T-2", "P0", "doing", Some(SessionState::ExecutingTools), 30),
+        ];
+        let output =
+            format_agent_statuses_at(&statuses, &query(AgentReportFormat::Compact), now()).unwrap();
+
+        assert!(output.starts_with("⚠️  Alerts: 0 stuck, 0 failed, 0 needing approval"));
+        assert!(!output.contains("STUCK"));
+        assert!(output.contains("generating"));
+        assert!(output.contains("exec tools"));
+    }
+
+    #[test]
+    fn doing_agent_is_stuck_when_generation_loop_is_off() {
+        let statuses = vec![status("T-1", "P0", "doing", Some(SessionState::Idle), 2)];
+        let output =
+            format_agent_statuses_at(&statuses, &query(AgentReportFormat::Compact), now()).unwrap();
+
+        assert!(output.starts_with("⚠️  Alerts: 1 stuck, 0 failed, 0 needing approval"));
+        assert!(output.contains("STUCK"));
+    }
+
+    #[test]
     fn sticky_alerts_always_render_when_attention_agents_exist() {
         let statuses = vec![
-            status("T-1", "P0", "doing", Some(SessionState::Idle), 18),
+            status("T-1", "P0", "doing", None, 18),
             status("T-2", "P1", "failed", Some(SessionState::Error), 2),
         ];
         let mut query = query(AgentReportFormat::Compact);
         query.card_ids = Some(HashSet::from(["missing".to_string()]));
         let output = format_agent_statuses_at(&statuses, &query, now()).unwrap();
 
-        assert!(output.starts_with("⚠️  Alerts: 1 stuck (>15min), 1 failed, 0 needing approval"));
+        assert!(output.starts_with("⚠️  Alerts: 1 stuck, 1 failed, 0 needing approval"));
         assert!(card_lines(&output).is_empty());
     }
 
