@@ -7,12 +7,20 @@
  * ------------------------------------------------------------------------- */
 
 .page {
-  composes: scrollbarThin from "../../components/shared/scrollbar.module.css";
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   overflow: hidden;
   background: transparent;
+}
+
+.content {
+  composes: scrollbarThin from "../../components/shared/scrollbar.module.css";
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* ---------- Shared action chip (declared early so composes can reach
@@ -90,6 +98,12 @@
 .topTitle {
   font-weight: 600;
   letter-spacing: 0.02em;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
 }
 
 /* ---------- Hero ---------- */
@@ -272,21 +286,15 @@
 
 .row {
   display: grid;
-  /* minmax(0, 1fr) lets columns shrink below their intrinsic min-content
-   * size so long titles/chips never push the grid wider than the page. */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-2);
   padding: 0 var(--space-3) var(--space-2);
-  flex-shrink: 0;
   min-height: 0;
   min-width: 0;
 }
 
-/* Three-column row: PULSE | OPPORTUNITIES | WORKSHOP and ACTIVITY |
- * RECENT ERRORS | RECENT CHATS. Falls back to two columns mid-narrow
- * widths and one column on very narrow viewports (handled below). */
 .row3 {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
 /* Single full-width row used by the unified PERSONALITY panel. */
@@ -294,15 +302,16 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* Stretching row: takes the remaining vertical space and lets its
- * children clip + scroll internally. Applied to rows that contain lists. */
 .rowFlex {
-  flex: 1 1 0;
   min-height: 0;
 }
 
 .rowFlexBottom {
   min-height: 132px;
+}
+
+.settingsSection {
+  padding: 0 var(--space-3) var(--space-3);
 }
 
 /* Slim chip strip used for project-setup quick actions placed inline
@@ -361,25 +370,16 @@
   gap: 2px;
 }
 
-/* Mid-narrow widths: drop 3-col rows back to 2 columns. */
 @media (max-width: 980px) {
   .row3 {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
 }
 
-/* Narrow IDE/webview widths: stack pairs into one column and let the page
- * scroll naturally so nothing gets clipped. */
 @media (max-width: 720px) {
-  .page {
-    overflow-y: auto;
-  }
   .row,
   .row3 {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .rowFlex {
-    flex: 0 0 auto;
   }
   .rowFlexBottom {
     min-height: 0;
@@ -395,12 +395,6 @@
 }
 
 @media (max-height: 860px) {
-  .page {
-    overflow-y: auto;
-  }
-  .rowFlex {
-    flex: 0 0 auto;
-  }
   .panelScroll {
     overflow: visible;
   }

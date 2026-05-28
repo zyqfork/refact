@@ -846,6 +846,63 @@ describe("BuddyHome_renders_all_sections", () => {
     expect(executor).toContain("dispatch(dismissRuntimeEvent(eventId))");
     expect(executor).toContain(".catch(() => undefined)");
   });
+
+  it("renders a buddy-home-content scroll container", async () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot(makePulse())));
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [] }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+        HttpResponse.json([]),
+      ),
+      http.get("http://127.0.0.1:8001/v1/stats/llm/summary", () =>
+        HttpResponse.json({
+          totals: { total_calls: 0, successful_calls: 0, total_tokens: 0 },
+        }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/setup/status", () =>
+        HttpResponse.json({ configured: true, reasons: [], detail: {} }),
+      ),
+    );
+
+    render(<BuddyHome />, { store });
+
+    expect(await screen.findByTestId("buddy-home-content")).toBeInTheDocument();
+  });
+
+  it("settings section uses a CSS class wrapper when settings toggled on", async () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot(makePulse())));
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [] }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+        HttpResponse.json([]),
+      ),
+      http.get("http://127.0.0.1:8001/v1/stats/llm/summary", () =>
+        HttpResponse.json({
+          totals: { total_calls: 0, successful_calls: 0, total_tokens: 0 },
+        }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/setup/status", () =>
+        HttpResponse.json({ configured: true, reasons: [], detail: {} }),
+      ),
+    );
+
+    const { user } = render(<BuddyHome />, { store });
+
+    await screen.findByTestId("buddy-home-content");
+    await user.click(screen.getByRole("button", { name: /settings/i }));
+
+    const settingsSection = await screen.findByTestId(
+      "buddy-home-settings-section",
+    );
+    expect(settingsSection).toBeInTheDocument();
+    expect(settingsSection).not.toHaveAttribute("style");
+  });
 });
 
 describe("BuddyWorld_dynamic_environment", () => {

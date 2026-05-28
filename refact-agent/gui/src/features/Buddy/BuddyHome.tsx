@@ -666,12 +666,14 @@ export const BuddyHome: React.FC = () => {
         <Button
           variant="ghost"
           size="1"
+          aria-label="Settings"
           onClick={() => setShowSettings((v) => !v)}
         >
           <GearIcon width={14} height={14} />
         </Button>
       </div>
 
+      <main className={styles.content} data-testid="buddy-home-content">
       <BuddyWorld
         homeDoorDisabled
         palette={palette}
@@ -703,7 +705,10 @@ export const BuddyHome: React.FC = () => {
       />
 
       {showSettings && (
-        <div style={{ padding: "0 var(--space-3) var(--space-3)" }}>
+        <div
+          className={styles.settingsSection}
+          data-testid="buddy-home-settings-section"
+        >
           <BuddySettingsPanel onClose={() => setShowSettings(false)} />
         </div>
       )}
@@ -753,7 +758,6 @@ export const BuddyHome: React.FC = () => {
         className={classNames(
           styles.row,
           styles.row3,
-          styles.rowFlex,
           styles.rowFlexBottom,
         )}
       >
@@ -773,6 +777,7 @@ export const BuddyHome: React.FC = () => {
       </div>
 
       <BuddyWorkshop />
+      </main>
     </div>
   );
 };
