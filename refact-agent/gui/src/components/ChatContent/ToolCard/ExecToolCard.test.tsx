@@ -454,10 +454,9 @@ describe("ExecToolCard", () => {
       },
     });
 
-    expect(screen.getByRole("button", { name: /show output/i })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    expect(
+      screen.getByRole("button", { name: /show output/i }),
+    ).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByTestId("exec-output-view")).not.toBeInTheDocument();
     expect(screen.queryByText("all tests passed")).not.toBeInTheDocument();
   });
@@ -476,10 +475,9 @@ describe("ExecToolCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /show output/i }));
 
-    expect(screen.getByRole("button", { name: /hide output/i })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: /hide output/i }),
+    ).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByTestId("exec-output-view")).toBeInTheDocument();
     expect(screen.getByText("revealed output")).toBeInTheDocument();
   });
@@ -559,10 +557,9 @@ describe("ExecToolCard", () => {
       },
     });
 
-    expect(screen.getByRole("button", { name: /hide output/i })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: /hide output/i }),
+    ).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByTestId("exec-output-view")).toBeInTheDocument();
     expect(screen.getByText("boom")).toBeInTheDocument();
   });

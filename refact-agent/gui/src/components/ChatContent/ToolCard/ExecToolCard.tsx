@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Badge, Box, Button, Flex, Spinner, Text } from "@radix-ui/themes";
 import { CodeIcon, LapTimerIcon, RowsIcon } from "@radix-ui/react-icons";
 import classNames from "classnames";
@@ -280,7 +286,10 @@ function extractOutputSection(content: string, title: string): string | null {
   return value === "<empty>" ? "" : value;
 }
 
-function sectionPreviewText(stream: string, text: string | null): string | null {
+function sectionPreviewText(
+  stream: string,
+  text: string | null,
+): string | null {
   if (!text) return null;
   const line = text
     .split("\n")
@@ -437,7 +446,11 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
     defaultExpandedKeyRef.current = key;
     setOutputOpen(true);
   }, [defaultOutputOpen, outputStoreKey, setOutputOpen]);
-  const { shouldRender, isAnimatingOpen } = useDelayedUnmount(isOpen, 200, true);
+  const { shouldRender, isAnimatingOpen } = useDelayedUnmount(
+    isOpen,
+    200,
+    true,
+  );
   const {
     shouldRender: shouldRenderOutput,
     isAnimatingOpen: isOutputAnimatingOpen,
