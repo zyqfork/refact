@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
+
+use crate::call_validation::ChatMessage;
+use crate::chat::internal_roles::{event, EventSubkind};
 use similar::{Algorithm, TextDiff};
 use tokio::sync::{Mutex as AMutex};
 
@@ -40,6 +43,15 @@ pub fn is_cache_guard_pause_id(tool_call_id: &str) -> bool {
 
 pub fn is_cache_guard_pause_reason(reason: &crate::chat::types::PauseReason) -> bool {
     reason.tool_name == CACHE_GUARD_TOOL_NAME || is_cache_guard_pause_id(&reason.tool_call_id)
+}
+
+pub fn cache_guard_event_message(payload: Value, summary: impl Into<String>) -> ChatMessage {
+    event(
+        EventSubkind::SystemNotice,
+        "chat.cache_guard",
+        payload,
+        summary,
+    )
 }
 
 pub async fn is_guard_enabled_for_model(app: AppState, model_id: &str) -> bool {
@@ -351,6 +363,22 @@ mod tests {
         assert!(is_cache_guard_pause_reason(&reason));
         assert!(is_cache_guard_pause_id("cacheguard_force_once"));
         assert!(!is_cache_guard_pause_id("call_123"));
+    }
+
+    #[test]
+    fn cache_guard_emits_event_not_user_message() {
+        let message = cache_guard_event_message(
+            json!({"model": "test/model", "reason": "prefix_changed"}),
+            "cache guard probe",
+        );
+
+        assert_eq!(message.role, "event");
+        assert_ne!(message.role, "user");
+        let event = message.extra.get("event").unwrap();
+        assert_eq!(event["subkind"], "system_notice");
+        assert_eq!(event["source"], "chat.cache_guard");
+        assert_eq!(event["payload"]["reason"], "prefix_changed");
+        assert_eq!(message.content.content_text_only(), "cache guard probe");
     }
 
     #[tokio::test]

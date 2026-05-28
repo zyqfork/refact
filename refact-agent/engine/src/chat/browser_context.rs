@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
-use crate::call_validation::{ChatContent, ChatMessage};
+use serde_json::json;
+
+use crate::call_validation::ChatMessage;
+use crate::chat::internal_roles::{event, EventSubkind};
 use crate::global_context::GlobalContext;
 use crate::integrations::browser_types::{
-    RecorderEvent, ConsoleEntry, NetworkEntry, MutationSummaryEntry,
+    ConsoleEntry, MutationSummaryEntry, NetworkEntry, RecorderEvent,
 };
 
 const OVERSIZE_THRESHOLD: usize = 100 * 1024;
@@ -364,17 +367,27 @@ pub fn make_context_message(
     _attach_screenshot: bool,
 ) -> ChatMessage {
     let text = format_browser_context(snapshot);
-    ChatMessage {
-        message_id: uuid::Uuid::new_v4().to_string(),
-        role: "user".to_string(),
-        content: ChatContent::SimpleText(text),
-        ..Default::default()
-    }
+    event(
+        EventSubkind::SystemNotice,
+        "chat.browser_context",
+        json!({
+            "url": snapshot.url,
+            "title": snapshot.title,
+            "actions": snapshot.actions.len(),
+            "console": snapshot.console.len(),
+            "network": snapshot.network.len(),
+            "mutations": snapshot.mutations.len(),
+            "total_bytes": snapshot.total_bytes,
+            "page_changed": snapshot.page_changed,
+        }),
+        text,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::call_validation::ChatContent;
 
     #[test]
     fn test_format_browser_context_full() {
@@ -629,7 +642,10 @@ mod tests {
         };
 
         let msg = make_context_message(&snapshot, false);
-        assert_eq!(msg.role, "user");
+        assert_eq!(msg.role, "event");
+        let event = msg.extra.get("event").unwrap();
+        assert_eq!(event["subkind"], "system_notice");
+        assert_eq!(event["source"], "chat.browser_context");
         match &msg.content {
             ChatContent::SimpleText(text) => {
                 assert!(text.contains("[Browser Context]"));

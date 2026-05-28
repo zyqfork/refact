@@ -4,17 +4,36 @@ use refact_chat_history::compression_exemption::{exemption_for, CompressionExemp
 use std::collections::{HashMap, HashSet};
 
 fn is_authoritative_summary(msg: &ChatMessage) -> bool {
-    if msg.role != "summarization" || is_ui_only_message(msg) {
+    if is_ui_only_message(msg) {
         return false;
     }
-    matches!(
+    let known_tier = matches!(
         msg.summarization_tier.as_deref(),
         Some("tier0_deterministic") | Some("tier1_llm") | Some("tier1_merged")
-    )
+    );
+    if msg.role == "event" {
+        return msg
+            .extra
+            .get("event")
+            .and_then(|event| event.get("subkind"))
+            .and_then(|subkind| subkind.as_str())
+            == Some("summarization_marker")
+            && known_tier
+            && msg.summarized_range.is_some();
+    }
+    msg.role == "summarization" && known_tier
+}
+
+fn summary_content(msg: &ChatMessage) -> String {
+    msg.extra
+        .get("summary_text")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| msg.content.content_text_only())
 }
 
 pub fn apply_summarization_linearize(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    if !messages.iter().any(|m| m.role == "summarization") {
+    if !messages.iter().any(|m| is_authoritative_summary(m)) {
         return messages;
     }
 
@@ -23,7 +42,7 @@ pub fn apply_summarization_linearize(messages: Vec<ChatMessage>) -> Vec<ChatMess
         .filter(|m| is_authoritative_summary(m))
         .filter_map(|m| {
             let (start, end) = m.summarized_range?;
-            Some((start, end, m.content.content_text_only()))
+            Some((start, end, summary_content(m)))
         })
         .collect();
 
@@ -63,7 +82,7 @@ pub fn apply_summarization_linearize(messages: Vec<ChatMessage>) -> Vec<ChatMess
     let mut result = Vec::with_capacity(messages.len());
 
     for (i, msg) in messages.iter().enumerate() {
-        if msg.role == "summarization" {
+        if msg.role == "summarization" || is_authoritative_summary(msg) {
             continue;
         }
         if suppressed.contains(&i) {

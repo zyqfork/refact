@@ -1908,3 +1908,44 @@ mod tests {
         assert!(canonical_mode_id(&"x".repeat(200)).is_err());
     }
 }
+
+#[test]
+fn cache_guard_emits_event_not_user_message() {
+    let message = crate::chat::cache_guard::cache_guard_event_message(
+        serde_json::json!({"model": "test/model", "probe": "cache_warm"}),
+        "cache guard probe",
+    );
+
+    assert_eq!(message.role, "event");
+    assert_ne!(message.role, "user");
+    let event = message.extra.get("event").unwrap();
+    assert_eq!(event["subkind"], serde_json::json!("system_notice"));
+    assert_eq!(event["source"], serde_json::json!("chat.cache_guard"));
+    assert_eq!(event["payload"]["probe"], serde_json::json!("cache_warm"));
+    assert_eq!(message.content.content_text_only(), "cache guard probe");
+}
+
+#[test]
+fn summarization_marker_is_event_not_user_message() {
+    let mut marker = crate::chat::internal_roles::event(
+        crate::chat::internal_roles::EventSubkind::SummarizationMarker,
+        "chat.summarizer",
+        serde_json::json!({
+            "tokens_before": 1200,
+            "tokens_after": 300,
+            "messages_compacted": 4,
+        }),
+        "compacted 4 msgs",
+    );
+    marker.summarized_range = Some((1, 4));
+    marker.summarization_tier = Some("tier1_llm".to_string());
+    marker.summarized_token_estimate = Some(1200);
+
+    assert_eq!(marker.role, "event");
+    assert_ne!(marker.role, "user");
+    let event = marker.extra.get("event").unwrap();
+    assert_eq!(event["subkind"], serde_json::json!("summarization_marker"));
+    assert_eq!(event["source"], serde_json::json!("chat.summarizer"));
+    assert_eq!(event["payload"]["messages_compacted"], serde_json::json!(4));
+    assert_eq!(marker.content.content_text_only(), "compacted 4 msgs");
+}

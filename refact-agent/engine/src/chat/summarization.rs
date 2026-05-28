@@ -1,19 +1,22 @@
 use std::sync::Arc;
-use tracing::{info, warn};
-use uuid::Uuid;
 
-use crate::call_validation::{ChatContent, ChatMessage};
-use crate::global_context::GlobalContext;
+use serde_json::{json, Value};
+use tracing::{info, warn};
+
+use crate::call_validation::ChatMessage;
 use crate::chat::diagnostics::{filter_ui_only_messages, is_ui_only_message};
-use refact_chat_history::compression_exemption::{exemption_for, CompressionExemption};
 use crate::chat::history_limit::{compute_context_budget, ContextPressure};
+use crate::chat::internal_roles::{event, EventSubkind};
 use crate::chat::linearize::apply_summarization_linearize;
 use crate::chat::trajectory_ops::approx_token_count;
-use crate::subchat::{SubchatConfig, ToolsPolicy, run_subchat};
+use crate::global_context::GlobalContext;
+use crate::subchat::{run_subchat, SubchatConfig, ToolsPolicy};
+use refact_chat_history::compression_exemption::{event_subkind, exemption_for, CompressionExemption};
 
 pub const MAX_TIER1_COMPACT_ATTEMPTS: usize = 2;
 pub const MAX_TIER1_ANCHORS_BEFORE_MERGE: usize = 4;
 const TIER1_OVERHEAD_TOKENS: usize = 1024;
+const SUMMARY_TEXT_EXTRA_KEY: &str = "summary_text";
 
 #[derive(Debug, Clone)]
 pub enum Tier1Failure {
@@ -198,13 +201,23 @@ fn adjust_range_after_removing_indices(
 }
 
 fn is_real_summarization_anchor(message: &ChatMessage) -> bool {
-    if message.role != "summarization" || is_ui_only_message(message) {
+    if is_ui_only_message(message) {
         return false;
     }
-    matches!(
+    let known_tier = matches!(
         message.summarization_tier.as_deref(),
         Some("tier0_deterministic") | Some("tier1_llm") | Some("tier1_merged")
-    )
+    );
+    if message.role == "event" && event_subkind(message) == Some("summarization_marker") {
+        return known_tier && message.summarized_range.is_some();
+    }
+    message.role == "summarization" && known_tier
+}
+
+fn set_summary_content(message: &mut ChatMessage, summary: String) {
+    message
+        .extra
+        .insert(SUMMARY_TEXT_EXTRA_KEY.to_string(), Value::String(summary));
 }
 
 fn visible_tier1_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
@@ -239,6 +252,32 @@ fn translate_summarized_range_to_original(summ_msg: &mut ChatMessage, original_i
             _ => None,
         };
     }
+}
+
+fn make_summarization_marker(
+    summary: String,
+    start: usize,
+    end: usize,
+    tier_label: &str,
+    tokens_before: usize,
+    tokens_after: usize,
+    messages_compacted: usize,
+) -> ChatMessage {
+    let mut message = event(
+        EventSubkind::SummarizationMarker,
+        "chat.summarizer",
+        json!({
+            "tokens_before": tokens_before,
+            "tokens_after": tokens_after,
+            "messages_compacted": messages_compacted,
+        }),
+        format!("compacted {messages_compacted} msgs"),
+    );
+    message.summarized_range = Some((start, end));
+    message.summarization_tier = Some(tier_label.to_string());
+    message.summarized_token_estimate = Some(tokens_before);
+    set_summary_content(&mut message, summary);
+    message
 }
 
 pub fn find_summarization_boundary(messages: &[ChatMessage]) -> (usize, usize) {
@@ -499,16 +538,17 @@ async fn tier1_summarize_range(
         start,
         end
     );
+    let tokens_after = summary.len() / 4 + 10;
 
-    Ok(ChatMessage {
-        message_id: Uuid::new_v4().to_string(),
-        role: "summarization".to_string(),
-        content: ChatContent::SimpleText(summary),
-        summarized_range: Some((start, end)),
-        summarization_tier: Some(tier_label.to_string()),
-        summarized_token_estimate: Some(token_estimate),
-        ..Default::default()
-    })
+    Ok(make_summarization_marker(
+        summary,
+        start,
+        end,
+        tier_label,
+        token_estimate,
+        tokens_after,
+        chunk.len(),
+    ))
 }
 
 pub async fn tier1_summarize(
@@ -715,13 +755,15 @@ mod tests {
     }
 
     fn make_summarization_msg(range: (usize, usize)) -> ChatMessage {
-        ChatMessage {
-            role: "summarization".to_string(),
-            content: ChatContent::SimpleText("previous summary".to_string()),
-            summarized_range: Some(range),
-            summarization_tier: Some("tier1_llm".to_string()),
-            ..Default::default()
-        }
+        make_summarization_marker(
+            "previous summary".to_string(),
+            range.0,
+            range.1,
+            "tier1_llm",
+            120,
+            14,
+            range.1.saturating_sub(range.0) + 1,
+        )
     }
 
     fn make_ui_only_reactive_report(content: &str) -> ChatMessage {
@@ -884,6 +926,27 @@ mod tests {
             ..Default::default()
         };
         assert!(!is_real_summarization_anchor(&msg_no_tier));
+    }
+
+    #[test]
+    fn summarization_marker_is_event_not_user_message() {
+        let marker = make_summarization_msg((1, 3));
+
+        assert_eq!(marker.role, "event");
+        assert_ne!(marker.role, "user");
+        let event = marker.extra.get("event").unwrap();
+        assert_eq!(event["subkind"], "summarization_marker");
+        assert_eq!(event["source"], "chat.summarizer");
+        assert_eq!(event["payload"]["messages_compacted"], json!(3));
+        assert_eq!(marker.content.content_text_only(), "compacted 3 msgs");
+        assert_eq!(
+            marker
+                .extra
+                .get(SUMMARY_TEXT_EXTRA_KEY)
+                .and_then(|value| value.as_str()),
+            Some("previous summary")
+        );
+        assert!(is_real_summarization_anchor(&marker));
     }
 
     #[test]
