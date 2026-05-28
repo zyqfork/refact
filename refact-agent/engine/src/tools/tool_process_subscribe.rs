@@ -12,7 +12,6 @@ use tokio::task::JoinHandle;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::chat::internal_roles::{event, EventSubkind};
-use crate::chat::types::SessionState;
 use crate::exec::types::normalize_workspace_path;
 use crate::exec::{ExecOutputChunk, ExecOutputStream, ExecProcessId, ExecRegistry};
 use crate::files_correction::get_active_project_path;

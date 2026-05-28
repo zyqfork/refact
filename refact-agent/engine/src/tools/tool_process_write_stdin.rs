@@ -12,7 +12,7 @@ use crate::exec::{ExecOutputChunk, ExecProcessId, ExecProcessSnapshot, ExecWrite
 use crate::files_correction::get_active_project_path;
 use crate::postprocessing::pp_command_output::{output_mini_postprocessing, OutputFilter};
 use crate::tools::file_edit::auxiliary::active_execution_scope;
-use crate::tools::tool_process::{process_value, read_value};
+use crate::tools::tool_process::{process_value, read_value, status_label};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 use crate::worktrees::scope::ExecutionScope;
 
