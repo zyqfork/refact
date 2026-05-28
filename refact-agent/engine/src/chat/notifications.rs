@@ -36,12 +36,20 @@ async fn wait_for_shutdown(gcx: SharedGlobalContext) {
     }
 }
 
-async fn handle_process_completion(gcx: SharedGlobalContext, event: ProcessCompletionEvent) {
+pub(crate) async fn handle_process_completion(
+    gcx: SharedGlobalContext,
+    event: ProcessCompletionEvent,
+) {
     let session_arc = process_completion_session(gcx.clone(), &event.chat_id).await;
     let Some(session_arc) = session_arc else {
         return;
     };
-    inject_as_priority(gcx, session_arc, event).await;
+    if inject_as_priority(gcx.clone(), session_arc, event.clone()).await {
+        return;
+    }
+    if let Some(session_arc) = process_completion_session(gcx.clone(), &event.chat_id).await {
+        inject_as_priority(gcx, session_arc, event).await;
+    }
 }
 
 async fn process_completion_session(
@@ -52,7 +60,10 @@ async fn process_completion_session(
         let sessions = gcx.chat_sessions.read().await;
         sessions.get(chat_id).cloned()
     } {
-        return Some(session_arc);
+        let is_closed = session_arc.lock().await.closed;
+        if !is_closed {
+            return Some(session_arc);
+        }
     }
 
     let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
@@ -81,12 +92,12 @@ async fn inject_as_priority(
     gcx: SharedGlobalContext,
     session_arc: Arc<AMutex<ChatSession>>,
     event: ProcessCompletionEvent,
-) {
+) -> bool {
     let app = crate::app_state::AppState::from_gcx(gcx).await;
     let processor_running = {
         let mut session = session_arc.lock().await;
         if session.closed {
-            return;
+            return false;
         }
         inject_process_completion_message(&mut session, event.clone());
         session.enqueue_priority_command(CommandRequest {
@@ -103,6 +114,7 @@ async fn inject_as_priority(
             processor_running,
         ));
     }
+    true
 }
 
 pub(crate) fn inject_process_completion_message(

@@ -1528,6 +1528,44 @@ pub async fn close_all_chat_sessions(app: AppState) {
     }
 }
 
+async fn cleanup_idle_session(
+    app: AppState,
+    sessions: &SessionsMap,
+    chat_id: &str,
+    session_arc: Arc<AMutex<ChatSession>>,
+) -> bool {
+    super::trajectories::maybe_save_trajectory(app, session_arc.clone()).await;
+
+    let should_remove = {
+        let mut session = session_arc.lock().await;
+        close_idle_session_for_cleanup(&mut session)
+    };
+
+    if !should_remove {
+        return false;
+    }
+
+    let mut sessions_write = sessions.write().await;
+    if let Some(current) = sessions_write.get(chat_id) {
+        if Arc::ptr_eq(current, &session_arc) {
+            sessions_write.remove(chat_id);
+            return true;
+        }
+    }
+    false
+}
+
+fn close_idle_session_for_cleanup(session: &mut ChatSession) -> bool {
+    if !session.is_idle_for_cleanup() {
+        return false;
+    }
+    if !session.closed {
+        session.close_event_channel();
+    }
+    session.queue_notify.notify_waiters();
+    true
+}
+
 pub fn start_session_cleanup_task(app: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(session_cleanup_interval());
@@ -1574,6 +1612,11 @@ pub fn start_session_cleanup_task(app: AppState) {
             info!("Cleaning up {} idle sessions", to_cleanup.len());
 
             for (chat_id, session_arc) in &to_cleanup {
+                if !cleanup_idle_session(app.clone(), &sessions, chat_id, session_arc.clone()).await
+                {
+                    continue;
+                }
+
                 let app_hook = app.clone();
                 let chat_id_hook = chat_id.clone();
                 tokio::spawn(async move {
@@ -1591,20 +1634,6 @@ pub fn start_session_cleanup_task(app: AppState) {
                     run_hooks(app_hook, HookEvent::SessionEnd, payload).await;
                 });
 
-                {
-                    let mut session = session_arc.lock().await;
-                    session.close_event_channel(); // sets closed + closed_flag
-                    session.queue_notify.notify_waiters();
-                }
-                {
-                    let mut sessions_write = sessions.write().await;
-                    if let Some(current) = sessions_write.get(chat_id) {
-                        if Arc::ptr_eq(current, session_arc) {
-                            sessions_write.remove(chat_id);
-                        }
-                    }
-                }
-                super::trajectories::maybe_save_trajectory(app.clone(), session_arc.clone()).await;
                 info!("Saved trajectory for closed session {}", chat_id);
             }
         }
@@ -1616,7 +1645,9 @@ mod tests {
     use super::*;
     use super::super::types::{ChatCommand, CommandRequest};
     use crate::call_validation::{ChatToolCall, ChatToolFunction};
+    use crate::exec::{ExecMode, ExecProcessId, ExecProcessMeta};
     use serde_json::json;
+    use std::sync::atomic::Ordering;
     use std::time::Instant;
 
     fn make_session() -> ChatSession {
@@ -1631,6 +1662,27 @@ mod tests {
         let mut session = ChatSession::new("test-chat-small".to_string());
         session.event_tx = event_tx;
         session
+    }
+
+    async fn test_app_with_workspace(
+        workspace: &std::path::Path,
+    ) -> (crate::app_state::AppState, tempfile::TempDir) {
+        let config_dir = tempfile::tempdir().unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx_with_dirs(
+            workspace.join("cache"),
+            config_dir.path().to_path_buf(),
+        )
+        .await;
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![workspace.to_path_buf()];
+        let app = crate::app_state::AppState::from_gcx(gcx).await;
+        (app, config_dir)
+    }
+
+    fn background_completion_meta(chat_id: &str) -> ExecProcessMeta {
+        ExecProcessMeta::new(ExecMode::Background, "true".to_string())
+            .with_process_id(ExecProcessId("exec_cleanup_order".to_string()))
+            .with_chat_id(chat_id)
+            .with_short_description("cleanup order".to_string())
     }
 
     #[test]
@@ -2497,6 +2549,131 @@ mod tests {
 
         assert!(!session.is_pending_wake_up());
         assert!(session.is_idle_for_cleanup());
+    }
+
+    #[tokio::test]
+    async fn cleanup_saves_before_session_removal() {
+        let workspace = tempfile::tempdir().unwrap();
+        let (app, _config_dir) = test_app_with_workspace(workspace.path()).await;
+        let chat_id = "cleanup-saves-before-removal";
+        let session_arc = Arc::new(AMutex::new(ChatSession::new(chat_id.to_string())));
+        {
+            let mut session = session_arc.lock().await;
+            session.add_message(ChatMessage::new("user".to_string(), "hello".to_string()));
+            session.last_activity =
+                Instant::now() - session_idle_timeout() - std::time::Duration::from_secs(1);
+        }
+        app.chat
+            .sessions
+            .write()
+            .await
+            .insert(chat_id.to_string(), session_arc.clone());
+
+        assert!(
+            cleanup_idle_session(
+                app.clone(),
+                &app.chat.sessions,
+                chat_id,
+                session_arc.clone(),
+            )
+            .await
+        );
+
+        assert!(app.chat.sessions.read().await.get(chat_id).is_none());
+        assert!(
+            super::super::trajectories::load_trajectory_for_chat(app.gcx.clone(), chat_id)
+                .await
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_keeps_session_when_completion_arrives_during_save() {
+        let workspace = tempfile::tempdir().unwrap();
+        let (app, _config_dir) = test_app_with_workspace(workspace.path()).await;
+        let chat_id = "cleanup-keeps-completion-during-save";
+        let session_arc = Arc::new(AMutex::new(ChatSession::new(chat_id.to_string())));
+        {
+            let mut session = session_arc.lock().await;
+            session.add_message(ChatMessage::new("user".to_string(), "hello".to_string()));
+            session
+                .queue_processor_running
+                .store(true, Ordering::SeqCst);
+            session.last_activity =
+                Instant::now() - session_idle_timeout() - std::time::Duration::from_secs(1);
+        }
+        app.chat
+            .sessions
+            .write()
+            .await
+            .insert(chat_id.to_string(), session_arc.clone());
+
+        super::super::trajectories::maybe_save_trajectory(app.clone(), session_arc.clone()).await;
+        let process_id = app
+            .runtime
+            .exec_registry
+            .register(background_completion_meta(chat_id), 4096)
+            .await
+            .meta
+            .process_id;
+        app.runtime
+            .exec_registry
+            .mark_started(&process_id)
+            .await
+            .unwrap();
+        let mut completion_rx = app.runtime.exec_registry.subscribe_completion();
+        app.runtime
+            .exec_registry
+            .mark_exited(&process_id, Some(0))
+            .await
+            .unwrap();
+        let completion = completion_rx.recv().await.unwrap();
+        crate::chat::notifications::handle_process_completion(app.gcx.clone(), completion).await;
+
+        assert!(
+            !cleanup_idle_session(
+                app.clone(),
+                &app.chat.sessions,
+                chat_id,
+                session_arc.clone(),
+            )
+            .await
+        );
+
+        let session = session_arc.lock().await;
+        assert!(!session.closed);
+        assert!(session
+            .command_queue
+            .iter()
+            .any(|request| matches!(request.command, ChatCommand::Regenerate {})));
+        assert!(session.last_activity.elapsed() <= session_idle_timeout());
+        session
+            .queue_processor_running
+            .store(false, Ordering::SeqCst);
+        drop(session);
+        assert!(app.chat.sessions.read().await.get(chat_id).is_some());
+        app.runtime.shutdown_flag.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn cleanup_close_helper_rechecks_idle_state() {
+        let mut session = make_session();
+        session.last_activity =
+            Instant::now() - session_idle_timeout() - std::time::Duration::from_secs(1);
+        assert!(close_idle_session_for_cleanup(&mut session));
+        assert!(session.closed);
+
+        let mut already_closed = make_session();
+        already_closed.close_event_channel();
+        already_closed.last_activity =
+            Instant::now() - session_idle_timeout() - std::time::Duration::from_secs(1);
+        assert!(close_idle_session_for_cleanup(&mut already_closed));
+        assert!(already_closed.closed);
+
+        let mut touched = make_session();
+        touched.last_activity = Instant::now();
+        assert!(!close_idle_session_for_cleanup(&mut touched));
+        assert!(!touched.closed);
     }
 
     #[test]
