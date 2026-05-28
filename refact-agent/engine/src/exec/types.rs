@@ -528,6 +528,7 @@ pub struct ExecProcessFilter {
     pub tool_call_id: Option<String>,
     pub service_name: Option<String>,
     pub workspace: Option<PathBuf>,
+    pub mode: Option<ExecMode>,
     pub status: Option<ExecStatusKind>,
 }
 
@@ -537,6 +538,7 @@ impl ExecProcessFilter {
             && self.tool_call_id.is_none()
             && self.service_name.is_none()
             && self.workspace.is_none()
+            && self.mode.is_none()
             && self.status.is_none()
     }
 }
@@ -872,6 +874,7 @@ mod tests {
             tool_call_id: None,
             service_name: Some("svc".to_string()),
             workspace: Some(PathBuf::from("/workspace")),
+            mode: None,
             status: None,
         };
         assert!(owner.matches_filter(&filter));

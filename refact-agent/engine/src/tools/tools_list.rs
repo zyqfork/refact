@@ -171,6 +171,11 @@ pub(crate) fn builtin_system_tools(config_path: String) -> Vec<Box<dyn Tool + Se
         Box::new(crate::tools::tool_process::ToolProcessKill {
             config_path: config_path.clone(),
         }),
+        Box::new(
+            crate::tools::tool_clean_background_processes::ToolCleanBackgroundProcesses {
+                config_path: config_path.clone(),
+            },
+        ),
         Box::new(crate::tools::tool_process::ToolProcessWait {
             config_path: config_path.clone(),
         }),

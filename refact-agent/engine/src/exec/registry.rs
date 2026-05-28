@@ -332,6 +332,13 @@ impl ExecRegistry {
             .filter(|record| record.snapshot.meta.owner.matches_filter(&filter))
             .filter(|record| {
                 filter
+                    .mode
+                    .as_ref()
+                    .map(|mode| &record.snapshot.meta.mode == mode)
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                filter
                     .status
                     .map(|status| record.snapshot.status.kind() == status)
                     .unwrap_or(true)
@@ -608,6 +615,13 @@ impl ExecRegistry {
             records
                 .iter()
                 .filter(|(_, record)| record.snapshot.meta.owner.matches_filter(&filter))
+                .filter(|(_, record)| {
+                    filter
+                        .mode
+                        .as_ref()
+                        .map(|mode| &record.snapshot.meta.mode == mode)
+                        .unwrap_or(true)
+                })
                 .filter(|(_, record)| {
                     filter
                         .status
@@ -1122,6 +1136,7 @@ mod tests {
                 tool_call_id: None,
                 service_name: Some("api".to_string()),
                 workspace: Some(PathBuf::from("/workspace-b")),
+                mode: None,
                 status: Some(ExecStatusKind::Running),
             })
             .await;
