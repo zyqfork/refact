@@ -218,7 +218,7 @@ export const Toolbar = ({ activeTab }: ToolbarProps) => {
   }, [createTask, dispatch]);
 
   const onOpenChatInBrowser = useCallback(() => {
-    openUrl(lspUrl || `http://127.0.0.1:${lspPort}`);
+    openUrl(lspUrl ?? `http://127.0.0.1:${lspPort}`);
   }, [lspPort, lspUrl, openUrl]);
 
   const goToTab = useCallback(
