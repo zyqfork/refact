@@ -380,7 +380,7 @@ impl ExecRegistry {
         stream: ExecOutputStream,
         text: String,
     ) -> Result<ExecOutputChunk, String> {
-        let chunk = {
+        let (chunk, spill_append) = {
             let mut records = self.records.lock().await;
             let record = records
                 .get_mut(process_id)
@@ -388,11 +388,23 @@ impl ExecRegistry {
             if let Some(raw_capture) = record.raw_capture.as_mut() {
                 raw_capture.append(&stream, &text);
             }
-            let chunk = record.transcript.append_chunk(stream, text).await?;
-            record.snapshot.disk_log_path = record.transcript.disk_log_path().cloned();
-            chunk
+            record.transcript.append_chunk(stream, text)
         };
         let _ = self.output_tx.send(chunk.clone());
+        let spill_result = if let Some(spill_append) = spill_append {
+            let result = spill_append.write().await;
+            let mut records = self.records.lock().await;
+            if let Some(record) = records.get_mut(process_id) {
+                record.transcript.record_spill_result(&result);
+                record.snapshot.disk_log_path = record.transcript.disk_log_path().cloned();
+            }
+            result.map(|_| ())
+        } else {
+            Ok(())
+        };
+        if let Err(error) = spill_result {
+            tracing::warn!("exec spill failed for {process_id}: {error}");
+        }
         Ok(chunk)
     }
 
@@ -1195,6 +1207,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_service_restart_spill_log_is_truncated() {
+        let registry = ExecRegistry::new();
+        let first = registry
+            .register(
+                meta("exec_service_reused", ExecMode::Service, "server")
+                    .with_chat_id("chat-service")
+                    .with_service_name("api"),
+                16,
+            )
+            .await;
+        let process_id = first.meta.process_id.clone();
+        let old_text = format!("old log line\n{}", "x".repeat(DEFAULT_SPILL_THRESHOLD_BYTES));
+        registry
+            .append_output(&process_id, ExecOutputStream::Stdout, old_text)
+            .await
+            .unwrap();
+        let first_path = registry
+            .disk_log_path(&process_id)
+            .await
+            .expect("first spill path");
+        registry.mark_exited(&process_id, Some(0)).await.unwrap();
+
+        let second = registry
+            .register(
+                meta("exec_service_reused", ExecMode::Service, "server")
+                    .with_chat_id("chat-service")
+                    .with_service_name("api"),
+                16,
+            )
+            .await;
+        assert_eq!(second.meta.process_id, process_id);
+        let new_text = format!("new log line\n{}", "y".repeat(DEFAULT_SPILL_THRESHOLD_BYTES));
+        registry
+            .append_output(&process_id, ExecOutputStream::Stdout, new_text.clone())
+            .await
+            .unwrap();
+        let second_path = registry
+            .disk_log_path(&process_id)
+            .await
+            .expect("second spill path");
+
+        assert_eq!(first_path, second_path);
+        let persisted = std::fs::read_to_string(second_path).unwrap();
+        assert_eq!(persisted, new_text);
+        assert!(!persisted.contains("old log line"));
+    }
+
+    #[tokio::test]
     async fn test_list_filters_owner_and_status() {
         let registry = ExecRegistry::new();
         let first = meta("exec_one", ExecMode::Service, "server")
@@ -1994,5 +2054,58 @@ mod tests {
         let final_read = registry.read(&process_id, 0, None).await;
         assert_eq!(final_read.chunks.len(), 50);
         assert_eq!(final_read.latest_seq, 50);
+    }
+
+    #[tokio::test]
+    async fn test_append_broadcasts_before_slow_spill_finishes() {
+        let registry = ExecRegistry::new();
+        let snapshot = registry
+            .register(
+                meta("exec_slow_spill", ExecMode::Background, "server").with_chat_id("chat-slow"),
+                4096,
+            )
+            .await;
+        let process_id = snapshot.meta.process_id.clone();
+        let temp = tempfile::tempdir().unwrap();
+        let blocker = temp.path().join("not-a-dir");
+        let _ = tokio::fs::write(&blocker, "block").await;
+        let target = crate::exec::spill::SpillTarget::with_root(
+            blocker,
+            "chat-slow",
+            &process_id,
+        );
+        {
+            let mut records = registry.records.lock().await;
+            records
+                .get_mut(&process_id)
+                .unwrap()
+                .transcript
+                .set_spill_target_for_test(target);
+        }
+        let mut rx = registry.subscribe_output();
+        let append = tokio::spawn({
+            let registry = registry.clone();
+            let process_id = process_id.clone();
+            async move {
+                registry
+                    .append_output(
+                        &process_id,
+                        ExecOutputStream::Stdout,
+                        format!("hello{}", "x".repeat(DEFAULT_SPILL_THRESHOLD_BYTES)),
+                    )
+                    .await
+            }
+        });
+
+        let broadcast = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("output should broadcast before spill failure records")
+            .unwrap();
+        let append_result = append.await.unwrap().unwrap();
+
+        assert_eq!(broadcast.process_id, process_id);
+        assert_eq!(append_result.process_id, process_id);
+        let read = registry.read(&process_id, 0, None).await;
+        assert_eq!(read.chunks, vec![append_result]);
     }
 }

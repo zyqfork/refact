@@ -6,8 +6,11 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use crate::exec::spill::SpillWriter;
+use tokio::sync::{Mutex, OwnedMutexGuard};
+
+use crate::exec::spill::{SpillTarget, SpillWriter};
 use crate::exec::types::{
     current_timestamp_ms, ExecOutputChunk, ExecOutputStream, ExecProcessId, ExecReadResult,
 };
@@ -39,10 +42,22 @@ pub struct ExecTranscript {
     truncated_chunks: u64,
     current_bytes: usize,
     max_bytes: usize,
-    chat_id: Option<String>,
     spill_threshold_bytes: usize,
-    spill_writer: Option<SpillWriter>,
+    spill: Option<Arc<Mutex<SpillState>>>,
     disk_log_path: Option<PathBuf>,
+    last_spill_error: Option<String>,
+}
+
+struct SpillState {
+    target: SpillTarget,
+    writer: Option<SpillWriter>,
+    disabled: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct SpillAppend {
+    state: Arc<Mutex<SpillState>>,
+    text: String,
 }
 
 #[derive(Clone)]
@@ -170,6 +185,18 @@ impl ExecTranscript {
         chat_id: Option<String>,
         spill_threshold_bytes: usize,
     ) -> Self {
+        let spill = chat_id.as_deref().and_then(|chat_id| {
+            SpillTarget::new(chat_id, &process_id)
+                .map(|target| {
+                    Arc::new(Mutex::new(SpillState {
+                        target,
+                        writer: None,
+                        disabled: false,
+                    }))
+                })
+                .map_err(|error| tracing::warn!("exec spill disabled for {process_id}: {error}"))
+                .ok()
+        });
         Self {
             process_id,
             chunks: VecDeque::new(),
@@ -181,10 +208,10 @@ impl ExecTranscript {
             truncated_chunks: 0,
             current_bytes: 0,
             max_bytes: Self::normalize_max_bytes(max_bytes),
-            chat_id,
             spill_threshold_bytes,
-            spill_writer: None,
+            spill,
             disk_log_path: None,
+            last_spill_error: None,
         }
     }
 
@@ -196,15 +223,13 @@ impl ExecTranscript {
         self.append_chunk_to_ring(stream, text).seq
     }
 
-    pub(crate) async fn append_chunk(
+    pub(crate) fn append_chunk(
         &mut self,
         stream: ExecOutputStream,
         text: String,
-    ) -> Result<ExecOutputChunk, String> {
-        if !text.is_empty() {
-            self.maybe_spill(&text).await?;
-        }
-        Ok(self.append_chunk_to_ring(stream, text))
+    ) -> (ExecOutputChunk, Option<SpillAppend>) {
+        let spill_append = self.prepare_spill_append(&text);
+        (self.append_chunk_to_ring(stream, text), spill_append)
     }
 
     fn append_chunk_to_ring(&mut self, stream: ExecOutputStream, text: String) -> ExecOutputChunk {
@@ -257,20 +282,29 @@ impl ExecTranscript {
         chunk
     }
 
-    async fn maybe_spill(&mut self, text: &str) -> Result<(), String> {
-        if self.disk_log_path.is_none()
-            && self.total_bytes_appended.saturating_add(text.len()) > self.spill_threshold_bytes
+    fn prepare_spill_append(&mut self, text: &str) -> Option<SpillAppend> {
+        if text.is_empty()
+            || self.total_bytes_appended.saturating_add(text.len()) <= self.spill_threshold_bytes
         {
-            if let Some(chat_id) = self.chat_id.as_ref() {
-                let writer = SpillWriter::create(chat_id, &self.process_id).await?;
-                self.disk_log_path = Some(writer.path().clone());
-                self.spill_writer = Some(writer);
+            return None;
+        }
+        let state = self.spill.as_ref()?.clone();
+        Some(SpillAppend {
+            state,
+            text: text.to_string(),
+        })
+    }
+
+    pub(crate) fn record_spill_result(&mut self, result: &Result<PathBuf, String>) {
+        match result {
+            Ok(path) => {
+                self.disk_log_path = Some(path.clone());
+                self.last_spill_error = None;
+            }
+            Err(error) => {
+                self.last_spill_error = Some(error.clone());
             }
         }
-        if let Some(writer) = self.spill_writer.as_mut() {
-            writer.write_line(text).await?;
-        }
-        Ok(())
     }
 
     pub fn read_since(&self, since_seq: u64) -> Vec<&ExecOutputChunk> {
@@ -356,6 +390,57 @@ impl ExecTranscript {
 
     pub fn disk_log_path(&self) -> Option<&PathBuf> {
         self.disk_log_path.as_ref()
+    }
+
+    pub fn last_spill_error(&self) -> Option<&str> {
+        self.last_spill_error.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_spill_target_for_test(&mut self, target: SpillTarget) {
+        self.spill = Some(Arc::new(Mutex::new(SpillState {
+            target,
+            writer: None,
+            disabled: false,
+        })));
+    }
+}
+
+impl SpillAppend {
+    pub(crate) async fn write(self) -> Result<PathBuf, String> {
+        let mut state = self.state.lock_owned().await;
+        if state.disabled {
+            return Err("exec spill disabled after previous failure".to_string());
+        }
+        if state.writer.is_none() {
+            let target = state.target.clone();
+            state = create_spill_writer(state, target).await?;
+        }
+        let Some(writer) = state.writer.as_mut() else {
+            state.disabled = true;
+            return Err("exec spill writer unavailable".to_string());
+        };
+        if let Err(error) = writer.write_line(&self.text).await {
+            state.disabled = true;
+            return Err(error);
+        }
+        Ok(writer.path().clone())
+    }
+}
+
+async fn create_spill_writer(
+    mut state: OwnedMutexGuard<SpillState>,
+    target: SpillTarget,
+) -> Result<OwnedMutexGuard<SpillState>, String> {
+    match SpillWriter::create(&target).await {
+        Ok(writer) => {
+            state.writer = Some(writer);
+            Ok(state)
+        }
+        Err(error) => {
+            state.disabled = true;
+            Err(error)
+        }
     }
 }
 
@@ -616,6 +701,36 @@ mod tests {
         let read = t.read(0, None);
         assert_eq!(read.max_bytes, 1);
         assert!(read.current_bytes <= 1);
+    }
+
+    #[tokio::test]
+    async fn spill_failure_retains_in_memory_transcript() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocker = temp.path().join("not-a-dir");
+        std::fs::write(&blocker, "block").unwrap();
+        let target = SpillTarget::with_root(
+            blocker,
+            "chat-a",
+            &ExecProcessId("exec_spill_fail".to_string()),
+        );
+        let mut t = ExecTranscript::new_with_spill(
+            ExecProcessId("exec_spill_fail".to_string()),
+            4096,
+            Some("chat-a".to_string()),
+            1,
+        );
+        t.set_spill_target_for_test(target);
+
+        let (chunk, spill_append) =
+            t.append_chunk(ExecOutputStream::Stdout, "retained output".to_string());
+        let result = spill_append.expect("spill append").write().await;
+        t.record_spill_result(&result);
+
+        assert!(result.is_err());
+        assert_eq!(chunk.seq, 0);
+        assert_eq!(t.read(0, None).chunks, vec![chunk]);
+        assert!(t.last_spill_error().is_some());
+        assert!(t.disk_log_path().is_none());
     }
 
     #[test]
