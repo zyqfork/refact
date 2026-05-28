@@ -1165,13 +1165,13 @@ impl ExecRegistry {
         let mut records = self.records.lock().await;
         records
             .values_mut()
-            .filter(|record| !record.snapshot.status.is_terminal() || record.child.is_some())
+            .filter(|record| {
+                !record.snapshot.status.is_terminal()
+                    || record.child.is_some()
+                    || record.runtime.is_some()
+            })
             .map(|record| {
-                let runtime = if record.snapshot.status.is_terminal() {
-                    None
-                } else {
-                    record.runtime.clone()
-                };
+                let runtime = record.runtime.clone();
                 if runtime.is_none() && !record.snapshot.status.is_terminal() {
                     record.set_status(ExecStatus::Killed);
                 }
@@ -1211,6 +1211,37 @@ async fn cleanup_target(
                 ),
                 child: None,
             },
+        };
+        return (
+            process_id,
+            short_description,
+            ExecCleanupTargetKind::Runtime,
+            outcome,
+        );
+    }
+    if let Some(runtime) = target.runtime {
+        let (response_tx, response_rx) = oneshot::channel();
+        let outcome = if runtime
+            .control_tx
+            .send(ExecProcessCommand::Kill {
+                response: response_tx,
+            })
+            .await
+            .is_err()
+        {
+            runtime.terminal.notify_waiters();
+            ExecCleanupOutcome::Stopped
+        } else {
+            match tokio::time::timeout(timeout, response_rx).await {
+                Ok(_) => ExecCleanupOutcome::Stopped,
+                Err(_) => ExecCleanupOutcome::TimedOut {
+                    message: format!(
+                        "timed out while stopping terminal runtime process after {:.3}s",
+                        timeout.as_secs_f64()
+                    ),
+                    child: None,
+                },
+            }
         };
         return (
             process_id,
@@ -2904,6 +2935,85 @@ mod tests {
             registry.get(&process_id).await.is_none(),
             "record must be gone after successful remove"
         );
+    }
+
+    #[tokio::test]
+    async fn cleanup_shutdown_terminal_failed_runtime_attempts_cleanup() {
+        let registry = ExecRegistry::new();
+        let (control_tx, mut control_rx) = mpsc::channel::<ExecProcessCommand>(1);
+        let runtime = ExecProcessRuntime {
+            control_tx,
+            terminal: Arc::new(Notify::new()),
+            stdin_writer: None,
+        };
+        let snapshot = registry
+            .register_new_with_runtime(
+                meta("exec_td_rt_fail_cleanup", ExecMode::Background, "sleep 30"),
+                DEFAULT_MAX_BYTES,
+                runtime,
+                false,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry
+            .mark_failed(&process_id, "simulated failure".to_string())
+            .await
+            .unwrap();
+
+        let responder = tokio::spawn(async move {
+            match control_rx.recv().await {
+                Some(ExecProcessCommand::Kill { response }) => {
+                    let _ = response.send(Err("already stopped".to_string()));
+                    true
+                }
+                _ => false,
+            }
+        });
+
+        let summary = registry.cleanup_shutdown(Duration::from_millis(500)).await;
+
+        assert!(
+            responder.await.unwrap(),
+            "Kill must be sent to terminal runtime"
+        );
+        assert_eq!(summary.runtime_stop_attempts, 1);
+        assert_eq!(summary.runtime_stopped_count, 1);
+        assert_eq!(summary.removed_count, 1);
+        assert!(registry.get(&process_id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn cleanup_shutdown_terminal_timed_out_runtime_retains_on_no_response() {
+        let registry = ExecRegistry::new();
+        let (control_tx, _control_rx) = mpsc::channel::<ExecProcessCommand>(1);
+        let runtime = ExecProcessRuntime {
+            control_tx,
+            terminal: Arc::new(Notify::new()),
+            stdin_writer: None,
+        };
+        let snapshot = registry
+            .register_new_with_runtime(
+                meta("exec_td_rt_timeout_cleanup", ExecMode::Background, "sleep 30"),
+                DEFAULT_MAX_BYTES,
+                runtime,
+                false,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry.mark_timed_out(&process_id).await.unwrap();
+
+        let summary = registry.cleanup_shutdown(Duration::from_millis(10)).await;
+
+        assert_eq!(summary.runtime_stop_attempts, 1);
+        assert_eq!(summary.runtime_timed_out_count, 1);
+        assert_eq!(summary.removed_count, 0);
+        let retained = registry.get(&process_id).await;
+        assert!(retained.is_some());
+        assert!(matches!(retained.unwrap().status, ExecStatus::Failed { .. }));
     }
 
     #[tokio::test]
