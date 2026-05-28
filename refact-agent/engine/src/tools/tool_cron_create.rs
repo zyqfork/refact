@@ -94,11 +94,11 @@ impl Tool for ToolCronCreate {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let input = input_from_args(args)?;
-        let (app, chat_id, project_root) = cron_tool_context(ccx).await;
+        let (app, chat_id, project_root, mode) = cron_tool_context(ccx).await;
         let runtime = runtime_for_project(
             project_root,
             Some(chat_id.clone()),
-            None,
+            mode,
             unix_now_ms(),
             scheduler_timezone(),
         )?;
@@ -189,7 +189,7 @@ fn runtime_for_project(
 
 async fn cron_tool_context(
     ccx: Arc<AMutex<AtCommandsContext>>,
-) -> (crate::app_state::AppState, String, Option<PathBuf>) {
+) -> (crate::app_state::AppState, String, Option<PathBuf>, Option<String>) {
     let (app, gcx, chat_id, scoped_root) = {
         let locked = ccx.lock().await;
         (
@@ -204,9 +204,20 @@ async fn cron_tool_context(
     };
     let project_root = match scoped_root {
         Some(root) => Some(root),
-        None => get_active_project_path(gcx).await,
+        None => get_active_project_path(gcx.clone()).await,
     };
-    (app, chat_id, project_root)
+    let session_arc = {
+        let sessions = gcx.chat_sessions.read().await;
+        sessions.get(&chat_id).cloned()
+    };
+    let mode = if let Some(session_arc) = session_arc {
+        let session = session_arc.lock().await;
+        let mode = session.thread.mode.clone();
+        if mode.is_empty() { None } else { Some(mode) }
+    } else {
+        None
+    };
+    (app, chat_id, project_root, mode)
 }
 
 pub(crate) async fn create_cron_job(

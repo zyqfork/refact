@@ -356,6 +356,7 @@ impl CronRunner {
             cron_fire_message(task, final_fire)
         };
         let prompt = task.prompt.clone();
+        let mode = task.mode.clone().filter(|m| !m.is_empty());
         let processor_flag = {
             let mut session = session_arc.lock().await;
             if session.closed {
@@ -375,6 +376,15 @@ impl CronRunner {
                     suppress_auto_enrichment: false,
                 },
             });
+            if let Some(ref mode) = mode {
+                session.command_queue.push_front(CommandRequest {
+                    client_request_id: format!("cron-set-mode-{}", Uuid::new_v4()),
+                    priority: true,
+                    command: ChatCommand::SetParams {
+                        patch: json!({"mode": mode}),
+                    },
+                });
+            }
             session.queue_processor_running.clone()
         };
 
@@ -1081,5 +1091,55 @@ mod tests {
             !sessions.contains_key("no-traj-catch-up-chat"),
             "no empty session should be created during catch-up when no trajectory exists"
         );
+    }
+
+    #[tokio::test]
+    async fn fire_mode_is_applied_as_set_params() {
+        let now = now_ms();
+        let store = Arc::new(InMemoryCronStore::new());
+        let mut task = due_task("cron_mode_apply", now);
+        task.mode = Some("explore".to_string());
+        store.add(task).await.unwrap();
+        let gcx = gcx_with_session(SessionState::Idle).await;
+        let mut runner = CronRunner::new(store.clone(), gcx.clone());
+
+        runner.fire_due_tasks(now).await;
+
+        let session = session(&gcx).await;
+        let session = session.lock().await;
+        let set_params_idx = session.command_queue.iter().position(|req| {
+            matches!(&req.command, ChatCommand::SetParams { patch }
+                if patch.get("mode").and_then(|v| v.as_str()) == Some("explore"))
+        });
+        let user_message_idx = session.command_queue.iter().position(|req| {
+            matches!(&req.command, ChatCommand::UserMessage { .. })
+        });
+        assert!(set_params_idx.is_some(), "SetParams must be in queue for task with mode");
+        assert!(user_message_idx.is_some(), "UserMessage must be in queue");
+        assert!(
+            set_params_idx.unwrap() < user_message_idx.unwrap(),
+            "SetParams must precede UserMessage in queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn fire_without_mode_does_not_inject_set_params() {
+        let now = now_ms();
+        let store = Arc::new(InMemoryCronStore::new());
+        let mut task = due_task("cron_no_mode", now);
+        task.mode = None;
+        store.add(task).await.unwrap();
+        let gcx = gcx_with_session(SessionState::Idle).await;
+        let mut runner = CronRunner::new(store.clone(), gcx.clone());
+
+        runner.fire_due_tasks(now).await;
+
+        let session = session(&gcx).await;
+        let session = session.lock().await;
+        let has_set_params = session
+            .command_queue
+            .iter()
+            .any(|req| matches!(&req.command, ChatCommand::SetParams { .. }));
+        assert!(!has_set_params, "No SetParams should be in queue when task has no mode");
     }
 }
