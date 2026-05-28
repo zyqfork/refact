@@ -307,7 +307,8 @@
 }
 
 .rowFlexBottom {
-  min-height: 132px;
+  grid-template-rows: clamp(180px, 30vh, 360px);
+  min-height: 0;
 }
 
 .settingsSection {
@@ -382,19 +383,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .rowFlexBottom {
+    grid-template-rows: auto;
     min-height: 0;
   }
-  .panelScroll {
-    overflow: visible;
-  }
-  .scrollList {
-    overflow-y: visible;
-    overflow-x: hidden;
-    flex: 0 0 auto;
-  }
-}
-
-@media (max-height: 860px) {
   .panelScroll {
     overflow: visible;
   }

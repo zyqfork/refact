@@ -3133,3 +3133,59 @@ describe("BuddyRecentChats_opens_existing_chat", () => {
     expect(trajectoryCalled).toBe(false);
   });
 });
+
+describe("BuddyHome_bottom_row_bounded_scroll", () => {
+  const commonHandlers = [
+    http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+      HttpResponse.json({ opportunities: [] }),
+    ),
+    http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+      HttpResponse.json([]),
+    ),
+    http.get("http://127.0.0.1:8001/v1/stats/llm/summary", () =>
+      HttpResponse.json({
+        totals: { total_calls: 0, successful_calls: 0, total_tokens: 0 },
+      }),
+    ),
+    http.get("http://127.0.0.1:8001/v1/setup/status", () =>
+      HttpResponse.json({ configured: true, reasons: [], detail: {} }),
+    ),
+  ];
+
+  it("activity panel has panelScroll class for bounded internal scrolling", async () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot(makePulse())));
+    server.use(...commonHandlers);
+
+    render(<BuddyHome />, { store });
+    const panel = await screen.findByTestId("buddy-activity-panel");
+    expect(panel.className).toContain("panelScroll");
+  });
+
+  it("recent errors panel has panelScroll class for bounded internal scrolling", async () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot(makePulse())));
+    server.use(...commonHandlers);
+
+    render(<BuddyHome />, { store });
+    const panel = await screen.findByTestId("buddy-recent-errors-panel");
+    expect(panel.className).toContain("panelScroll");
+  });
+
+  it("BuddyHome CSS uses grid-template-rows on rowFlexBottom and omits max-height media query", async () => {
+    const css = await readGuiSource(
+      "features/Buddy/BuddyHome.module.css",
+    );
+    expect(css).toContain("grid-template-rows");
+    expect(css).toContain("rowFlexBottom");
+    expect(css).not.toContain("max-height: 860px");
+  });
+
+  it("BuddyRecentChats entriesScroll class keeps overflow-y: auto for scrollable list", async () => {
+    const css = await readGuiSource(
+      "features/Buddy/BuddyRecentChats.module.css",
+    );
+    expect(css).toContain("entriesScroll");
+    expect(css).toContain("overflow-y: auto");
+  });
+});
