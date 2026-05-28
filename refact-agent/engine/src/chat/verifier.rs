@@ -5,6 +5,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use process_wrap::tokio::TokioCommandWrap;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessGroup;
+#[cfg(windows)]
+use process_wrap::tokio::JobObject;
 use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -18,6 +23,7 @@ use crate::tasks::types::{BoardCard, StatusUpdate, VerificationResult, VerifierR
 
 const VERIFY_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_OUTPUT_TAIL_CHARS: usize = 4000;
+const MAX_OUTPUT_CAPTURE_BYTES: usize = 512 * 1024;
 const MAX_DIFF_LINES: usize = 200;
 const VERIFIER_SOURCE: &str = "chat.verifier";
 
@@ -51,6 +57,55 @@ impl VerificationCommandRunner for SystemVerificationCommandRunner {
     ) -> VerificationResult {
         run_verification_argv(worktree, command, cwd, argv).await
     }
+}
+
+fn wrap_verifier_command(command: Command) -> TokioCommandWrap {
+    let mut command_wrap = TokioCommandWrap::from(command);
+    #[cfg(unix)]
+    command_wrap.wrap(ProcessGroup::leader());
+    #[cfg(windows)]
+    command_wrap.wrap(JobObject);
+    command_wrap
+}
+
+fn check_cwd_in_worktree(worktree: &Path, effective_cwd: &Path) -> Result<(), String> {
+    let canonical_worktree = std::fs::canonicalize(worktree)
+        .map_err(|e| format!("cannot access worktree '{}': {}", worktree.display(), e))?;
+    if let Ok(canonical_cwd) = std::fs::canonicalize(effective_cwd) {
+        if !canonical_cwd.starts_with(&canonical_worktree) {
+            return Err(format!(
+                "cwd '{}' is outside the worktree",
+                effective_cwd.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn read_bounded_tail(mut reader: impl AsyncReadExt + Unpin, max_bytes: usize) -> Vec<u8> {
+    if max_bytes == 0 {
+        return Vec::new();
+    }
+    let mut buf = [0u8; 8192];
+    let mut tail: Vec<u8> = Vec::with_capacity(max_bytes.min(65536));
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                tail.extend_from_slice(&buf[..n]);
+                if tail.len() > max_bytes * 2 {
+                    let excess = tail.len() - max_bytes;
+                    tail.drain(..excess);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if tail.len() > max_bytes {
+        let excess = tail.len() - max_bytes;
+        tail.drain(..excess);
+    }
+    tail
 }
 
 fn append_verifier_status(card: &mut BoardCard, report: &VerifierReport) {
@@ -327,6 +382,16 @@ async fn run_verification_argv(
     cwd: Option<PathBuf>,
     argv: Vec<String>,
 ) -> VerificationResult {
+    run_verification_argv_impl(worktree, command, cwd, argv, VERIFY_TIMEOUT).await
+}
+
+async fn run_verification_argv_impl(
+    worktree: &Path,
+    command: &str,
+    cwd: Option<PathBuf>,
+    argv: Vec<String>,
+    timeout: Duration,
+) -> VerificationResult {
     let Some(program) = argv.first() else {
         return VerificationResult {
             command: command.to_string(),
@@ -335,13 +400,24 @@ async fn run_verification_argv(
             output_tail: "empty verification command".to_string(),
         };
     };
-    let mut child = match Command::new(program)
-        .args(&argv[1..])
-        .current_dir(cwd.map_or_else(|| worktree.to_path_buf(), |cwd| worktree.join(cwd)))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let effective_cwd = cwd.map_or_else(|| worktree.to_path_buf(), |cwd| worktree.join(cwd));
+    if let Err(reason) = check_cwd_in_worktree(worktree, &effective_cwd) {
+        return VerificationResult {
+            command: command.to_string(),
+            exit_code: None,
+            passed: false,
+            output_tail: reason,
+        };
+    }
+    let mut cmd = Command::new(program);
+    cmd.args(&argv[1..]);
+    cmd.current_dir(&effective_cwd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+    let mut command_wrap = wrap_verifier_command(cmd);
+    let mut child = match command_wrap.spawn() {
         Ok(child) => child,
         Err(error) => {
             return VerificationResult {
@@ -352,52 +428,54 @@ async fn run_verification_argv(
             };
         }
     };
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
+    let stdout = child.stdout().take();
+    let stderr = child.stderr().take();
     let stdout_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        if let Some(ref mut stdout) = stdout {
-            let _ = stdout.read_to_end(&mut bytes).await;
+        match stdout {
+            Some(stdout) => read_bounded_tail(stdout, MAX_OUTPUT_CAPTURE_BYTES).await,
+            None => Vec::new(),
         }
-        bytes
     });
     let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        if let Some(ref mut stderr) = stderr {
-            let _ = stderr.read_to_end(&mut bytes).await;
+        match stderr {
+            Some(stderr) => read_bounded_tail(stderr, MAX_OUTPUT_CAPTURE_BYTES).await,
+            None => Vec::new(),
         }
-        bytes
     });
-    let status = match tokio::time::timeout(VERIFY_TIMEOUT, child.wait()).await {
+    let status = match tokio::time::timeout(timeout, Box::into_pin(child.wait())).await {
         Ok(Ok(status)) => status,
         Ok(Err(error)) => {
+            stdout_task.abort();
+            stderr_task.abort();
             return VerificationResult {
                 command: command.to_string(),
                 exit_code: None,
                 passed: false,
                 output_tail: format!("failed to wait for command: {}", error),
-            }
+            };
         }
         Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(5), Box::into_pin(child.wait())).await;
+            stdout_task.abort();
+            stderr_task.abort();
             return VerificationResult {
                 command: command.to_string(),
                 exit_code: None,
                 passed: false,
                 output_tail: format!(
                     "command timed out after {} seconds",
-                    VERIFY_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ),
             };
         }
     };
-    let stdout = stdout_task.await.unwrap_or_default();
-    let stderr = stderr_task.await.unwrap_or_default();
+    let stdout_bytes = stdout_task.await.unwrap_or_default();
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
     let output = format!(
         "{}{}",
-        String::from_utf8_lossy(&stdout),
-        String::from_utf8_lossy(&stderr)
+        String::from_utf8_lossy(&stdout_bytes),
+        String::from_utf8_lossy(&stderr_bytes)
     );
     VerificationResult {
         command: command.to_string(),
@@ -709,5 +787,75 @@ mod tests {
             "T-missing".to_string(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn large_output_is_bounded() {
+        let (mut write_half, read_half) = tokio::io::duplex(65536);
+        let data = vec![b'x'; MAX_OUTPUT_CAPTURE_BYTES * 3];
+        let write_task = tokio::spawn(async move {
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut write_half, &data).await;
+        });
+        let result = read_bounded_tail(read_half, MAX_OUTPUT_CAPTURE_BYTES).await;
+        let _ = write_task.await;
+        assert!(result.len() <= MAX_OUTPUT_CAPTURE_BYTES);
+    }
+
+    #[tokio::test]
+    async fn cwd_outside_worktree_is_rejected() {
+        let worktree = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let result = run_verification_argv_impl(
+            worktree.path(),
+            "cargo check",
+            Some(outside.path().to_path_buf()),
+            vec!["cargo".to_string(), "check".to_string()],
+            Duration::from_secs(30),
+        )
+        .await;
+
+        assert!(!result.passed);
+        assert!(result.output_tail.contains("outside the worktree"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdin_null_does_not_hang() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_verification_argv_impl(
+                temp.path(),
+                "cat",
+                None,
+                vec!["cat".to_string()],
+                Duration::from_secs(30),
+            ),
+        )
+        .await
+        .expect("should not hang with stdin=null");
+
+        assert!(result.passed);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_process_group() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let result = run_verification_argv_impl(
+            temp.path(),
+            "sleep 30",
+            None,
+            vec!["sleep".to_string(), "30".to_string()],
+            Duration::from_millis(200),
+        )
+        .await;
+
+        assert!(!result.passed);
+        assert!(result.output_tail.contains("timed out"));
+        assert!(result.exit_code.is_none());
     }
 }
