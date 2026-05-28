@@ -35,6 +35,7 @@ use crate::tools::tools_description::{
 use crate::worktrees::scope::ExecutionScope;
 
 const PROCESS_TRANSCRIPT_MAX_BYTES: usize = 2 * 1024 * 1024;
+const DISK_READ_MAX_BYTES: usize = 1024 * 1024;
 const TTY_DESCRIPTION: &str = "If true, run the command attached to a pseudo-terminal (PTY). Enables interactive stdin via process_write_stdin and merges stdout+stderr into a single combined stream. Defeats some pipe-only output buffering. Defaults to false.";
 const ASK_USER_DEFAULT: &[&str] = &[
     "*rm*",
@@ -96,6 +97,31 @@ const ASK_USER_DEFAULT: &[&str] = &[
     "*srm*",
 ];
 const DENY_DEFAULT: &[&str] = &["sudo*"];
+
+async fn read_disk_log_tail(path: &std::path::Path) -> Result<(String, bool), String> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("failed to open process output from disk: {e}"))?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|e| format!("failed to read disk log metadata: {e}"))?;
+    let file_size = metadata.len() as usize;
+    let truncated = file_size > DISK_READ_MAX_BYTES;
+    if truncated {
+        let seek_pos = (file_size - DISK_READ_MAX_BYTES) as u64;
+        file.seek(std::io::SeekFrom::Start(seek_pos))
+            .await
+            .map_err(|e| format!("failed to seek disk log: {e}"))?;
+    }
+    let capacity = DISK_READ_MAX_BYTES.min(file_size);
+    let mut buf = Vec::with_capacity(capacity);
+    file.read_to_end(&mut buf)
+        .await
+        .map_err(|e| format!("failed to read process output from disk: {e}"))?;
+    Ok((String::from_utf8_lossy(&buf).into_owned(), truncated))
+}
 
 pub struct ToolProcessStart {
     pub config_path: String,
@@ -428,6 +454,17 @@ impl Tool for ToolProcessRead {
         let stream = parse_stream_selection(args)?;
         let from_disk = parse_optional_bool(args, "from_disk")?.unwrap_or(false);
         let output_filter = parse_output_filter_args(args, &OutputFilter::default());
+        if from_disk
+            && matches!(
+                stream,
+                ProcessStreamSelection::Stdout | ProcessStreamSelection::Stderr
+            )
+        {
+            return Err(format!(
+                "stream={} is not available with from_disk=true: persisted logs are combined-only; use stream=combined or stream=all",
+                stream_label(stream)
+            ));
+        }
         let read = exec_registry.read(&process_id, since_seq, None).await;
         let mut content = format_process_snapshot("Process output", &snapshot);
         content.push_str(&format!(
@@ -436,13 +473,17 @@ impl Tool for ToolProcessRead {
         ));
         if from_disk {
             if let Some(path) = read.disk_log_path.as_ref() {
-                let text = tokio::fs::read_to_string(path)
-                    .await
-                    .map_err(|error| format!("failed to read process output from disk: {error}"))?;
+                let (text, truncated) = read_disk_log_tail(path).await?;
                 content.push_str(&format!(
                     "from_disk: true\npersisted_output_path: {}\n",
                     path.display()
                 ));
+                if truncated {
+                    content.push_str(&format!(
+                        "disk_read_truncated: true (showing last {} bytes)\n",
+                        DISK_READ_MAX_BYTES
+                    ));
+                }
                 content.push_str(&format_disk_read_sections(&text, stream, &output_filter));
             } else {
                 content.push_str(&format_read_sections(&read, stream, &output_filter));
@@ -1511,17 +1552,11 @@ fn append_section(out: &mut String, title: &str, text: &str, output_filter: &Out
 
 fn format_disk_read_sections(
     text: &str,
-    selection: ProcessStreamSelection,
+    _selection: ProcessStreamSelection,
     output_filter: &OutputFilter,
 ) -> String {
     let mut out = String::new();
-    let title = match selection {
-        ProcessStreamSelection::Stdout => "stdout",
-        ProcessStreamSelection::Stderr => "stderr",
-        ProcessStreamSelection::Combined => "combined",
-        ProcessStreamSelection::All => "combined",
-    };
-    append_section(&mut out, title, text, output_filter);
+    append_section(&mut out, "combined", text, output_filter);
     out
 }
 
@@ -2962,5 +2997,139 @@ mod tests {
         assert!(text(&listed).contains(owned.as_str()));
         assert!(text(&listed).contains(other.as_str()));
         assert_eq!(exec(&listed)["count"], 2);
+    }
+
+    #[tokio::test]
+    async fn process_read_from_disk_rejects_stdout_stream() {
+        let (gcx, ccx) = test_ccx().await;
+        let process_id =
+            register_test_process(&gcx, "exec_disk_reject_stdout", "chat", None).await;
+        gcx.exec_registry
+            .mark_started(&process_id)
+            .await
+            .unwrap();
+
+        let mut read = ToolProcessRead {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut read,
+            ccx,
+            make_args_map(vec![
+                ("process_id", json!(process_id.as_str())),
+                ("from_disk", json!(true)),
+                ("stream", json!("stdout")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("stdout"),
+            "error should mention the rejected stream: {err}"
+        );
+        assert!(
+            err.contains("combined"),
+            "error should suggest combined: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_read_from_disk_rejects_stderr_stream() {
+        let (gcx, ccx) = test_ccx().await;
+        let process_id =
+            register_test_process(&gcx, "exec_disk_reject_stderr", "chat", None).await;
+        gcx.exec_registry
+            .mark_started(&process_id)
+            .await
+            .unwrap();
+
+        let mut read = ToolProcessRead {
+            config_path: String::new(),
+        };
+        let err = run_tool(
+            &mut read,
+            ccx,
+            make_args_map(vec![
+                ("process_id", json!(process_id.as_str())),
+                ("from_disk", json!(true)),
+                ("stream", json!("stderr")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("stderr"),
+            "error should mention the rejected stream: {err}"
+        );
+        assert!(
+            err.contains("combined"),
+            "error should suggest combined: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_read_from_disk_combined_still_returns_tail() {
+        let (gcx, ccx) = test_ccx().await;
+        let snapshot = gcx
+            .exec_registry
+            .register(
+                ExecProcessMeta::new(ExecMode::Background, "test".to_string())
+                    .with_chat_id("chat")
+                    .with_short_description("Disk combined tail test".to_string()),
+                PROCESS_TRANSCRIPT_MAX_BYTES,
+            )
+            .await;
+        let process_id = snapshot.meta.process_id;
+        gcx.exec_registry.mark_started(&process_id).await.unwrap();
+
+        let marker = "DISK_TAIL_MARKER";
+        let mut data = String::from(marker);
+        data.push_str(&"x".repeat(256 * 1024 + 1));
+        gcx.exec_registry
+            .append_output(&process_id, ExecOutputStream::Stdout, data)
+            .await
+            .unwrap();
+
+        assert!(
+            gcx.exec_registry.disk_log_path(&process_id).await.is_some(),
+            "disk log should be created after spill threshold"
+        );
+
+        let mut read = ToolProcessRead {
+            config_path: String::new(),
+        };
+        let message = run_tool(
+            &mut read,
+            ccx,
+            make_args_map(vec![
+                ("process_id", json!(process_id.as_str())),
+                ("from_disk", json!(true)),
+                ("stream", json!("combined")),
+            ]),
+        )
+        .await
+        .unwrap();
+        let body = text(&message);
+        assert!(body.contains("combined"), "output should be labeled combined");
+        assert!(body.contains(marker), "output should contain appended data");
+    }
+
+    #[tokio::test]
+    async fn process_read_from_disk_is_bounded_for_large_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let large_file = temp.path().join("large.log");
+        let content = "x".repeat(DISK_READ_MAX_BYTES + 512 * 1024);
+        tokio::fs::write(&large_file, content.as_bytes())
+            .await
+            .unwrap();
+
+        let (tail_text, truncated) = super::read_disk_log_tail(&large_file).await.unwrap();
+        assert!(truncated, "large file should be reported as truncated");
+        assert!(
+            tail_text.len() <= DISK_READ_MAX_BYTES,
+            "text length {} should not exceed cap {}",
+            tail_text.len(),
+            DISK_READ_MAX_BYTES
+        );
     }
 }
