@@ -1,12 +1,12 @@
-schema_version: 4
+schema_version: 5
 id: subagent
 title: Subagent
-description: General-purpose focused subagent for delegated research and exploration tasks
+description: General-purpose focused read-only subagent for delegated research and exploration tasks
 expose_as_tool: false
 has_code: true
 
 tool:
-  description: Delegate a specific research or exploration task to a sub-agent that works independently
+  description: Delegate a specific read-only research or exploration task to a sub-agent that works independently
   agentic: true
   allow_parallel: true
   parameters:

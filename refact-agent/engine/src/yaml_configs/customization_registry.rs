@@ -1929,6 +1929,7 @@ mod tests {
                 "knowledge".to_string(),
                 "web".to_string(),
                 "web_search".to_string(),
+                "shell".to_string(),
                 "compress_chat_probe".to_string(),
                 "compress_chat_apply".to_string(),
                 "tasks_set".to_string(),
