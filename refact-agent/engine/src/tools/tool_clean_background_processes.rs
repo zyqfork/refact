@@ -97,7 +97,7 @@ impl Tool for ToolCleanBackgroundProcesses {
             },
             experimental: false,
             allow_parallel: false,
-            description: "Kill and reap all non-terminal background processes. Use to clean up after experiments. Services are excluded by default unless include_services=true.".to_string(),
+            description: "Kill and reap all non-terminal background processes owned by the current chat. Use to clean up after experiments. `scope=chat` (default) is available in normal chats. `scope=all` and `include_services=true` require planner/admin context and cannot be used by normal agents even after confirmation.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -105,12 +105,12 @@ impl Tool for ToolCleanBackgroundProcesses {
                         "type": "string",
                         "enum": ["chat", "owner", "workspace", "all"],
                         "default": "chat",
-                        "description": "Which set of processes to target. `owner` is kept as a compatibility alias for `chat`."
+                        "description": "Which set of processes to target. `chat` (default) kills processes owned by the current chat — available in normal chats. `owner` is a compatibility alias for `chat`. `workspace` kills processes in the active workspace. `all` kills every process globally and requires planner/admin context."
                     },
                     "include_services": {
                         "type": "boolean",
                         "default": false,
-                        "description": "Also kill Service-mode processes."
+                        "description": "Also kill Service-mode processes. Requires planner/admin context; normal agents must leave this false."
                     }
                 }
             }),
@@ -600,6 +600,33 @@ mod tests {
         );
         assert!(gcx.exec_registry.get(&background).await.is_none());
         assert!(gcx.exec_registry.get(&service).await.is_none());
+    }
+
+    #[test]
+    fn clean_background_processes_description_mentions_planner_requirement() {
+        let tool = ToolCleanBackgroundProcesses {
+            config_path: String::new(),
+        };
+        let desc = tool.tool_description();
+        assert!(
+            desc.description.contains("planner"),
+            "tool description must mention planner restriction: {}",
+            desc.description
+        );
+        let scope_desc = desc.input_schema["properties"]["scope"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            scope_desc.contains("planner"),
+            "scope description must mention planner restriction: {scope_desc}"
+        );
+        let include_services_desc = desc.input_schema["properties"]["include_services"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            include_services_desc.contains("planner"),
+            "include_services description must mention planner restriction: {include_services_desc}"
+        );
     }
 
     #[tokio::test]
