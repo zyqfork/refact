@@ -169,19 +169,133 @@ fn status_exit_code(status: &ExecStatus) -> Option<i32> {
     }
 }
 
-fn stop_rejected_child(mut child: tokio::process::Child, process_group_isolated: bool) {
+fn combine_cleanup_message(existing: Option<String>, message: String) -> String {
+    match existing {
+        Some(existing) if !existing.is_empty() => format!("{existing}; {message}"),
+        _ => message,
+    }
+}
+
+fn append_cleanup_message(target: &mut Option<String>, message: String) {
+    *target = Some(combine_cleanup_message(target.take(), message));
+}
+
+#[cfg(unix)]
+fn send_sigkill(process_id: i32) -> Result<(), std::io::Error> {
+    if unsafe { libc::kill(process_id, libc::SIGKILL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn send_sigkill_to_group(process_id: u32) -> Result<(), String> {
+    send_sigkill(-(process_id as i32)).map_err(|error| error.to_string())
+}
+
+#[cfg(unix)]
+fn proc_stat_parent_id(stat: &str) -> Option<i32> {
+    let (_, after_name) = stat.rsplit_once(") ")?;
+    let mut fields = after_name.split_whitespace();
+    let _state = fields.next()?;
+    fields.next()?.parse().ok()
+}
+
+#[cfg(unix)]
+fn collect_descendant_processes(root_pid: i32) -> Vec<i32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some(parent_id) = proc_stat_parent_id(&stat) else {
+            continue;
+        };
+        children.entry(parent_id).or_default().push(pid);
+    }
+    let mut descendants = Vec::new();
+    let mut stack = children.remove(&root_pid).unwrap_or_default();
+    while let Some(pid) = stack.pop() {
+        descendants.push(pid);
+        if let Some(child_ids) = children.remove(&pid) {
+            stack.extend(child_ids);
+        }
+    }
+    descendants
+}
+
+#[cfg(unix)]
+fn kill_descendant_processes(root_pid: i32) -> Result<(), String> {
+    let mut cleanup_error = None;
+    let descendants = collect_descendant_processes(root_pid);
+    for descendant_pid in descendants.into_iter().rev() {
+        match send_sigkill(descendant_pid) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+            Err(error) => append_cleanup_message(&mut cleanup_error, error.to_string()),
+        }
+    }
+    match cleanup_error {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
+}
+
+async fn stop_rejected_child(
+    mut child: tokio::process::Child,
+    process_group_isolated: bool,
+) -> Result<(), String> {
+    let mut cleanup_error = None;
     #[cfg(unix)]
     {
-        if process_group_isolated {
-            if let Some(pid) = child.id() {
-                let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        match child.id() {
+            Some(pid) if process_group_isolated => {
+                if let Err(message) = send_sigkill_to_group(pid) {
+                    append_cleanup_message(&mut cleanup_error, message);
+                }
+            }
+            Some(pid) => {
+                if let Err(message) = kill_descendant_processes(pid as i32) {
+                    append_cleanup_message(&mut cleanup_error, message);
+                }
+            }
+            None => {
+                append_cleanup_message(
+                    &mut cleanup_error,
+                    "missing child pid for rejected child cleanup".to_string(),
+                );
             }
         }
     }
-    let _ = child.start_kill();
-    tokio::spawn(async move {
-        let _ = child.wait().await;
-    });
+    if let Err(error) = child.start_kill() {
+        append_cleanup_message(&mut cleanup_error, error.to_string());
+    }
+    match tokio::time::timeout(REMOVE_KILL_TIMEOUT, child.wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => append_cleanup_message(&mut cleanup_error, error.to_string()),
+        Err(_) => append_cleanup_message(
+            &mut cleanup_error,
+            format!(
+                "timed out while stopping rejected child after {:.3}s",
+                REMOVE_KILL_TIMEOUT.as_secs_f64()
+            ),
+        ),
+    }
+    match cleanup_error {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
 }
 
 async fn write_stdin_bytes(
@@ -389,10 +503,15 @@ impl ExecRegistry {
     ) -> Result<ExecProcessSnapshot, String> {
         let process_id = meta.process_id.clone();
         if !process_group_isolated {
-            stop_rejected_child(child, false);
-            return Err(format!(
+            let message = format!(
                 "register_with_child requires process_group_isolated=true for cleanup guarantees: {process_id}"
-            ));
+            );
+            return Err(match stop_rejected_child(child, false).await {
+                Ok(()) => message,
+                Err(cleanup_error) => {
+                    format!("{message}; rejected child cleanup failed: {cleanup_error}")
+                }
+            });
         }
         let mut records = self.records.lock().await;
         if let Some(existing) = records.get(&process_id) {
@@ -402,7 +521,7 @@ impl ExecRegistry {
             {
                 let snapshot = existing.snapshot.clone();
                 drop(records);
-                stop_rejected_child(child, process_group_isolated);
+                stop_rejected_child(child, process_group_isolated).await?;
                 return Ok(snapshot);
             }
         }
@@ -987,38 +1106,45 @@ impl ExecRegistry {
                 let Some(mut child) = target.child else {
                     return Err(format!("remove target has no child: {}", target.process_id));
                 };
+                let mut kill_error = None;
                 #[cfg(unix)]
                 {
                     if target.process_group_isolated {
                         if let Some(pid) = child.id() {
-                            let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                            if let Err(message) = send_sigkill_to_group(pid) {
+                                kill_error = Some(message);
+                            }
                         }
                     }
                 }
-                let _ = child.start_kill();
+                if let Err(error) = child.start_kill() {
+                    append_cleanup_message(&mut kill_error, error.to_string());
+                }
                 match tokio::time::timeout(timeout, child.wait()).await {
-                    Ok(Ok(_)) => self.mark_killed(&target.process_id).await,
+                    Ok(Ok(_)) => match kill_error {
+                        Some(message) => {
+                            self.keep_remove_failure(&target.process_id, message.clone(), None)
+                                .await;
+                            Err(message)
+                        }
+                        None => self.mark_killed(&target.process_id).await,
+                    },
                     Ok(Err(err)) => {
-                        let message = err.to_string();
-                        self.keep_remove_failure(
-                            &target.process_id,
-                            message.clone(),
-                            Some(child),
-                        )
-                        .await;
+                        let message = combine_cleanup_message(kill_error, err.to_string());
+                        self.keep_remove_failure(&target.process_id, message.clone(), Some(child))
+                            .await;
                         Err(message)
                     }
                     Err(_) => {
-                        let message = format!(
-                            "timed out while removing child process after {:.3}s",
-                            timeout.as_secs_f64()
+                        let message = combine_cleanup_message(
+                            kill_error,
+                            format!(
+                                "timed out while removing child process after {:.3}s",
+                                timeout.as_secs_f64()
+                            ),
                         );
-                        self.keep_remove_failure(
-                            &target.process_id,
-                            message.clone(),
-                            Some(child),
-                        )
-                        .await;
+                        self.keep_remove_failure(&target.process_id, message.clone(), Some(child))
+                            .await;
                         Err(message)
                     }
                 }
@@ -1327,15 +1453,14 @@ async fn cleanup_target(
     {
         if target.process_group_isolated {
             if let Some(pid) = child.id() {
-                let result = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-                if result != 0 {
-                    kill_error = Some(std::io::Error::last_os_error().to_string());
+                if let Err(message) = send_sigkill_to_group(pid) {
+                    kill_error = Some(message);
                 }
             }
         }
     }
     if let Err(err) = child.start_kill() {
-        kill_error = Some(err.to_string());
+        append_cleanup_message(&mut kill_error, err.to_string());
     }
     let wait_result = tokio::time::timeout(timeout, child.wait()).await;
     let (outcome, child) = match wait_result {
@@ -1359,7 +1484,10 @@ async fn cleanup_target(
         ),
     };
     let outcome = match (outcome, kill_error) {
-        (ExecCleanupOutcome::Stopped, _) => ExecCleanupOutcome::Stopped,
+        (ExecCleanupOutcome::Stopped, Some(message)) => {
+            ExecCleanupOutcome::Failed { message, child }
+        }
+        (ExecCleanupOutcome::Stopped, None) => ExecCleanupOutcome::Stopped,
         (_, Some(message)) => ExecCleanupOutcome::Failed { message, child },
         (ExecCleanupOutcome::Failed { message, .. }, None) => {
             ExecCleanupOutcome::Failed { message, child }
@@ -1415,6 +1543,17 @@ mod tests {
     #[cfg(unix)]
     fn process_exists(process_id: u32) -> bool {
         unsafe { libc::kill(process_id as i32, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    async fn wait_until_process_exits(process_id: u32) -> bool {
+        for _ in 0..20 {
+            if !process_exists(process_id) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        !process_exists(process_id)
     }
 
     #[tokio::test]
@@ -2382,6 +2521,75 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn remove_group_kill_failure_is_not_reported_as_success() {
+        let registry = ExecRegistry::new();
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("30");
+        let child = command.spawn().expect("spawn child");
+        let child_pid = child.id().expect("child pid");
+        let snapshot = registry
+            .register_with_child(
+                meta(
+                    "exec_remove_group_kill_fail",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                child,
+                true,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+
+        let error = registry.remove(&process_id).await.unwrap_err();
+
+        assert!(error.contains("No such process") || error.contains("not found"));
+        assert!(wait_until_process_exits(child_pid).await);
+        let retained = registry.get(&process_id).await.unwrap();
+        assert!(matches!(retained.status, ExecStatus::Failed { .. }));
+        let _ = registry.remove(&process_id).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_group_kill_failure_is_not_reported_as_success() {
+        let registry = ExecRegistry::new();
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("30");
+        let child = command.spawn().expect("spawn child");
+        let child_pid = child.id().expect("child pid");
+        let snapshot = registry
+            .register_with_child(
+                meta(
+                    "exec_shutdown_group_kill_fail",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                child,
+                true,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+
+        let summary = registry.cleanup_shutdown(Duration::from_secs(2)).await;
+
+        assert_eq!(summary.removed_count, 0);
+        assert_eq!(summary.child_stop_attempts, 1);
+        assert_eq!(summary.child_stopped_count, 0);
+        assert_eq!(summary.child_failed_count, 1);
+        assert!(wait_until_process_exits(child_pid).await);
+        let retained = registry.get(&process_id).await.unwrap();
+        assert!(matches!(retained.status, ExecStatus::Failed { .. }));
+        let _ = registry.remove(&process_id).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn terminal_failed_with_child_is_killed_on_remove() {
         let registry = ExecRegistry::new();
         let mut command = tokio::process::Command::new("sh");
@@ -2585,7 +2793,11 @@ mod tests {
         let registry = ExecRegistry::new();
         let snapshot = registry
             .register(
-                meta("exec_retain_overwrite_guard", ExecMode::Background, "sleep 30"),
+                meta(
+                    "exec_retain_overwrite_guard",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
                 DEFAULT_MAX_BYTES,
             )
             .await;
@@ -2843,8 +3055,7 @@ mod tests {
         let registry = ExecRegistry::new();
         let first = registry
             .register(
-                meta("exec_child_dup_kill", ExecMode::Background, "sleep 1")
-                    .with_chat_id("chat-a"),
+                meta("exec_child_dup_kill", ExecMode::Background, "sleep 1").with_chat_id("chat-a"),
                 DEFAULT_MAX_BYTES,
             )
             .await;
@@ -3022,15 +3233,8 @@ mod tests {
             .get(&ExecProcessId("exec_reject_non_isolated_child".to_string()))
             .await
             .is_none());
-        for _ in 0..20 {
-            if !process_exists(child_pid) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        assert!(!process_exists(child_pid));
-        let _ = unsafe { libc::kill(descendant_pid, libc::SIGKILL) };
-        let _ = unsafe { libc::waitpid(descendant_pid, std::ptr::null_mut(), 0) };
+        assert!(wait_until_process_exits(child_pid).await);
+        assert!(wait_until_process_exits(descendant_pid as u32).await);
     }
 
     #[tokio::test]
@@ -3064,11 +3268,11 @@ mod tests {
 
         let result = registry.remove(&process_id).await;
 
-        let kill_received = matches!(
-            control_rx.try_recv(),
-            Ok(ExecProcessCommand::Kill { .. })
+        let kill_received = matches!(control_rx.try_recv(), Ok(ExecProcessCommand::Kill { .. }));
+        assert!(
+            kill_received,
+            "Kill command must be sent to runtime on remove"
         );
-        assert!(kill_received, "Kill command must be sent to runtime on remove");
         assert!(
             result.is_err(),
             "remove must fail when runtime does not respond"
@@ -3270,7 +3474,11 @@ mod tests {
         };
         let snapshot = registry
             .register_new_with_runtime(
-                meta("exec_td_rt_timeout_cleanup", ExecMode::Background, "sleep 30"),
+                meta(
+                    "exec_td_rt_timeout_cleanup",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
                 DEFAULT_MAX_BYTES,
                 runtime,
                 false,
@@ -3288,7 +3496,10 @@ mod tests {
         assert_eq!(summary.removed_count, 0);
         let retained = registry.get(&process_id).await;
         assert!(retained.is_some());
-        assert!(matches!(retained.unwrap().status, ExecStatus::Failed { .. }));
+        assert!(matches!(
+            retained.unwrap().status,
+            ExecStatus::Failed { .. }
+        ));
     }
 
     #[tokio::test]
