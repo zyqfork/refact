@@ -643,6 +643,21 @@ impl LlmWireAdapter for OpenAiResponsesAdapter {
                 }
                 deltas.push(LlmStreamDelta::Done);
             }
+            // ── Codex metadata events — preserve but do not render as server blocks ──
+            "codex.rate_limits" => {
+                let mut extra = serde_json::Map::new();
+                extra.insert(
+                    "codex_rate_limits".to_string(),
+                    json!([
+                        {
+                            "sequence_number": json.get("sequence_number").cloned().unwrap_or(Value::Null),
+                            "payload": json,
+                        }
+                    ]),
+                );
+                deltas.push(LlmStreamDelta::MergeExtra { extra });
+            }
+
             // ── Error events ──
             "response.failed" => {
                 let error = json
@@ -1621,6 +1636,37 @@ mod tests {
         let result = adapter.parse_stream_chunk(chunk);
 
         assert!(matches!(result, Err(StreamParseError::FatalError(_))));
+    }
+
+    #[test]
+    fn test_codex_rate_limits_is_metadata_only() {
+        let adapter = OpenAiResponsesAdapter;
+        let chunk = r#"{"type":"codex.rate_limits","sequence_number":1,"payload":{"type":"codex_rate_limits","plan_type":"pro","rate_limits":{"allowed":true,"limit_reached":false}}}"#;
+
+        let deltas = adapter.parse_stream_chunk(chunk).unwrap();
+
+        assert!(
+            deltas
+                .iter()
+                .any(|d| matches!(d, LlmStreamDelta::MergeExtra { .. })),
+            "codex.rate_limits should be preserved in message extra"
+        );
+        assert!(
+            !deltas
+                .iter()
+                .any(|d| matches!(d, LlmStreamDelta::AddServerContentBlock { .. })),
+            "codex.rate_limits should not create a visible server block"
+        );
+        if let Some(LlmStreamDelta::MergeExtra { extra }) = deltas
+            .iter()
+            .find(|d| matches!(d, LlmStreamDelta::MergeExtra { .. }))
+        {
+            assert_eq!(extra["codex_rate_limits"][0]["sequence_number"], json!(1));
+            assert_eq!(
+                extra["codex_rate_limits"][0]["payload"]["payload"]["plan_type"],
+                json!("pro")
+            );
+        }
     }
 
     #[test]
