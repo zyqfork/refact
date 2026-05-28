@@ -301,7 +301,8 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
                   key={lvl}
                   type="button"
                   className={classNames(styles.radioBtn, {
-                    [styles.radioBtnActive]: liveSettings.autonomy_level === lvl,
+                    [styles.radioBtnActive]:
+                      liveSettings.autonomy_level === lvl,
                   })}
                   onClick={() => handleSegmented("autonomy_level", lvl)}
                 >

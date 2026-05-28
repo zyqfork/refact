@@ -674,109 +674,105 @@ export const BuddyHome: React.FC = () => {
       </div>
 
       <main className={styles.content} data-testid="buddy-home-content">
-      <BuddyWorld
-        homeDoorDisabled
-        palette={palette}
-        stage={stage}
-        state={state}
-        pulse={pulse}
-        pet={pet}
-        nowPlaying={nowPlaying}
-        activeQuest={activeQuest}
-        onCanvasEvent={buddy.handleCanvasEvent}
-        activeSpeech={heroSpeech}
-        setupNeeded={setupNeeded}
-        onRunMode={handleRunMode}
-        onDismissSetup={handleDismissSetup}
-        onCare={(action, toy) => void handleCare(action, toy)}
-        onOpenPage={handleOpenWorldPage}
-        onSpeechControl={(control) => void handleSpeechControl(control)}
-      />
+        <BuddyWorld
+          homeDoorDisabled
+          palette={palette}
+          stage={stage}
+          state={state}
+          pulse={pulse}
+          pet={pet}
+          nowPlaying={nowPlaying}
+          activeQuest={activeQuest}
+          onCanvasEvent={buddy.handleCanvasEvent}
+          activeSpeech={heroSpeech}
+          setupNeeded={setupNeeded}
+          onRunMode={handleRunMode}
+          onDismissSetup={handleDismissSetup}
+          onCare={(action, toy) => void handleCare(action, toy)}
+          onOpenPage={handleOpenWorldPage}
+          onSpeechControl={(control) => void handleSpeechControl(control)}
+        />
 
-      <BuddySummaryStrip
-        stage={stage}
-        xp={xp}
-        xpNext={xpNext}
-        xpFill={xpFill}
-        pet={pet}
-        statsData={statsData}
-        successRate={successRate}
-        onViewStats={handleViewStats}
-      />
+        <BuddySummaryStrip
+          stage={stage}
+          xp={xp}
+          xpNext={xpNext}
+          xpFill={xpFill}
+          pet={pet}
+          statsData={statsData}
+          successRate={successRate}
+          onViewStats={handleViewStats}
+        />
 
-      {showSettings && (
-        <div
-          className={styles.settingsSection}
-          data-testid="buddy-home-settings-section"
-        >
-          <BuddySettingsPanel onClose={() => setShowSettings(false)} />
-        </div>
-      )}
-
-      <div className={styles.chipStrip}>
-        <span className={styles.chipStripLabel}>Project setup</span>
-        {SETUP_MODES.map((m) => (
-          <button
-            key={m.mode}
-            type="button"
-            className={classNames(styles.setupChip, {
-              [styles.setupChipPrimary]: m.mode === "setup",
-            })}
-            onClick={() => handleRunMode(m.mode)}
+        {showSettings && (
+          <div
+            className={styles.settingsSection}
+            data-testid="buddy-home-settings-section"
           >
-            {m.label}
-          </button>
-        ))}
-      </div>
-
-      {draftId && (
-        <div className={classNames(styles.row, styles.rowSingle)}>
-          <BuddyHomeDraftReview draftId={draftId} />
-        </div>
-      )}
-
-      <div className={styles.row} data-testid="buddy-home-new-sections">
-        <BuddyPulseCard />
-        <BuddyOpportunitiesFeed />
-      </div>
-
-      <BuddyPersonalityPanel
-        personality={personality}
-        needRows={needRows}
-        unlockedSkills={unlockedSkills}
-        activeQuest={activeQuest}
-        name={name}
-        settings={settings}
-        isSavingSettings={isSavingSettings}
-        onQuestControl={(control) => void handleQuestControl(control)}
-        onReroll={() => void handleReroll()}
-        onToggleProactive={handleSettings}
-        onPromptChange={(prompt) => void handlePromptChange(prompt)}
-      />
-
-      <div
-        className={classNames(
-          styles.row,
-          styles.row3,
-          styles.rowFlexBottom,
+            <BuddySettingsPanel onClose={() => setShowSettings(false)} />
+          </div>
         )}
-      >
-        <BuddyActivityPanel
-          activities={activities}
-          onOpenChat={handleOpenActivityChat}
-        />
-        <BuddyRecentErrorsPanel
-          recentErrors={recentErrors}
-          onInvestigate={handleInvestigateError}
-          onDismiss={handleDismissError}
-        />
-        <BuddyRecentChats
-          className={classNames(styles.panel, styles.panelScroll)}
-          title="RECENT CHATS"
-        />
-      </div>
 
-      <BuddyWorkshop />
+        <div className={styles.chipStrip}>
+          <span className={styles.chipStripLabel}>Project setup</span>
+          {SETUP_MODES.map((m) => (
+            <button
+              key={m.mode}
+              type="button"
+              className={classNames(styles.setupChip, {
+                [styles.setupChipPrimary]: m.mode === "setup",
+              })}
+              onClick={() => handleRunMode(m.mode)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {draftId && (
+          <div className={classNames(styles.row, styles.rowSingle)}>
+            <BuddyHomeDraftReview draftId={draftId} />
+          </div>
+        )}
+
+        <div className={styles.row} data-testid="buddy-home-new-sections">
+          <BuddyPulseCard />
+          <BuddyOpportunitiesFeed />
+        </div>
+
+        <BuddyPersonalityPanel
+          personality={personality}
+          needRows={needRows}
+          unlockedSkills={unlockedSkills}
+          activeQuest={activeQuest}
+          name={name}
+          settings={settings}
+          isSavingSettings={isSavingSettings}
+          onQuestControl={(control) => void handleQuestControl(control)}
+          onReroll={() => void handleReroll()}
+          onToggleProactive={handleSettings}
+          onPromptChange={(prompt) => void handlePromptChange(prompt)}
+        />
+
+        <div
+          className={classNames(styles.row, styles.row3, styles.rowFlexBottom)}
+        >
+          <BuddyActivityPanel
+            activities={activities}
+            onOpenChat={handleOpenActivityChat}
+          />
+          <BuddyRecentErrorsPanel
+            recentErrors={recentErrors}
+            onInvestigate={handleInvestigateError}
+            onDismiss={handleDismissError}
+          />
+          <BuddyRecentChats
+            className={classNames(styles.panel, styles.panelScroll)}
+            title="RECENT CHATS"
+          />
+        </div>
+
+        <BuddyWorkshop />
       </main>
     </div>
   );
