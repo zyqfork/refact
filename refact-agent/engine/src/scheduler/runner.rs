@@ -15,6 +15,7 @@ use crate::app_state::AppState;
 use crate::call_validation::ChatMessage;
 use crate::chat::internal_roles::{event, EventSubkind};
 use crate::chat::process_command_queue;
+use crate::chat::get_or_create_session_with_trajectory;
 use crate::chat::types::{ChatCommand, CommandRequest};
 use crate::files_correction::get_active_project_path;
 use crate::global_context::SharedGlobalContext;
@@ -176,9 +177,27 @@ impl CronRunner {
                 return;
             }
             ChatFireStatus::Missing => {
-                self.handle_unfireable_task(&task, now, "chat session not found")
-                    .await;
-                return;
+                if task.durable {
+                    let app = AppState::from_gcx(self.gcx.clone()).await;
+                    get_or_create_session_with_trajectory(app, &self.gcx.chat_sessions, chat_id)
+                        .await;
+                    match chat_fire_status(&self.gcx, chat_id).await {
+                        ChatFireStatus::Fireable => {}
+                        status => {
+                            tracing::warn!(
+                                "durable task {} deferred after session restore ({:?})",
+                                task.id,
+                                status
+                            );
+                            self.defer_invalid_target_task(&task, now);
+                            return;
+                        }
+                    }
+                } else {
+                    self.handle_unfireable_task(&task, now, "chat session not found")
+                        .await;
+                    return;
+                }
             }
             ChatFireStatus::Closed => {
                 self.handle_unfireable_task(&task, now, "chat session is closed")
@@ -233,7 +252,7 @@ impl CronRunner {
     }
 
     async fn handle_unfireable_task(&mut self, task: &ScheduledTask, now: u64, reason: &str) {
-        if task.recurring {
+        if task.recurring || task.durable {
             tracing::warn!(
                 "deferred scheduled task {} because it is not fireable: {}",
                 task.id,
@@ -916,5 +935,65 @@ mod tests {
 
         assert!(handle.is_finished());
         handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn durable_one_shot_missing_chat_is_restored_not_deleted() {
+        let now = now_ms();
+        let store = Arc::new(InMemoryCronStore::new());
+        let mut one_shot = one_shot_task("cron_durable_restore_one_shot", now);
+        one_shot.chat_id = Some("lazy-durable-chat".to_string());
+        one_shot.durable = true;
+        store.add(one_shot).await.unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let mut runner = CronRunner::new(store.clone(), gcx.clone());
+
+        runner.fire_due_tasks(now).await;
+
+        assert!(
+            store.list().await.is_empty(),
+            "durable one-shot should be removed after firing, not silently deleted"
+        );
+        let sessions = gcx.chat_sessions.read().await;
+        let session_arc = sessions
+            .get("lazy-durable-chat")
+            .expect("session should have been created for durable task");
+        let session = session_arc.lock().await;
+        assert!(
+            session.messages.iter().any(|m| {
+                m.role == EVENT_ROLE && m.extra["event"]["subkind"].as_str() == Some("cron_fire")
+            }),
+            "session should have cron_fire event injected"
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_recurring_missing_chat_does_not_hot_loop() {
+        let now = now_ms();
+        let store = Arc::new(InMemoryCronStore::new());
+        let mut recurring = due_task("cron_durable_recurring_restore", now);
+        recurring.chat_id = Some("lazy-recurring-chat".to_string());
+        recurring.durable = true;
+        store.add(recurring).await.unwrap();
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let mut runner = CronRunner::new(store.clone(), gcx.clone());
+
+        runner.fire_due_tasks(now).await;
+
+        let stored = store.list().await;
+        assert_eq!(stored.len(), 1, "recurring task should remain in store");
+        assert_eq!(stored[0].fire_count, 1, "task should have fired once");
+        assert!(
+            runner
+                .deferred_until_ms
+                .get("cron_durable_recurring_restore")
+                .is_none(),
+            "task should not be in deferred map after successful fire"
+        );
+        let sessions = gcx.chat_sessions.read().await;
+        assert!(
+            sessions.contains_key("lazy-recurring-chat"),
+            "session should have been created"
+        );
     }
 }
