@@ -410,6 +410,7 @@ impl Tool for ToolProcessRead {
         let snapshot = require_process(&exec_registry, &process_id).await?;
         let since_seq = parse_optional_u64(args, "since_seq")?.unwrap_or(0);
         let stream = parse_stream_selection(args)?;
+        let from_disk = parse_optional_bool(args, "from_disk")?.unwrap_or(false);
         let output_filter = parse_output_filter_args(args, &OutputFilter::default());
         let read = exec_registry.read(&process_id, since_seq, None).await;
         let mut content = format_process_snapshot("Process output", &snapshot);
@@ -417,7 +418,22 @@ impl Tool for ToolProcessRead {
             "\nsince_seq: {}\nnext_seq: {}\nlatest_seq: {}\n",
             read.since_seq, read.next_seq, read.latest_seq
         ));
-        content.push_str(&format_read_sections(&read, stream, &output_filter));
+        if from_disk {
+            if let Some(path) = read.disk_log_path.as_ref() {
+                let text = tokio::fs::read_to_string(path)
+                    .await
+                    .map_err(|error| format!("failed to read process output from disk: {error}"))?;
+                content.push_str(&format!(
+                    "from_disk: true\npersisted_output_path: {}\n",
+                    path.display()
+                ));
+                content.push_str(&format_disk_read_sections(&text, stream, &output_filter));
+            } else {
+                content.push_str(&format_read_sections(&read, stream, &output_filter));
+            }
+        } else {
+            content.push_str(&format_read_sections(&read, stream, &output_filter));
+        }
         Ok(tool_result(
             tool_call_id,
             content,
@@ -444,6 +460,7 @@ impl Tool for ToolProcessRead {
                     ("process_id", "string", "Runtime-owned process ID returned by process_start."),
                     ("since_seq", "integer", "Optional output sequence cursor. Default: 0."),
                     ("stream", "string", "Optional stream: stdout, stderr, combined, or all. Default: combined."),
+                    ("from_disk", "boolean", "Optional. If true and persisted output exists, read the full on-disk transcript instead of the in-memory ring."),
                     ("output_filter", "string", "Optional regex filter for output lines."),
                     ("output_limit", "string", "Optional max lines to show, or all/full for unlimited output."),
                 ],
@@ -1294,6 +1311,7 @@ fn process_value(snapshot: &ExecProcessSnapshot) -> Value {
         "ended_at_ms": snapshot.meta.ended_at_ms,
         "duration_ms": duration.as_millis() as u64,
         "exit_code": exit_code(&snapshot.status),
+        "persisted_output_path": snapshot.disk_log_path.as_ref().map(|path| path.to_string_lossy().to_string()),
     })
 }
 
@@ -1334,6 +1352,7 @@ fn read_value(read: &ExecReadResult) -> Value {
         "max_bytes": read.max_bytes,
         "chunk_count": read.chunk_count,
         "is_truncated": read.is_truncated,
+        "persisted_output_path": read.disk_log_path.as_ref().map(|path| path.to_string_lossy().to_string()),
     })
 }
 
@@ -1437,6 +1456,22 @@ fn append_section(out: &mut String, title: &str, text: &str, output_filter: &Out
             out.push('\n');
         }
     }
+}
+
+fn format_disk_read_sections(
+    text: &str,
+    selection: ProcessStreamSelection,
+    output_filter: &OutputFilter,
+) -> String {
+    let mut out = String::new();
+    let title = match selection {
+        ProcessStreamSelection::Stdout => "stdout",
+        ProcessStreamSelection::Stderr => "stderr",
+        ProcessStreamSelection::Combined => "combined",
+        ProcessStreamSelection::All => "combined",
+    };
+    append_section(&mut out, title, text, output_filter);
+    out
 }
 
 fn collect_stream(chunks: &[ExecOutputChunk], stream: ExecOutputStream) -> String {

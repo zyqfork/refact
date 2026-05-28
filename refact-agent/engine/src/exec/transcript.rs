@@ -5,12 +5,15 @@
 //! stderr; when a cap is hit the captured stream ends with an `[X bytes elided]` marker.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
+use crate::exec::spill::SpillWriter;
 use crate::exec::types::{
     current_timestamp_ms, ExecOutputChunk, ExecOutputStream, ExecProcessId, ExecReadResult,
 };
 
 pub const DEFAULT_MAX_BYTES: usize = 512 * 1024;
+pub const DEFAULT_SPILL_THRESHOLD_BYTES: usize = 256 * 1024;
 pub const FOREGROUND_STDOUT_CAPTURE_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const FOREGROUND_STDERR_CAPTURE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
@@ -36,6 +39,10 @@ pub struct ExecTranscript {
     truncated_chunks: u64,
     current_bytes: usize,
     max_bytes: usize,
+    chat_id: Option<String>,
+    spill_threshold_bytes: usize,
+    spill_writer: Option<SpillWriter>,
+    disk_log_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -154,6 +161,15 @@ impl ExecTranscript {
     }
 
     pub fn new(process_id: ExecProcessId, max_bytes: usize) -> Self {
+        Self::new_with_spill(process_id, max_bytes, None, DEFAULT_SPILL_THRESHOLD_BYTES)
+    }
+
+    pub fn new_with_spill(
+        process_id: ExecProcessId,
+        max_bytes: usize,
+        chat_id: Option<String>,
+        spill_threshold_bytes: usize,
+    ) -> Self {
         Self {
             process_id,
             chunks: VecDeque::new(),
@@ -165,6 +181,10 @@ impl ExecTranscript {
             truncated_chunks: 0,
             current_bytes: 0,
             max_bytes: Self::normalize_max_bytes(max_bytes),
+            chat_id,
+            spill_threshold_bytes,
+            spill_writer: None,
+            disk_log_path: None,
         }
     }
 
@@ -173,14 +193,21 @@ impl ExecTranscript {
     }
 
     pub fn append(&mut self, stream: ExecOutputStream, text: String) -> u64 {
-        self.append_chunk(stream, text).seq
+        self.append_chunk_to_ring(stream, text).seq
     }
 
-    pub(crate) fn append_chunk(
+    pub(crate) async fn append_chunk(
         &mut self,
         stream: ExecOutputStream,
         text: String,
-    ) -> ExecOutputChunk {
+    ) -> Result<ExecOutputChunk, String> {
+        if !text.is_empty() {
+            self.maybe_spill(&text).await?;
+        }
+        Ok(self.append_chunk_to_ring(stream, text))
+    }
+
+    fn append_chunk_to_ring(&mut self, stream: ExecOutputStream, text: String) -> ExecOutputChunk {
         let seq = self.next_seq;
         if text.is_empty() {
             return ExecOutputChunk {
@@ -230,6 +257,22 @@ impl ExecTranscript {
         chunk
     }
 
+    async fn maybe_spill(&mut self, text: &str) -> Result<(), String> {
+        if self.disk_log_path.is_none()
+            && self.total_bytes_appended.saturating_add(text.len()) > self.spill_threshold_bytes
+        {
+            if let Some(chat_id) = self.chat_id.as_ref() {
+                let writer = SpillWriter::create(chat_id, &self.process_id).await?;
+                self.disk_log_path = Some(writer.path().clone());
+                self.spill_writer = Some(writer);
+            }
+        }
+        if let Some(writer) = self.spill_writer.as_mut() {
+            writer.write_line(text).await?;
+        }
+        Ok(())
+    }
+
     pub fn read_since(&self, since_seq: u64) -> Vec<&ExecOutputChunk> {
         self.chunks.iter().filter(|c| c.seq >= since_seq).collect()
     }
@@ -263,6 +306,7 @@ impl ExecTranscript {
             max_bytes: self.max_bytes,
             chunk_count: self.chunks.len(),
             is_truncated: self.is_truncated(),
+            disk_log_path: self.disk_log_path.clone(),
         }
     }
 
@@ -308,6 +352,10 @@ impl ExecTranscript {
 
     pub fn next_seq(&self) -> u64 {
         self.next_seq
+    }
+
+    pub fn disk_log_path(&self) -> Option<&PathBuf> {
+        self.disk_log_path.as_ref()
     }
 }
 

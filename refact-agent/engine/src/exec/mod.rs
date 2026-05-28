@@ -1,6 +1,7 @@
 pub mod pty;
 pub mod registry;
 pub mod spawn;
+pub mod spill;
 pub mod transcript;
 pub mod types;
 

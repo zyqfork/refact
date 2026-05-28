@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify};
 
-use crate::exec::transcript::{ExecRawCapture, ExecRawOutput, ExecTranscript};
+use crate::exec::transcript::{
+    ExecRawCapture, ExecRawOutput, ExecTranscript, DEFAULT_SPILL_THRESHOLD_BYTES,
+};
 use crate::exec::types::{
     current_timestamp_ms, ExecMode, ExecOutputChunk, ExecOutputStream, ExecProcessFilter,
     ExecProcessId, ExecProcessMeta, ExecProcessSnapshot, ExecReadResult, ExecServiceLookup,
@@ -66,10 +68,16 @@ struct ExecProcessRecord {
 impl ExecProcessRecord {
     fn new(meta: ExecProcessMeta, transcript_limit_bytes: usize, capture_raw: bool) -> Self {
         let process_id = meta.process_id.clone();
+        let chat_id = meta.owner.chat_id.clone();
         let raw_capture = capture_raw.then(|| ExecRawCapture::foreground(process_id.clone()));
         Self {
             snapshot: ExecProcessSnapshot::new(meta),
-            transcript: ExecTranscript::new(process_id, transcript_limit_bytes),
+            transcript: ExecTranscript::new_with_spill(
+                process_id,
+                transcript_limit_bytes,
+                chat_id,
+                DEFAULT_SPILL_THRESHOLD_BYTES,
+            ),
             raw_capture,
             child: None,
             runtime: None,
@@ -380,7 +388,9 @@ impl ExecRegistry {
             if let Some(raw_capture) = record.raw_capture.as_mut() {
                 raw_capture.append(&stream, &text);
             }
-            record.transcript.append_chunk(stream, text)
+            let chunk = record.transcript.append_chunk(stream, text).await?;
+            record.snapshot.disk_log_path = record.transcript.disk_log_path().cloned();
+            chunk
         };
         let _ = self.output_tx.send(chunk.clone());
         Ok(chunk)
@@ -405,6 +415,13 @@ impl ExecRegistry {
             .get(process_id)
             .map(|record| record.transcript.read(since_seq, limit))
             .unwrap_or_else(|| ExecReadResult::not_found(process_id.clone(), since_seq))
+    }
+
+    pub async fn disk_log_path(&self, process_id: &ExecProcessId) -> Option<std::path::PathBuf> {
+        let records = self.records.lock().await;
+        records
+            .get(process_id)
+            .and_then(|record| record.transcript.disk_log_path().cloned())
     }
 
     pub async fn write_stdin(

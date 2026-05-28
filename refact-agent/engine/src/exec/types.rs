@@ -574,6 +574,7 @@ impl ExecServiceLookup {
 pub struct ExecProcessSnapshot {
     pub meta: ExecProcessMeta,
     pub status: ExecStatus,
+    pub disk_log_path: Option<PathBuf>,
 }
 
 impl ExecProcessSnapshot {
@@ -581,6 +582,7 @@ impl ExecProcessSnapshot {
         Self {
             status: ExecStatus::Starting,
             meta,
+            disk_log_path: None,
         }
     }
 
@@ -607,6 +609,7 @@ pub struct ExecReadResult {
     pub max_bytes: usize,
     pub chunk_count: usize,
     pub is_truncated: bool,
+    pub disk_log_path: Option<PathBuf>,
 }
 
 impl ExecReadResult {
@@ -627,6 +630,7 @@ impl ExecReadResult {
             max_bytes: 0,
             chunk_count: 0,
             is_truncated: false,
+            disk_log_path: None,
         }
     }
 }
