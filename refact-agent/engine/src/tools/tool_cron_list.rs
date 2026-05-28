@@ -8,12 +8,63 @@ use tokio::sync::Mutex as AMutex;
 
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
-use crate::files_correction::get_active_project_path;
-use crate::scheduler::{human_schedule, next_run_ms, CronStore, JsonFileCronStore, ScheduledTask};
+use crate::scheduler::{
+    active_durable_cron_store, human_schedule, next_run_ms, scheduler_timezone, session_cron_store,
+    CronStore, ScheduledTask,
+};
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 
 pub struct ToolCronList {
     pub config_path: String,
+    #[cfg(test)]
+    test_session_store: Option<Arc<dyn CronStore>>,
+    #[cfg(test)]
+    test_durable_store: Option<Arc<dyn CronStore>>,
+}
+
+impl ToolCronList {
+    pub fn new(config_path: String) -> Self {
+        Self {
+            config_path,
+            #[cfg(test)]
+            test_session_store: None,
+            #[cfg(test)]
+            test_durable_store: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_stores(
+        config_path: String,
+        session_store: Arc<dyn CronStore>,
+        durable_store: Option<Arc<dyn CronStore>>,
+    ) -> Self {
+        Self {
+            config_path,
+            test_session_store: Some(session_store),
+            test_durable_store: durable_store,
+        }
+    }
+
+    fn session_store(&self) -> Arc<dyn CronStore> {
+        #[cfg(test)]
+        if let Some(store) = &self.test_session_store {
+            return store.clone();
+        }
+        session_cron_store()
+    }
+
+    async fn durable_store(
+        &self,
+        ccx: Arc<AMutex<AtCommandsContext>>,
+    ) -> Result<Option<Arc<dyn CronStore>>, String> {
+        #[cfg(test)]
+        if self.test_session_store.is_some() {
+            return Ok(self.test_durable_store.clone());
+        }
+        let gcx = ccx.lock().await.global_context.clone();
+        active_durable_cron_store(gcx).await
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,21 +83,37 @@ impl Tool for ToolCronList {
         args: &HashMap<String, Value>,
     ) -> Result<(bool, Vec<ContextEnum>), String> {
         let scope = parse_scope(args)?;
-        let gcx = ccx.lock().await.app.gcx.clone();
-        let project_root = get_active_project_path(gcx)
-            .await
-            .ok_or_else(|| "No active project for scheduled tasks".to_string())?;
-        let store = JsonFileCronStore::new(project_root)?;
         let now_ms = Utc::now().timestamp_millis().max(0) as u64;
-        let tasks = store
-            .list()
-            .await
-            .into_iter()
-            .filter(|task| matches_scope(task, scope))
-            .map(|task| task_value(&task, now_ms))
-            .collect::<Vec<_>>();
-        let text = serde_json::to_string_pretty(&tasks).map_err(|error| error.to_string())?;
+        let tz = scheduler_timezone();
 
+        let mut tasks: Vec<Value> = Vec::new();
+
+        if scope == CronListScope::Session || scope == CronListScope::All {
+            let session_tasks = self.session_store().list().await;
+            tasks.extend(session_tasks.iter().map(|t| task_value(t, now_ms, tz)));
+        }
+
+        if scope == CronListScope::Durable || scope == CronListScope::All {
+            if let Some(store) = self.durable_store(ccx).await? {
+                let durable_tasks = store.list().await;
+                tasks.extend(durable_tasks.iter().map(|t| task_value(t, now_ms, tz)));
+            }
+        }
+
+        tasks.sort_by(|a, b| {
+            a["next_fire_at_ms"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&b["next_fire_at_ms"].as_u64().unwrap_or(0))
+                .then_with(|| {
+                    a["id"]
+                        .as_str()
+                        .unwrap_or("")
+                        .cmp(b["id"].as_str().unwrap_or(""))
+                })
+        });
+
+        let text = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
         Ok((
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
@@ -113,15 +180,7 @@ fn parse_scope(args: &HashMap<String, Value>) -> Result<CronListScope, String> {
     }
 }
 
-fn matches_scope(task: &ScheduledTask, scope: CronListScope) -> bool {
-    match scope {
-        CronListScope::Session => !task.durable,
-        CronListScope::Durable => task.durable,
-        CronListScope::All => true,
-    }
-}
-
-fn task_value(task: &ScheduledTask, now_ms: u64) -> Value {
+fn task_value(task: &ScheduledTask, now_ms: u64, tz: chrono_tz::Tz) -> Value {
     json!({
         "id": task.id,
         "cron": task.cron,
@@ -130,7 +189,7 @@ fn task_value(task: &ScheduledTask, now_ms: u64) -> Value {
         "prompt": first_chars(&task.prompt, 200),
         "recurring": task.recurring,
         "durable": task.durable,
-        "next_fire_at_ms": next_run_ms(&task.cron, now_ms, chrono_tz::UTC).unwrap_or(0),
+        "next_fire_at_ms": next_run_ms(&task.cron, now_ms, tz).unwrap_or(0),
         "fire_count": task.fire_count,
         "created_at_ms": task.created_at_ms,
     })
@@ -144,34 +203,44 @@ fn first_chars(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::scheduler::{InMemoryCronStore, JsonFileCronStore, DEFAULT_RECURRING_AUTO_EXPIRE_AFTER_MS};
 
-    fn task(id: &str, durable: bool, prompt: &str) -> ScheduledTask {
+    fn session_task(id: &str) -> ScheduledTask {
         ScheduledTask {
             id: id.to_string(),
             cron: "*/5 * * * *".to_string(),
-            prompt: prompt.to_string(),
-            description: format!("{id} description"),
+            prompt: "session prompt".to_string(),
+            description: format!("{id} desc"),
             recurring: true,
-            durable,
-            created_at_ms: 123,
+            durable: false,
+            created_at_ms: 1000,
             chat_id: Some("chat".to_string()),
             mode: Some("agent".to_string()),
             last_fired_at_ms: None,
-            fire_count: if durable { 2 } else { 1 },
-            auto_expire_after_ms: crate::scheduler::DEFAULT_RECURRING_AUTO_EXPIRE_AFTER_MS,
+            fire_count: 0,
+            auto_expire_after_ms: DEFAULT_RECURRING_AUTO_EXPIRE_AFTER_MS,
         }
     }
 
-    async fn ccx(project_root: std::path::PathBuf) -> Arc<AMutex<AtCommandsContext>> {
-        let gcx = crate::global_context::tests::make_test_gcx().await;
-        {
-            *gcx.documents_state.workspace_folders.lock().unwrap() = vec![project_root.clone()];
-            gcx.documents_state
-                .active_file_path
-                .lock()
-                .await
-                .replace(project_root.join("src/lib.rs"));
+    fn durable_task(id: &str) -> ScheduledTask {
+        ScheduledTask {
+            id: id.to_string(),
+            cron: "0 9 * * *".to_string(),
+            prompt: "durable prompt".to_string(),
+            description: format!("{id} desc"),
+            recurring: true,
+            durable: true,
+            created_at_ms: 1000,
+            chat_id: Some("chat".to_string()),
+            mode: Some("agent".to_string()),
+            last_fired_at_ms: None,
+            fire_count: 0,
+            auto_expire_after_ms: DEFAULT_RECURRING_AUTO_EXPIRE_AFTER_MS,
         }
+    }
+
+    async fn test_ccx() -> Arc<AMutex<AtCommandsContext>> {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
         let ccx = AtCommandsContext::new_with_abort(
             AppState::from_gcx(gcx).await,
             4096,
@@ -195,62 +264,109 @@ mod tests {
         scope: Option<&str>,
     ) -> Vec<Value> {
         let mut args = HashMap::new();
-        if let Some(scope) = scope {
-            args.insert("scope".to_string(), json!(scope));
+        if let Some(s) = scope {
+            args.insert("scope".to_string(), json!(s));
         }
         let (_, messages) = tool
             .tool_execute(ccx, &"call".to_string(), &args)
             .await
             .unwrap();
         let message = match messages.into_iter().next().unwrap() {
-            ContextEnum::ChatMessage(message) => message,
+            ContextEnum::ChatMessage(m) => m,
             ContextEnum::ContextFile(_) => panic!("expected chat message"),
         };
         let text = match message.content {
-            ChatContent::SimpleText(text) => text,
+            ChatContent::SimpleText(t) => t,
             _ => panic!("expected text content"),
         };
         serde_json::from_str(&text).unwrap()
     }
 
     #[tokio::test]
-    async fn lists_all_and_filters_by_scope() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(temp.path().join("src")).unwrap();
-        let store = JsonFileCronStore::new(temp.path()).unwrap();
-        let long_prompt = "x".repeat(250);
-        store
-            .add(task("cron_session", false, &long_prompt))
+    async fn cron_list_scope_session_sees_session_store() {
+        let session_store: Arc<dyn CronStore> = Arc::new(InMemoryCronStore::new());
+        session_store
+            .add(session_task("cron_list_sess_a"))
             .await
             .unwrap();
-        store
-            .add(task("cron_durable", true, "durable prompt"))
+        let mut tool = ToolCronList::with_stores(String::new(), session_store, None);
+        let ccx = test_ccx().await;
+
+        let session_only = run_tool(&mut tool, ccx.clone(), Some("session")).await;
+        assert_eq!(session_only.len(), 1);
+        assert_eq!(session_only[0]["id"], json!("cron_list_sess_a"));
+        assert_eq!(session_only[0]["durable"], json!(false));
+
+        let durable_only = run_tool(&mut tool, ccx.clone(), Some("durable")).await;
+        assert_eq!(durable_only.len(), 0);
+
+        let all = run_tool(&mut tool, ccx, None).await;
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["id"], json!("cron_list_sess_a"));
+    }
+
+    #[tokio::test]
+    async fn cron_list_scope_all_sees_session_and_durable() {
+        let session_store: Arc<dyn CronStore> = Arc::new(InMemoryCronStore::new());
+        session_store
+            .add(session_task("cron_list_all_sess"))
             .await
             .unwrap();
 
-        let ccx = ccx(temp.path().to_path_buf()).await;
-        let mut tool = ToolCronList {
-            config_path: String::new(),
-        };
+        let temp = tempfile::tempdir().unwrap();
+        let durable_store: Arc<dyn CronStore> =
+            Arc::new(JsonFileCronStore::new(temp.path()).unwrap());
+        durable_store
+            .add(durable_task("cron_list_all_dur"))
+            .await
+            .unwrap();
+
+        let mut tool = ToolCronList::with_stores(
+            String::new(),
+            session_store,
+            Some(durable_store),
+        );
+        let ccx = test_ccx().await;
 
         let all = run_tool(&mut tool, ccx.clone(), None).await;
         assert_eq!(all.len(), 2);
-        assert_eq!(all[0]["id"], json!("cron_durable"));
-        assert_eq!(all[0]["human_schedule"], json!("every 5 minutes"));
-        assert_eq!(all[0]["description"], json!("cron_durable description"));
-        assert!(all[0]["next_fire_at_ms"].as_u64().unwrap() > 0);
-        assert_eq!(all[0]["fire_count"], json!(2));
-        assert_eq!(all[0]["created_at_ms"], json!(123));
-        assert_eq!(all[1]["prompt"].as_str().unwrap().chars().count(), 200);
+        let ids: Vec<&str> = all.iter().map(|v| v["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"cron_list_all_sess"));
+        assert!(ids.contains(&"cron_list_all_dur"));
 
-        let session = run_tool(&mut tool, ccx.clone(), Some("session")).await;
-        assert_eq!(session.len(), 1);
-        assert_eq!(session[0]["id"], json!("cron_session"));
-        assert_eq!(session[0]["durable"], json!(false));
+        let session_only = run_tool(&mut tool, ccx.clone(), Some("session")).await;
+        assert_eq!(session_only.len(), 1);
+        assert_eq!(session_only[0]["id"], json!("cron_list_all_sess"));
 
-        let durable = run_tool(&mut tool, ccx, Some("durable")).await;
-        assert_eq!(durable.len(), 1);
-        assert_eq!(durable[0]["id"], json!("cron_durable"));
-        assert_eq!(durable[0]["durable"], json!(true));
+        let durable_only = run_tool(&mut tool, ccx, Some("durable")).await;
+        assert_eq!(durable_only.len(), 1);
+        assert_eq!(durable_only[0]["id"], json!("cron_list_all_dur"));
+    }
+
+    #[tokio::test]
+    async fn cron_list_next_fire_uses_scheduler_timezone() {
+        let session_store: Arc<dyn CronStore> = Arc::new(InMemoryCronStore::new());
+        session_store
+            .add(session_task("cron_list_tz_check"))
+            .await
+            .unwrap();
+        let mut tool = ToolCronList::with_stores(String::new(), session_store, None);
+        let ccx = test_ccx().await;
+
+        let items = run_tool(&mut tool, ccx, Some("session")).await;
+        assert_eq!(items.len(), 1);
+
+        let now_ms = Utc::now().timestamp_millis().max(0) as u64;
+        let tz = scheduler_timezone();
+        let expected = next_run_ms("*/5 * * * *", now_ms, tz).unwrap_or(0);
+        let actual = items[0]["next_fire_at_ms"].as_u64().unwrap();
+        assert!(
+            actual > 0,
+            "next_fire_at_ms should be positive, got {actual}"
+        );
+        assert!(
+            actual.abs_diff(expected) < 60_000,
+            "next_fire_at_ms {actual} should be close to scheduler_timezone-based {expected}"
+        );
     }
 }

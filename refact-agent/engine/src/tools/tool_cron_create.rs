@@ -13,8 +13,8 @@ use crate::call_validation::{ChatContent, ChatMessage, ContextEnum};
 use crate::chat::internal_roles::{event, EventSubkind};
 use crate::files_correction::get_active_project_path;
 use crate::scheduler::{
-    human_schedule, next_run_ms, parse_cron, session_cron_store, CronStore, JsonFileCronStore,
-    ScheduledTask,
+    human_schedule, next_run_ms, parse_cron, scheduler_timezone, session_cron_store, CronStore,
+    JsonFileCronStore, ScheduledTask,
 };
 use crate::tools::tools_description::{Tool, ToolDesc, ToolSource, ToolSourceType};
 
@@ -100,7 +100,7 @@ impl Tool for ToolCronCreate {
             Some(chat_id.clone()),
             None,
             unix_now_ms(),
-            local_timezone(),
+            scheduler_timezone(),
         )?;
         let outcome = create_cron_job(input, runtime).await?;
 
@@ -295,18 +295,6 @@ fn unix_now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-}
-
-fn local_timezone() -> Tz {
-    iana_time_zone::get_timezone()
-        .ok()
-        .and_then(|value| value.parse::<Tz>().ok())
-        .or_else(|| {
-            std::env::var("TZ")
-                .ok()
-                .and_then(|value| value.trim_start_matches(':').parse::<Tz>().ok())
-        })
-        .unwrap_or(chrono_tz::UTC)
 }
 
 #[cfg(test)]

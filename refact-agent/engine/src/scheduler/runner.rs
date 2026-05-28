@@ -18,6 +18,7 @@ use crate::chat::process_command_queue;
 use crate::chat::types::{ChatCommand, CommandRequest};
 use crate::files_correction::get_active_project_path;
 use crate::global_context::SharedGlobalContext;
+use crate::scheduler::scheduler_timezone;
 
 use super::cron_expr::next_run_ms;
 use super::jitter::{jittered_next_run_ms, one_shot_jittered_next_run_ms, JitterConfig};
@@ -28,7 +29,6 @@ const DEFAULT_SLEEP_MS: u64 = 60_000;
 const IDLE_DEFER_MS: u64 = 30_000;
 const INVALID_TARGET_DEFER_MS: u64 = 60_000;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
-const RUNNER_TZ: chrono_tz::Tz = chrono_tz::UTC;
 
 pub struct CronRunner {
     pub store: Arc<dyn CronStore>,
@@ -510,11 +510,12 @@ fn auto_expired_notice_message(task: &ScheduledTask) -> ChatMessage {
 }
 
 fn scheduled_fire_at_ms(task: &ScheduledTask, _now: u64, jitter_cfg: &JitterConfig) -> Option<u64> {
+    let tz = scheduler_timezone();
     let from_ms = task.last_fired_at_ms.unwrap_or(task.created_at_ms);
     let next = if task.recurring {
-        jittered_next_run_ms(&task.cron, from_ms, &task.id, jitter_cfg, RUNNER_TZ)
+        jittered_next_run_ms(&task.cron, from_ms, &task.id, jitter_cfg, tz)
     } else {
-        one_shot_jittered_next_run_ms(&task.cron, from_ms, &task.id, jitter_cfg, RUNNER_TZ)
+        one_shot_jittered_next_run_ms(&task.cron, from_ms, &task.id, jitter_cfg, tz)
     }?;
     if task.recurring || task.last_fired_at_ms.is_none() {
         Some(next)
@@ -527,7 +528,8 @@ fn missed_one_shot_task(task: &ScheduledTask, now: u64) -> bool {
     !task.recurring
         && task.last_fired_at_ms.is_none()
         && task.fire_count == 0
-        && next_run_ms(&task.cron, task.created_at_ms, RUNNER_TZ).is_some_and(|next| next < now)
+        && next_run_ms(&task.cron, task.created_at_ms, scheduler_timezone())
+            .is_some_and(|next| next < now)
 }
 
 fn task_final_after_fire(task: &ScheduledTask, now: u64) -> bool {

@@ -1,18 +1,16 @@
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
-use chrono_tz::Tz;
 use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
 use crate::custom_error::ScratchError;
-use crate::files_correction::get_active_project_path;
-use crate::scheduler::{human_schedule, next_run_ms, session_cron_store, CronStore, JsonFileCronStore};
+use crate::scheduler::{
+    active_durable_cron_store, human_schedule, next_run_ms, scheduler_timezone, session_cron_store,
+};
 use crate::tools::tool_cron_create::{create_cron_job, CronCreateInput, CronCreateRuntime};
 
 #[derive(Debug, Serialize)]
@@ -61,39 +59,26 @@ pub async fn handle_v1_scheduler_cron_get(
     State(app): State<AppState>,
 ) -> Result<Json<Vec<CronTaskResponse>>, ScratchError> {
     let now_ms = Utc::now().timestamp_millis().max(0) as u64;
+    let tz = scheduler_timezone();
+
     let mut tasks = session_cron_store()
         .list()
         .await
         .into_iter()
-        .map(|task| CronTaskResponse {
-            id: task.id,
-            cron: task.cron.clone(),
-            human_schedule: human_schedule(&task.cron),
-            description: task.description,
-            prompt: first_chars(&task.prompt, 200),
-            recurring: task.recurring,
-            durable: task.durable,
-            next_fire_at_ms: next_run_ms(&task.cron, now_ms, local_timezone()).unwrap_or(0),
-            fire_count: task.fire_count,
-            created_at_ms: task.created_at_ms,
-        })
+        .map(|task| task_response(task, now_ms, tz))
         .collect::<Vec<_>>();
 
-    if let Some(project_root) = active_project_root(&app).await {
-        let store = JsonFileCronStore::new(project_root)
-            .map_err(|error| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-        tasks.extend(store.list().await.into_iter().map(|task| CronTaskResponse {
-            id: task.id,
-            cron: task.cron.clone(),
-            human_schedule: human_schedule(&task.cron),
-            description: task.description,
-            prompt: first_chars(&task.prompt, 200),
-            recurring: task.recurring,
-            durable: task.durable,
-            next_fire_at_ms: next_run_ms(&task.cron, now_ms, local_timezone()).unwrap_or(0),
-            fire_count: task.fire_count,
-            created_at_ms: task.created_at_ms,
-        }));
+    let durable = active_durable_cron_store(app.gcx.clone())
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if let Some(store) = durable {
+        tasks.extend(
+            store
+                .list()
+                .await
+                .into_iter()
+                .map(|task| task_response(task, now_ms, tz)),
+        );
     }
 
     tasks.sort_by(|a, b| {
@@ -108,19 +93,15 @@ pub async fn handle_v1_scheduler_cron_post(
     State(app): State<AppState>,
     Json(request): Json<CronCreateRequest>,
 ) -> Result<Json<CronCreateResponse>, ScratchError> {
-    let project_root = active_project_root(&app).await;
-    let durable_store = project_root
-        .map(|project_root| {
-            JsonFileCronStore::new(project_root).map(|store| Arc::new(store) as Arc<dyn CronStore>)
-        })
-        .transpose()
-        .map_err(|error| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let durable_store = active_durable_cron_store(app.gcx.clone())
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let runtime = CronCreateRuntime {
         session_store: session_cron_store(),
         durable_store,
         change_notify: crate::scheduler::runner_change_notify(),
         now_ms: unix_now_ms(),
-        timezone: local_timezone(),
+        timezone: scheduler_timezone(),
         chat_id: None,
         mode: None,
     };
@@ -152,16 +133,17 @@ pub async fn handle_v1_scheduler_cron_delete(
     let mut removed = session_cron_store()
         .remove(&id)
         .await
-        .map_err(|error| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     if !removed {
-        if let Some(project_root) = active_project_root(&app).await {
-            let store = JsonFileCronStore::new(project_root)
-                .map_err(|error| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        let durable = active_durable_cron_store(app.gcx.clone())
+            .await
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        if let Some(store) = durable {
             removed = store
                 .remove(&id)
                 .await
-                .map_err(|error| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         }
     }
 
@@ -172,8 +154,23 @@ pub async fn handle_v1_scheduler_cron_delete(
     Ok(Json(CronDeleteResponse { removed }))
 }
 
-async fn active_project_root(app: &AppState) -> Option<PathBuf> {
-    get_active_project_path(app.gcx.clone()).await
+fn task_response(
+    task: crate::scheduler::ScheduledTask,
+    now_ms: u64,
+    tz: chrono_tz::Tz,
+) -> CronTaskResponse {
+    CronTaskResponse {
+        id: task.id,
+        cron: task.cron.clone(),
+        human_schedule: human_schedule(&task.cron),
+        description: task.description,
+        prompt: first_chars(&task.prompt, 200),
+        recurring: task.recurring,
+        durable: task.durable,
+        next_fire_at_ms: next_run_ms(&task.cron, now_ms, tz).unwrap_or(0),
+        fire_count: task.fire_count,
+        created_at_ms: task.created_at_ms,
+    }
 }
 
 fn first_chars(value: &str, max_chars: usize) -> String {
@@ -185,18 +182,6 @@ fn unix_now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-}
-
-fn local_timezone() -> Tz {
-    iana_time_zone::get_timezone()
-        .ok()
-        .and_then(|value| value.parse::<Tz>().ok())
-        .or_else(|| {
-            std::env::var("TZ")
-                .ok()
-                .and_then(|value| value.trim_start_matches(':').parse::<Tz>().ok())
-        })
-        .unwrap_or(chrono_tz::UTC)
 }
 
 #[cfg(test)]

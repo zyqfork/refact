@@ -13,6 +13,28 @@ pub use types::{
     SchedulerConfig, cron_create_policy,
 };
 
+pub fn scheduler_timezone() -> chrono_tz::Tz {
+    iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+        .or_else(|| {
+            std::env::var("TZ")
+                .ok()
+                .and_then(|value| value.trim_start_matches(':').parse::<chrono_tz::Tz>().ok())
+        })
+        .unwrap_or(chrono_tz::UTC)
+}
+
+pub async fn active_durable_cron_store(
+    gcx: std::sync::Arc<crate::global_context::GlobalContext>,
+) -> Result<Option<std::sync::Arc<dyn CronStore>>, String> {
+    match crate::files_correction::get_active_project_path(gcx).await {
+        None => Ok(None),
+        Some(path) => JsonFileCronStore::new(path)
+            .map(|store| Some(std::sync::Arc::new(store) as std::sync::Arc<dyn CronStore>)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
