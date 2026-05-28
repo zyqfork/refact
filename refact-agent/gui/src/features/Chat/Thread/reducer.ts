@@ -343,7 +343,9 @@ function applyRestoredThread(
     tool_use: payload.tool_use ?? existing.tool_use ?? fallbackToolUse,
     mode: normalizeLegacyMode(payload.mode ?? existing.mode),
     buddy_meta:
-      payload.buddy_meta !== undefined ? payload.buddy_meta : existing.buddy_meta,
+      payload.buddy_meta !== undefined
+        ? payload.buddy_meta
+        : existing.buddy_meta,
     boost_reasoning:
       payload.boost_reasoning !== undefined
         ? payload.boost_reasoning
@@ -368,8 +370,7 @@ function applyRestoredThread(
       payload.isTitleGenerated !== undefined
         ? payload.isTitleGenerated
         : existing.isTitleGenerated,
-    new_chat_suggested:
-      payload.new_chat_suggested ??
+    new_chat_suggested: payload.new_chat_suggested ??
       existing.new_chat_suggested ?? { wasSuggested: false },
     createdAt: payload.createdAt ?? existing.createdAt,
     updatedAt: payload.updatedAt ?? existing.updatedAt,
@@ -418,7 +419,9 @@ function applyRestoredThread(
         ? payload.frequency_penalty
         : existing.frequency_penalty,
     max_tokens:
-      payload.max_tokens !== undefined ? payload.max_tokens : existing.max_tokens,
+      payload.max_tokens !== undefined
+        ? payload.max_tokens
+        : existing.max_tokens,
     parallel_tool_calls:
       payload.parallel_tool_calls !== undefined
         ? payload.parallel_tool_calls
