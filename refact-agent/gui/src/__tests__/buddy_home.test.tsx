@@ -3860,41 +3860,60 @@ describe("BuddyRecentChats_opens_existing_chat", () => {
 });
 
 describe("BuddyHome_bottom_row_bounded_scroll", () => {
-  const commonHandlers = [
-    http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
-      HttpResponse.json({ opportunities: [] }),
-    ),
-    http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
-      HttpResponse.json([]),
-    ),
-    http.get("http://127.0.0.1:8001/v1/stats/llm/summary", () =>
-      HttpResponse.json({
-        totals: { total_calls: 0, successful_calls: 0, total_tokens: 0 },
-      }),
-    ),
-    http.get("http://127.0.0.1:8001/v1/setup/status", () =>
-      HttpResponse.json({ configured: true, reasons: [], detail: {} }),
-    ),
-  ];
-
-  it("activity panel has panelScroll class for bounded internal scrolling", async () => {
+  it("bottom panels stay inside the bounded row with internal scroll containers", async () => {
     const store = setUpStore({ ...CONFIG_STATE });
     store.dispatch(setBuddySnapshot(makeSnapshot(makePulse())));
-    server.use(...commonHandlers);
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [] }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+        HttpResponse.json([
+          makeConversation({ id: "bottom-row-chat", title: "Bottom row chat" }),
+        ]),
+      ),
+      http.get("http://127.0.0.1:8001/v1/stats/llm/summary", () =>
+        HttpResponse.json({
+          totals: { total_calls: 0, successful_calls: 0, total_tokens: 0 },
+        }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/setup/status", () =>
+        HttpResponse.json({ configured: true, reasons: [], detail: {} }),
+      ),
+    );
 
     render(<BuddyHome />, { store });
-    const panel = await screen.findByTestId("buddy-activity-panel");
-    expect(panel.className).toContain("panelScroll");
-  });
 
-  it("recent errors panel has panelScroll class for bounded internal scrolling", async () => {
-    const store = setUpStore({ ...CONFIG_STATE });
-    store.dispatch(setBuddySnapshot(makeSnapshot(makePulse())));
-    server.use(...commonHandlers);
+    const activityPanel = await screen.findByTestId("buddy-activity-panel");
+    const errorsPanel = screen.getByTestId("buddy-recent-errors-panel");
+    await screen.findByText("Bottom row chat");
+    const recentChatsTitle = screen.getByText("RECENT CHATS");
+    const recentChatsPanel = recentChatsTitle.closest("[class*='panelScroll']");
+    const bottomRow = activityPanel.parentElement;
 
-    render(<BuddyHome />, { store });
-    const panel = await screen.findByTestId("buddy-recent-errors-panel");
-    expect(panel.className).toContain("panelScroll");
+    expect(bottomRow).not.toBeNull();
+    expect(bottomRow?.className).toContain("row");
+    expect(bottomRow?.className).toContain("row3");
+    expect(bottomRow?.className).toContain("rowFlexBottom");
+    expect(bottomRow).toContainElement(activityPanel);
+    expect(bottomRow).toContainElement(errorsPanel);
+    expect(bottomRow).toContainElement(recentChatsPanel as HTMLElement);
+
+    for (const panel of [activityPanel, errorsPanel, recentChatsPanel]) {
+      expect(panel).not.toBeNull();
+      expect(panel?.className).toContain("panel");
+      expect(panel?.className).toContain("panelScroll");
+    }
+
+    expect(
+      activityPanel.querySelector("[class*='scrollList']"),
+    ).toBeInTheDocument();
+    expect(
+      errorsPanel.querySelector("[class*='scrollList']"),
+    ).toBeInTheDocument();
+    expect(
+      recentChatsPanel?.querySelector("[class*='entriesScroll']"),
+    ).toBeInTheDocument();
   });
 
   it("rowFlexBottom block bounds explicit and implicit bottom row sizing", async () => {
