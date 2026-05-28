@@ -56,6 +56,7 @@ import { buildColorMap } from "../features/Buddy/canvas/colorMap";
 import { updateSceneAnimation } from "../features/Buddy/canvas/animLoop";
 import { createInitialAnimState } from "../features/Buddy/state";
 import { setUpStore } from "../app/store";
+import { trajectoriesApi } from "../services/refact";
 import { buddyApi, type BuddyErrorReport } from "../services/refact/buddy";
 import type {
   BuddySnapshot,
@@ -78,7 +79,12 @@ import type {
 } from "../features/Buddy/types";
 import { buildBuddyInvestigationPrompt } from "../features/Buddy/investigation";
 import { withBuddyErrorReport } from "../features/Buddy/BuddyErrorBoundary";
-import { createChatWithId, restoreChat } from "../features/Chat/Thread/actions";
+import {
+  createChatWithId,
+  restoreChat,
+  restoreChatFromBackend,
+  openExistingBuddyChat,
+} from "../features/Chat/Thread/actions";
 import {
   addBuddyCrashBreadcrumb,
   beginBuddyCrashSession,
@@ -4706,6 +4712,185 @@ describe("buddy chat reactions settings and bubbles", () => {
 });
 
 describe("restoreChat buddy_meta handling", () => {
+  test("restoreChat refreshes an existing empty buddy runtime with restored messages", () => {
+    const store = setUpStore();
+    store.dispatch(createChatWithId({ id: "buddy-refresh-1" }));
+
+    store.dispatch(
+      restoreChat({
+        id: "buddy-refresh-1",
+        title: "Hydrated Buddy Chat",
+        model: "gpt-test",
+        mode: "buddy",
+        tool_use: "agent",
+        messages: [
+          {
+            role: "user",
+            content: "Stored Buddy message",
+            message_id: "msg-1",
+          },
+        ],
+        boost_reasoning: false,
+        context_tokens_cap: undefined,
+        include_project_info: true,
+        increase_max_tokens: false,
+        createdAt: "2024-01-01T00:00:00Z",
+        updatedAt: "2024-01-02T00:00:00Z",
+        buddy_meta: {
+          is_buddy_chat: true,
+          buddy_chat_kind: "chat",
+          workflow_id: null,
+        },
+      }),
+    );
+
+    const state = store.getState();
+    const rt = state.chat.threads["buddy-refresh-1"];
+    expect(rt?.thread.title).toBe("Hydrated Buddy Chat");
+    expect(rt?.thread.model).toBe("gpt-test");
+    expect(rt?.thread.mode).toBe("buddy");
+    expect(rt?.thread.messages).toHaveLength(1);
+    expect(rt?.thread.messages[0]).toMatchObject({
+      role: "user",
+      content: "Stored Buddy message",
+    });
+    expect(rt?.thread.buddy_meta?.is_buddy_chat).toBe(true);
+    expect(state.chat.open_thread_ids).not.toContain("buddy-refresh-1");
+    expect(state.chat.current_thread_id).toBe("buddy-refresh-1");
+  });
+
+  test("restoreChat attaches buddy_meta to an existing non-buddy runtime", () => {
+    const store = setUpStore();
+    store.dispatch(createChatWithId({ id: "promoted-buddy-1" }));
+
+    expect(
+      store.getState().chat.threads["promoted-buddy-1"]?.thread.buddy_meta,
+    ).toBeUndefined();
+    expect(store.getState().chat.open_thread_ids).toContain(
+      "promoted-buddy-1",
+    );
+
+    store.dispatch(
+      restoreChat({
+        id: "promoted-buddy-1",
+        title: "Promoted Buddy Chat",
+        model: "",
+        mode: "buddy",
+        tool_use: "agent",
+        messages: [],
+        boost_reasoning: false,
+        context_tokens_cap: undefined,
+        include_project_info: true,
+        increase_max_tokens: false,
+        createdAt: "2024-01-01T00:00:00Z",
+        updatedAt: "2024-01-02T00:00:00Z",
+        buddy_meta: {
+          is_buddy_chat: true,
+          buddy_chat_kind: "workflow",
+          workflow_id: "refact_self_critic",
+        },
+      }),
+    );
+
+    const state = store.getState();
+    const rt = state.chat.threads["promoted-buddy-1"];
+    expect(rt?.thread.buddy_meta).toEqual({
+      is_buddy_chat: true,
+      buddy_chat_kind: "workflow",
+      workflow_id: "refact_self_critic",
+    });
+    expect(rt?.thread.title).toBe("Promoted Buddy Chat");
+    expect(state.chat.open_thread_ids).not.toContain("promoted-buddy-1");
+  });
+
+  test("openExistingBuddyChat requests trajectory with non-subscribed query", async () => {
+    const initiateSpy = vi.spyOn(
+      trajectoriesApi.endpoints.getTrajectory,
+      "initiate",
+    );
+    const dispatch = vi.fn((action: unknown) => {
+      if (typeof action === "function") {
+        return {
+          unwrap: () =>
+            Promise.resolve({
+              id: "buddy-no-subscribe",
+              title: "No Subscribe Buddy",
+              created_at: "2024-01-01T00:00:00Z",
+              updated_at: "2024-01-02T00:00:00Z",
+              model: "",
+              mode: "buddy",
+              tool_use: "agent",
+              messages: [],
+            }),
+        };
+      }
+      return action;
+    });
+
+    await openExistingBuddyChat({
+      id: "buddy-no-subscribe",
+      kind: "chat",
+      title: "No Subscribe Buddy",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-02T00:00:00Z",
+      status: "completed",
+      message_count: 1,
+      icon: "💬",
+      badge: null,
+    })(dispatch as never, (() => ({})) as never, undefined);
+
+    expect(initiateSpy).toHaveBeenCalledWith("buddy-no-subscribe", {
+      forceRefetch: true,
+      subscribe: false,
+    });
+  });
+
+  test("restoreChatFromBackend requests trajectory with non-subscribed query", async () => {
+    const initiateSpy = vi.spyOn(
+      trajectoriesApi.endpoints.getTrajectory,
+      "initiate",
+    );
+    const dispatch = vi.fn((action: unknown) => {
+      if (typeof action === "function") {
+        return {
+          unwrap: () =>
+            Promise.resolve({
+              id: "backend-no-subscribe",
+              title: "Backend No Subscribe",
+              created_at: "2024-01-01T00:00:00Z",
+              updated_at: "2024-01-02T00:00:00Z",
+              model: "",
+              mode: "agent",
+              tool_use: "agent",
+              messages: [],
+            }),
+        };
+      }
+      return action;
+    });
+
+    await restoreChatFromBackend({
+      id: "backend-no-subscribe",
+      fallback: {
+        id: "backend-no-subscribe",
+        title: "Backend No Subscribe",
+        model: "",
+        messages: [],
+        boost_reasoning: false,
+        context_tokens_cap: undefined,
+        include_project_info: true,
+        increase_max_tokens: false,
+        createdAt: "2024-01-01T00:00:00Z",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
+    })(dispatch as never, (() => ({})) as never, undefined);
+
+    expect(initiateSpy).toHaveBeenCalledWith("backend-no-subscribe", {
+      forceRefetch: true,
+      subscribe: false,
+    });
+  });
+
   test("restoreChat with buddy_meta preserves it in thread and skips open_thread_ids", () => {
     const store = setUpStore();
     store.dispatch(

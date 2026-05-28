@@ -327,6 +327,51 @@ function shouldReplaceBackgroundAgent(
   );
 }
 
+function applyRestoredThread(
+  rt: Draft<ChatThreadRuntime>,
+  payload: ReturnType<typeof restoreChat>["payload"],
+  fallbackToolUse: ToolUse,
+) {
+  const messages = payload.messages.map(normalizeMessage);
+  rt.thread = {
+    ...rt.thread,
+    id: payload.id,
+    messages,
+    model: payload.model,
+    title: payload.title,
+    tool_use: payload.tool_use ?? fallbackToolUse,
+    mode: normalizeLegacyMode(payload.mode),
+    buddy_meta: payload.buddy_meta,
+    boost_reasoning: payload.boost_reasoning,
+    context_tokens_cap: payload.context_tokens_cap,
+    include_project_info: payload.include_project_info,
+    increase_max_tokens: payload.increase_max_tokens,
+    project_name: payload.project_name,
+    isTitleGenerated: payload.isTitleGenerated,
+    new_chat_suggested: payload.new_chat_suggested ?? { wasSuggested: false },
+    createdAt: payload.createdAt,
+    updatedAt: payload.updatedAt,
+    last_user_message_id: payload.last_user_message_id,
+    parent_id: payload.parent_id,
+    link_type: payload.link_type,
+    root_chat_id: payload.root_chat_id,
+    worktree: payload.worktree,
+    task_meta: payload.task_meta,
+    is_task_chat: payload.is_task_chat,
+    auto_approve_editing_tools: payload.auto_approve_editing_tools,
+    auto_approve_dangerous_commands: payload.auto_approve_dangerous_commands,
+    reasoning_effort: payload.reasoning_effort,
+    thinking_budget: payload.thinking_budget,
+    temperature: payload.temperature,
+    frequency_penalty: payload.frequency_penalty,
+    max_tokens: payload.max_tokens,
+    parallel_tool_calls: payload.parallel_tool_calls,
+    auto_enrichment_enabled: payload.auto_enrichment_enabled,
+    auto_compact_enabled: payload.auto_compact_enabled,
+  };
+  rt.message_index_by_id = rebuildMessageIndexById(messages);
+}
+
 export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(hydratePersistedChatTabs, (state) => {
     const persistedTabs = loadPersistedChatTabs();
@@ -749,26 +794,27 @@ export const chatReducer = createReducer(initialState, (builder) => {
     const isBuddyChat = Boolean(action.payload.buddy_meta?.is_buddy_chat);
     const existingRt = getRuntime(state, action.payload.id);
     if (existingRt) {
-      if (!isBuddyChat && !state.open_thread_ids.includes(action.payload.id)) {
+      applyRestoredThread(existingRt, action.payload, state.tool_use);
+      if (isBuddyChat || existingRt.thread.is_task_chat) {
+        state.open_thread_ids = state.open_thread_ids.filter(
+          (id) => id !== action.payload.id,
+        );
+      } else if (!state.open_thread_ids.includes(action.payload.id)) {
         state.open_thread_ids.push(action.payload.id);
       }
       state.current_thread_id = action.payload.id;
-      // Don't reset snapshot_received - thread was already hydrated
       return;
     }
 
-    const mode = normalizeLegacyMode(action.payload.mode);
     const newRuntime: ChatThreadRuntime = {
       thread: {
         id: action.payload.id,
         messages: [],
-        model: action.payload.model,
-        title: action.payload.title,
-        tool_use: action.payload.tool_use ?? state.tool_use,
-        mode,
-        buddy_meta: action.payload.buddy_meta,
+        model: "",
+        title: "",
+        tool_use: state.tool_use,
+        mode: normalizeLegacyMode(action.payload.mode),
         new_chat_suggested: { wasSuggested: false },
-        auto_enrichment_enabled: false,
       },
       streaming: false,
       waiting_for_response: false,
@@ -793,6 +839,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
       manual_preview_items: [],
       manual_preview_ran: false,
     };
+    applyRestoredThread(newRuntime, action.payload, state.tool_use);
 
     state.threads[action.payload.id] = newRuntime;
     if (!isBuddyChat && !state.open_thread_ids.includes(action.payload.id)) {

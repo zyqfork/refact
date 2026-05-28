@@ -499,6 +499,7 @@ export const restoreChatFromBackend = createAsyncThunk<
       .dispatch(
         trajectoriesApi.endpoints.getTrajectory.initiate(id, {
           forceRefetch: true,
+          subscribe: false,
         }),
       )
       .unwrap();
@@ -619,6 +620,7 @@ export const openExistingBuddyChat = createAsyncThunk<
       .dispatch(
         trajectoriesApi.endpoints.getTrajectory.initiate(entry.id, {
           forceRefetch: true,
+          subscribe: false,
         }),
       )
       .unwrap();

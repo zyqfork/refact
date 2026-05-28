@@ -3484,6 +3484,70 @@ describe("BuddyRecentChats_opens_existing_chat", () => {
     );
   });
 
+  it("clicking a workflow recent row opens the Buddy workflow trajectory", async () => {
+    let trajectoryCalled = false;
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+        HttpResponse.json([
+          makeConversation({
+            id: "workflow-buddy-chat",
+            kind: "workflow",
+            title: "Workflow Buddy Chat",
+            badge: "Memory Garden",
+            workflow_id: "buddy_memory_garden",
+            message_count: 4,
+          }),
+        ]),
+      ),
+      http.get(
+        "http://127.0.0.1:8001/v1/trajectories/workflow-buddy-chat",
+        () => {
+          trajectoryCalled = true;
+          return HttpResponse.json({
+            id: "workflow-buddy-chat",
+            title: "Workflow Buddy Chat",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-02T00:00:00Z",
+            model: "",
+            mode: "buddy",
+            tool_use: "agent",
+            messages: [
+              {
+                role: "user",
+                content: "Workflow saved message",
+                message_id: "workflow-msg-1",
+              },
+            ],
+          });
+        },
+      ),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    const { user } = render(<BuddyRecentChats showFilters={false} />, {
+      store,
+    });
+
+    const chatRow = await screen.findByText("Workflow Buddy Chat");
+    await user.click(chatRow);
+
+    await waitFor(() => {
+      expect(trajectoryCalled).toBe(true);
+    });
+
+    const rt = store.getState().chat.threads["workflow-buddy-chat"];
+    expect(rt?.thread.buddy_meta).toEqual({
+      is_buddy_chat: true,
+      buddy_chat_kind: "workflow",
+      workflow_id: "buddy_memory_garden",
+    });
+    expect(rt?.thread.messages).toHaveLength(1);
+    expect(store.getState().pages.at(-1)?.name).toBe("chat");
+    expect(store.getState().chat.open_thread_ids).not.toContain(
+      "workflow-buddy-chat",
+    );
+  });
+
   it("New Chat button still creates a new conversation without trajectory fetch", async () => {
     let createConversationCalled = false;
     let trajectoryCalled = false;

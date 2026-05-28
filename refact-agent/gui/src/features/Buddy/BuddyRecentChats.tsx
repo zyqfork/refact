@@ -3,7 +3,11 @@ import { Flex, Text, Spinner } from "@radix-ui/themes";
 import { ChatBubbleIcon, PlusIcon } from "@radix-ui/react-icons";
 import { useAppDispatch } from "../../hooks";
 import { push } from "../Pages/pagesSlice";
-import { openBuddyChat, newBuddyChatAction, openExistingBuddyChat } from "../Chat/Thread";
+import {
+  openBuddyChat,
+  newBuddyChatAction,
+  openExistingBuddyChat,
+} from "../Chat/Thread";
 import {
   useGetBuddyConversationsQuery,
   useCreateBuddyConversationMutation,
@@ -37,7 +41,10 @@ interface EntryRowProps {
 }
 
 const EntryRow: React.FC<EntryRowProps> = ({ entry, onClick }) => {
-  const clickable = entry.kind === "chat" || entry.kind === "setup";
+  const clickable =
+    entry.kind === "chat" ||
+    entry.kind === "setup" ||
+    entry.kind === "workflow";
   return (
     <button
       type="button"
