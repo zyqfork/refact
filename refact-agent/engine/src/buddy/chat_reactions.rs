@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
@@ -35,14 +36,28 @@ const BUG_KEYWORDS: &[&str] = &[
 // perf->performance substring etc. Removed: plan, test, perf, improve, optimize, rewrite.
 const INSIGHT_KEYWORDS: &[&str] = &[
     "architecture",
+    "api",
+    "cache",
+    "caching",
+    "cleanup",
+    "component",
     "refactor",
     "performance",
     "security",
     "migrate",
     "migration",
     "design",
+    "feature",
+    "flow",
+    "implement",
     "review",
+    "rename",
+    "schema",
+    "simplify",
+    "state",
     "tradeoff",
+    "ui",
+    "ux",
     "deprecate",
     "deprecated",
 ];
@@ -112,10 +127,45 @@ fn has_bug_signal(lower: &str, tokens: &[&str]) -> bool {
         || lower.contains("timed out")
 }
 
+fn matches_insight_keyword(token: &str, keyword: &str) -> bool {
+    match keyword {
+        "api" => token == "api" || token == "apis",
+        "cache" => token == "cache" || token == "caches" || token == "cached",
+        "flow" => token == "flow" || token == "flows",
+        "state" => token == "state" || token == "states" || token == "stateful",
+        "ui" => token == "ui" || token == "uis",
+        "ux" => token == "ux",
+        _ => token.starts_with(keyword),
+    }
+}
+
 pub struct AcceptedUserMessage {
     pub chat_id: String,
     pub thread: ThreadParams,
     pub content: ChatContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatReactionSkipReason {
+    ThreadFiltered,
+    TextTooShort,
+    BuddyUnavailable,
+    SettingsDisabled,
+    NoReactionKind,
+    RateLimited,
+}
+
+impl ChatReactionSkipReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChatReactionSkipReason::ThreadFiltered => "thread_filtered",
+            ChatReactionSkipReason::TextTooShort => "text_too_short",
+            ChatReactionSkipReason::BuddyUnavailable => "buddy_unavailable",
+            ChatReactionSkipReason::SettingsDisabled => "settings_disabled",
+            ChatReactionSkipReason::NoReactionKind => "no_reaction_kind",
+            ChatReactionSkipReason::RateLimited => "rate_limited",
+        }
+    }
 }
 
 pub fn should_observe_thread(thread: &ThreadParams) -> bool {
@@ -153,6 +203,12 @@ pub struct ChatReaction {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatReactionCandidate {
+    pub analysis_text: String,
+    pub kind: ChatReactionKind,
+}
+
 #[derive(Clone)]
 struct ChatReactionVoiceInputs {
     persona: BuddyPersonalityProfile,
@@ -160,13 +216,32 @@ struct ChatReactionVoiceInputs {
     pulse_one_liner: String,
 }
 
-/// Chat reactions are independent of `message_observation_enabled`, which only gates the
-/// periodic ChatPatternObserver.
+/// Chat reactions are independent of `proactive_enabled` and `message_observation_enabled`,
+/// which gate proactive suggestions and the periodic ChatPatternObserver respectively.
 pub fn settings_allow_chat_reactions(settings: &BuddySettings) -> bool {
-    settings.enabled
-        && settings.proactive_enabled
-        && settings.chat_reactions_enabled
-        && !settings.quiet_mode
+    settings.enabled && settings.chat_reactions_enabled && !settings.quiet_mode
+}
+
+pub fn chat_reaction_candidate(
+    thread: &ThreadParams,
+    raw_text: &str,
+    settings: Option<&BuddySettings>,
+) -> Result<ChatReactionCandidate, ChatReactionSkipReason> {
+    if !should_observe_thread(thread) {
+        return Err(ChatReactionSkipReason::ThreadFiltered);
+    }
+    let analysis_text =
+        prepare_analysis_text(raw_text).ok_or(ChatReactionSkipReason::TextTooShort)?;
+    let settings = settings.ok_or(ChatReactionSkipReason::BuddyUnavailable)?;
+    if !settings_allow_chat_reactions(settings) {
+        return Err(ChatReactionSkipReason::SettingsDisabled);
+    }
+    let kind = classify_chat_reaction_kind(&analysis_text, settings)
+        .ok_or(ChatReactionSkipReason::NoReactionKind)?;
+    Ok(ChatReactionCandidate {
+        analysis_text,
+        kind,
+    })
 }
 
 pub fn prepare_analysis_text(raw: &str) -> Option<String> {
@@ -188,7 +263,7 @@ pub fn classify_chat_reaction_kind(
         Some(ChatReactionKind::BugCandidate)
     } else if INSIGHT_KEYWORDS
         .iter()
-        .any(|kw| tokens.iter().any(|t| t.starts_with(kw)))
+        .any(|kw| tokens.iter().any(|t| matches_insight_keyword(t, kw)))
     {
         Some(ChatReactionKind::Insight)
     } else if settings.humor_enabled && settings.humor_level != HumorLevel::Off {
@@ -294,31 +369,40 @@ async fn render_chat_reaction_text(
 }
 
 pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMessage) {
-    if !should_observe_thread(&accepted.thread) {
-        return;
-    }
-
     let raw_text = accepted.content.content_text_only();
-    let Some(analysis) = prepare_analysis_text(&raw_text) else {
-        return;
-    };
 
     let plan = {
         let mut svc_guard = app.buddy.buddy.lock().await;
+        let settings = svc_guard.as_ref().map(|svc| &svc.settings);
+        let candidate = match chat_reaction_candidate(&accepted.thread, &raw_text, settings) {
+            Ok(candidate) => candidate,
+            Err(reason) => {
+                debug!(
+                    target: "buddy.chat_reactions",
+                    chat_id = %accepted.chat_id,
+                    reason = %reason.as_str(),
+                    message_chars = raw_text.chars().count(),
+                    "buddy chat reaction skipped"
+                );
+                return;
+            }
+        };
         let Some(svc) = svc_guard.as_mut() else {
             return;
         };
-        if !settings_allow_chat_reactions(&svc.settings) {
-            return;
-        }
-        let Some(kind) = classify_chat_reaction_kind(&analysis, &svc.settings) else {
-            return;
-        };
         let now = chrono::Utc::now();
-        if !svc
-            .chat_reaction_limiter
-            .allow_kind(&accepted.chat_id, kind.clone(), now)
+        if let Err(reason) =
+            svc.chat_reaction_limiter
+                .try_allow_kind(&accepted.chat_id, candidate.kind.clone(), now)
         {
+            debug!(
+                target: "buddy.chat_reactions",
+                chat_id = %accepted.chat_id,
+                reason = %reason.as_str(),
+                reaction_kind = ?candidate.kind,
+                analysis_hash = %message_hash(&candidate.analysis_text),
+                "buddy chat reaction skipped"
+            );
             return;
         }
         let voice_inputs = ChatReactionVoiceInputs {
@@ -329,20 +413,61 @@ pub async fn maybe_enqueue_chat_reaction(app: AppState, accepted: AcceptedUserMe
                 svc.pulse.memory.pending_ops, svc.pulse.tasks.stuck
             ),
         };
-        (kind, voice_inputs)
+        (candidate, voice_inputs)
     };
 
     let app2 = app.clone();
     let chat_id = accepted.chat_id.clone();
     tokio::spawn(async move {
-        let (kind, voice_inputs) = plan;
-        let speech = render_chat_reaction_text(&app2, &kind, &analysis, &voice_inputs).await;
-        let event = build_reaction_event(&chat_id, &analysis, &ChatReaction { kind, text: speech });
+        let (candidate, voice_inputs) = plan;
+        let speech = render_chat_reaction_text(
+            &app2,
+            &candidate.kind,
+            &candidate.analysis_text,
+            &voice_inputs,
+        )
+        .await;
+        let event = build_reaction_event(
+            &chat_id,
+            &candidate.analysis_text,
+            &ChatReaction {
+                kind: candidate.kind.clone(),
+                text: speech,
+            },
+        );
+        let event_id = event.id.clone();
+        let analysis_hash = message_hash(&candidate.analysis_text);
         let mut svc_guard = app2.buddy.buddy.lock().await;
         if let Some(svc) = svc_guard.as_mut() {
             if settings_allow_chat_reactions(&svc.settings) {
                 svc.enqueue_runtime_event(event);
+                debug!(
+                    target: "buddy.chat_reactions",
+                    chat_id = %chat_id,
+                    reaction_kind = ?candidate.kind,
+                    analysis_hash = %analysis_hash,
+                    event_id = %event_id,
+                    "buddy chat reaction emitted"
+                );
+            } else {
+                debug!(
+                    target: "buddy.chat_reactions",
+                    chat_id = %chat_id,
+                    reason = %ChatReactionSkipReason::SettingsDisabled.as_str(),
+                    reaction_kind = ?candidate.kind,
+                    analysis_hash = %analysis_hash,
+                    "buddy chat reaction skipped"
+                );
             }
+        } else {
+            debug!(
+                target: "buddy.chat_reactions",
+                chat_id = %chat_id,
+                reason = %ChatReactionSkipReason::BuddyUnavailable.as_str(),
+                reaction_kind = ?candidate.kind,
+                analysis_hash = %analysis_hash,
+                "buddy chat reaction skipped"
+            );
         }
     });
 }
@@ -369,6 +494,15 @@ impl ChatReactionLimiter {
         kind: ChatReactionKind,
         now: DateTime<Utc>,
     ) -> bool {
+        self.try_allow_kind(chat_id, kind, now).is_ok()
+    }
+
+    pub fn try_allow_kind(
+        &mut self,
+        chat_id: &str,
+        kind: ChatReactionKind,
+        now: DateTime<Utc>,
+    ) -> Result<(), ChatReactionSkipReason> {
         self.per_chat_kind_last_at
             .retain(|_, last_at| (now - *last_at).num_seconds() < PER_CHAT_COOLDOWN_SECS);
         if (now - self.global_window_start).num_seconds() >= 3600 {
@@ -376,17 +510,17 @@ impl ChatReactionLimiter {
             self.global_window_start = now;
         }
         if self.global_hourly_count >= GLOBAL_HOURLY_CAP {
-            return false;
+            return Err(ChatReactionSkipReason::RateLimited);
         }
         let key = (chat_id.to_string(), kind);
         if let Some(last) = self.per_chat_kind_last_at.get(&key) {
             if (now - *last).num_seconds() < PER_CHAT_COOLDOWN_SECS {
-                return false;
+                return Err(ChatReactionSkipReason::RateLimited);
             }
         }
         self.per_chat_kind_last_at.insert(key, now);
         self.global_hourly_count += 1;
-        true
+        Ok(())
     }
 
     pub fn allow(&mut self, chat_id: &str, now: DateTime<Utc>) -> bool {
@@ -412,18 +546,28 @@ mod tests {
     }
 
     #[test]
-    fn settings_gate_blocks_each_toggle() {
+    fn settings_gate_blocks_hard_toggles_only() {
         let mut s = BuddySettings::default();
         s.enabled = false;
         assert!(!settings_allow_chat_reactions(&s));
 
         let mut s = BuddySettings::default();
         s.proactive_enabled = false;
-        assert!(!settings_allow_chat_reactions(&s));
+        assert!(
+            settings_allow_chat_reactions(&s),
+            "live chat reactions must not require proactive_enabled"
+        );
 
         let mut s = BuddySettings::default();
         s.chat_reactions_enabled = false;
         assert!(!settings_allow_chat_reactions(&s));
+    }
+
+    #[test]
+    fn chat_reactions_independent_from_proactive() {
+        let mut s = BuddySettings::default();
+        s.proactive_enabled = false;
+        assert!(settings_allow_chat_reactions(&s));
     }
 
     #[test]
@@ -442,6 +586,63 @@ mod tests {
         let mut s = BuddySettings::default();
         s.quiet_mode = true;
         assert!(!settings_allow_chat_reactions(&s));
+    }
+
+    #[test]
+    fn chat_reaction_candidate_reports_skip_reasons() {
+        let settings = BuddySettings::default();
+        let thread = ThreadParams::default();
+        let normal_text = "please design a new component state flow now";
+
+        let mut filtered = ThreadParams::default();
+        filtered.mode = "task_agent".to_string();
+        assert_eq!(
+            chat_reaction_candidate(&filtered, normal_text, Some(&settings)),
+            Err(ChatReactionSkipReason::ThreadFiltered)
+        );
+
+        assert_eq!(
+            chat_reaction_candidate(&thread, "too short", Some(&settings)),
+            Err(ChatReactionSkipReason::TextTooShort)
+        );
+
+        assert_eq!(
+            chat_reaction_candidate(&thread, normal_text, None),
+            Err(ChatReactionSkipReason::BuddyUnavailable)
+        );
+
+        let mut disabled = BuddySettings::default();
+        disabled.chat_reactions_enabled = false;
+        assert_eq!(
+            chat_reaction_candidate(&thread, normal_text, Some(&disabled)),
+            Err(ChatReactionSkipReason::SettingsDisabled)
+        );
+
+        let mut disabled = BuddySettings::default();
+        disabled.enabled = false;
+        assert_eq!(
+            chat_reaction_candidate(&thread, normal_text, Some(&disabled)),
+            Err(ChatReactionSkipReason::SettingsDisabled)
+        );
+
+        let mut disabled = BuddySettings::default();
+        disabled.quiet_mode = true;
+        assert_eq!(
+            chat_reaction_candidate(&thread, normal_text, Some(&disabled)),
+            Err(ChatReactionSkipReason::SettingsDisabled)
+        );
+
+        let mut no_kind = BuddySettings::default();
+        no_kind.humor_enabled = false;
+        no_kind.humor_level = HumorLevel::Off;
+        assert_eq!(
+            chat_reaction_candidate(
+                &thread,
+                "please write a friendly greeting for this tiny helper",
+                Some(&no_kind),
+            ),
+            Err(ChatReactionSkipReason::NoReactionKind)
+        );
     }
 
     #[test]
@@ -487,6 +688,22 @@ mod tests {
     }
 
     #[test]
+    fn classify_common_work_messages_as_insight() {
+        let s = BuddySettings::default();
+        for text in [
+            "please simplify the component state flow for the toolbar",
+            "implement the schema cleanup for this api response",
+            "rename the cache layer for the caching feature ux",
+            "review the ui flow before the migration lands",
+        ] {
+            let reaction = classify_chat_reaction(text, &s).unwrap_or_else(|| {
+                panic!("expected insight reaction for: {text}");
+            });
+            assert_eq!(reaction.kind, ChatReactionKind::Insight, "text: {text}");
+        }
+    }
+
+    #[test]
     fn classify_humor_fallback() {
         let s = BuddySettings::default();
         let reaction =
@@ -499,6 +716,23 @@ mod tests {
         let mut s = BuddySettings::default();
         s.humor_level = HumorLevel::Off;
         assert!(classify_chat_reaction("please write a hello world example for me", &s).is_none());
+    }
+
+    #[test]
+    fn limiter_reports_rate_limited_reason() {
+        let mut lim = ChatReactionLimiter::new();
+        let now = Utc::now();
+        assert!(lim
+            .try_allow_kind("chat-a", ChatReactionKind::Insight, now)
+            .is_ok());
+        assert_eq!(
+            lim.try_allow_kind(
+                "chat-a",
+                ChatReactionKind::Insight,
+                now + Duration::seconds(10),
+            ),
+            Err(ChatReactionSkipReason::RateLimited)
+        );
     }
 
     #[test]
@@ -649,6 +883,26 @@ mod tests {
             ChatReactionKind::BugCandidate,
             "debug/latest/contest must not trigger BugCandidate"
         );
+    }
+
+    #[test]
+    fn insight_short_keywords_require_exact_tokens() {
+        let s = BuddySettings::default();
+        for text in [
+            "please write a quick guide about apical history",
+            "please decide how to handle fluid layouts later",
+            "please make a useful utility helper for the sidebar",
+            "please think about the next xenon parser experiment",
+        ] {
+            let reaction = classify_chat_reaction(text, &s).unwrap_or_else(|| {
+                panic!("humor fallback should still classify: {text}");
+            });
+            assert_ne!(
+                reaction.kind,
+                ChatReactionKind::Insight,
+                "short insight keyword must not overmatch: {text}"
+            );
+        }
     }
 
     #[test]

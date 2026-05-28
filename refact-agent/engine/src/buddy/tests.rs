@@ -8043,6 +8043,79 @@ async fn maybe_enqueue_emits_when_message_observation_disabled() {
 }
 
 #[tokio::test]
+async fn maybe_enqueue_chat_reaction_emits_when_proactive_disabled() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let (service, _renderer) =
+        crate::buddy::voice_service::test_voice_service_with_responses(vec![None]);
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app = make_gcx_with_buddy().await;
+    {
+        let mut lock = app.buddy.buddy.lock().await;
+        let svc = lock.as_mut().unwrap();
+        svc.settings.proactive_enabled = false;
+        svc.settings.chat_reactions_enabled = true;
+    }
+
+    maybe_enqueue_chat_reaction(
+        app.clone(),
+        AcceptedUserMessage {
+            chat_id: "proactive-off-reaction-chat".to_string(),
+            thread: ThreadParams::default(),
+            content: ChatContent::SimpleText(
+                "please implement the schema cleanup for this api response".to_string(),
+            ),
+        },
+    )
+    .await;
+
+    let ev = wait_for_runtime_event(&app, "speech_insight").await;
+    assert_eq!(ev.source, "chat_reactions");
+    assert_eq!(ev.chat_id.as_deref(), Some("proactive-off-reaction-chat"));
+}
+
+#[tokio::test]
+async fn maybe_enqueue_chat_reaction_hard_settings_block_events() {
+    use super::chat_reactions::{AcceptedUserMessage, maybe_enqueue_chat_reaction};
+    use crate::call_validation::ChatContent;
+    use crate::chat::types::ThreadParams;
+
+    let blockers: [fn(&mut BuddySettings); 3] = [
+        |settings| settings.chat_reactions_enabled = false,
+        |settings| settings.enabled = false,
+        |settings| settings.quiet_mode = true,
+    ];
+    for configure in blockers {
+        let app = make_gcx_with_buddy().await;
+        {
+            let mut lock = app.buddy.buddy.lock().await;
+            configure(&mut lock.as_mut().unwrap().settings);
+        }
+
+        maybe_enqueue_chat_reaction(
+            app.clone(),
+            AcceptedUserMessage {
+                chat_id: "settings-blocked-reaction-chat".to_string(),
+                thread: ThreadParams::default(),
+                content: ChatContent::SimpleText(
+                    "please implement the schema cleanup for this api response".to_string(),
+                ),
+            },
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let lock = app.buddy.buddy.lock().await;
+        assert!(
+            lock.as_ref().unwrap().runtime_queue.items.is_empty(),
+            "hard settings gate must block live chat reaction events"
+        );
+    }
+}
+
+#[tokio::test]
 async fn investigation_enrich_context_resolves_diagnostic_ids() {
     use super::diagnostics::diagnostic_id;
     use crate::http::routers::v1::buddy_opportunities::enrich_investigation_context;
