@@ -167,6 +167,12 @@ impl refact_core::worktree_meta::WorktreeThread for ThreadParams {
     }
 }
 
+impl ThreadParams {
+    pub fn auto_compact_enabled_effective(&self) -> bool {
+        self.auto_compact_enabled.unwrap_or(true)
+    }
+}
+
 impl Default for ThreadParams {
     fn default() -> Self {
         Self {
@@ -786,6 +792,42 @@ mod tests {
         assert!(params.context_tokens_cap.is_none());
         assert!(params.worktree.is_none());
         assert!(!params.id.is_empty());
+        assert!(params.auto_compact_enabled.is_none());
+        assert!(params.auto_compact_enabled_effective());
+    }
+
+    #[test]
+    fn test_auto_compact_effective_defaults_to_enabled() {
+        assert!(ThreadParams::default().auto_compact_enabled_effective());
+
+        let unset = ThreadParams {
+            auto_compact_enabled: None,
+            ..Default::default()
+        };
+        assert!(unset.auto_compact_enabled_effective());
+
+        let disabled = ThreadParams {
+            auto_compact_enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(!disabled.auto_compact_enabled_effective());
+    }
+
+    #[test]
+    fn test_auto_compact_missing_in_json_is_effectively_enabled() {
+        let json = r#"{
+            "id":"test",
+            "title":"Test",
+            "model":"gpt-4",
+            "mode":"agent",
+            "tool_use":"agent",
+            "include_project_info":true,
+            "checkpoints_enabled":true
+        }"#;
+
+        let params: ThreadParams = serde_json::from_str(json).unwrap();
+        assert!(params.auto_compact_enabled.is_none());
+        assert!(params.auto_compact_enabled_effective());
     }
 
     #[test]

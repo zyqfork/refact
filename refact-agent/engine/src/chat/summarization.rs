@@ -565,7 +565,7 @@ pub async fn maybe_apply_tier1(
     session_arc: &Arc<tokio::sync::Mutex<crate::chat::types::ChatSession>>,
     thread: &crate::chat::types::ThreadParams,
 ) {
-    if !thread.auto_compact_enabled.unwrap_or(false) {
+    if !thread.auto_compact_enabled_effective() {
         return;
     }
 

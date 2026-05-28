@@ -865,7 +865,7 @@ pub fn start_generation(
                 if retry_decision.is_context_limit() && !abort_flag.load(Ordering::SeqCst) {
                     let auto_compact_enabled = {
                         let session = session_arc.lock().await;
-                        session.thread.auto_compact_enabled.unwrap_or(false)
+                        session.thread.auto_compact_enabled_effective()
                     };
                     if !auto_compact_enabled {
                         warn!(

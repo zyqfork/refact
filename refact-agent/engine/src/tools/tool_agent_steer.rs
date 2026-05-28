@@ -134,7 +134,7 @@ fn should_autocompact_before_steer(
     state: SessionState,
     thread: &refact_chat_api::ThreadParams,
 ) -> bool {
-    thread.auto_compact_enabled.unwrap_or(false)
+    thread.auto_compact_enabled_effective()
         && matches!(state, SessionState::Completed | SessionState::Error)
 }
 
@@ -797,6 +797,47 @@ mod tests {
         let updates = mock.updates();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].previous_response_id, None);
+        assert!(output.contains("Auto-compaction: applied before steering."));
+        assert_eq!(mock.pushed_commands().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn tool_agent_steer_autocompacts_when_auto_compact_is_unset() {
+        let temp = tempfile::tempdir().unwrap();
+        let gcx = write_task(
+            temp.path(),
+            test_card("doing", Some("agent-chat-1".to_string())),
+        )
+        .await;
+        let messages = vec![
+            ChatMessage::new("user".to_string(), "hi".to_string()),
+            ChatMessage::new("tool".to_string(), "x".repeat(40_000)),
+        ];
+        let mock = Arc::new(MockChatFacade::with_messages(
+            SessionState::Completed,
+            messages,
+        ));
+        *mock.thread.lock().unwrap() = refact_chat_api::ThreadParams {
+            auto_compact_enabled: None,
+            ..test_agent_thread()
+        };
+        let ccx = planner_ccx(gcx, mock.clone(), "planner").await;
+        let mut tool = ToolAgentSteer::new();
+
+        let output = tool_output_text(
+            tool.tool_execute(
+                ccx,
+                &"call".to_string(),
+                &args(&[
+                    ("card_id", json!("T-29")),
+                    ("message", json!("Continue now")),
+                ]),
+            )
+            .await
+            .unwrap(),
+        );
+
+        assert_eq!(mock.updates().len(), 1);
         assert!(output.contains("Auto-compaction: applied before steering."));
         assert_eq!(mock.pushed_commands().len(), 1);
     }
