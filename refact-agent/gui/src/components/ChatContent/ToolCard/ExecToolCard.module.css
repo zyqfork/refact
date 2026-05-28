@@ -44,6 +44,11 @@
   white-space: nowrap;
 }
 
+.ptyChip {
+  color: var(--purple-11);
+  background: var(--purple-a3);
+}
+
 .statusBadge {
   text-transform: capitalize;
 }
@@ -56,6 +61,12 @@
 .statusRunning {
   color: var(--green-11);
   background: var(--green-a3);
+}
+
+.statusRunningInBackground {
+  color: var(--amber-11);
+  background: var(--amber-a3);
+  animation: exec-status-pulse 1.5s ease-in-out infinite;
 }
 
 .statusExited {
@@ -128,6 +139,10 @@
   margin-bottom: var(--space-2);
 }
 
+.logButton {
+  cursor: pointer;
+}
+
 .copyButton {
   cursor: pointer;
 }
@@ -193,8 +208,23 @@
   background: var(--gray-a2);
 }
 
+@keyframes exec-status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--amber-a5);
+  }
+
+  50% {
+    box-shadow: 0 0 0 3px var(--amber-a3);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .contentWrapper {
     transition: none;
+  }
+
+  .statusRunningInBackground {
+    animation: none;
   }
 }

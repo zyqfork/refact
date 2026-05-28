@@ -132,6 +132,7 @@ export type ToolResult = SingleModelToolResult | MultiModalToolResult;
 export type ExecProcessStatus =
   | "starting"
   | "running"
+  | "running_in_background"
   | "exited"
   | "failed"
   | "killed"
@@ -145,6 +146,7 @@ export type ExecTranscriptMetadata = {
   latest_seq?: number;
   total_bytes_appended?: number;
   total_lines_appended?: number;
+  persisted_output_path?: string;
   dropped_chunks?: number;
   dropped_bytes?: number;
   truncated_chunks?: number;
@@ -176,6 +178,10 @@ export type ExecProcessMetadata = {
   timeout_secs?: number;
   exit_code?: number | null;
   stream?: string;
+  persisted_output_path?: string;
+  bytes_written?: number;
+  chunks_returned?: number;
+  tty?: boolean;
   transcript?: ExecTranscriptMetadata;
 };
 
@@ -206,6 +212,7 @@ export function isExecProcessStatus(
   return (
     value === "starting" ||
     value === "running" ||
+    value === "running_in_background" ||
     value === "exited" ||
     value === "failed" ||
     value === "killed" ||

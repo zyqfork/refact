@@ -244,6 +244,7 @@ const EXEC_TOOL_NAMES = new Set([
   "process_read",
   "process_kill",
   "process_wait",
+  "process_write_stdin",
 ] as const);
 
 type ProcessToolName =
@@ -251,7 +252,8 @@ type ProcessToolName =
   | "process_list"
   | "process_read"
   | "process_kill"
-  | "process_wait";
+  | "process_wait"
+  | "process_write_stdin";
 
 function isProcessToolName(name: string | undefined): name is ProcessToolName {
   return (

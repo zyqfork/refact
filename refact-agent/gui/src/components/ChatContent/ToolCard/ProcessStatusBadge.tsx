@@ -14,6 +14,7 @@ type ProcessStatusBadgeProps = {
 const STATUS_CLASS = {
   starting: styles.statusStarting,
   running: styles.statusRunning,
+  running_in_background: styles.statusRunningInBackground,
   exited: styles.statusExited,
   failed: styles.statusFailed,
   killed: styles.statusKilled,
@@ -24,7 +25,9 @@ const STATUS_CLASS_BY_VALUE: Partial<Record<string, string>> = STATUS_CLASS;
 
 const statusLabel = (status: ProcessStatusValue): string => {
   if (!STATUS_CLASS_BY_VALUE[status]) return "unknown";
-  return status === "timed_out" ? "timed out" : status;
+  if (status === "timed_out") return "timed out";
+  if (status === "running_in_background") return "background";
+  return status;
 };
 
 export const ProcessStatusBadge: React.FC<ProcessStatusBadgeProps> = ({

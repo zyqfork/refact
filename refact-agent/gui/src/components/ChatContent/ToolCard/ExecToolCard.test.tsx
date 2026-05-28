@@ -1,11 +1,20 @@
-import { describe, expect, test } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
 import { Theme } from "@radix-ui/themes";
 
 import { ExecToolCard } from "./ExecToolCard";
-import { reducer as configReducer } from "../../../features/Config/configSlice";
+import {
+  reducer as configReducer,
+  type Config,
+} from "../../../features/Config/configSlice";
 import type {
   ExecToolMetadata,
   ToolCall,
@@ -23,9 +32,26 @@ type RenderExecToolOptions = {
   content?: string;
   extra?: ExecToolMetadata;
   failed?: boolean;
+  host?: Config["host"];
 };
 
-function makeStore(toolMessage?: ToolMessage) {
+function makeStore(toolMessage?: ToolMessage, host: Config["host"] = "web") {
+  const config: Config = {
+    host,
+    lspPort: 8001,
+    apiKey: null,
+    features: {
+      statistics: true,
+      vecdb: true,
+      ast: true,
+      images: true,
+    },
+    themeProps: {
+      appearance: "dark",
+    },
+    shiftEnterToSubmit: false,
+  };
+
   return configureStore({
     reducer: {
       config: configReducer,
@@ -41,6 +67,9 @@ function makeStore(toolMessage?: ToolMessage) {
           },
         },
       ) => state,
+    },
+    preloadedState: {
+      config,
     },
   });
 }
@@ -68,7 +97,7 @@ function renderExecTool(options: RenderExecToolOptions = {}) {
           extra: options.extra ? { exec: options.extra } : undefined,
         }
       : undefined;
-  const store = makeStore(message);
+  const store = makeStore(message, options.host);
 
   return render(
     <Provider store={store}>
@@ -139,11 +168,156 @@ describe("ExecToolCard", () => {
 
     expect(screen.getByTestId("exec-tool-process_start")).toBeInTheDocument();
     expect(screen.getByText("Start dev server")).toBeInTheDocument();
-    expect(screen.getByTestId("exec-status-running")).toHaveTextContent(
-      "running",
-    );
-    expect(screen.getByText("background")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("exec-status-running_in_background"),
+    ).toHaveTextContent("background");
     expect(screen.getByText("exec_bg_1")).toBeInTheDocument();
+  });
+
+  test("persisted_output_path renders Open log button", () => {
+    renderExecTool({
+      content: "output",
+      extra: {
+        process_id: "exec_log_1",
+        status: "exited",
+        short_description: "Read log",
+        command: "cat big.log",
+        persisted_output_path: "/tmp/refact/exec/exec_log_1.log",
+      },
+    });
+
+    expect(
+      screen.getByRole("button", { name: /open log/i }),
+    ).toBeInTheDocument();
+  });
+
+  test("Open log fetches and opens a blob in web host mode", async () => {
+    const blob = new Blob(["log output"], { type: "text/plain" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      blob: vi.fn().mockResolvedValue(blob),
+    });
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const createObjectURL = vi.fn(() => "blob:exec-log");
+    const revokeObjectURL = vi.fn();
+    const previousFetch = globalThis.fetch;
+    const previousCreateObjectURL = URL.createObjectURL;
+    const previousRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: fetchMock,
+    });
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURL,
+    });
+
+    renderExecTool({
+      host: "web",
+      content: "output",
+      extra: {
+        process_id: "exec_log_web",
+        status: "exited",
+        short_description: "Read web log",
+        command: "cat big.log",
+        persisted_output_path: "/tmp/refact/exec/exec_log_web.log",
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /open log/i }));
+    expect(fetchMock).toHaveBeenCalledWith("/tmp/refact/exec/exec_log_web.log");
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        "blob:exec-log",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    });
+
+    cleanup();
+    openSpy.mockRestore();
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: previousFetch,
+    });
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: previousCreateObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: previousRevokeObjectURL,
+    });
+  });
+
+  test("Open log dispatches ideOpenFile in IDE host mode", () => {
+    const postMessageSpy = vi
+      .spyOn(window, "postMessage")
+      .mockImplementation(() => undefined);
+
+    renderExecTool({
+      host: "jetbrains",
+      content: "output",
+      extra: {
+        process_id: "exec_log_ide",
+        status: "exited",
+        short_description: "Read IDE log",
+        command: "cat big.log",
+        persisted_output_path: "/tmp/refact/exec/exec_log_ide.log",
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /open log/i }));
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      {
+        type: "ide/openFile",
+        payload: { file_path: "/tmp/refact/exec/exec_log_ide.log" },
+      },
+      "*",
+    );
+
+    cleanup();
+    postMessageSpy.mockRestore();
+  });
+
+  test("process_write_stdin result shows bytes_written and chunks_returned", () => {
+    renderExecTool({
+      toolName: "process_write_stdin",
+      args: { process_id: "exec_pty_1", chars: "echo hi\n" },
+      content: "Process stdin written",
+      extra: {
+        process_id: "exec_pty_1",
+        status: "running",
+        short_description: "Interactive shell",
+        command: "bash",
+        mode: "background",
+        bytes_written: 8,
+        chunks_returned: 2,
+      },
+    });
+
+    expect(
+      screen.getByText("Wrote 8 bytes, got 2 new chunks"),
+    ).toBeInTheDocument();
+  });
+
+  test("tty true shows PTY chip", () => {
+    renderExecTool({
+      content: "pty output",
+      extra: {
+        process_id: "exec_pty_chip",
+        status: "running",
+        short_description: "Interactive shell",
+        command: "bash",
+        mode: "background",
+        tty: true,
+      },
+    });
+
+    expect(screen.getByTestId("exec-pty-chip")).toHaveTextContent("PTY");
   });
 
   test("process_read output renders stdout stderr and cursor metadata", () => {

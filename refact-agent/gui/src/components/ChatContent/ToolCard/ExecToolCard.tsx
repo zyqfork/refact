@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Badge, Box, Flex, Spinner, Text } from "@radix-ui/themes";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Badge, Box, Button, Flex, Spinner, Text } from "@radix-ui/themes";
 import { CodeIcon, LapTimerIcon, RowsIcon } from "@radix-ui/react-icons";
 import classNames from "classnames";
 
 import { useAppSelector } from "../../../hooks";
 import { selectToolResultById } from "../../../features/Chat/Thread/selectors";
+import { selectHost } from "../../../features/Config/configSlice";
 import type {
   ExecProcessMetadata,
   ExecProcessStatus,
@@ -15,6 +16,8 @@ import {
   extractExecMetadata,
   isExecProcessStatus,
 } from "../../../services/refact/types";
+import { ideOpenFile } from "../../../hooks/useEventBusForIDE";
+import { usePostMessage } from "../../../hooks/usePostMessage";
 import { useDelayedUnmount } from "../../shared/useDelayedUnmount";
 import { ToolCallTooltip } from "./ToolCallTooltip";
 import { useStoredOpen } from "../useStoredOpen";
@@ -31,6 +34,7 @@ type ExecToolName =
   | "process_read"
   | "process_kill"
   | "process_wait"
+  | "process_write_stdin"
   | "exec";
 
 type ExecToolCardProps = {
@@ -90,10 +94,21 @@ function getExecMetadata(
 
 function normalizeStatus(
   metadata: ExecToolMetadata | null,
+  toolName: ExecToolName,
   hasResult: boolean,
   toolFailed: boolean | undefined,
 ): ExecProcessStatus {
-  if (metadata && isExecProcessStatus(metadata.status)) return metadata.status;
+  if (metadata && isExecProcessStatus(metadata.status)) {
+    if (
+      metadata.status === "running" &&
+      (metadata.mode === "background" ||
+        metadata.mode === "service" ||
+        toolName === "process_start")
+    ) {
+      return "running_in_background";
+    }
+    return metadata.status;
+  }
   if (!hasResult) return "running";
   return toolFailed ? "failed" : "exited";
 }
@@ -118,6 +133,8 @@ function summarizeTool(toolName: ExecToolName, args: ProcessArgs): string {
       return `Kill ${args.process_id ?? "process"}`;
     case "process_wait":
       return `Wait for ${args.process_id ?? "process"}`;
+    case "process_write_stdin":
+      return `Write stdin to ${args.process_id ?? "process"}`;
     case "exec":
       return args.command ? `Run ${args.command}` : "Process";
   }
@@ -149,7 +166,9 @@ function displayProcessFromMetadata(
 
 function durationLabel(process: DisplayProcess, nowMs: number): string | null {
   if (
-    (process.status === "running" || process.status === "starting") &&
+    (process.status === "running" ||
+      process.status === "running_in_background" ||
+      process.status === "starting") &&
     typeof process.startedAtMs === "number"
   ) {
     const elapsed = Math.max(0, nowMs - process.startedAtMs) / 1000;
@@ -189,6 +208,40 @@ function listMeta(metadata: ExecToolMetadata | null): string | null {
   return filter ? `${count} processes · ${filter}` : `${count} processes`;
 }
 
+function writeStdinMeta(
+  toolName: ExecToolName,
+  metadata: ExecToolMetadata | null,
+): string | null {
+  if (toolName !== "process_write_stdin") return null;
+  if (typeof metadata?.bytes_written !== "number") return null;
+  if (typeof metadata.chunks_returned !== "number") return null;
+  return `Wrote ${metadata.bytes_written} bytes, got ${metadata.chunks_returned} new chunks`;
+}
+
+function persistedOutputPath(metadata: ExecToolMetadata | null): string | null {
+  return (
+    metadata?.persisted_output_path ??
+    metadata?.transcript?.persisted_output_path ??
+    null
+  );
+}
+
+function isBusyStatus(status: ExecProcessStatus): boolean {
+  return (
+    status === "starting" ||
+    status === "running" ||
+    status === "running_in_background"
+  );
+}
+
+async function openLogInWeb(path: string): Promise<void> {
+  const response = await fetch(path);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 function processItemLabel(process: ExecProcessMetadata): string {
   return (
     process.short_description ??
@@ -196,6 +249,19 @@ function processItemLabel(process: ExecProcessMetadata): string {
     process.process_id ??
     "process"
   );
+}
+
+function processListItemStatus(
+  process: ExecProcessMetadata,
+): ExecProcessStatus {
+  if (!isExecProcessStatus(process.status)) return "exited";
+  if (
+    process.status === "running" &&
+    (process.mode === "background" || process.mode === "service")
+  ) {
+    return "running_in_background";
+  }
+  return process.status;
 }
 
 function copyableOutputText(content: string | null): string | undefined {
@@ -219,6 +285,8 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
   toolCall,
   toolName,
 }) => {
+  const host = useAppSelector(selectHost);
+  const postMessage = usePostMessage();
   const storeKey = toolCall.id ? `tc:${toolCall.id}` : undefined;
   const [isOpen, handleToggle] = useStoredOpen(storeKey, true);
   const maybeResult = useAppSelector((state) =>
@@ -239,6 +307,7 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
   );
   const status = normalizeStatus(
     metadata,
+    toolName,
     Boolean(maybeResult),
     maybeResult?.tool_failed,
   );
@@ -249,10 +318,17 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
     fallbackSummary,
   );
   const copyableOutput = useMemo(() => copyableOutputText(content), [content]);
-  const isBusy = status === "starting" || status === "running";
+  const isBusy = isBusyStatus(status);
   const nowMs = useRunningNowMs(isBusy);
   const duration = durationLabel(process, nowMs);
-  const meta = [duration, listMeta(metadata)].filter(Boolean).join(" · ");
+  const logPath = persistedOutputPath(metadata);
+  const meta = [
+    duration,
+    writeStdinMeta(toolName, metadata),
+    listMeta(metadata),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const listedProcesses = metadata?.processes?.slice(0, 20) ?? [];
   const hiddenProcesses = Math.max(
     0,
@@ -264,6 +340,18 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
     true,
   );
   const details = detailRows(process);
+  const handleOpenLog = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      if (!logPath) return;
+      if (host === "web") {
+        void openLogInWeb(logPath).catch(() => undefined);
+        return;
+      }
+      postMessage(ideOpenFile({ file_path: logPath }));
+    },
+    [host, logPath, postMessage],
+  );
 
   const header = (
     <Flex
@@ -295,6 +383,16 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
           </Text>
         )}
         <ProcessStatusBadge status={status} />
+        {metadata?.tty === true && (
+          <Badge
+            size="1"
+            variant="soft"
+            className={styles.ptyChip}
+            data-testid="exec-pty-chip"
+          >
+            PTY
+          </Badge>
+        )}
         {process.processId && (
           <Badge size="1" variant="surface" className={styles.processChip}>
             {process.processId}
@@ -350,6 +448,21 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
                 processId={process.processId}
               />
 
+              {logPath && (
+                <Flex gap="2" wrap="wrap" className={styles.controls}>
+                  <Button
+                    type="button"
+                    size="1"
+                    variant="soft"
+                    color="gray"
+                    className={styles.logButton}
+                    onClick={handleOpenLog}
+                  >
+                    📄 Open log
+                  </Button>
+                </Flex>
+              )}
+
               {listedProcesses.length > 0 && (
                 <Box
                   className={styles.processList}
@@ -378,11 +491,7 @@ export const ExecToolCard: React.FC<ExecToolCardProps> = ({
                         )}
                       </Flex>
                       <ProcessStatusBadge
-                        status={
-                          isExecProcessStatus(item.status)
-                            ? item.status
-                            : "exited"
-                        }
+                        status={processListItemStatus(item)}
                       />
                     </Flex>
                   ))}
