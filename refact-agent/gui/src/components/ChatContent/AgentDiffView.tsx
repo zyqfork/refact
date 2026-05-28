@@ -11,8 +11,9 @@ import {
 } from "../../features/Chat/Thread/selectors";
 import type { DiffChunk, ToolCall } from "../../services/refact/types";
 import { ShikiCodeBlock } from "../Markdown";
-import { DiffForm } from "./DiffContent";
 import { ToolCard, type ToolStatus } from "./ToolCard";
+import { DiffBlock } from "./ToolCard/DiffBlock";
+import editToolStyles from "./ToolCard/EditTool.module.css";
 import { useStoredOpen } from "./useStoredOpen";
 import { parseAgentDiffOutput, type AgentDiffReport } from "./AgentDiffModel";
 import styles from "./AgentDiffView.module.css";
@@ -57,7 +58,7 @@ export const AgentDiffContent: React.FC<AgentDiffContentProps> = ({
     return { [selectedFile]: groupedDiffs[selectedFile] ?? [] };
   }, [groupedDiffs, selectedFile]);
 
-  const showDiffForm = report.diffChunks.length > 0;
+  const showRenderedDiff = report.diffChunks.length > 0;
   const shouldShowFileTree = report.files.length > 1;
   const selectedFileHasNoDiffs =
     selectedFile !== null && (groupedDiffs[selectedFile]?.length ?? 0) === 0;
@@ -166,8 +167,19 @@ export const AgentDiffContent: React.FC<AgentDiffContentProps> = ({
               <Text as="div" size="2" className={styles.emptyDiffMessage}>
                 No diff hunks for this file.
               </Text>
-            ) : showDiffForm ? (
-              <DiffForm diffs={selectedDiffs} />
+            ) : showRenderedDiff ? (
+              <Box className={editToolStyles.diffContent}>
+                {Object.entries(selectedDiffs).flatMap(([fileName, diffs]) =>
+                  diffs.map((diff, i) => (
+                    <DiffBlock
+                      key={`${fileName}-${i}`}
+                      diff={diff}
+                      fileName={fileName}
+                      displayFileName={fileName}
+                    />
+                  )),
+                )}
+              </Box>
             ) : (
               <Box className={styles.rawDiff}>
                 <ShikiCodeBlock

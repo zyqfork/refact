@@ -25,11 +25,15 @@
   user-select: none;
 }
 
-.hunkFileButton {
+.hunkFileButton,
+.hunkFileName {
   all: unset;
-  cursor: pointer;
   color: var(--accent-11);
   font-family: var(--code-font-family);
+}
+
+.hunkFileButton {
+  cursor: pointer;
 }
 
 .hunkFileButton:hover {

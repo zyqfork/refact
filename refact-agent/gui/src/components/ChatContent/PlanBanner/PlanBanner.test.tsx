@@ -176,10 +176,11 @@ describe("PlanBanner", () => {
     expect(screen.queryByRole("dialog", { name: "Plan history" })).toBeNull();
   });
 
-  it("sticky CSS class is applied to the banner root", () => {
+  it("compact plan classes are applied", () => {
     renderPlanBanner([makePlan(1)]);
 
     const banner = screen.getByTestId("plan-banner");
     expect(banner.className).toContain("sticky");
+    expect(banner.firstElementChild?.className).toContain("card");
   });
 });

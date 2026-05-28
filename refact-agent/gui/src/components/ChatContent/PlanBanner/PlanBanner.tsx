@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Button, Card, Flex, Text } from "@radix-ui/themes";
+import { Box, Button, Flex, Text } from "@radix-ui/themes";
 import { shallowEqual } from "react-redux";
 import { useAppSelector } from "../../../hooks";
 import {
@@ -100,7 +100,7 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
 
   return (
     <Box className={styles.sticky} data-testid="plan-banner">
-      <Card className={styles.card}>
+      <Box className={styles.card}>
         <Flex
           align="center"
           justify="between"
@@ -143,7 +143,7 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
             <Markdown>{plan.content}</Markdown>
           </Box>
         )}
-      </Card>
+      </Box>
       <PlanEditor
         open={editorOpen}
         content={plan.content}
