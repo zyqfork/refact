@@ -14,6 +14,7 @@ import {
 } from "./types";
 import type { ToolConfirmationPauseReason } from "../../../services/refact";
 import { type ChatMessages } from "../../../services/refact/types";
+import type { ChatEventEnvelope } from "../../../services/refact/chatSubscription";
 import type { WorktreeMeta } from "../../../services/refact/worktrees";
 import type { AppDispatch, RootState } from "../../../app/store";
 import { type SystemPrompts } from "../../../services/refact/prompts";
@@ -523,8 +524,6 @@ export const restoreChatFromBackend = createAsyncThunk<
   return undefined;
 });
 
-import type { ChatEventEnvelope } from "../../../services/refact/chatSubscription";
-
 export const applyChatEvent = createAction<ChatEventEnvelope>(
   "chatThread/applyChatEvent",
 );
@@ -698,7 +697,7 @@ export const startBuddyInvestigation = createAsyncThunk<
         mode: "buddy",
         buddy_meta: {
           is_buddy_chat: true,
-          buddy_chat_kind: "conversation",
+          buddy_chat_kind: "investigation",
           workflow_id: null,
         },
         include_project_info: true,

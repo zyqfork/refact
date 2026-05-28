@@ -87,6 +87,7 @@ import {
   restoreChat,
   restoreChatFromBackend,
   openExistingBuddyChat,
+  startBuddyInvestigation,
   setIsWaitingForResponse,
   setPreventSend,
   setThreadPauseReasons,
@@ -2838,6 +2839,63 @@ describe("Buddy investigation prompt hardening", () => {
     );
     expect(prompt).toContain(
       "use GitHub MCP remote browsing for `smallcloudai/refact` when helpful",
+    );
+  });
+
+  test("startBuddyInvestigation opens investigation chat metadata", async () => {
+    const commands: unknown[] = [];
+    server.use(
+      http.post("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+        HttpResponse.json({
+          chat_id: "buddy-investigation-meta-chat",
+          title: "Buddy investigation metadata",
+          created_at: "2024-01-01T00:00:00Z",
+          last_message_at: null,
+          message_count: 0,
+        }),
+      ),
+      http.post("http://127.0.0.1:8001/v1/buddy/investigation-context", () =>
+        HttpResponse.json({
+          logs: "logs",
+          internal_context: "context",
+          repo_owner: "smallcloudai",
+          repo_name: "refact",
+        }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/chats/:id/commands",
+        async ({ request }) => {
+          commands.push(await request.json());
+          return HttpResponse.json({ ok: true });
+        },
+      ),
+    );
+    const store = setUpStore();
+
+    await store.dispatch(
+      startBuddyInvestigation({
+        triggerText: "Model failed",
+        triggerSource: "runtime",
+      }),
+    );
+
+    const setParamsCommand = commands.find(
+      (command): command is { type: string; patch: { buddy_meta?: unknown } } =>
+        typeof command === "object" &&
+        command !== null &&
+        "type" in command &&
+        command.type === "set_params",
+    );
+    expect(setParamsCommand?.patch.buddy_meta).toEqual({
+      is_buddy_chat: true,
+      buddy_chat_kind: "investigation",
+      workflow_id: null,
+    });
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        type: "user_message",
+        suppress_auto_enrichment: true,
+      }),
     );
   });
 });
