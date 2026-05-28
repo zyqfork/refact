@@ -7,6 +7,7 @@ import {
   selectPlanHistory,
 } from "../../../features/Chat/Thread/selectors";
 import { Markdown } from "../../Markdown";
+import { PlanEditor } from "./PlanEditor";
 import { PlanHistoryModal } from "./PlanHistoryModal";
 import styles from "./PlanBanner.module.css";
 
@@ -56,6 +57,7 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
     shallowEqual,
   );
   const [collapsed, setCollapsed] = useState(() => readCollapsed(threadId));
+  const [editorOpen, setEditorOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -100,6 +102,14 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
               type="button"
               size="1"
               variant="soft"
+              onClick={() => setEditorOpen(true)}
+            >
+              Edit
+            </Button>
+            <Button
+              type="button"
+              size="1"
+              variant="soft"
               onClick={handleToggle}
             >
               {collapsed ? "Expand" : "Collapse"}
@@ -121,6 +131,11 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
           </Box>
         )}
       </Card>
+      <PlanEditor
+        open={editorOpen}
+        content={plan.content}
+        onOpenChange={setEditorOpen}
+      />
       <PlanHistoryModal
         open={historyOpen}
         onOpenChange={setHistoryOpen}
