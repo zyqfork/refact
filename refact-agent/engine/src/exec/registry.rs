@@ -741,6 +741,12 @@ impl ExecRegistry {
                 .get(process_id)
                 .ok_or_else(|| format!("process not found: {process_id}"))?;
             if record.snapshot.status.is_terminal() {
+                if status.is_none() && (record.runtime.is_some() || record.child.is_some()) {
+                    return Err(format!(
+                        "process is already terminal and retains cleanup handles; use remove() to clean up: {}",
+                        process_id
+                    ));
+                }
                 return Ok(record.snapshot.clone());
             }
             record
@@ -1250,7 +1256,12 @@ async fn cleanup_target(
             ExecCleanupOutcome::Stopped
         } else {
             match tokio::time::timeout(timeout, response_rx).await {
-                Ok(_) => ExecCleanupOutcome::Stopped,
+                Ok(Ok(Ok(_))) => ExecCleanupOutcome::Stopped,
+                Ok(Ok(Err(message))) => ExecCleanupOutcome::Failed {
+                    message,
+                    child: None,
+                },
+                Ok(Err(_)) => ExecCleanupOutcome::Stopped,
                 Err(_) => ExecCleanupOutcome::TimedOut {
                     message: format!(
                         "timed out while stopping terminal runtime process after {:.3}s",
@@ -2952,6 +2963,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kill_terminal_failed_runtime_returns_cleanup_error() {
+        let registry = ExecRegistry::new();
+        let (control_tx, _control_rx) = mpsc::channel::<ExecProcessCommand>(1);
+        let runtime = ExecProcessRuntime {
+            control_tx,
+            terminal: Arc::new(Notify::new()),
+            stdin_writer: None,
+        };
+        let snapshot = registry
+            .register_new_with_runtime(
+                meta(
+                    "exec_terminal_runtime_kill_error",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                runtime,
+                false,
+            )
+            .await
+            .unwrap();
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry
+            .mark_failed(&process_id, "simulated failure".to_string())
+            .await
+            .unwrap();
+
+        let error = registry.kill(&process_id).await.unwrap_err();
+
+        assert!(error.contains("already terminal"));
+        assert!(error.contains("remove()"));
+        assert!(registry.get(&process_id).await.is_some());
+        drop(_control_rx);
+        let _ = registry.remove(&process_id).await;
+    }
+
+    #[tokio::test]
+    async fn kill_terminal_failed_child_returns_cleanup_error() {
+        let registry = ExecRegistry::new();
+        let mut command = if cfg!(target_os = "windows") {
+            let mut command = tokio::process::Command::new("powershell.exe");
+            command.arg("-Command").arg("Start-Sleep -Seconds 30");
+            command
+        } else {
+            let mut command = tokio::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let child = command.spawn().expect("spawn child");
+        let snapshot = registry
+            .register_with_child(
+                meta(
+                    "exec_terminal_child_kill_error",
+                    ExecMode::Background,
+                    "sleep 30",
+                ),
+                DEFAULT_MAX_BYTES,
+                child,
+                false,
+            )
+            .await;
+        let process_id = snapshot.meta.process_id.clone();
+        registry.mark_started(&process_id).await.unwrap();
+        registry
+            .mark_failed(&process_id, "simulated failure".to_string())
+            .await
+            .unwrap();
+
+        let error = registry.kill(&process_id).await.unwrap_err();
+
+        assert!(error.contains("already terminal"));
+        assert!(error.contains("remove()"));
+        assert!(registry.get(&process_id).await.is_some());
+        let _ = registry.remove(&process_id).await;
+    }
+
+    #[tokio::test]
     async fn terminal_failed_runtime_remove_succeeds_when_runtime_already_exited() {
         let registry = ExecRegistry::new();
         let (control_tx, control_rx) = mpsc::channel::<ExecProcessCommand>(1);
@@ -2994,7 +3083,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_shutdown_terminal_failed_runtime_attempts_cleanup() {
+    async fn cleanup_shutdown_terminal_failed_runtime_retains_on_kill_error() {
         let registry = ExecRegistry::new();
         let (control_tx, mut control_rx) = mpsc::channel::<ExecProcessCommand>(1);
         let runtime = ExecProcessRuntime {
@@ -3035,9 +3124,14 @@ mod tests {
             "Kill must be sent to terminal runtime"
         );
         assert_eq!(summary.runtime_stop_attempts, 1);
-        assert_eq!(summary.runtime_stopped_count, 1);
-        assert_eq!(summary.removed_count, 1);
-        assert!(registry.get(&process_id).await.is_none());
+        assert_eq!(summary.runtime_stopped_count, 0);
+        assert_eq!(summary.runtime_failed_count, 1);
+        assert_eq!(summary.removed_count, 0);
+        let retained = registry.get(&process_id).await.unwrap();
+        assert!(matches!(
+            retained.status,
+            ExecStatus::Failed { message } if message == "already stopped"
+        ));
     }
 
     #[tokio::test]
