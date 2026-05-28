@@ -314,3 +314,7 @@ plugins/intellij/.refact/
 plugins/intellij/chat_package*/
 plugins/intellij/src/main/resources/bin/
 plugins/intellij/src/main/resources/webview/dist/
+# Local JetBrains release packaging script and copied archive
+/build-jb-plugin-local.sh
+/refact-*.zip
+
