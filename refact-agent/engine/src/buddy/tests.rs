@@ -2906,6 +2906,35 @@ async fn oversized_fallback_buddy_speech_is_capped() {
 }
 
 #[tokio::test]
+async fn runtime_event_safe_generated_title_keeps_safe_generated_description() {
+    let generated = "Generated safe title";
+    let (service, _renderer) = crate::buddy::voice_service::test_voice_service_with_responses(
+        vec![Some(generated.to_string())],
+    );
+    let _guard = crate::buddy::voice_service::install_test_voice_service(service).await;
+    let app =
+        crate::app_state::AppState::from_gcx(crate::global_context::tests::make_test_gcx().await)
+            .await;
+    let workflow_summary = "Generated safe description".to_string();
+
+    let (title, description) = super::actor::render_buddy_runtime_event(
+        app,
+        super::types::BuddyPersonalityProfile::default(),
+        "Pixel".to_string(),
+        BuddyPulse::default(),
+        Some("safe_runtime_description_test".to_string()),
+        workflow_summary.clone(),
+        "completed",
+        "Fallback title".to_string(),
+        Some("Fallback description".to_string()),
+    )
+    .await;
+
+    assert_eq!(title, generated);
+    assert_eq!(description.as_deref(), Some(workflow_summary.as_str()));
+}
+
+#[tokio::test]
 async fn oversized_runtime_title_and_description_fallbacks_are_capped() {
     let (service, _renderer) = crate::buddy::voice_service::test_voice_service_with_responses(
         vec![Some("Bearer sk-FORCEFALLBACK1234567890".to_string())],

@@ -374,6 +374,7 @@ pub async fn render_buddy_runtime_event(
         .await
         .render_runtime_event(gcx, voice_ctx, status)
         .await;
+    let title_is_safe = safe_buddy_candidate(&title, BUDDY_TITLE_MAX_CHARS).is_some();
     (
         safe_generated_buddy_text(
             &title,
@@ -382,7 +383,7 @@ pub async fn render_buddy_runtime_event(
             BUDDY_TITLE_MAX_CHARS,
         ),
         safe_generated_buddy_text_opt(
-            description,
+            if title_is_safe { description } else { None },
             fallback_description,
             BUDDY_STATIC_DESCRIPTION_FALLBACK,
             BUDDY_DESCRIPTION_MAX_CHARS,
