@@ -42,7 +42,6 @@ const IGNORED_KEYS: &[&str] = &[
     "usage",
     "finish_reason",
     "checkpoints",
-    "provider_specific_fields",
 ];
 
 pub enum CacheGuardOutcome {
@@ -462,7 +461,7 @@ mod tests {
         let input = json!({
             "messages": [
                 {"role": "user", "content": [{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}]},
-                {"role": "assistant", "content": "ok", "provider_specific_fields": {"x": 1}}
+                {"role": "assistant", "content": "ok", "provider_specific_fields": {"x": 1, "cache_control": {"type": "ephemeral"}}}
             ],
             "temperature": 0.3,
             "max_tokens": 1024,
@@ -478,7 +477,36 @@ mod tests {
 
         let first_content = out["messages"][0]["content"].as_array().unwrap();
         assert!(first_content[0].get("cache_control").is_none());
-        assert!(out["messages"][1].get("provider_specific_fields").is_none());
+        assert_eq!(out["messages"][1]["provider_specific_fields"]["x"], 1);
+        assert!(out["messages"][1]["provider_specific_fields"]
+            .get("cache_control")
+            .is_none());
+    }
+
+    #[test]
+    fn test_provider_specific_fields_semantic_mutation_breaks_prefix() {
+        let prev = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "provider_specific_fields": {
+                "reasoning": {"effort": "medium"},
+                "cache_control": {"type": "ephemeral"}
+            }
+        }));
+        let next = sanitize_body_for_cache_guard(&json!({
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"}
+            ],
+            "provider_specific_fields": {
+                "reasoning": {"effort": "high"},
+                "cache_control": {"type": "ephemeral"}
+            }
+        }));
+
+        assert!(prev["provider_specific_fields"]
+            .get("cache_control")
+            .is_none());
+        assert!(!is_append_only_prefix(&prev, &next));
     }
 
     #[test]

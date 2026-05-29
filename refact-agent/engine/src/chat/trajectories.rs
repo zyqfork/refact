@@ -5450,6 +5450,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cache_guard_snapshot_is_runtime_only_and_not_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let raw_request_marker = "raw-cache-guard-request-body-marker";
+        let mut session = ChatSession::new("cache-guard-runtime-only".to_string());
+        session.created_at = "2024-01-01T00:00:00Z".to_string();
+        session.cache_guard_snapshot = Some(json!({
+            "messages": [{"role": "user", "content": raw_request_marker}],
+            "provider_specific_fields": {"semantic": "value"}
+        }));
+        session.add_message(ChatMessage::new("user".to_string(), "visible".to_string()));
+
+        let snapshot = trajectory_snapshot_from_session(&session);
+        let snapshot_messages_json = serde_json::to_string(&snapshot.messages).unwrap();
+        assert!(!snapshot_messages_json.contains(raw_request_marker));
+
+        save_trajectory_snapshot(gcx.clone(), snapshot)
+            .await
+            .unwrap();
+
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join("cache-guard-runtime-only.json");
+        let saved_json = tokio::fs::read_to_string(path).await.unwrap();
+        assert!(!saved_json.contains("cache_guard_snapshot"));
+        assert!(!saved_json.contains(raw_request_marker));
+    }
+
+    #[tokio::test]
     async fn reactive_compact_attempts_roundtrip_and_clamp() {
         let dir = tempfile::tempdir().unwrap();
         let (gcx, _) = make_app_with_workspace(dir.path()).await;
