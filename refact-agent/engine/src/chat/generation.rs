@@ -1232,35 +1232,42 @@ pub async fn run_llm_generation(
         worktree: thread.worktree.clone(),
     };
 
-    let messages = {
+    let (messages, existing_frozen_prefix) = {
         let session = session_arc.lock().await;
-        session.messages.clone()
+        (
+            session.messages.clone(),
+            session.thread.frozen_request_prefix.clone(),
+        )
     };
-    let system_prompt = messages.iter().find_map(|message| {
-        if message.role == "system" {
-            match &message.content {
-                ChatContent::SimpleText(text) => Some(text.clone()),
-                _ => None,
-            }
-        } else {
-            None
+    let frozen_request_prefix = match existing_frozen_prefix {
+        Some(prefix) => Some(prefix),
+        None => {
+            let system_prompt = messages.iter().find_map(|message| {
+                if message.role == "system" {
+                    match &message.content {
+                        ChatContent::SimpleText(text) => Some(text.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            });
+            let canonical_tools = build_canonical_openai_tools(
+                gcx.clone(),
+                &tools,
+                model_rec.supports_strict_tools,
+                model_rec.supports_tools,
+            )
+            .await;
+            let mut session = session_arc.lock().await;
+            ensure_frozen_prefix(
+                &mut session,
+                system_prompt,
+                Some(serde_json::Value::Array(canonical_tools.tools)),
+            );
+            session.thread.frozen_request_prefix.clone()
         }
-    });
-    let canonical_tools = build_canonical_openai_tools(
-        gcx.clone(),
-        &tools,
-        model_rec.supports_strict_tools,
-        model_rec.supports_tools,
-    )
-    .await;
-    {
-        let mut session = session_arc.lock().await;
-        let _ = ensure_frozen_prefix(
-            &mut session,
-            system_prompt,
-            Some(serde_json::Value::Array(canonical_tools.tools)),
-        );
-    }
+    };
     let model_type_defaults = caps.user_defaults.defaults_for_model(
         &model_rec.base.id,
         &caps.defaults.chat_default_model,
@@ -1330,6 +1337,7 @@ pub async fn run_llm_generation(
         supports_tools: model_rec.supports_tools,
         parallel_tool_calls: thread.parallel_tool_calls,
         cache_control: CacheControl::Ephemeral,
+        frozen_request_prefix: frozen_request_prefix.clone(),
         ..Default::default()
     };
 

@@ -7,13 +7,14 @@ use tokio::sync::Mutex as AMutex;
 use crate::app_state::AppState;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::execute_at::run_at_commands_locally;
-use crate::call_validation::{ChatMessage, ChatMeta, ReasoningEffort, SamplingParameters};
+use crate::call_validation::{ChatContent, ChatMessage, ChatMeta, ReasoningEffort, SamplingParameters};
 use crate::caps::{resolve_chat_model, ChatModelRecord};
 use crate::global_context::GlobalContext;
 use crate::llm::{LlmRequest, CanonicalToolChoice, CommonParams, ReasoningIntent, WireFormat};
 use crate::llm::params::CacheControl;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::scratchpads::scratchpad_utils::HasRagResults;
+use refact_chat_api::FrozenRequestPrefix;
 use refact_tool_api::{build_registry_from_names, ToolAliasRegistry, ToolDesc};
 use super::tools::execute_tools;
 use super::types::ThreadParams;
@@ -169,6 +170,7 @@ pub struct ChatPrepareOptions {
     pub tool_choice: Option<ToolChoice>,
     pub parallel_tool_calls: Option<bool>,
     pub cache_control: CacheControl,
+    pub frozen_request_prefix: Option<FrozenRequestPrefix>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,8 +195,65 @@ impl Default for ChatPrepareOptions {
             tool_choice: None,
             parallel_tool_calls: None,
             cache_control: CacheControl::Off,
+            frozen_request_prefix: None,
         }
     }
+}
+
+fn frozen_openai_tools(prefix: Option<&FrozenRequestPrefix>) -> Option<Vec<Value>> {
+    prefix
+        .and_then(|prefix| prefix.tools_canonical.as_ref())
+        .and_then(|value| value.as_array())
+        .map(|tools| tools.to_vec())
+}
+
+async fn select_canonical_openai_tools(
+    gcx: Arc<GlobalContext>,
+    tools: &[ToolDesc],
+    mode_supports_strict: bool,
+    supports_tools: bool,
+    frozen_request_prefix: Option<&FrozenRequestPrefix>,
+) -> CanonicalOpenAiTools {
+    if let Some(openai_tools) = frozen_openai_tools(frozen_request_prefix) {
+        let tool_names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+        return CanonicalOpenAiTools {
+            tools: openai_tools,
+            alias_registry: build_registry_from_names(&tool_names),
+        };
+    }
+
+    build_canonical_openai_tools(gcx, tools, mode_supports_strict, supports_tools).await
+}
+
+fn apply_frozen_system_prompt(
+    mut messages: Vec<ChatMessage>,
+    frozen_request_prefix: Option<&FrozenRequestPrefix>,
+) -> Vec<ChatMessage> {
+    let Some(system_prompt) = frozen_request_prefix
+        .and_then(|prefix| prefix.system_prompt.as_ref())
+        .filter(|text| !text.is_empty())
+    else {
+        return messages;
+    };
+
+    match messages.iter().position(|message| message.role == "system") {
+        Some(0) => {
+            messages[0].content = ChatContent::SimpleText(system_prompt.clone());
+        }
+        Some(idx) => {
+            let mut system_message = messages.remove(idx);
+            system_message.content = ChatContent::SimpleText(system_prompt.clone());
+            messages.insert(0, system_message);
+        }
+        None => {
+            messages.insert(
+                0,
+                ChatMessage::new("system".to_string(), system_prompt.clone()),
+            );
+        }
+    }
+
+    messages
 }
 
 pub async fn prepare_chat_passthrough(
@@ -330,11 +389,12 @@ pub async fn prepare_chat_passthrough(
         }
     }
 
-    let canonical_tools = build_canonical_openai_tools(
+    let canonical_tools = select_canonical_openai_tools(
         gcx.clone(),
         &tools,
         model_record.supports_strict_tools,
         options.supports_tools,
+        options.frozen_request_prefix.as_ref(),
     )
     .await;
     let openai_tools = canonical_tools.tools;
@@ -366,6 +426,9 @@ pub async fn prepare_chat_passthrough(
         stitched.extend(tail);
         limited_adapted_msgs = stitched;
     }
+
+    limited_adapted_msgs =
+        apply_frozen_system_prompt(limited_adapted_msgs, options.frozen_request_prefix.as_ref());
 
     // 10. Build LlmRequest
     // Enforce n=1 for chat - multi-choice not supported in streaming accumulation
@@ -583,10 +646,10 @@ fn strip_thinking_blocks_if_disabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::call_validation::ChatContent;
     use crate::llm::adapter::{AdapterSettings, LlmWireAdapter};
     use crate::llm::adapters::openai_chat::OpenAiChatAdapter;
     use crate::yaml_configs::customization_types::{ModeConfig, ProjectRegistry};
+    use indexmap::IndexMap;
     use refact_tool_api::{ToolSource, ToolSourceType};
     use serde_json::json;
     use std::collections::HashMap;
@@ -720,6 +783,138 @@ mod tests {
         crate::chat::internal_roles::plan(mode, version, content, None)
     }
 
+    fn frozen_prefix(
+        system_prompt: &str,
+        tools_canonical: serde_json::Value,
+    ) -> FrozenRequestPrefix {
+        FrozenRequestPrefix {
+            schema_version: 1,
+            created_at: "2026-05-29T00:00:00Z".to_string(),
+            system_prompt: Some(system_prompt.to_string()),
+            tools_canonical: Some(tools_canonical),
+        }
+    }
+
+    fn caps_with_model(model_id: &str) -> crate::caps::CodeAssistantCaps {
+        let mut caps = crate::caps::CodeAssistantCaps::default();
+        caps.chat_models = IndexMap::new();
+        caps.chat_models.insert(
+            model_id.to_string(),
+            Arc::new(ChatModelRecord {
+                base: crate::caps::BaseModelRecord {
+                    id: model_id.to_string(),
+                    name: model_id.to_string(),
+                    n_ctx: 8192,
+                    tokenizer: "fake".to_string(),
+                    ..Default::default()
+                },
+                supports_tools: true,
+                supports_strict_tools: false,
+                supports_temperature: true,
+                ..Default::default()
+            }),
+        );
+        caps.defaults.chat_default_model = model_id.to_string();
+        caps
+    }
+
+    async fn gcx_with_model_and_modes(
+        model_id: &str,
+        modes: Vec<ModeConfig>,
+    ) -> Arc<GlobalContext> {
+        let gcx = gcx_with_modes(modes).await;
+        {
+            let app = AppState::from_gcx(gcx.clone()).await;
+            let mut state = app.model.caps.write().await;
+            state.caps = Some(Arc::new(caps_with_model(model_id)));
+            state.last_attempted_ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        }
+        gcx
+    }
+
+    async fn prepare_with_prefix(
+        gcx: Arc<GlobalContext>,
+        messages: Vec<ChatMessage>,
+        tools: Vec<ToolDesc>,
+        frozen_request_prefix: Option<FrozenRequestPrefix>,
+    ) -> PreparedChat {
+        let app = AppState::from_gcx(gcx.clone()).await;
+        let model_id = "test/frozen-model";
+        let ccx = AtCommandsContext::new_from_app(
+            app,
+            8192,
+            1,
+            false,
+            messages.clone(),
+            "frozen-chat".to_string(),
+            None,
+            model_id.to_string(),
+            None,
+            None,
+        )
+        .await;
+        let tokenizer = crate::tokens::cached_tokenizer(
+            gcx.clone(),
+            &crate::caps::BaseModelRecord {
+                id: model_id.to_string(),
+                name: model_id.to_string(),
+                tokenizer: "fake".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let t = HasTokenizerAndEot::new(tokenizer);
+        let thread = ThreadParams {
+            model: model_id.to_string(),
+            mode: "agent".to_string(),
+            include_project_info: false,
+            frozen_request_prefix: frozen_request_prefix.clone(),
+            ..Default::default()
+        };
+        let meta = ChatMeta {
+            chat_id: "frozen-chat".to_string(),
+            chat_mode: "agent".to_string(),
+            chat_remote: false,
+            current_config_file: String::new(),
+            context_tokens_cap: Some(8192),
+            include_project_info: false,
+            request_attempt_id: "attempt".to_string(),
+            worktree: None,
+        };
+        let mut sampling = SamplingParameters {
+            max_new_tokens: 1024,
+            ..Default::default()
+        };
+        let options = ChatPrepareOptions {
+            prepend_system_prompt: false,
+            allow_at_commands: false,
+            allow_tool_prerun: false,
+            supports_tools: true,
+            frozen_request_prefix,
+            ..Default::default()
+        };
+
+        prepare_chat_passthrough(
+            gcx,
+            Arc::new(AMutex::new(ccx)),
+            &t,
+            messages,
+            &thread,
+            model_id,
+            "agent",
+            tools,
+            &meta,
+            &mut sampling,
+            &options,
+        )
+        .await
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn frozen_build_canonical_openai_tools_enriches_handoff_and_is_deterministic() {
         let gcx = gcx_with_modes(vec![
@@ -740,6 +935,112 @@ mod tests {
         assert_eq!(
             first.tools[0]["function"]["parameters"]["properties"]["target_mode"]["enum"],
             json!(["agent", "explore"])
+        );
+    }
+
+    #[tokio::test]
+    async fn frozen_prepare_uses_frozen_tools_and_system_verbatim() {
+        let frozen_tools = json!([{
+            "type": "function",
+            "function": {
+                "name": "frozen_tool",
+                "description": "Frozen tool description",
+                "parameters": {"type": "object"}
+            }
+        }]);
+        let prefix = frozen_prefix("FROZEN SYSTEM", frozen_tools.clone());
+        let messages = vec![
+            ChatMessage::new("system".to_string(), "dynamic system".to_string()),
+            ChatMessage::new("user".to_string(), "hello".to_string()),
+        ];
+        let gcx = gcx_with_model_and_modes(
+            "test/frozen-model",
+            vec![mode_config("agent", "Agent", "Do agent work")],
+        )
+        .await;
+
+        let prepared =
+            prepare_with_prefix(gcx, messages, vec![handoff_tool_desc()], Some(prefix)).await;
+
+        assert_eq!(
+            prepared.llm_request.tools,
+            Some(frozen_tools.as_array().unwrap().clone())
+        );
+        assert_eq!(
+            prepared.llm_request.messages[0].content.content_text_only(),
+            "FROZEN SYSTEM"
+        );
+        assert_eq!(
+            prepared.limited_messages[0].content.content_text_only(),
+            "FROZEN SYSTEM"
+        );
+    }
+
+    #[tokio::test]
+    async fn frozen_prepare_skips_handoff_mode_enrichment() {
+        let frozen_tools = json!([{
+            "type": "function",
+            "function": {
+                "name": "handoff_to_mode",
+                "description": "Frozen handoff only",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target_mode": {"type": "string", "description": "Frozen target"}
+                    }
+                }
+            }
+        }]);
+        let prefix = frozen_prefix("Frozen system", frozen_tools.clone());
+        let gcx = gcx_with_model_and_modes(
+            "test/frozen-model",
+            vec![
+                mode_config("agent", "Agent", "Do agent work"),
+                mode_config("mutated", "Mutated", "Must not enter frozen tools"),
+            ],
+        )
+        .await;
+
+        let prepared = prepare_with_prefix(
+            gcx,
+            vec![ChatMessage::new("user".to_string(), "hello".to_string())],
+            vec![handoff_tool_desc()],
+            Some(prefix),
+        )
+        .await;
+        let tool = &prepared.llm_request.tools.as_ref().unwrap()[0];
+
+        assert_eq!(tool, &frozen_tools[0]);
+        assert!(!tool.to_string().contains("Available modes"));
+        assert!(tool["function"]["parameters"]["properties"]["target_mode"]
+            .get("enum")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn frozen_first_turn_parity_with_stored_prefix() {
+        let gcx = gcx_with_model_and_modes(
+            "test/frozen-model",
+            vec![mode_config("agent", "Agent", "Do agent work")],
+        )
+        .await;
+        let messages = vec![
+            ChatMessage::new("system".to_string(), "FIRST SYSTEM".to_string()),
+            ChatMessage::new("user".to_string(), "hello".to_string()),
+        ];
+        let tools = vec![handoff_tool_desc()];
+
+        let first = prepare_with_prefix(gcx.clone(), messages.clone(), tools.clone(), None).await;
+        let stored = frozen_prefix(
+            "FIRST SYSTEM",
+            serde_json::Value::Array(first.llm_request.tools.clone().unwrap()),
+        );
+        let second = prepare_with_prefix(gcx, messages, tools, Some(stored)).await;
+
+        assert_eq!(first.llm_request.tools, second.llm_request.tools);
+        assert_eq!(
+            first.llm_request.messages[0].content.content_text_only(),
+            second.llm_request.messages[0].content.content_text_only()
         );
     }
 
