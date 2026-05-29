@@ -1,6 +1,8 @@
 pub mod browser_context;
 pub mod cache_diagnostics;
 pub mod cache_guard;
+#[cfg(test)]
+mod cache_stability_tests;
 pub mod config;
 mod content;
 pub mod diagnostics;
