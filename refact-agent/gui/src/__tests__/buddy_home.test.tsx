@@ -537,6 +537,8 @@ describe("ActivityFeed_filter_chips_filter_by_workflow_prefix", () => {
 describe("BuddyWorkflowFailureSummaries", () => {
   it("formats failure category labels with the shared Buddy utility", () => {
     expect(formatFailureLabel("model_unavailable")).toBe("Model Unavailable");
+    expect(formatFailureLabel("MODEL_UNAVAILABLE")).toBe("Model Unavailable");
+    expect(formatFailureLabel("context_TOO-large")).toBe("Context Too Large");
     expect(formatFailureLabel(" context-too-large ")).toBe("Context Too Large");
     expect(formatFailureLabel(" ")).toBeNull();
   });
@@ -694,7 +696,6 @@ describe("BuddyHome_renders_all_sections", () => {
   });
 
   it("failed hero runtime dismiss remains local and snoozes notifications", async () => {
-    vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
     let dismissCalled = false;
     const runtime = {
       id: "home-runtime-dismiss-fails",
@@ -703,7 +704,7 @@ describe("BuddyHome_renders_all_sections", () => {
       source: "test",
       status: "failed",
       priority: "high",
-      created_at: "2024-01-01T00:00:00Z",
+      created_at: new Date().toISOString(),
     } satisfies BuddyRuntimeEvent;
     server.use(
       http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
@@ -873,7 +874,6 @@ describe("BuddyHome_renders_all_sections", () => {
   });
 
   it("recent error grouping keeps distinct structured failure details", async () => {
-    vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
     const nowMs = Date.now();
     const base = {
       id: "structured-failure-model",
@@ -935,7 +935,6 @@ describe("BuddyHome_renders_all_sections", () => {
   });
 
   it("failed dashboard runtime dismiss remains local", async () => {
-    vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
     let dismissCalled = false;
     const runtime = {
       id: "dashboard-runtime-dismiss-fails",
@@ -944,7 +943,7 @@ describe("BuddyHome_renders_all_sections", () => {
       source: "test",
       status: "failed",
       priority: "high",
-      created_at: "2024-01-01T00:00:00Z",
+      created_at: new Date().toISOString(),
     } satisfies BuddyRuntimeEvent;
     server.use(
       http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>

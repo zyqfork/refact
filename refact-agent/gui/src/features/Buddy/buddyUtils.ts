@@ -23,7 +23,10 @@ export function formatFailureLabel(
   return trimmed
     .split(/[_\s-]+/)
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .map((part) => {
+      const normalized = part.toLowerCase();
+      return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    })
     .join(" ");
 }
 
