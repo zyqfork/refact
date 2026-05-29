@@ -1318,13 +1318,16 @@ pub async fn save_trajectory_snapshot(
     snapshot: TrajectorySnapshot,
 ) -> Result<(), String> {
     let app = AppState::from_gcx(gcx.clone()).await;
+    let existing_no_meta_path = if snapshot.task_meta.is_none() && snapshot.buddy_meta.is_none() {
+        find_trajectory_or_buddy_path(gcx.clone(), &snapshot.chat_id).await
+    } else {
+        None
+    };
     if snapshot.messages.is_empty()
         && snapshot.task_meta.is_none()
         && snapshot.buddy_meta.is_none()
         && snapshot.frozen_request_prefix.is_none()
-        && find_trajectory_or_buddy_path(gcx.clone(), &snapshot.chat_id)
-            .await
-            .is_none()
+        && existing_no_meta_path.is_none()
     {
         return Ok(());
     }
@@ -1442,6 +1445,8 @@ pub async fn save_trajectory_snapshot(
             .await
             .map_err(|e| format!("Failed to create buddy conversations dir: {}", e))?;
         buddy_dir.join(format!("{}.json", snapshot.chat_id))
+    } else if let Some(path) = existing_no_meta_path {
+        path
     } else {
         let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
         tokio::fs::create_dir_all(&trajectories_dir)
@@ -5960,6 +5965,88 @@ mod tests {
         assert!(raw.get("frozen_request_prefix").is_none());
         assert!(raw.get("claude_code_identity").is_none());
         assert!(raw.get("previous_response_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn mode_transition_empty_provider_cleanup_persists_to_original_global_path_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "transition-empty-provider-global-open";
+        let global_trajectories_dir = get_global_trajectories_dir(gcx.clone()).await;
+        tokio::fs::create_dir_all(&global_trajectories_dir)
+            .await
+            .unwrap();
+        let path = global_trajectories_dir.join(format!("{chat_id}.json"));
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Transition Global Open",
+                "model": "model",
+                "mode": "task_planner",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "mode_transition",
+                "previous_response_id": "resp_source",
+                "messages": [],
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let project_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+
+        let session_arc = crate::chat::get_or_create_session_with_trajectory(
+            app.clone(),
+            &app.chat.sessions,
+            chat_id,
+        )
+        .await;
+        {
+            let session = session_arc.lock().await;
+            assert!(session.messages.is_empty());
+            assert!(session.thread.frozen_request_prefix.is_none());
+            assert!(session.thread.claude_code_identity.is_none());
+            assert!(session.thread.previous_response_id.is_none());
+        }
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(raw["messages"].as_array().unwrap().len(), 0);
+        assert!(raw.get("frozen_request_prefix").is_none());
+        assert!(raw.get("claude_code_identity").is_none());
+        assert!(raw.get("previous_response_id").is_none());
+        assert!(!tokio::fs::try_exists(project_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mode_transition_new_empty_snapshot_without_existing_file_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "transition-new-empty-skip";
+
+        save_trajectory_snapshot(gcx, test_snapshot(chat_id, "New Empty", Vec::new()))
+            .await
+            .unwrap();
+
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        assert!(!tokio::fs::try_exists(path).await.unwrap());
     }
 
     #[tokio::test]
