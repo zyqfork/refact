@@ -1016,10 +1016,7 @@ mod tests {
         let metadata = metadata_user_id(&http.body);
         assert_eq!(metadata["device_id"], identity.device_id);
         assert_eq!(metadata["session_id"], identity.session_id);
-        assert_eq!(
-            http.body["metadata"]["rename_table_version"],
-            claude_code_compat::rename_table_version()
-        );
+        assert!(http.body["metadata"].get("rename_table_version").is_none());
     }
 
     #[test]

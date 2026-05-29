@@ -200,17 +200,6 @@ pub fn cc_rename_base_tool(base_name: &str) -> &str {
     base_name
 }
 
-pub fn rename_table_version() -> String {
-    let mut hasher = Sha256::new();
-    for (original, renamed) in CC_TOOL_RENAMES {
-        hasher.update(original.as_bytes());
-        hasher.update([0]);
-        hasher.update(renamed.as_bytes());
-        hasher.update([0xff]);
-    }
-    format!("{:x}", hasher.finalize())
-}
-
 pub fn cc_resolve_tool_name(name: &str) -> String {
     if name.starts_with(MCP_TOOL_PREFIX) {
         let base = &name[MCP_TOOL_PREFIX.len()..];
@@ -589,7 +578,6 @@ pub fn inject_metadata(body: &mut Value, identity: Option<&ClaudeCodeIdentity>) 
     .unwrap_or_default();
     body["metadata"] = json!({
         "user_id": meta_value,
-        "rename_table_version": rename_table_version(),
     });
 }
 
@@ -810,10 +798,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(uid).unwrap();
         assert!(parsed["device_id"].as_str().unwrap().len() == 64);
         assert!(!parsed["session_id"].as_str().unwrap().is_empty());
-        assert_eq!(
-            body["metadata"]["rename_table_version"].as_str().unwrap(),
-            rename_table_version()
-        );
+        assert!(body["metadata"].get("rename_table_version").is_none());
     }
 
     #[test]
@@ -846,14 +831,6 @@ mod tests {
         assert_eq!(
             headers.get("x-claude-code-session-id").unwrap(),
             identity.session_id.as_str()
-        );
-    }
-
-    #[test]
-    fn test_rename_table_version_stable_for_current_table() {
-        assert_eq!(
-            rename_table_version(),
-            "b11ba8de3ffd2f21b49ea620c1371688011d10b55c3ef4dd3941503b51f172c1"
         );
     }
 
