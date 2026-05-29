@@ -421,6 +421,38 @@ pub async fn get_buddy_conversations_dir(gcx: Arc<GlobalContext>) -> Result<Path
     Ok(workspace_root.join(".refact/buddy/chats/conversations"))
 }
 
+fn normalize_system_prompt(system_prompt: Option<String>) -> Option<String> {
+    system_prompt.filter(|text| !text.trim().is_empty())
+}
+
+fn frozen_prefix_has_system_prompt(prefix: &FrozenRequestPrefix) -> bool {
+    prefix
+        .system_prompt
+        .as_ref()
+        .is_some_and(|text| !text.trim().is_empty())
+}
+
+fn frozen_prefix_has_tools(prefix: &FrozenRequestPrefix) -> bool {
+    prefix.tools_canonical.is_some()
+}
+
+pub fn frozen_prefix_is_complete(prefix: &FrozenRequestPrefix) -> bool {
+    frozen_prefix_has_system_prompt(prefix) && frozen_prefix_has_tools(prefix)
+}
+
+pub fn first_system_prompt(messages: &[ChatMessage]) -> Option<String> {
+    messages.iter().find_map(|message| {
+        if message.role == "system" {
+            match &message.content {
+                ChatContent::SimpleText(text) if !text.trim().is_empty() => Some(text.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    })
+}
+
 pub fn new_frozen_request_prefix(
     system_prompt: Option<String>,
     tools_canonical: Option<serde_json::Value>,
@@ -428,7 +460,7 @@ pub fn new_frozen_request_prefix(
     FrozenRequestPrefix {
         schema_version: 1,
         created_at: chrono::Utc::now().to_rfc3339(),
-        system_prompt,
+        system_prompt: normalize_system_prompt(system_prompt),
         tools_canonical,
     }
 }
@@ -477,13 +509,45 @@ pub fn ensure_frozen_prefix(
     system_prompt: Option<String>,
     tools_canonical: Option<serde_json::Value>,
 ) -> Option<FrozenRequestPrefix> {
-    if session.thread.frozen_request_prefix.is_some() {
+    let system_prompt = normalize_system_prompt(system_prompt);
+    if system_prompt.is_none() && tools_canonical.is_none() {
         return None;
     }
-    let prefix = new_frozen_request_prefix(system_prompt, tools_canonical);
-    session.thread.frozen_request_prefix = Some(prefix.clone());
-    session.increment_version();
-    Some(prefix)
+
+    match session.thread.frozen_request_prefix.as_mut() {
+        Some(prefix) => {
+            if frozen_prefix_is_complete(prefix) {
+                return None;
+            }
+
+            let mut changed = false;
+            if !frozen_prefix_has_system_prompt(prefix) {
+                if let Some(system_prompt) = system_prompt {
+                    prefix.system_prompt = Some(system_prompt);
+                    changed = true;
+                }
+            }
+            if !frozen_prefix_has_tools(prefix) {
+                if let Some(tools_canonical) = tools_canonical {
+                    prefix.tools_canonical = Some(tools_canonical);
+                    changed = true;
+                }
+            }
+            if changed {
+                let prefix = prefix.clone();
+                session.increment_version();
+                Some(prefix)
+            } else {
+                None
+            }
+        }
+        None => {
+            let prefix = new_frozen_request_prefix(system_prompt, tools_canonical);
+            session.thread.frozen_request_prefix = Some(prefix.clone());
+            session.increment_version();
+            Some(prefix)
+        }
+    }
 }
 
 fn fix_tool_call_indexes(messages: &mut [ChatMessage]) {
@@ -940,7 +1004,11 @@ pub async fn load_trajectory_for_chat(
         auto_compact_enabled: t.get("auto_compact_enabled").and_then(|v| v.as_bool()),
         frozen_request_prefix: t
             .get("frozen_request_prefix")
-            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .or_else(|| {
+                first_system_prompt(&messages)
+                    .map(|system_prompt| new_frozen_request_prefix(Some(system_prompt), None))
+            }),
         claude_code_identity: t
             .get("claude_code_identity")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
@@ -1128,7 +1196,10 @@ pub async fn save_trajectory_snapshot(
     snapshot: TrajectorySnapshot,
 ) -> Result<(), String> {
     let app = AppState::from_gcx(gcx.clone()).await;
-    if snapshot.messages.is_empty() && snapshot.task_meta.is_none() && snapshot.buddy_meta.is_none()
+    if snapshot.messages.is_empty()
+        && snapshot.task_meta.is_none()
+        && snapshot.buddy_meta.is_none()
+        && snapshot.frozen_request_prefix.is_none()
     {
         return Ok(());
     }
@@ -2931,9 +3002,11 @@ pub async fn handle_v1_trajectories_get(
 ) -> Result<Response<Body>, ScratchError> {
     let gcx = app.gcx.clone();
     validate_trajectory_id(&id)?;
-    let file_path = find_trajectory_or_buddy_path(gcx, &id).await.ok_or_else(|| {
-        ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
-    })?;
+    let file_path = find_trajectory_or_buddy_path(gcx, &id)
+        .await
+        .ok_or_else(|| {
+            ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
+        })?;
     let content = fs::read_to_string(&file_path)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -4887,17 +4960,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn frozen_request_prefix_and_claude_code_identity_missing_in_legacy_trajectory() {
+    async fn frozen_request_prefix_migrates_system_prompt_from_legacy_trajectory() {
         let dir = tempfile::tempdir().unwrap();
-        let gcx = crate::global_context::tests::make_test_gcx().await;
-        let app = AppState::from_gcx(gcx.clone()).await;
-        {
-            *app.workspace
-                .documents_state
-                .workspace_folders
-                .lock()
-                .unwrap() = vec![dir.path().to_path_buf()];
-        }
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
         let traj_dir = dir.path().join(".refact").join("trajectories");
         tokio::fs::create_dir_all(&traj_dir).await.unwrap();
         tokio::fs::write(
@@ -4910,7 +4975,10 @@ mod tests {
                 "model":"model",
                 "mode":"agent",
                 "tool_use":"agent",
-                "messages":[{"role":"user","content":"hello"}],
+                "messages":[
+                    {"role":"system","content":"legacy system"},
+                    {"role":"user","content":"hello"}
+                ],
                 "include_project_info":true,
                 "checkpoints_enabled":true
             }"#,
@@ -4921,13 +4989,19 @@ mod tests {
         let loaded = load_trajectory_for_chat(gcx, "legacy-frozen-prefix")
             .await
             .unwrap();
-        assert!(loaded.thread.frozen_request_prefix.is_none());
+        let prefix = loaded.thread.frozen_request_prefix.unwrap();
+        assert_eq!(prefix.system_prompt.as_deref(), Some("legacy system"));
+        assert!(prefix.tools_canonical.is_none());
         assert!(loaded.thread.claude_code_identity.is_none());
     }
 
     #[test]
-    fn frozen_lazy_ensure_sets_once_and_preserves_existing_prefix() {
+    fn frozen_lazy_ensure_noops_on_empty_inputs_and_preserves_existing_prefix() {
         let mut session = ChatSession::new("lazy-frozen".to_string());
+        assert!(ensure_frozen_prefix(&mut session, None, None).is_none());
+        assert!(session.thread.frozen_request_prefix.is_none());
+        assert_eq!(session.trajectory_version, 0);
+
         let first = ensure_frozen_prefix(
             &mut session,
             Some("system one".to_string()),
@@ -4947,13 +5021,49 @@ mod tests {
         );
         assert!(second.is_none());
         assert_eq!(session.trajectory_version, version_after_first);
+        let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+        assert_eq!(prefix.system_prompt.as_deref(), Some("system one"));
         assert_eq!(
-            session
-                .thread
-                .frozen_request_prefix
-                .as_ref()
-                .and_then(|prefix| prefix.system_prompt.as_deref()),
-            Some("system one")
+            prefix.tools_canonical,
+            Some(json!([{"type":"function","function":{"name":"cat"}}]))
+        );
+    }
+
+    #[test]
+    fn frozen_lazy_ensure_fills_partial_prefix_once() {
+        let mut session = ChatSession::new("partial-frozen".to_string());
+        let partial = ensure_frozen_prefix(&mut session, Some("system only".to_string()), None)
+            .expect("partial prefix should be installed");
+        assert_eq!(partial.system_prompt.as_deref(), Some("system only"));
+        assert!(partial.tools_canonical.is_none());
+        let version_after_partial = session.trajectory_version;
+
+        let filled = ensure_frozen_prefix(
+            &mut session,
+            Some("replacement system".to_string()),
+            Some(json!([{"type":"function","function":{"name":"cat"}}])),
+        )
+        .expect("partial prefix should be filled");
+        assert_eq!(filled.system_prompt.as_deref(), Some("system only"));
+        assert_eq!(
+            filled.tools_canonical,
+            Some(json!([{"type":"function","function":{"name":"cat"}}]))
+        );
+        assert_eq!(session.trajectory_version, version_after_partial + 1);
+
+        let version_after_fill = session.trajectory_version;
+        assert!(ensure_frozen_prefix(
+            &mut session,
+            Some("new system".to_string()),
+            Some(json!([{"type":"function","function":{"name":"shell"}}])),
+        )
+        .is_none());
+        assert_eq!(session.trajectory_version, version_after_fill);
+        let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+        assert_eq!(prefix.system_prompt.as_deref(), Some("system only"));
+        assert_eq!(
+            prefix.tools_canonical,
+            Some(json!([{"type":"function","function":{"name":"cat"}}]))
         );
     }
 
@@ -5077,15 +5187,11 @@ mod tests {
         )
         .await;
         {
-            let mut session = session_arc.lock().await;
-            assert!(session.thread.frozen_request_prefix.is_none());
-            ensure_frozen_prefix(
-                &mut session,
-                Some("legacy system".to_string()),
-                Some(json!([{"type":"function","function":{"name":"cat"}}])),
-            );
+            let session = session_arc.lock().await;
+            let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+            assert_eq!(prefix.system_prompt.as_deref(), Some("legacy system"));
+            assert!(prefix.tools_canonical.is_none());
         }
-        maybe_save_trajectory(app, session_arc).await;
 
         let raw: serde_json::Value = serde_json::from_str(
             &tokio::fs::read_to_string(trajectories_dir.join(format!("{chat_id}.json")))
@@ -5093,7 +5199,11 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(raw["frozen_request_prefix"]["system_prompt"], "legacy system");
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "legacy system"
+        );
+        assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
         assert_eq!(raw["messages"][0]["content"], "legacy system");
     }
 
@@ -5124,7 +5234,10 @@ mod tests {
                 "model": "model",
                 "mode": "task_agent",
                 "tool_use": "agent",
-                "messages": [{"role":"user","content":"hello task"}],
+                "messages": [
+                    {"role":"system","content":"task system"},
+                    {"role":"user","content":"hello task"}
+                ],
                 "created_at": "2024-01-01T00:00:00Z",
                 "updated_at": "2024-01-01T00:00:00Z",
                 "include_project_info": true,
@@ -5150,11 +5263,11 @@ mod tests {
         )
         .await;
         {
-            let mut session = session_arc.lock().await;
-            assert!(session.thread.frozen_request_prefix.is_none());
-            ensure_frozen_prefix(&mut session, Some("task system".to_string()), Some(json!([])));
+            let session = session_arc.lock().await;
+            let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+            assert_eq!(prefix.system_prompt.as_deref(), Some("task system"));
+            assert!(prefix.tools_canonical.is_none());
         }
-        maybe_save_trajectory(app, session_arc).await;
 
         let generic_path = dir
             .path()
@@ -5165,8 +5278,34 @@ mod tests {
             serde_json::from_str(&tokio::fs::read_to_string(&task_path).await.unwrap()).unwrap();
         assert!(!tokio::fs::try_exists(generic_path).await.unwrap());
         assert_eq!(raw["frozen_request_prefix"]["system_prompt"], "task system");
+        assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
     }
 
+    #[tokio::test]
+    async fn frozen_empty_normal_snapshot_with_prefix_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let mut snapshot = test_snapshot("empty-frozen-normal", "Frozen Empty", vec![]);
+        snapshot.frozen_request_prefix = Some(new_frozen_request_prefix(
+            Some("empty snapshot system".to_string()),
+            None,
+        ));
+
+        save_trajectory_snapshot(gcx, snapshot).await.unwrap();
+
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join("empty-frozen-normal.json");
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "empty snapshot system"
+        );
+        assert_eq!(raw["messages"].as_array().unwrap().len(), 0);
+    }
     #[tokio::test]
     async fn trajectory_updated_at_changes_when_title_changes_without_messages() {
         let dir = tempfile::tempdir().unwrap();

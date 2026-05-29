@@ -24,7 +24,10 @@ use crate::constants::CHAT_TOP_N;
 use crate::knowledge::enrichment::enrich_messages_with_knowledge;
 
 use super::types::*;
-use super::trajectories::{check_external_reload_pending, ensure_frozen_prefix, maybe_save_trajectory};
+use super::trajectories::{
+    check_external_reload_pending, ensure_frozen_prefix, first_system_prompt,
+    frozen_prefix_is_complete, maybe_save_trajectory,
+};
 use super::tools::{process_tool_calls_once, ToolStepOutcome};
 use super::prepare::{build_canonical_openai_tools, prepare_chat_passthrough, ChatPrepareOptions};
 use super::prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messages;
@@ -1202,36 +1205,29 @@ pub async fn run_llm_generation(
             session.thread.frozen_request_prefix.clone(),
         )
     };
+    let canonical_tools = build_canonical_openai_tools(
+        gcx.clone(),
+        &tools,
+        model_rec.supports_strict_tools,
+        model_rec.supports_tools,
+    )
+    .await;
     let mut installed_frozen_prefix = false;
-    let frozen_request_prefix = match existing_frozen_prefix {
-        Some(prefix) => Some(prefix),
-        None => {
-            let system_prompt = messages.iter().find_map(|message| {
-                if message.role == "system" {
-                    match &message.content {
-                        ChatContent::SimpleText(text) => Some(text.clone()),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            });
-            let canonical_tools = build_canonical_openai_tools(
-                gcx.clone(),
-                &tools,
-                model_rec.supports_strict_tools,
-                model_rec.supports_tools,
-            )
-            .await;
-            let mut session = session_arc.lock().await;
-            installed_frozen_prefix = ensure_frozen_prefix(
-                &mut session,
-                system_prompt,
-                Some(serde_json::Value::Array(canonical_tools.tools)),
-            )
-            .is_some();
-            session.thread.frozen_request_prefix.clone()
-        }
+    let frozen_request_prefix = if existing_frozen_prefix
+        .as_ref()
+        .is_some_and(frozen_prefix_is_complete)
+    {
+        existing_frozen_prefix
+    } else {
+        let system_prompt = first_system_prompt(&messages);
+        let mut session = session_arc.lock().await;
+        installed_frozen_prefix = ensure_frozen_prefix(
+            &mut session,
+            system_prompt,
+            Some(serde_json::Value::Array(canonical_tools.tools.clone())),
+        )
+        .is_some();
+        session.thread.frozen_request_prefix.clone()
     };
     if installed_frozen_prefix {
         maybe_save_trajectory(app.clone(), session_arc.clone()).await;

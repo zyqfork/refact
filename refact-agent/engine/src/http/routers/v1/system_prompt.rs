@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
 use crate::call_validation::{ChatContent, ChatMessage, ChatMeta, validate_mode_for_request};
+use crate::chat::get_or_create_session_with_trajectory;
 use crate::chat::prepare::build_canonical_openai_tools;
 use crate::chat::trajectories::{
-    ensure_frozen_prefix, maybe_save_trajectory, new_frozen_request_prefix, persist_frozen_prefix,
+    ensure_frozen_prefix, maybe_save_trajectory, new_frozen_request_prefix,
 };
 use crate::custom_error::ScratchError;
 use crate::indexing_utils::wait_for_indexing_if_needed;
@@ -55,12 +56,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_gcx, app) = make_app_with_workspace(dir.path()).await;
         let chat_id = "init-freeze-normal";
-        let session_arc = get_or_create_session_with_trajectory(
-            app.clone(),
-            &app.chat.sessions,
-            chat_id,
-        )
-        .await;
+        let session_arc =
+            get_or_create_session_with_trajectory(app.clone(), &app.chat.sessions, chat_id).await;
         {
             let mut session = session_arc.lock().await;
             session.add_message(ChatMessage::new("user".to_string(), "hello".to_string()));
@@ -73,11 +70,12 @@ mod tests {
             .join(".refact")
             .join("trajectories")
             .join(format!("{chat_id}.json"));
-        let raw: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(path).await.unwrap(),
-        )
-        .unwrap();
-        assert_eq!(raw["frozen_request_prefix"]["system_prompt"], "frozen system");
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "frozen system"
+        );
     }
 
     #[tokio::test]
@@ -90,7 +88,9 @@ mod tests {
         tokio::fs::create_dir_all(dir.path().join(".refact").join("tasks").join(task_id))
             .await
             .unwrap();
-        let session_arc = Arc::new(tokio::sync::Mutex::new(ChatSession::new(chat_id.to_string())));
+        let session_arc = Arc::new(tokio::sync::Mutex::new(ChatSession::new(
+            chat_id.to_string(),
+        )));
         {
             let mut session = session_arc.lock().await;
             session.thread.task_meta = Some(TaskMeta {
@@ -125,10 +125,8 @@ mod tests {
             .join(agent_id)
             .join(format!("{chat_id}.json"));
         assert!(!tokio::fs::try_exists(generic_path).await.unwrap());
-        let raw: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(task_path).await.unwrap(),
-        )
-        .unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(task_path).await.unwrap()).unwrap();
         assert_eq!(raw["frozen_request_prefix"]["system_prompt"], "task frozen");
     }
 
@@ -137,12 +135,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_gcx, app) = make_app_with_workspace(dir.path()).await;
         let chat_id = "init-freeze-existing";
-        let session_arc = get_or_create_session_with_trajectory(
-            app.clone(),
-            &app.chat.sessions,
-            chat_id,
-        )
-        .await;
+        let session_arc =
+            get_or_create_session_with_trajectory(app.clone(), &app.chat.sessions, chat_id).await;
         {
             let mut session = session_arc.lock().await;
             session.thread.frozen_request_prefix = Some(prefix("original frozen"));
@@ -158,11 +152,12 @@ mod tests {
             .join(".refact")
             .join("trajectories")
             .join(format!("{chat_id}.json"));
-        let raw: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(path).await.unwrap(),
-        )
-        .unwrap();
-        assert_eq!(raw["frozen_request_prefix"]["system_prompt"], "original frozen");
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "original frozen"
+        );
     }
 
     #[tokio::test]
@@ -185,7 +180,10 @@ mod tests {
                 "model": "model",
                 "mode": "buddy",
                 "tool_use": "agent",
-                "messages": [{"role":"user","content":"hello buddy"}],
+                "messages": [
+                    {"role":"system","content":"buddy system"},
+                    {"role":"user","content":"hello buddy"}
+                ],
                 "created_at": "2024-01-01T00:00:00Z",
                 "updated_at": "2024-01-01T00:00:00Z",
                 "include_project_info": true,
@@ -196,18 +194,15 @@ mod tests {
         )
         .await
         .unwrap();
-        let session_arc = get_or_create_session_with_trajectory(
-            app.clone(),
-            &app.chat.sessions,
-            chat_id,
-        )
-        .await;
+        let session_arc =
+            get_or_create_session_with_trajectory(app.clone(), &app.chat.sessions, chat_id).await;
         {
-            let mut session = session_arc.lock().await;
+            let session = session_arc.lock().await;
             assert!(session.thread.buddy_meta.is_some());
-            ensure_frozen_prefix(&mut session, Some("buddy system".to_string()), Some(json!([])));
+            let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+            assert_eq!(prefix.system_prompt.as_deref(), Some("buddy system"));
+            assert!(prefix.tools_canonical.is_none());
         }
-        crate::chat::trajectories::maybe_save_trajectory(app, session_arc).await;
 
         let generic_path = dir
             .path()
@@ -221,7 +216,11 @@ mod tests {
         )
         .unwrap();
         assert!(!tokio::fs::try_exists(generic_path).await.unwrap());
-        assert_eq!(raw["frozen_request_prefix"]["system_prompt"], "buddy system");
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "buddy system"
+        );
+        assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
     }
 }
 
@@ -236,31 +235,19 @@ async fn persist_init_frozen_prefix(
     chat_id: &str,
     frozen_prefix: refact_chat_api::FrozenRequestPrefix,
 ) {
-    let session_arc = {
-        let sessions = app.gcx.chat_sessions.read().await;
-        sessions.get(chat_id).cloned()
+    let session_arc =
+        get_or_create_session_with_trajectory(app.clone(), &app.chat.sessions, chat_id).await;
+    let installed = {
+        let mut session = session_arc.lock().await;
+        ensure_frozen_prefix(
+            &mut session,
+            frozen_prefix.system_prompt.clone(),
+            frozen_prefix.tools_canonical.clone(),
+        )
+        .is_some()
     };
-    if let Some(session_arc) = session_arc {
-        let installed = {
-            let mut session = session_arc.lock().await;
-            ensure_frozen_prefix(
-                &mut session,
-                frozen_prefix.system_prompt.clone(),
-                frozen_prefix.tools_canonical.clone(),
-            )
-            .is_some()
-        };
-        if installed {
-            maybe_save_trajectory(app, session_arc).await;
-        }
-    } else if let Err(error) =
-        persist_frozen_prefix(app.gcx.clone(), chat_id, frozen_prefix).await
-    {
-        tracing::warn!(
-            "Failed to persist frozen request prefix for {}: {}",
-            chat_id,
-            error
-        );
+    if installed {
+        maybe_save_trajectory(app, session_arc).await;
     }
 }
 

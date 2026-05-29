@@ -19,7 +19,9 @@ use crate::ext::hooks_runner::{HookPayload, get_project_dir_string, run_hooks};
 use super::types::*;
 use super::types::{session_idle_timeout, session_cleanup_interval};
 use super::config::limits;
-use super::trajectories::{task_context_from_task_meta, trajectory_meta_title, TrajectoryEvent};
+use super::trajectories::{
+    first_system_prompt, task_context_from_task_meta, trajectory_meta_title, TrajectoryEvent,
+};
 
 pub(super) fn has_displayable_assistant_content(message: &ChatMessage) -> bool {
     let has_text_content = match &message.content {
@@ -1336,6 +1338,32 @@ impl ChatSession {
     }
 }
 
+async fn migrate_legacy_frozen_prefix_on_open(
+    app: AppState,
+    session_arc: Arc<AMutex<ChatSession>>,
+) {
+    let installed = {
+        let mut session = session_arc.lock().await;
+        let prefix = session.thread.frozen_request_prefix.as_ref();
+        let needs_prefix = prefix.is_none();
+        let needs_legacy_save = prefix
+            .map(|prefix| prefix.tools_canonical.is_none() && prefix.system_prompt.is_some())
+            .unwrap_or(false);
+        if needs_prefix {
+            let system_prompt = first_system_prompt(&session.messages);
+            super::trajectories::ensure_frozen_prefix(&mut session, system_prompt, None).is_some()
+        } else if needs_legacy_save {
+            session.increment_version();
+            true
+        } else {
+            false
+        }
+    };
+    if installed {
+        super::trajectories::maybe_save_trajectory(app, session_arc).await;
+    }
+}
+
 pub async fn get_or_create_session_with_trajectory(
     app: AppState,
     sessions: &SessionsMap,
@@ -1459,6 +1487,10 @@ pub async fn get_or_create_session_with_trajectory(
             };
             run_hooks(app_hook, HookEvent::SessionStart, payload).await;
         });
+    }
+
+    if inserted && !is_new {
+        migrate_legacy_frozen_prefix_on_open(app.clone(), session_arc.clone()).await;
     }
 
     session_arc
