@@ -24,9 +24,9 @@ use crate::constants::CHAT_TOP_N;
 use crate::knowledge::enrichment::enrich_messages_with_knowledge;
 
 use super::types::*;
-use super::trajectories::{maybe_save_trajectory, check_external_reload_pending};
+use super::trajectories::{check_external_reload_pending, ensure_frozen_prefix, maybe_save_trajectory};
 use super::tools::{process_tool_calls_once, ToolStepOutcome};
-use super::prepare::{prepare_chat_passthrough, ChatPrepareOptions};
+use super::prepare::{build_canonical_openai_tools, prepare_chat_passthrough, ChatPrepareOptions};
 use super::prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messages;
 use super::stream_core::{
     run_llm_stream, StreamRunParams, StreamCollector, normalize_tool_call, ChoiceFinal,
@@ -1204,6 +1204,31 @@ pub async fn run_llm_generation(
         let session = session_arc.lock().await;
         session.messages.clone()
     };
+    let system_prompt = messages.iter().find_map(|message| {
+        if message.role == "system" {
+            match &message.content {
+                ChatContent::SimpleText(text) => Some(text.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    });
+    let canonical_tools = build_canonical_openai_tools(
+        gcx.clone(),
+        &tools,
+        model_rec.supports_strict_tools,
+        model_rec.supports_tools,
+    )
+    .await;
+    {
+        let mut session = session_arc.lock().await;
+        let _ = ensure_frozen_prefix(
+            &mut session,
+            system_prompt,
+            Some(serde_json::Value::Array(canonical_tools.tools)),
+        );
+    }
     let model_type_defaults = caps.user_defaults.defaults_for_model(
         &model_rec.base.id,
         &caps.defaults.chat_default_model,

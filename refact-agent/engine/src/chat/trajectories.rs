@@ -12,6 +12,7 @@ use tokio::fs;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+use refact_chat_api::FrozenRequestPrefix;
 
 use crate::call_validation::{ChatMessage, ChatContent};
 use crate::app_state::AppState;
@@ -418,6 +419,98 @@ pub async fn get_buddy_conversations_dir(gcx: Arc<GlobalContext>) -> Result<Path
     let project_dirs = get_project_dirs(gcx).await;
     let workspace_root = project_dirs.first().ok_or("No workspace folder found")?;
     Ok(workspace_root.join(".refact/buddy/chats/conversations"))
+}
+
+pub fn new_frozen_request_prefix(
+    system_prompt: Option<String>,
+    tools_canonical: Option<serde_json::Value>,
+) -> FrozenRequestPrefix {
+    FrozenRequestPrefix {
+        schema_version: 1,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        system_prompt,
+        tools_canonical,
+    }
+}
+
+pub async fn persist_frozen_prefix(
+    gcx: Arc<GlobalContext>,
+    chat_id: &str,
+    frozen_request_prefix: FrozenRequestPrefix,
+) -> Result<(), String> {
+    validate_trajectory_id(chat_id).map_err(|e| e.message)?;
+    let file_path = match find_trajectory_path(gcx.clone(), chat_id).await {
+        Some(path) => path,
+        None => {
+            let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
+            tokio::fs::create_dir_all(&trajectories_dir)
+                .await
+                .map_err(|e| format!("Failed to create trajectories dir: {}", e))?;
+            trajectories_dir.join(format!("{}.json", chat_id))
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut trajectory = if file_path.exists() {
+        let content = tokio::fs::read_to_string(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read trajectory: {}", e))?;
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| format!("Failed to parse trajectory: {}", e))?
+    } else {
+        json!({
+            "id": chat_id,
+            "title": "New Chat",
+            "model": "",
+            "mode": "agent",
+            "tool_use": "agent",
+            "messages": [],
+            "created_at": now,
+            "updated_at": now,
+            "include_project_info": true,
+            "checkpoints_enabled": true,
+            "isTitleGenerated": false,
+            "auto_approve_editing_tools": false,
+            "auto_approve_dangerous_commands": false,
+            "autonomous_no_confirm": false,
+        })
+    };
+
+    if trajectory
+        .get("frozen_request_prefix")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Ok(());
+    }
+
+    trajectory["frozen_request_prefix"] =
+        serde_json::to_value(frozen_request_prefix).map_err(|e| e.to_string())?;
+    trajectory["updated_at"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
+
+    let tmp_path = unique_trajectory_tmp_path(&file_path);
+    let json_result = serde_json::to_string_pretty(&trajectory)
+        .map_err(|e| format!("Failed to serialize trajectory: {}", e));
+    atomic_write_json_with_tmp_path(
+        &file_path,
+        &tmp_path,
+        json_result,
+        Some("Failed to write trajectory"),
+    )
+    .await
+}
+
+pub fn ensure_frozen_prefix(
+    session: &mut ChatSession,
+    system_prompt: Option<String>,
+    tools_canonical: Option<serde_json::Value>,
+) -> Option<FrozenRequestPrefix> {
+    if session.thread.frozen_request_prefix.is_some() {
+        return None;
+    }
+    let prefix = new_frozen_request_prefix(system_prompt, tools_canonical);
+    session.thread.frozen_request_prefix = Some(prefix.clone());
+    session.increment_version();
+    Some(prefix)
 }
 
 fn fix_tool_call_indexes(messages: &mut [ChatMessage]) {
@@ -4877,6 +4970,100 @@ mod tests {
             .unwrap();
         assert!(loaded.thread.frozen_request_prefix.is_none());
         assert!(loaded.thread.claude_code_identity.is_none());
+    }
+
+    #[test]
+    fn frozen_lazy_ensure_sets_once_and_preserves_existing_prefix() {
+        let mut session = ChatSession::new("lazy-frozen".to_string());
+        let first = ensure_frozen_prefix(
+            &mut session,
+            Some("system one".to_string()),
+            Some(json!([{"type":"function","function":{"name":"cat"}}])),
+        )
+        .expect("missing prefix should be installed");
+
+        assert_eq!(first.schema_version, 1);
+        assert_eq!(first.system_prompt.as_deref(), Some("system one"));
+        assert!(session.thread.frozen_request_prefix.is_some());
+        let version_after_first = session.trajectory_version;
+
+        let second = ensure_frozen_prefix(
+            &mut session,
+            Some("system two".to_string()),
+            Some(json!([{"type":"function","function":{"name":"shell"}}])),
+        );
+        assert!(second.is_none());
+        assert_eq!(session.trajectory_version, version_after_first);
+        assert_eq!(
+            session
+                .thread
+                .frozen_request_prefix
+                .as_ref()
+                .and_then(|prefix| prefix.system_prompt.as_deref()),
+            Some("system one")
+        );
+    }
+
+    #[tokio::test]
+    async fn frozen_persist_prefix_read_modify_write_preserves_existing_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let traj_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&traj_dir).await.unwrap();
+        let path = traj_dir.join("persist-frozen.json");
+        tokio::fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "id": "persist-frozen",
+                "title": "Keep Me",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "model": "model-a",
+                "mode": "agent",
+                "tool_use": "agent",
+                "messages": [{"role": "user", "content": "hello"}],
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "custom_field": {"still": "here"}
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let prefix = FrozenRequestPrefix {
+            schema_version: 1,
+            created_at: "2026-05-29T00:00:00Z".to_string(),
+            system_prompt: Some("frozen system".to_string()),
+            tools_canonical: Some(json!([{"type":"function","function":{"name":"cat"}}])),
+        };
+        persist_frozen_prefix(gcx.clone(), "persist-frozen", prefix.clone())
+            .await
+            .unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(raw["title"], "Keep Me");
+        assert_eq!(raw["custom_field"], json!({"still": "here"}));
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "frozen system"
+        );
+
+        let replacement = FrozenRequestPrefix {
+            schema_version: 1,
+            created_at: "2026-05-30T00:00:00Z".to_string(),
+            system_prompt: Some("replacement".to_string()),
+            tools_canonical: None,
+        };
+        persist_frozen_prefix(gcx, "persist-frozen", replacement)
+            .await
+            .unwrap();
+        let raw_after_second: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw_after_second["frozen_request_prefix"]["system_prompt"],
+            "frozen system"
+        );
     }
 
     #[tokio::test]

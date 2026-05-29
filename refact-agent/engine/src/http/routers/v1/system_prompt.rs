@@ -4,12 +4,14 @@ use hyper::Body;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
-use crate::call_validation::{ChatMessage, ChatMeta, validate_mode_for_request};
+use crate::call_validation::{ChatContent, ChatMessage, ChatMeta, validate_mode_for_request};
+use crate::chat::prepare::build_canonical_openai_tools;
+use crate::chat::trajectories::{new_frozen_request_prefix, persist_frozen_prefix};
 use crate::custom_error::ScratchError;
 use crate::indexing_utils::wait_for_indexing_if_needed;
 use crate::scratchpads::chat_utils_prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messages;
 use crate::scratchpads::scratchpad_utils::HasRagResults;
-use crate::tools::tools_list::get_tools_for_mode;
+use crate::tools::tools_list::{apply_mcp_lazy_filter, get_tools_for_mode};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PrependSystemPromptPost {
@@ -47,21 +49,50 @@ pub async fn handle_v1_prepend_system_prompt_and_maybe_more_initial_messages(
             )
         })?;
 
+    let mode_tools = apply_mcp_lazy_filter(get_tools_for_mode(gcx.clone(), &mode_id, None).await);
+    let tool_descs: Vec<_> = mode_tools
+        .tools
+        .into_iter()
+        .map(|tool| tool.tool_description())
+        .collect();
+    let prompt_tool_names = tool_descs.iter().map(|t| t.name.clone()).collect();
+
     let (messages, _) = prepend_the_right_system_prompt_and_maybe_more_initial_messages(
         crate::app_state::AppState::from_gcx(gcx.clone()).await,
         post.messages,
         &post.chat_meta,
         &None,
         &mut has_rag_results,
-        get_tools_for_mode(gcx.clone(), &mode_id, None)
-            .await
-            .into_iter()
-            .map(|t| t.tool_description().name)
-            .collect(),
+        prompt_tool_names,
         &mode_id,
         "",
     )
     .await;
+
+    let system_prompt = messages.iter().find_map(|message| {
+        if message.role == "system" {
+            match &message.content {
+                ChatContent::SimpleText(text) => Some(text.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    });
+    let canonical_tools = build_canonical_openai_tools(gcx.clone(), &tool_descs, false, true).await;
+    let frozen_prefix = new_frozen_request_prefix(
+        system_prompt,
+        Some(serde_json::Value::Array(canonical_tools.tools)),
+    );
+    if let Err(error) =
+        persist_frozen_prefix(gcx.clone(), &post.chat_meta.chat_id, frozen_prefix).await
+    {
+        tracing::warn!(
+            "Failed to persist frozen request prefix for {}: {}",
+            post.chat_meta.chat_id,
+            error
+        );
+    }
     let messages_to_stream_back = has_rag_results.in_json;
 
     Ok(Response::builder()

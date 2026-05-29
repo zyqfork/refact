@@ -14,7 +14,7 @@ use crate::llm::{LlmRequest, CanonicalToolChoice, CommonParams, ReasoningIntent,
 use crate::llm::params::CacheControl;
 use crate::scratchpad_abstract::HasTokenizerAndEot;
 use crate::scratchpads::scratchpad_utils::HasRagResults;
-use refact_tool_api::{build_registry_from_names, ToolDesc};
+use refact_tool_api::{build_registry_from_names, ToolAliasRegistry, ToolDesc};
 use super::tools::execute_tools;
 use super::types::ThreadParams;
 
@@ -23,6 +23,112 @@ use super::history_limit::fix_and_limit_messages_history;
 use super::linearize::apply_summarization_linearize;
 use super::prompts::prepend_the_right_system_prompt_and_maybe_more_initial_messages;
 use super::config::tokens;
+
+pub struct CanonicalOpenAiTools {
+    pub tools: Vec<Value>,
+    pub alias_registry: ToolAliasRegistry,
+}
+
+pub async fn build_canonical_openai_tools(
+    gcx: Arc<GlobalContext>,
+    tools: &[ToolDesc],
+    mode_supports_strict: bool,
+    supports_tools: bool,
+) -> CanonicalOpenAiTools {
+    let filtered_tools: Vec<ToolDesc> = if supports_tools {
+        tools.to_vec()
+    } else {
+        vec![]
+    };
+    let tool_names: Vec<String> = filtered_tools.iter().map(|t| t.name.clone()).collect();
+    let alias_registry = build_registry_from_names(&tool_names);
+    let mut openai_tools: Vec<Value> = filtered_tools
+        .iter()
+        .map(|tool| {
+            let alias = alias_registry
+                .get_alias(&tool.name)
+                .unwrap_or(&tool.name)
+                .to_string();
+            let mut v = tool.clone().into_openai_style(mode_supports_strict);
+            if alias != tool.name {
+                if let Some(func) = v.get_mut("function") {
+                    func["name"] = serde_json::Value::String(alias);
+                }
+            }
+            v
+        })
+        .collect();
+
+    if supports_tools {
+        let handoff_alias = alias_registry
+            .get_alias("handoff_to_mode")
+            .unwrap_or("handoff_to_mode");
+        if let Some(idx) = openai_tools.iter().position(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|n| n == handoff_alias)
+                .unwrap_or(false)
+        }) {
+            if let Some(registry) =
+                crate::yaml_configs::customization_registry::get_project_registry(gcx.clone()).await
+            {
+                let mut mode_lines = Vec::new();
+                let mut mode_ids = Vec::new();
+                let mut modes: Vec<_> = registry.modes.values().collect();
+                modes.sort_by(|a, b| a.id.cmp(&b.id));
+                for mode in modes {
+                    if mode.specific {
+                        continue;
+                    }
+                    let title = if mode.title.is_empty() {
+                        mode.id.clone()
+                    } else {
+                        mode.title.clone()
+                    };
+                    let mut desc = mode.description.clone();
+                    if desc.len() > 120 {
+                        desc = format!("{}...", desc.chars().take(120).collect::<String>());
+                    }
+                    mode_lines.push(format!(
+                        "- {}: {}",
+                        mode.id,
+                        if desc.is_empty() { title } else { desc }
+                    ));
+                    mode_ids.push(mode.id.clone());
+                }
+                let mode_list = mode_lines.join("\n");
+                if let Some(func) = openai_tools[idx].get_mut("function") {
+                    if let Some(desc_val) = func.get_mut("description") {
+                        let desc = desc_val.as_str().unwrap_or("");
+                        let enriched = format!("{}\n\nAvailable modes:\n{}", desc, mode_list);
+                        *desc_val = serde_json::Value::String(enriched);
+                    }
+                    if let Some(params) = func.get_mut("parameters") {
+                        if let Some(props) = params.get_mut("properties") {
+                            if let Some(target_mode) = props.get_mut("target_mode") {
+                                let desc =
+                                    format!("Target mode ID. Available modes:\n{}", mode_list);
+                                target_mode["description"] = serde_json::Value::String(desc);
+                                target_mode["enum"] = serde_json::Value::Array(
+                                    mode_ids
+                                        .into_iter()
+                                        .map(serde_json::Value::String)
+                                        .collect(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    CanonicalOpenAiTools {
+        tools: openai_tools,
+        alias_registry,
+    }
+}
 
 fn responses_stateful_tail(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     // For stateful Responses API (previous_response_id), we should send only *new* items.
@@ -224,97 +330,15 @@ pub async fn prepare_chat_passthrough(
         }
     }
 
-    // 6. Build tools list with alias layer to ensure provider-safe names (≤64 chars)
-    let filtered_tools: Vec<ToolDesc> = if options.supports_tools {
-        tools.to_vec()
-    } else {
-        vec![]
-    };
-    let strict_tools = model_record.supports_strict_tools;
-    let tool_names: Vec<String> = filtered_tools.iter().map(|t| t.name.clone()).collect();
-    let alias_registry = build_registry_from_names(&tool_names);
-    let mut openai_tools: Vec<Value> = filtered_tools
-        .iter()
-        .map(|tool| {
-            let alias = alias_registry
-                .get_alias(&tool.name)
-                .unwrap_or(&tool.name)
-                .to_string();
-            let mut v = tool.clone().into_openai_style(strict_tools);
-            if alias != tool.name {
-                if let Some(func) = v.get_mut("function") {
-                    func["name"] = serde_json::Value::String(alias);
-                }
-            }
-            v
-        })
-        .collect();
-
-    // 6b. Enrich handoff_to_mode tool with dynamic mode list
-    if options.supports_tools {
-        let handoff_alias = alias_registry
-            .get_alias("handoff_to_mode")
-            .unwrap_or("handoff_to_mode");
-        if let Some(idx) = openai_tools.iter().position(|t| {
-            t.get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-                .map(|n| n == handoff_alias)
-                .unwrap_or(false)
-        }) {
-            if let Some(registry) =
-                crate::yaml_configs::customization_registry::get_project_registry(gcx.clone()).await
-            {
-                let mut mode_lines = Vec::new();
-                let mut mode_ids = Vec::new();
-                let mut modes: Vec<_> = registry.modes.values().collect();
-                modes.sort_by(|a, b| a.id.cmp(&b.id));
-                for mode in modes {
-                    if mode.specific {
-                        continue;
-                    }
-                    let title = if mode.title.is_empty() {
-                        mode.id.clone()
-                    } else {
-                        mode.title.clone()
-                    };
-                    let mut desc = mode.description.clone();
-                    if desc.len() > 120 {
-                        desc = format!("{}...", desc.chars().take(120).collect::<String>());
-                    }
-                    mode_lines.push(format!(
-                        "- {}: {}",
-                        mode.id,
-                        if desc.is_empty() { title } else { desc }
-                    ));
-                    mode_ids.push(mode.id.clone());
-                }
-                let mode_list = mode_lines.join("\n");
-                if let Some(func) = openai_tools[idx].get_mut("function") {
-                    if let Some(desc_val) = func.get_mut("description") {
-                        let desc = desc_val.as_str().unwrap_or("");
-                        let enriched = format!("{}\n\nAvailable modes:\n{}", desc, mode_list);
-                        *desc_val = serde_json::Value::String(enriched);
-                    }
-                    if let Some(params) = func.get_mut("parameters") {
-                        if let Some(props) = params.get_mut("properties") {
-                            if let Some(target_mode) = props.get_mut("target_mode") {
-                                let desc =
-                                    format!("Target mode ID. Available modes:\n{}", mode_list);
-                                target_mode["description"] = serde_json::Value::String(desc);
-                                target_mode["enum"] = serde_json::Value::Array(
-                                    mode_ids
-                                        .into_iter()
-                                        .map(serde_json::Value::String)
-                                        .collect(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let canonical_tools = build_canonical_openai_tools(
+        gcx.clone(),
+        &tools,
+        model_record.supports_strict_tools,
+        options.supports_tools,
+    )
+    .await;
+    let openai_tools = canonical_tools.tools;
+    let alias_registry = canonical_tools.alias_registry;
 
     // 7. History validation and fixing
     let limited_msgs = fix_and_limit_messages_history(&messages, sampling_parameters)?;
@@ -562,7 +586,10 @@ mod tests {
     use crate::call_validation::ChatContent;
     use crate::llm::adapter::{AdapterSettings, LlmWireAdapter};
     use crate::llm::adapters::openai_chat::OpenAiChatAdapter;
+    use crate::yaml_configs::customization_types::{ModeConfig, ProjectRegistry};
+    use refact_tool_api::{ToolSource, ToolSourceType};
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn make_model_record_effort(effort_options: Option<Vec<&str>>) -> ChatModelRecord {
         ChatModelRecord {
@@ -618,8 +645,102 @@ mod tests {
         }
     }
 
+    fn handoff_tool_desc() -> ToolDesc {
+        ToolDesc {
+            name: "handoff_to_mode".to_string(),
+            display_name: "Handoff To Mode".to_string(),
+            source: ToolSource {
+                source_type: ToolSourceType::Builtin,
+                config_path: String::new(),
+            },
+            experimental: false,
+            allow_parallel: false,
+            description:
+                "Create a new chat in another mode using the current conversation context."
+                    .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target_mode": {
+                        "type": "string",
+                        "description": "Target mode ID to hand off to."
+                    }
+                },
+                "required": ["target_mode"]
+            }),
+            output_schema: None,
+            annotations: None,
+        }
+    }
+
+    fn mode_config(id: &str, title: &str, description: &str) -> ModeConfig {
+        ModeConfig {
+            schema_version: 1,
+            id: id.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            specific: false,
+            prompt: String::new(),
+            plan_template: String::new(),
+            tools: Vec::new(),
+            allow_integrations: false,
+            allow_mcp: false,
+            allow_subagents: false,
+            model_defaults: Default::default(),
+            tool_confirm: Default::default(),
+            thread_defaults: Default::default(),
+            ui: Default::default(),
+            base: None,
+            match_models: None,
+            override_config: None,
+        }
+    }
+
+    async fn gcx_with_modes(modes: Vec<ModeConfig>) -> Arc<GlobalContext> {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let workspace =
+            std::env::temp_dir().join(format!("refact-frozen-prefix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        *gcx.documents_state.workspace_folders.lock().unwrap() = vec![workspace.clone()];
+        let registry = ProjectRegistry {
+            modes: modes
+                .into_iter()
+                .map(|mode| (mode.id.clone(), mode))
+                .collect::<HashMap<_, _>>(),
+            ..Default::default()
+        };
+        gcx.project_registry_cache
+            .write()
+            .unwrap()
+            .insert(workspace.clone(), registry);
+        gcx
+    }
+
     fn plan_message(mode: &str, version: u32, content: &str) -> ChatMessage {
         crate::chat::internal_roles::plan(mode, version, content, None)
+    }
+
+    #[tokio::test]
+    async fn frozen_build_canonical_openai_tools_enriches_handoff_and_is_deterministic() {
+        let gcx = gcx_with_modes(vec![
+            mode_config("agent", "Agent", "Do agent work"),
+            mode_config("explore", "Explore", "Look around"),
+        ])
+        .await;
+        let tools = vec![handoff_tool_desc()];
+
+        let first = build_canonical_openai_tools(gcx.clone(), &tools, false, true).await;
+        let second = build_canonical_openai_tools(gcx, &tools, false, true).await;
+
+        assert_eq!(first.tools, second.tools);
+        let description = first.tools[0]["function"]["description"].as_str().unwrap();
+        assert!(description.contains("Available modes:"));
+        assert!(description.contains("- agent: Do agent work"));
+        assert!(description.contains("- explore: Look around"));
+        assert_eq!(
+            first.tools[0]["function"]["parameters"]["properties"]["target_mode"]["enum"],
+            json!(["agent", "explore"])
+        );
     }
 
     fn default_settings() -> AdapterSettings {
