@@ -13,6 +13,7 @@ import type {
   OpportunityStatus,
   BuddyPulse,
   BuddyDraft,
+  BuddyStorageMetadata,
 } from "./types";
 
 const HOME_NOTIFICATION_SNOOZE_MS = 10 * 60 * 1000;
@@ -308,6 +309,10 @@ export type BuddySettingsPatch = Partial<BuddySettings> & {
 };
 
 export type BuddySettingsPatchKey = keyof BuddySettings;
+
+export type BuddySettingsResponse = BuddySettings & {
+  storage?: BuddyStorageMetadata;
+};
 
 interface PendingBuddySettingsRequest {
   requestSeq: number;
@@ -682,6 +687,8 @@ export const buddySlice = createSlice({
     updateBuddySettings: (state, action: PayloadAction<BuddySettings>) => {
       if (state.snapshot) {
         setSnapshotSettingsPreservingDisabled(state, action.payload);
+        const storage = (action.payload as BuddySettingsResponse).storage;
+        if (storage) state.snapshot.storage = storage;
         applyPendingSettingsRequests(state);
       }
       // If snapshot is null but buddy is being re-enabled, wait for the next
@@ -713,7 +720,10 @@ export const buddySlice = createSlice({
     },
     finishBuddySettingsRequest: (
       state,
-      action: PayloadAction<{ requestSeq: number; settings?: BuddySettings }>,
+      action: PayloadAction<{
+        requestSeq: number;
+        settings?: BuddySettingsResponse;
+      }>,
     ) => {
       const request = state.pendingSettingsRequests.find(
         (entry) => entry.requestSeq === action.payload.requestSeq,
@@ -728,6 +738,9 @@ export const buddySlice = createSlice({
           request.keys,
         );
         applyBuddySettingsPatchToSnapshot(state.snapshot, settingsPatch);
+        if (action.payload.settings.storage) {
+          state.snapshot.storage = action.payload.settings.storage;
+        }
       }
       applyPendingSettingsRequests(state);
     },
@@ -981,6 +994,7 @@ export const buddySlice = createSlice({
     selectBuddyLoaded: (state) => state.loaded,
     selectBuddyState: (state) => state.snapshot?.state ?? null,
     selectBuddySettings: (state) => state.snapshot?.settings ?? null,
+    selectBuddyStorage: (state) => state.snapshot?.storage ?? null,
     selectBuddyActivities: (state) =>
       state.snapshot?.state.recent_activities ?? EMPTY_BUDDY_ACTIVITIES,
     selectBuddySuggestions: (state) =>
@@ -1051,6 +1065,7 @@ export const {
   selectBuddyLoaded,
   selectBuddyState,
   selectBuddySettings,
+  selectBuddyStorage,
   selectBuddyActivities,
   selectBuddySuggestions,
   selectBuddyConversations,

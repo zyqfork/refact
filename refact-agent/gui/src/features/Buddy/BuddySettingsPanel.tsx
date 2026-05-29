@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Switch, Text, TextArea } from "@radix-ui/themes";
 import classNames from "classnames";
 import { useAppSelector } from "../../hooks";
-import { selectBuddySettings } from "./buddySlice";
+import { selectBuddySettings, selectBuddyStorage } from "./buddySlice";
 import { useUpdateBuddySettingsMutation } from "../../services/refact/buddy";
 import type { AutonomyLevel, BuddySettings, HumorLevel } from "./types";
 import styles from "./BuddySettingsPanel.module.css";
@@ -38,6 +38,7 @@ interface Props {
 
 export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
   const liveSettings = useAppSelector(selectBuddySettings);
+  const storage = useAppSelector(selectBuddyStorage);
   const [updateSettingsMutation] = useUpdateBuddySettingsMutation();
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [promptDraft, setPromptDraft] = useState<string>("");
@@ -173,9 +174,9 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
     saveStatus === "saving"
       ? "Saving…"
       : saveStatus === "saved"
-        ? "Saved"
+        ? "Saved to active Buddy settings"
         : saveStatus === "failed"
-          ? "Failed"
+          ? "Save failed"
           : null;
 
   return (
@@ -437,6 +438,32 @@ export const BuddySettingsPanel: React.FC<Props> = ({ onClose }) => {
             </label>
           ))}
         </div>
+      </div>
+
+      <div className={styles.section} data-testid="buddy-storage-diagnostics">
+        <Text size="1" weight="bold" color="gray" className={styles.label}>
+          ADVANCED / DIAGNOSTICS
+        </Text>
+        {storage ? (
+          <div className={styles.diagnosticsGrid}>
+            <Text size="1" color="gray">
+              Active Buddy folder
+            </Text>
+            <code className={styles.pathValue}>{storage.buddy_dir}</code>
+            <Text size="1" color="gray">
+              Settings file
+            </Text>
+            <code className={styles.pathValue}>{storage.settings_path}</code>
+            <Text size="1" color="gray">
+              Project root
+            </Text>
+            <code className={styles.pathValue}>{storage.project_root}</code>
+          </div>
+        ) : (
+          <Text size="1" color="gray">
+            Storage metadata is unavailable from this engine response.
+          </Text>
+        )}
       </div>
 
       {onClose ? (

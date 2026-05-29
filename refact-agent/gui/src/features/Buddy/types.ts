@@ -920,10 +920,17 @@ export interface BuddySettings {
   observers: ObserverToggles;
 }
 
+export interface BuddyStorageMetadata {
+  project_root: string;
+  buddy_dir: string;
+  settings_path: string;
+}
+
 export interface BuddySnapshot {
   state: BuddyState;
   settings: BuddySettings;
   enabled: boolean;
+  storage?: BuddyStorageMetadata;
   recent_diagnostics?: DiagnosticContext[];
   active_speech?: BuddySpeechItem | null;
   runtime_queue?: BuddyRuntimeEvent[];
@@ -1020,7 +1027,11 @@ export type BuddySSEEvent =
   | { event_type: "ActivityAdded"; activity: BuddyActivityEntry }
   | { event_type: "SuggestionAdded"; suggestion: BuddySuggestion }
   | { event_type: "SuggestionDismissed"; suggestion_id: string }
-  | { event_type: "SettingsChanged"; settings: BuddySettings }
+  | {
+      event_type: "SettingsChanged";
+      settings: BuddySettings;
+      storage?: BuddyStorageMetadata;
+    }
   | { event_type: "DiagnosticAdded"; diagnostic: DiagnosticContext }
   | { event_type: "RuntimeEvent"; event: BuddyRuntimeEvent }
   | { event_type: "SpeechUpdated"; speech: BuddySpeechItem }

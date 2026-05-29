@@ -165,21 +165,33 @@ pub async fn handle_v1_buddy_snapshot(
     State(app): State<AppState>,
 ) -> Result<axum::Json<serde_json::Value>, ScratchError> {
     let buddy_arc = app.buddy.buddy.clone();
-    let lock = buddy_arc.lock().await;
-    match lock.as_ref() {
-        Some(service) => Ok(axum::Json(
-            serde_json::to_value(service.snapshot())
-                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        )),
-        None => Ok(axum::Json(serde_json::json!({
-            "enabled": false,
-            "state": crate::buddy::state::default_buddy_state(),
-            "settings": crate::buddy::settings::BuddySettings::default(),
-            "recent_diagnostics": [],
-            "runtime_queue": [],
-            "now_playing": null,
-            "active_speech": null
-        }))),
+    let snapshot = {
+        let lock = buddy_arc.lock().await;
+        lock.as_ref().map(|service| service.snapshot())
+    };
+    match snapshot {
+        Some(snapshot) => Ok(axum::Json(serde_json::to_value(snapshot).map_err(|e| {
+            ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?)),
+        None => {
+            let mut payload = serde_json::json!({
+                "enabled": false,
+                "state": crate::buddy::state::default_buddy_state(),
+                "settings": crate::buddy::settings::BuddySettings::default(),
+                "recent_diagnostics": [],
+                "runtime_queue": [],
+                "now_playing": null,
+                "active_speech": null
+            });
+            if let Some(project_root) = crate::files_correction::get_project_dirs(app.gcx.clone())
+                .await
+                .into_iter()
+                .next()
+            {
+                attach_storage_metadata(&mut payload, &project_root);
+            }
+            Ok(axum::Json(payload))
+        }
     }
 }
 
@@ -187,16 +199,32 @@ pub async fn handle_v1_buddy_settings_get(
     State(app): State<AppState>,
 ) -> Result<axum::Json<serde_json::Value>, ScratchError> {
     let buddy_arc = app.buddy.buddy.clone();
-    let lock = buddy_arc.lock().await;
-    match lock.as_ref() {
-        Some(service) => Ok(axum::Json(
-            serde_json::to_value(&service.settings)
-                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        )),
-        None => Ok(axum::Json(
-            serde_json::to_value(crate::buddy::settings::BuddySettings::default())
-                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        )),
+    let service_settings = {
+        let lock = buddy_arc.lock().await;
+        lock.as_ref()
+            .map(|service| (service.project_root.clone(), service.settings.clone()))
+    };
+    match service_settings {
+        Some((project_root, settings)) => {
+            let mut payload = serde_json::to_value(settings)
+                .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            attach_storage_metadata(&mut payload, &project_root);
+            Ok(axum::Json(payload))
+        }
+        None => {
+            let mut payload =
+                serde_json::to_value(crate::buddy::settings::BuddySettings::default()).map_err(
+                    |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+                )?;
+            if let Some(project_root) = crate::files_correction::get_project_dirs(app.gcx.clone())
+                .await
+                .into_iter()
+                .next()
+            {
+                attach_storage_metadata(&mut payload, &project_root);
+            }
+            Ok(axum::Json(payload))
+        }
     }
 }
 
@@ -394,12 +422,14 @@ pub async fn handle_v1_buddy_settings_update(
         crate::buddy::settings::save_settings(&project_root, &new_settings)
             .await
             .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let storage = crate::buddy::settings::storage_metadata(&project_root);
         let _ = tx.send(BuddyEvent::SettingsChanged {
             settings: new_settings.clone(),
         });
-        return Ok(axum::Json(serde_json::to_value(new_settings).map_err(
-            |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        )?));
+        let mut payload = serde_json::to_value(new_settings)
+            .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        attach_storage_metadata_value(&mut payload, storage);
+        return Ok(axum::Json(payload));
     }
 
     let project_root = crate::files_correction::get_project_dirs(app.gcx.clone())
@@ -420,9 +450,26 @@ pub async fn handle_v1_buddy_settings_update(
     crate::buddy::settings::save_settings(&project_root, &new_settings)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(axum::Json(serde_json::to_value(new_settings).map_err(
-        |e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    )?))
+    let mut payload = serde_json::to_value(new_settings)
+        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    attach_storage_metadata(&mut payload, &project_root);
+    Ok(axum::Json(payload))
+}
+
+fn attach_storage_metadata(payload: &mut serde_json::Value, project_root: &std::path::Path) {
+    attach_storage_metadata_value(
+        payload,
+        crate::buddy::settings::storage_metadata(project_root),
+    );
+}
+
+fn attach_storage_metadata_value(
+    payload: &mut serde_json::Value,
+    storage: crate::buddy::settings::BuddyStorageMetadata,
+) {
+    if let serde_json::Value::Object(map) = payload {
+        map.insert("storage".to_string(), serde_json::json!(storage));
+    }
 }
 
 #[derive(Debug, Deserialize)]

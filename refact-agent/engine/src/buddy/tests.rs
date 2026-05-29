@@ -586,6 +586,35 @@ fn test_settings_request_tone_fields_mark_persona_dirty() {
     }
 }
 
+#[test]
+fn test_settings_storage_metadata_paths() {
+    let root = std::path::PathBuf::from("/tmp/active-buddy-root");
+    let storage = super::settings::storage_metadata(&root);
+
+    assert_eq!(storage.project_root, "/tmp/active-buddy-root");
+    assert_eq!(storage.buddy_dir, "/tmp/active-buddy-root/.refact/buddy");
+    assert_eq!(
+        storage.settings_path,
+        "/tmp/active-buddy-root/.refact/buddy/settings.json"
+    );
+}
+
+#[test]
+fn test_snapshot_includes_storage_metadata_for_service_path() {
+    let mut svc = make_service();
+    svc.project_root = std::path::PathBuf::from("/tmp/service-buddy-root");
+
+    let snapshot = svc.snapshot();
+    let storage = snapshot.storage.expect("storage metadata must be present");
+
+    assert_eq!(storage.project_root, "/tmp/service-buddy-root");
+    assert_eq!(storage.buddy_dir, "/tmp/service-buddy-root/.refact/buddy");
+    assert_eq!(
+        storage.settings_path,
+        "/tmp/service-buddy-root/.refact/buddy/settings.json"
+    );
+}
+
 #[tokio::test]
 async fn test_settings_update_tone_fields_bump_persona_cache_version() {
     let app = make_gcx_with_buddy().await;
@@ -674,6 +703,80 @@ async fn test_settings_update_hot_applies_and_emits_event() {
         }
     }
     assert!(saw_settings_changed);
+}
+
+#[tokio::test]
+async fn test_settings_update_service_response_includes_storage_metadata() {
+    let app = make_gcx_with_buddy().await;
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest =
+        serde_json::from_str(r#"{"quiet_mode":true}"#).unwrap();
+
+    let response = crate::http::routers::v1::buddy::handle_v1_buddy_settings_update(
+        axum::extract::State(app.clone()),
+        axum::Json(req),
+    )
+    .await
+    .unwrap();
+    let storage = response.0["storage"].as_object().expect("storage object");
+    let project_root = {
+        let buddy_arc = app.buddy.buddy.clone();
+        let lock = buddy_arc.lock().await;
+        lock.as_ref().unwrap().project_root.clone()
+    };
+    let expected_project_root = project_root.to_string_lossy().to_string();
+    let expected_settings_path = project_root
+        .join(".refact/buddy/settings.json")
+        .to_string_lossy()
+        .to_string();
+
+    assert_eq!(
+        storage["project_root"].as_str(),
+        Some(expected_project_root.as_str())
+    );
+    assert_eq!(
+        storage["settings_path"].as_str(),
+        Some(expected_settings_path.as_str())
+    );
+}
+
+#[tokio::test]
+async fn test_settings_update_fallback_response_includes_storage_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let gcx = crate::global_context::tests::make_test_gcx().await;
+    let app = crate::app_state::AppState::from_gcx(gcx.clone()).await;
+    {
+        *app.workspace
+            .documents_state
+            .workspace_folders
+            .lock()
+            .unwrap() = vec![dir.path().to_path_buf()];
+    }
+    *app.buddy.buddy.lock().await = None;
+    let req: crate::http::routers::v1::buddy::BuddySettingsRequest =
+        serde_json::from_str(r#"{"quiet_mode":true}"#).unwrap();
+
+    let response = crate::http::routers::v1::buddy::handle_v1_buddy_settings_update(
+        axum::extract::State(app),
+        axum::Json(req),
+    )
+    .await
+    .unwrap();
+    let storage = response.0["storage"].as_object().expect("storage object");
+    let expected_project_root = dir.path().to_string_lossy().to_string();
+    let expected_settings_path = dir
+        .path()
+        .join(".refact/buddy/settings.json")
+        .to_string_lossy()
+        .to_string();
+
+    assert_eq!(
+        storage["project_root"].as_str(),
+        Some(expected_project_root.as_str())
+    );
+    assert_eq!(
+        storage["settings_path"].as_str(),
+        Some(expected_settings_path.as_str())
+    );
 }
 
 #[tokio::test]

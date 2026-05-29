@@ -3030,8 +3030,45 @@ describe("BuddySettingsPanel_autosave", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Saved")).toBeInTheDocument();
+      expect(
+        screen.getByText("Saved to active Buddy settings"),
+      ).toBeInTheDocument();
     });
+  });
+
+  it("renders active Buddy storage diagnostics when present", () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot(undefined, {
+          storage: {
+            project_root: "/repo/root",
+            buddy_dir: "/repo/root/.refact/buddy",
+            settings_path: "/repo/root/.refact/buddy/settings.json",
+          },
+        }),
+      ),
+    );
+
+    render(<BuddySettingsPanel />, { store });
+
+    expect(screen.getByText("ADVANCED / DIAGNOSTICS")).toBeInTheDocument();
+    expect(screen.getByText("Active Buddy folder")).toBeInTheDocument();
+    expect(screen.getByText("/repo/root/.refact/buddy")).toBeInTheDocument();
+    expect(
+      screen.getByText("/repo/root/.refact/buddy/settings.json"),
+    ).toBeInTheDocument();
+  });
+
+  it("tolerates missing Buddy storage diagnostics", () => {
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(setBuddySnapshot(makeSnapshot()));
+
+    render(<BuddySettingsPanel />, { store });
+
+    expect(screen.getByTestId("buddy-storage-diagnostics")).toHaveTextContent(
+      "Storage metadata is unavailable from this engine response.",
+    );
   });
 
   it("shows Failed status on save error without unhandled rejections", async () => {
@@ -3054,7 +3091,7 @@ describe("BuddySettingsPanel_autosave", () => {
         screen.getByRole("switch", { name: /housekeeping enabled/i }),
       );
 
-      expect(await screen.findByRole("alert")).toHaveTextContent("Failed");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Save failed");
 
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       expect(unhandled).not.toHaveBeenCalled();
@@ -3101,7 +3138,7 @@ describe("BuddySettingsPanel_autosave", () => {
       ).toBe(true);
     });
     expect(housekeepingSwitch).toBeChecked();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Failed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Save failed");
   });
 
   it("failed enabled autosave restores Buddy Home instead of trapping disabled UI", async () => {
@@ -3182,7 +3219,9 @@ describe("BuddySettingsPanel_autosave", () => {
 
     responseResolvers[0]?.({ ...makeSnapshot().settings, quiet_mode: true });
     await waitFor(() => {
-      expect(screen.getByText("Saved")).toBeInTheDocument();
+      expect(
+        screen.getByText("Saved to active Buddy settings"),
+      ).toBeInTheDocument();
     });
   });
 
@@ -3245,7 +3284,9 @@ describe("BuddySettingsPanel_autosave", () => {
       housekeeping_enabled: false,
     });
     await waitFor(() => {
-      expect(screen.getByText("Saved")).toBeInTheDocument();
+      expect(
+        screen.getByText("Saved to active Buddy settings"),
+      ).toBeInTheDocument();
     });
     expect(store.getState().buddy.snapshot?.settings.quiet_mode).toBe(true);
     expect(store.getState().buddy.snapshot?.settings.housekeeping_enabled).toBe(
@@ -3283,7 +3324,9 @@ describe("BuddySettingsPanel_autosave", () => {
       }),
     );
     await waitFor(() => {
-      expect(screen.getByText("Saved")).toBeInTheDocument();
+      expect(
+        screen.getByText("Saved to active Buddy settings"),
+      ).toBeInTheDocument();
     });
 
     responseResolvers[0]?.(
@@ -3291,7 +3334,9 @@ describe("BuddySettingsPanel_autosave", () => {
     );
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(screen.getByText("Saved")).toBeInTheDocument();
+    expect(
+      screen.getByText("Saved to active Buddy settings"),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 

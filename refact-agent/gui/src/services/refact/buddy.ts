@@ -23,6 +23,7 @@ import {
   removeDraft,
   replaceOpportunities,
   selectBuddySettings,
+  type BuddySettingsResponse,
   type BuddySettingsPatchKey,
   type BuddySliceState,
 } from "../../features/Buddy/buddySlice";
@@ -363,7 +364,7 @@ export const buddyApi = createApi({
       providesTags: ["BuddySnapshot"],
     }),
     updateBuddySettings: builder.mutation<
-      BuddySettings,
+      BuddySettingsResponse,
       BuddySettingsUpdateRequest
     >({
       queryFn: async (settings, api, _opts, baseQuery) => {
@@ -375,7 +376,7 @@ export const buddyApi = createApi({
           body: settings,
         });
         if (result.error) return { error: result.error };
-        return { data: result.data as BuddySettings };
+        return { data: result.data as BuddySettingsResponse };
       },
       invalidatesTags: ["BuddySnapshot"],
       async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {

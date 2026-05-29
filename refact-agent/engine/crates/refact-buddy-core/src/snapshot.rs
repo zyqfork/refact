@@ -6,10 +6,19 @@ use crate::types::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuddyStorageMetadata {
+    pub project_root: String,
+    pub buddy_dir: String,
+    pub settings_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuddySnapshot {
     pub state: BuddyState,
     pub settings: BuddySettings,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<BuddyStorageMetadata>,
     #[serde(default)]
     pub recent_diagnostics: Vec<DiagnosticContext>,
     pub runtime_queue: Vec<BuddyRuntimeEvent>,

@@ -432,6 +432,7 @@ impl BuddyService {
             state,
             settings: self.settings.clone(),
             enabled: self.settings.enabled,
+            storage: Some(super::settings::storage_metadata(&self.project_root)),
             recent_diagnostics: self.recent_diagnostics.clone(),
             runtime_queue: self.runtime_queue.items.iter().cloned().collect(),
             now_playing: self.runtime_queue.now_playing.clone(),
