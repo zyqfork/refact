@@ -28,20 +28,24 @@ const CACHE_GUARD_DIFF_PREVIEW_NOTICE: &str = concat!(
     "large arrays use count summaries and text payloads are redacted/truncated]\n"
 );
 
-const IGNORED_KEYS: &[&str] = &[
+const RECURSIVELY_IGNORED_KEYS: &[&str] = &[
     "cache_control",
     "request_attempt_id",
+    "usage",
+    "finish_reason",
+    "checkpoints",
+];
+
+const TOP_LEVEL_IGNORED_KEYS: &[&str] = &[
     "temperature",
     "max_tokens",
     "max_completion_tokens",
     "max_output_tokens",
     "frequency_penalty",
+    "presence_penalty",
     "stop",
     "stop_sequences",
     "n",
-    "usage",
-    "finish_reason",
-    "checkpoints",
 ];
 
 pub enum CacheGuardOutcome {
@@ -105,14 +109,19 @@ async fn model_supports_cache_guard(app: AppState, model_id: &str) -> bool {
 }
 
 pub fn sanitize_body_for_cache_guard(value: &Value) -> Value {
-    sanitize_value(value)
+    sanitize_value(value, true)
 }
 
 pub fn is_append_only_prefix(prev: &Value, next: &Value) -> bool {
-    is_append_only_prefix_inner(prev, next, None)
+    is_append_only_prefix_inner(prev, next, None, true)
 }
 
-fn is_append_only_prefix_inner(prev: &Value, next: &Value, parent_key: Option<&str>) -> bool {
+fn is_append_only_prefix_inner(
+    prev: &Value,
+    next: &Value,
+    parent_key: Option<&str>,
+    top_level: bool,
+) -> bool {
     match (prev, next) {
         (Value::Null, Value::Null)
         | (Value::Bool(_), Value::Bool(_))
@@ -128,16 +137,22 @@ fn is_append_only_prefix_inner(prev: &Value, next: &Value, parent_key: Option<&s
             a == b
         }
         (Value::Object(a), Value::Object(b)) => {
-            let a_keys = a.keys().filter(|k| !is_ignored_key(k)).count();
-            let b_keys = b.keys().filter(|k| !is_ignored_key(k)).count();
+            let a_keys = a
+                .keys()
+                .filter(|key| !is_ignored_key(key, top_level))
+                .count();
+            let b_keys = b
+                .keys()
+                .filter(|key| !is_ignored_key(key, top_level))
+                .count();
             if a_keys != b_keys {
                 return false;
             }
             a.iter()
-                .filter(|(k, _)| !is_ignored_key(k))
-                .all(|(k, old_v)| {
-                    b.get(k)
-                        .map(|new_v| is_append_only_prefix_inner(old_v, new_v, Some(k)))
+                .filter(|(key, _)| !is_ignored_key(key, top_level))
+                .all(|(key, old_v)| {
+                    b.get(key)
+                        .map(|new_v| is_append_only_prefix_inner(old_v, new_v, Some(key), false))
                         .unwrap_or(false)
                 })
         }
@@ -389,6 +404,13 @@ pub async fn check_or_pause_cache_guard(
 
     let reason = {
         let mut session = session_arc.lock().await;
+        if let Some(outcome) = cache_guard_outcome_if_snapshot_changed(
+            session.cache_guard_snapshot.as_ref(),
+            &previous,
+            &sanitized,
+        ) {
+            return Ok(outcome);
+        }
         session.discard_draft_for_pause();
         session
             .abort_flag
@@ -422,6 +444,26 @@ pub async fn check_or_pause_cache_guard(
     Ok(CacheGuardOutcome::Paused { reason })
 }
 
+fn cache_guard_outcome_if_snapshot_changed(
+    current: Option<&Value>,
+    captured_previous: &Value,
+    sanitized: &Value,
+) -> Option<CacheGuardOutcome> {
+    if current == Some(captured_previous) {
+        return None;
+    }
+    let Some(current) = current else {
+        return Some(CacheGuardOutcome::Pass(Some(sanitized.clone())));
+    };
+    if is_append_only_prefix(current, sanitized) {
+        Some(CacheGuardOutcome::Pass(Some(sanitized.clone())))
+    } else {
+        Some(CacheGuardOutcome::Pass(None))
+    }
+}
+
+// `cache_guard_snapshot` is an in-memory-only canonical provider request body for
+// cache-prefix comparison; trajectory persistence intentionally omits it.
 pub async fn commit_cache_guard_snapshot(
     session_arc: Arc<AMutex<crate::chat::types::ChatSession>>,
     sanitized_body: Value,
@@ -430,23 +472,27 @@ pub async fn commit_cache_guard_snapshot(
     session.cache_guard_snapshot = Some(sanitized_body);
 }
 
-fn is_ignored_key(key: &str) -> bool {
-    IGNORED_KEYS.contains(&key)
+fn is_ignored_key(key: &str, top_level: bool) -> bool {
+    RECURSIVELY_IGNORED_KEYS.contains(&key) || top_level && TOP_LEVEL_IGNORED_KEYS.contains(&key)
 }
 
-fn sanitize_value(value: &Value) -> Value {
+fn sanitize_value(value: &Value, top_level: bool) -> Value {
     match value {
         Value::Object(map) => {
             let mut out = Map::new();
-            for (k, v) in map {
-                if is_ignored_key(k) {
+            for (key, value) in map {
+                if is_ignored_key(key, top_level) {
                     continue;
                 }
-                out.insert(k.clone(), sanitize_value(v));
+                out.insert(key.clone(), sanitize_value(value, false));
             }
             Value::Object(out)
         }
-        Value::Array(arr) => Value::Array(arr.iter().map(sanitize_value).collect()),
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|value| sanitize_value(value, false))
+                .collect(),
+        ),
         _ => value.clone(),
     }
 }
@@ -481,6 +527,94 @@ mod tests {
         assert!(out["messages"][1]["provider_specific_fields"]
             .get("cache_control")
             .is_none());
+    }
+
+    #[test]
+    fn test_top_level_generation_options_are_ignored() {
+        let prev = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "stop": ["old"],
+            "presence_penalty": 0.0
+        }));
+        let next = sanitize_body_for_cache_guard(&json!({
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"}
+            ],
+            "temperature": 0.9,
+            "max_tokens": 2048,
+            "stop": ["new"],
+            "presence_penalty": 1.0
+        }));
+
+        assert!(prev.get("temperature").is_none());
+        assert!(prev.get("max_tokens").is_none());
+        assert!(prev.get("stop").is_none());
+        assert!(prev.get("presence_penalty").is_none());
+        assert!(is_append_only_prefix(&prev, &next));
+    }
+
+    #[test]
+    fn test_nested_generation_named_keys_remain_semantic() {
+        let prev = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "configure",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "max_tokens": {"type": "integer"},
+                            "stop": {"type": "string"}
+                        }
+                    }
+                }
+            }],
+            "provider_specific_fields": {
+                "generation_limits": {"max_tokens": 100, "stop": "END"}
+            }
+        }));
+        let next = sanitize_body_for_cache_guard(&json!({
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"}
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "configure",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "max_tokens": {"type": "string"},
+                            "stop": {"type": "boolean"}
+                        }
+                    }
+                }
+            }],
+            "provider_specific_fields": {
+                "generation_limits": {"max_tokens": 200, "stop": "DONE"}
+            }
+        }));
+
+        assert!(prev["tools"][0]["function"]["parameters"]["properties"]
+            .get("max_tokens")
+            .is_some());
+        assert!(prev["tools"][0]["function"]["parameters"]["properties"]
+            .get("stop")
+            .is_some());
+        assert_eq!(
+            prev["provider_specific_fields"]["generation_limits"]["max_tokens"],
+            100
+        );
+        assert_eq!(
+            prev["provider_specific_fields"]["generation_limits"]["stop"],
+            "END"
+        );
+        assert!(!is_append_only_prefix(&prev, &next));
     }
 
     #[test]
@@ -829,6 +963,71 @@ mod tests {
         let mut session = crate::chat::types::ChatSession::new("test-cache-guard".to_string());
         session.thread.task_meta = role.map(task_meta);
         session
+    }
+
+    #[test]
+    fn cache_guard_stale_snapshot_recheck_passes_without_pause() {
+        let captured_previous = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "old"}],
+            "model": "test"
+        }));
+        let current = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "new"}],
+            "model": "test"
+        }));
+        let sanitized = sanitize_body_for_cache_guard(&json!({
+            "messages": [
+                {"role": "user", "content": "new"},
+                {"role": "assistant", "content": "hello"}
+            ],
+            "model": "test"
+        }));
+
+        let outcome =
+            cache_guard_outcome_if_snapshot_changed(Some(&current), &captured_previous, &sanitized);
+
+        assert!(matches!(outcome, Some(CacheGuardOutcome::Pass(Some(_)))));
+    }
+
+    #[test]
+    fn cache_guard_stale_snapshot_recheck_does_not_commit_over_new_violation() {
+        let captured_previous = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "old"}],
+            "model": "test"
+        }));
+        let current = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "new"}],
+            "model": "test"
+        }));
+        let sanitized = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "assistant", "content": "different"}],
+            "model": "test"
+        }));
+
+        let outcome =
+            cache_guard_outcome_if_snapshot_changed(Some(&current), &captured_previous, &sanitized);
+
+        assert!(matches!(outcome, Some(CacheGuardOutcome::Pass(None))));
+    }
+
+    #[test]
+    fn cache_guard_stale_snapshot_recheck_noops_when_snapshot_unchanged() {
+        let captured_previous = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "user", "content": "old"}],
+            "model": "test"
+        }));
+        let sanitized = sanitize_body_for_cache_guard(&json!({
+            "messages": [{"role": "assistant", "content": "different"}],
+            "model": "test"
+        }));
+
+        let outcome = cache_guard_outcome_if_snapshot_changed(
+            Some(&captured_previous),
+            &captured_previous,
+            &sanitized,
+        );
+
+        assert!(outcome.is_none());
     }
 
     #[tokio::test]
