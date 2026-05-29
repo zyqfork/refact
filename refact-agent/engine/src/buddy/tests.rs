@@ -42,6 +42,61 @@ fn make_service() -> BuddyService {
     make_service_with_events().0
 }
 
+#[tokio::test]
+async fn workflow_failure_report_emits_runtime_event_activity_and_transcript() {
+    let (mut svc, mut rx) = make_service_with_events();
+    let report = super::workflows::WorkflowFailureReport {
+        workflow_id: "buddy_dependency_radar".to_string(),
+        category: super::workflows::WorkflowFailureCategory::ModelUnavailable,
+        summary: "Model unavailable — check Buddy/default model settings.".to_string(),
+        detail: "OpenAI 404: model refact/gpt-4.1-nano not found".to_string(),
+        chat_id: None,
+    };
+
+    svc.record_workflow_failure_report(report).await;
+
+    assert!(svc.state.recent_activities.iter().any(|activity| {
+        activity.title.contains("Model unavailable")
+            && activity
+                .failure_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Buddy/default model"))
+    }));
+    assert!(svc.state.workflow_summaries.iter().any(|summary| {
+        summary.workflow_id == "buddy_dependency_radar"
+            && summary.last_outcome.as_deref() == Some("failed:model_unavailable")
+    }));
+    assert!(svc.runtime_queue.items.iter().any(|event| {
+        event.status == "failed"
+            && event.dedupe_key.as_deref()
+                == Some("workflow_failure:buddy_dependency_radar:model_unavailable")
+    }));
+
+    let mut saw_runtime = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, super::events::BuddyEvent::RuntimeEvent { .. }) {
+            saw_runtime = true;
+            break;
+        }
+    }
+    assert!(saw_runtime);
+
+    let summary = svc
+        .state
+        .workflow_summaries
+        .iter()
+        .find(|summary| summary.workflow_id == "buddy_dependency_radar")
+        .unwrap();
+    assert_eq!(
+        summary.failure_category.as_deref(),
+        Some("model_unavailable")
+    );
+    assert!(summary
+        .failure_summary
+        .as_deref()
+        .is_some_and(|summary| summary.contains("Buddy/default model")));
+}
+
 fn make_suggestion(id: &str, stype: &str, created_at: &str) -> BuddySuggestion {
     BuddySuggestion {
         id: id.to_string(),
@@ -184,6 +239,8 @@ fn test_repeated_successful_workflow_rewards_eventually_advance() {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 activity_type: "workflow".to_string(),
                 chat_id: None,
+                failure_category: None,
+                failure_summary: None,
             },
         );
     }
@@ -1181,6 +1238,8 @@ async fn issue_success_side_effects_are_centralized() {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 activity_type: "issue_created".to_string(),
                 chat_id: None,
+                failure_category: None,
+                failure_summary: None,
             },
         )
         .await;
@@ -6398,6 +6457,8 @@ async fn humor_attach_does_not_hold_buddy_lock() {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 activity_type: "test".to_string(),
                 chat_id: None,
+                failure_category: None,
+                failure_summary: None,
             });
         }
     }

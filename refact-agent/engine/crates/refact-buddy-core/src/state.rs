@@ -774,6 +774,8 @@ pub fn apply_care_action(
             timestamp: Utc::now().to_rfc3339(),
             activity_type: activity_type.to_string(),
             chat_id: None,
+            failure_category: None,
+            failure_summary: None,
         },
     );
 

@@ -163,6 +163,8 @@ mod tests {
             description: None,
             source: "chat".to_string(),
             status: "started".to_string(),
+            failure_category: None,
+            failure_summary: None,
             progress: None,
             dedupe_key: Some(dedupe_key.to_string()),
             priority: "normal".to_string(),

@@ -24,7 +24,7 @@ messages:
     1. Pick 1 high-confidence candidate.
     2. Optionally use apply_patch to propose a small refactor.
     3. If you found a generalizable lesson, use buddy_memory_create with kind=lesson.
-    4. End with buddy_log_activity describing the win.
+    4. End with buddy_runtime_event describing the win.
   user_template: |
     Workflow: {{workflow_id}}
     Project root: {{project_root}}
@@ -38,5 +38,5 @@ tools:
   - search_symbol_definition
   - search_pattern
   - apply_patch
-  - buddy_log_activity
+  - buddy_runtime_event
   - buddy_memory_create

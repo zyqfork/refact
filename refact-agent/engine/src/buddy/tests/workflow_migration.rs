@@ -41,12 +41,12 @@ async fn every_workflow_yaml_loadable_via_get_delegate_config() {
 }
 
 #[test]
-fn every_workflow_yaml_includes_buddy_log_activity_in_tools() {
+fn every_workflow_yaml_includes_buddy_runtime_event_in_tools() {
     for id in workflow_ids() {
         let config = load_workflow_yaml(id);
         assert!(
-            config.tools.iter().any(|tool| tool == "buddy_log_activity"),
-            "{id} does not include buddy_log_activity"
+            config.tools.iter().any(|tool| tool == "buddy_runtime_event"),
+            "{id} does not include buddy_runtime_event"
         );
     }
 }

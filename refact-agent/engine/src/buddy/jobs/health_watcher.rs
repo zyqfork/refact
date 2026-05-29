@@ -97,6 +97,8 @@ impl BuddyJob for HealthWatcherJob {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 activity_type: "health".to_string(),
                 chat_id: None,
+                failure_category: None,
+                failure_summary: None,
             })
         } else {
             None

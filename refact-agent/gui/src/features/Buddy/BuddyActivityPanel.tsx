@@ -12,6 +12,16 @@ interface BuddyActivityPanelProps {
   onOpenChat?: (chatId: string, title: string) => void;
 }
 
+function formatFailureLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export const BuddyActivityPanel: React.FC<BuddyActivityPanelProps> = ({
   activities,
   onOpenChat,
@@ -56,7 +66,9 @@ export const BuddyActivityPanel: React.FC<BuddyActivityPanelProps> = ({
           </Text>
         )}
         {filteredActivities.map((a, i) => {
-          const tooltip = a.description || a.title;
+          const failureLabel = formatFailureLabel(a.failure_category);
+          const detail = a.failure_summary || a.description;
+          const tooltip = detail || a.title;
           const canOpen = Boolean(a.chat_id && onOpenChat);
           return (
             <Tooltip
@@ -88,7 +100,15 @@ export const BuddyActivityPanel: React.FC<BuddyActivityPanelProps> = ({
               >
                 <span className={styles.listIcon}>{a.icon}</span>
                 <div className={styles.listContent}>
-                  <span className={styles.listTitle}>{a.title}</span>
+                  <span className={styles.listTitle}>
+                    {a.title}
+                    {failureLabel && (
+                      <span className={styles.ackBadge}>{failureLabel}</span>
+                    )}
+                  </span>
+                  {detail && (
+                    <span className={styles.listSubtitle}>{detail}</span>
+                  )}
                 </div>
                 <span className={styles.listMeta}>
                   {formatBuddyTime(a.timestamp)}

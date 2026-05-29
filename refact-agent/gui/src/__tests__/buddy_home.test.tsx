@@ -38,6 +38,7 @@ import { AutonomousChats } from "../features/Buddy/AutonomousChats";
 import { BuddyRecentChats } from "../features/Buddy/BuddyRecentChats";
 import { UserActivityCard } from "../features/Buddy/UserActivityCard";
 import { BuddyActivityPanel } from "../features/Buddy/BuddyActivityPanel";
+import { BuddyRecentErrorsPanel } from "../features/Buddy/BuddyRecentErrorsPanel";
 import { BuddySpeechCloud } from "../features/Buddy/BuddySpeechCloud";
 import { bubblePositionForSceneX } from "../features/Buddy/buddyWorldUtils";
 import { buildBuddyWorldState } from "../features/Buddy/buddyWorldModel";
@@ -529,6 +530,52 @@ describe("ActivityFeed_filter_chips_filter_by_workflow_prefix", () => {
 
     expect(screen.queryByText("Compile sniffer")).not.toBeInTheDocument();
     expect(screen.getByText("Memory garden")).toBeInTheDocument();
+  });
+});
+
+describe("BuddyWorkflowFailureSummaries", () => {
+  it("shows structured failure categories in activity and recent error panels", () => {
+    render(
+      <>
+        <BuddyActivityPanel
+          activities={[
+            makeActivity({
+              title: "Dependency radar failed: Model unavailable",
+              description: "OpenAI 404: model not found",
+              failure_category: "model_unavailable",
+              failure_summary:
+                "Model unavailable — check Buddy/default model settings.",
+            }),
+          ]}
+        />
+        <BuddyRecentErrorsPanel
+          recentErrors={[
+            {
+              id: "workflow-failure-1",
+              signal_type: "buddy_dependency_radar_failed",
+              title: "Dependency radar failed: Model unavailable",
+              source: "buddy",
+              status: "failed",
+              priority: "high",
+              created_at: "2024-01-01T00:00:00Z",
+              failure_category: "model_unavailable",
+              failure_summary:
+                "Model unavailable — check Buddy/default model settings.",
+            },
+          ]}
+          onInvestigate={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </>,
+      { preloadedState: CONFIG_STATE },
+    );
+
+    expect(screen.getAllByText("Model Unavailable")).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "Model unavailable — check Buddy/default model settings.",
+      ),
+    ).toHaveLength(2);
   });
 });
 

@@ -534,6 +534,8 @@ export interface BuddyWorkflowSummary {
   last_run: string | null;
   run_count: number;
   last_outcome: string | null;
+  failure_category?: string | null;
+  failure_summary?: string | null;
 }
 
 export interface BuddySemanticSnapshot {
@@ -550,6 +552,8 @@ export interface BuddyActivityEntry {
   timestamp: string;
   activity_type: string;
   chat_id?: string | null;
+  failure_category?: string | null;
+  failure_summary?: string | null;
 }
 
 export interface BuddySuggestion {
@@ -1022,6 +1026,8 @@ export interface BuddyRuntimeEvent {
   description?: string | null;
   source: string;
   status: string;
+  failure_category?: string | null;
+  failure_summary?: string | null;
   progress?: number | null;
   dedupe_key?: string | null;
   priority: string;

@@ -747,6 +747,8 @@ pub fn build_reaction_event(
         description: None,
         source: "chat_reactions".to_string(),
         status: "info".to_string(),
+        failure_category: None,
+        failure_summary: None,
         progress: None,
         dedupe_key: Some(dedupe_key),
         priority: "normal".to_string(),

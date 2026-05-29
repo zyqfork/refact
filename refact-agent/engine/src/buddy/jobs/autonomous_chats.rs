@@ -27,6 +27,7 @@ use crate::buddy::memory_lifecycle::{MemoryCandidate, MemoryCandidateStatus, Mem
 use crate::buddy::scheduler::{BuddyJob, BuddyJobContext, BuddyJobResult};
 use crate::buddy::settings::load_settings;
 use crate::buddy::types::{BuddyActivity, BuddyFact, BuddyFactKind, BuddyRuntimeEvent, BuddyThreadMeta};
+use crate::buddy::workflows::{WorkflowFailureCategory, WorkflowFailureReport};
 use crate::call_validation::ChatMessage;
 use crate::app_state::AppState;
 use crate::stats::event::LlmCallEvent;
@@ -460,6 +461,8 @@ async fn autonomous_activity(
         timestamp: Utc::now().to_rfc3339(),
         activity_type: spec.workflow_id.clone(),
         chat_id: Some(chat_id.to_string()),
+        failure_category: None,
+        failure_summary: None,
     }
 }
 
@@ -506,6 +509,8 @@ async fn autonomous_runtime_event(
     event.scene = Some("insight".to_string());
     event.duration_hint = Some(12);
     event.chat_id = Some(chat_id.to_string());
+    event.failure_category = None;
+    event.failure_summary = None;
     event
 }
 
@@ -517,12 +522,15 @@ fn apply_autonomous_runtime_chat_notification(event: &mut BuddyRuntimeEvent, des
     event.duration_hint = Some(12);
 }
 
-fn called_buddy_log_activity(messages: &[ChatMessage]) -> bool {
+fn called_buddy_runtime_report(messages: &[ChatMessage]) -> bool {
     messages.iter().any(|message| {
         message.tool_calls.as_ref().is_some_and(|tool_calls| {
-            tool_calls
-                .iter()
-                .any(|tool_call| tool_call.function.name == "buddy_log_activity")
+            tool_calls.iter().any(|tool_call| {
+                matches!(
+                    tool_call.function.name.as_str(),
+                    "buddy_runtime_event" | "buddy_log_activity"
+                )
+            })
         })
     })
 }
@@ -534,6 +542,108 @@ fn last_assistant_text(messages: &[ChatMessage]) -> String {
         .find(|message| message.role == "assistant")
         .map(|message| message.content.content_text_only())
         .unwrap_or_default()
+}
+
+fn workflow_failure_category(error: &str) -> WorkflowFailureCategory {
+    let lower = error.to_lowercase();
+    if lower.trim() == "aborted" || lower.contains("original error: aborted") {
+        return WorkflowFailureCategory::Cancelled;
+    }
+    if lower.contains("tool '") && lower.contains("not found")
+        || lower.contains("unknown tool")
+        || lower.contains("tool not found")
+    {
+        return WorkflowFailureCategory::ToolUnavailable;
+    }
+    if lower.contains("tool failed")
+        || lower.contains("tool execution failed")
+        || lower.contains("tool call failed")
+    {
+        return WorkflowFailureCategory::ToolFailed;
+    }
+    match crate::chat::retry_policy::classify_user_error(error) {
+        crate::chat::retry_policy::UserErrorCategory::ModelUnavailable => {
+            WorkflowFailureCategory::ModelUnavailable
+        }
+        crate::chat::retry_policy::UserErrorCategory::ContextTooLarge => {
+            WorkflowFailureCategory::ContextTooLarge
+        }
+        crate::chat::retry_policy::UserErrorCategory::InvalidRequest
+        | crate::chat::retry_policy::UserErrorCategory::ToolSchemaInvalid => {
+            WorkflowFailureCategory::InvalidRequest
+        }
+        crate::chat::retry_policy::UserErrorCategory::ProviderTransient
+        | crate::chat::retry_policy::UserErrorCategory::NetworkFailure
+        | crate::chat::retry_policy::UserErrorCategory::StreamCorrupted => {
+            WorkflowFailureCategory::ProviderTransient
+        }
+        crate::chat::retry_policy::UserErrorCategory::ProviderRateLimit => {
+            WorkflowFailureCategory::ProviderRateLimit
+        }
+        crate::chat::retry_policy::UserErrorCategory::AuthenticationFailed => {
+            WorkflowFailureCategory::AuthenticationFailed
+        }
+        crate::chat::retry_policy::UserErrorCategory::BillingQuota => {
+            WorkflowFailureCategory::BillingQuota
+        }
+        crate::chat::retry_policy::UserErrorCategory::ContentPolicy => {
+            WorkflowFailureCategory::ContentPolicy
+        }
+        crate::chat::retry_policy::UserErrorCategory::Unknown => WorkflowFailureCategory::Unknown,
+    }
+}
+
+fn workflow_failure_summary(category: &WorkflowFailureCategory, error: &str) -> String {
+    let detail = redact_and_cap_text(error, 240);
+    match category {
+        WorkflowFailureCategory::ModelUnavailable => format!(
+            "Model unavailable — check Buddy/default model settings. {}",
+            detail
+        ),
+        WorkflowFailureCategory::ContextTooLarge => {
+            "Context too large — Buddy needs a smaller prompt or compaction before retrying."
+                .to_string()
+        }
+        WorkflowFailureCategory::ToolUnavailable => format!(
+            "Tool unavailable — the workflow referenced a tool that is not registered. {}",
+            detail
+        ),
+        WorkflowFailureCategory::ToolFailed => format!("Tool failed during workflow. {}", detail),
+        WorkflowFailureCategory::InvalidRequest => format!("Invalid provider request. {}", detail),
+        WorkflowFailureCategory::ProviderTransient => {
+            format!("Provider temporarily unavailable. {}", detail)
+        }
+        WorkflowFailureCategory::ProviderRateLimit => {
+            format!("Provider rate limit reached. {}", detail)
+        }
+        WorkflowFailureCategory::AuthenticationFailed => {
+            format!("Authentication failed. {}", detail)
+        }
+        WorkflowFailureCategory::BillingQuota => {
+            format!("Billing or quota limit reached. {}", detail)
+        }
+        WorkflowFailureCategory::ContentPolicy => {
+            format!("Content policy blocked the request. {}", detail)
+        }
+        WorkflowFailureCategory::Cancelled => "Workflow cancelled before completion.".to_string(),
+        WorkflowFailureCategory::Unknown => format!("Workflow failed. {}", detail),
+    }
+}
+
+fn autonomous_failure_result(spec: &AutonomousBuddyChatSpec, error: String) -> BuddyJobResult {
+    let category = workflow_failure_category(&error);
+    let detail = redact_and_cap_text(&error, 1_000);
+    let summary = workflow_failure_summary(&category, &error);
+    BuddyJobResult {
+        workflow_failure: Some(WorkflowFailureReport {
+            workflow_id: spec.workflow_id.clone(),
+            category,
+            summary,
+            detail,
+            chat_id: None,
+        }),
+        ..Default::default()
+    }
 }
 
 fn default_autonomous_activity(
@@ -553,6 +663,8 @@ fn default_autonomous_activity(
         timestamp: Utc::now().to_rfc3339(),
         activity_type: spec.workflow_id.clone(),
         chat_id: Some(chat_id.to_string()),
+        failure_category: None,
+        failure_summary: None,
     }
 }
 
@@ -568,7 +680,7 @@ pub(crate) async fn execute_autonomous_spec(
         Ok(chat_id) => chat_id,
         Err(err) => {
             tracing::warn!("autonomous buddy job {} failed: {}", spec.workflow_id, err);
-            return BuddyJobResult::default();
+            return autonomous_failure_result(&spec, err);
         }
     };
     autonomous_success_result(gcx, ctx, spec, chat_id).await
@@ -1882,7 +1994,7 @@ pub async fn run_autonomous_buddy_chat(
         .chat_id
         .clone()
         .ok_or_else(|| "autonomous buddy chat did not return a chat_id".to_string())?;
-    if !called_buddy_log_activity(&result.messages) {
+    if !called_buddy_runtime_report(&result.messages) {
         let report_text = last_assistant_text(&result.messages);
         buddy_apply(
             gcx,
@@ -2126,7 +2238,7 @@ async fn execute_built_autonomous_job(
     }
 
     let signal_hash = spec.signal_hash.clone();
-    let chat_id = match run_autonomous_buddy_chat(gcx, spec).await {
+    let chat_id = match run_autonomous_buddy_chat(gcx, spec.clone()).await {
         Ok(chat_id) => chat_id,
         Err(err) => {
             tracing::debug!(
@@ -2134,7 +2246,7 @@ async fn execute_built_autonomous_job(
                 definition.meta.id,
                 err
             );
-            return BuddyJobResult::default();
+            return autonomous_failure_result(&spec.clone(), err);
         }
     };
 
@@ -2151,6 +2263,8 @@ async fn execute_built_autonomous_job(
         timestamp: Utc::now().to_rfc3339(),
         activity_type: definition.meta.id.to_string(),
         chat_id: Some(chat_id.clone()),
+        failure_category: None,
+        failure_summary: None,
     };
     let mut runtime_event = make_runtime_event(
         definition.meta.id,
@@ -4745,6 +4859,41 @@ mod tests {
         assert_eq!(result.last_result.as_deref(), Some(stored.as_str()));
     }
 
+    #[test]
+    fn autonomous_failure_result_classifies_model_context_and_tool_errors() {
+        let spec = AutonomousBuddyChatSpec::new(
+            DEPENDENCY_RADAR_WORKFLOW_ID,
+            "Dependency Radar",
+            "Prompt",
+            "Evidence",
+        );
+
+        let model = autonomous_failure_result(
+            &spec,
+            "OpenAI 404: model refact/gpt-4.1-nano not found".to_string(),
+        )
+        .workflow_failure
+        .expect("model failure");
+        assert_eq!(model.category, WorkflowFailureCategory::ModelUnavailable);
+        assert!(model.summary.contains("Model unavailable"));
+
+        let context = autonomous_failure_result(
+            &spec,
+            "This model's maximum context length is 128000 tokens".to_string(),
+        )
+        .workflow_failure
+        .expect("context failure");
+        assert_eq!(context.category, WorkflowFailureCategory::ContextTooLarge);
+
+        let tool = autonomous_failure_result(
+            &spec,
+            "Error: tool 'buddy_log_activity' not found".to_string(),
+        )
+        .workflow_failure
+        .expect("tool failure");
+        assert_eq!(tool.category, WorkflowFailureCategory::ToolUnavailable);
+    }
+
     #[tokio::test]
     async fn autonomous_success_result_includes_visible_runtime_event_with_stable_dedupe() {
         let ctx = context_with_last_result(None);
@@ -4813,7 +4962,7 @@ mod tests {
         let (messages, max_steps, tools) = build_autonomous_messages(gcx, &spec).await.unwrap();
 
         assert_eq!(max_steps, 10);
-        assert!(tools.contains(&"buddy_log_activity".to_string()));
+        assert!(tools.contains(&"buddy_runtime_event".to_string()));
         assert_eq!(messages.len(), 2);
         let ChatContent::SimpleText(user_prompt) = &messages[1].content else {
             panic!("expected simple text user prompt");

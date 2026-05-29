@@ -77,6 +77,8 @@ fn make_runtime_event(
         description: None,
         source: source.to_string(),
         status: status.to_string(),
+        failure_category: None,
+        failure_summary: None,
         progress: None,
         dedupe_key: Some(dedupe_key.to_string()),
         priority: priority.unwrap_or("normal").to_string(),

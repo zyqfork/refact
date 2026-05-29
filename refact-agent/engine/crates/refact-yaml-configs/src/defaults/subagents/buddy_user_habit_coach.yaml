@@ -28,8 +28,8 @@ messages:
     1. Search for memories relevant to the habit signal.
     2. Identify one small coaching point or decide there is nothing to say.
     3. Speak only if the nudge is timely and helpful.
-    4. End by calling buddy_log_activity with a short title and 1-2 sentence description.
-    If nothing useful to do, call buddy_log_activity with "noted: nothing to do today" and exit.
+    4. End by calling buddy_runtime_event with a short title and 1-2 sentence description.
+    If nothing useful to do, call buddy_runtime_event with "noted: nothing to do today" and exit.
   user_template: |
     Workflow: {{workflow_id}}
     Title: {{title}}
@@ -45,5 +45,5 @@ messages:
 tools:
   - buddy_memory_search
   - buddy_memory_create
-  - buddy_log_activity
+  - buddy_runtime_event
   - buddy_speak

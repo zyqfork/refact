@@ -6,6 +6,81 @@ use tracing::warn;
 use crate::app_state::AppState;
 use super::types::BuddyActivity;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowFailureCategory {
+    ModelUnavailable,
+    ContextTooLarge,
+    ToolUnavailable,
+    ToolFailed,
+    InvalidRequest,
+    ProviderTransient,
+    ProviderRateLimit,
+    AuthenticationFailed,
+    BillingQuota,
+    ContentPolicy,
+    Cancelled,
+    Unknown,
+}
+
+impl WorkflowFailureCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ModelUnavailable => "model_unavailable",
+            Self::ContextTooLarge => "context_too_large",
+            Self::ToolUnavailable => "tool_unavailable",
+            Self::ToolFailed => "tool_failed",
+            Self::InvalidRequest => "invalid_request",
+            Self::ProviderTransient => "provider_transient",
+            Self::ProviderRateLimit => "provider_rate_limit",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::BillingQuota => "billing_quota",
+            Self::ContentPolicy => "content_policy",
+            Self::Cancelled => "cancelled",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::ModelUnavailable => "Model unavailable",
+            Self::ContextTooLarge => "Context too large",
+            Self::ToolUnavailable => "Tool unavailable",
+            Self::ToolFailed => "Tool failed",
+            Self::InvalidRequest => "Invalid request",
+            Self::ProviderTransient => "Provider temporarily unavailable",
+            Self::ProviderRateLimit => "Rate limit reached",
+            Self::AuthenticationFailed => "Authentication failed",
+            Self::BillingQuota => "Billing or quota limit reached",
+            Self::ContentPolicy => "Content policy blocked request",
+            Self::Cancelled => "Workflow cancelled",
+            Self::Unknown => "Workflow failed",
+        }
+    }
+
+    pub fn priority(&self) -> &'static str {
+        match self {
+            Self::AuthenticationFailed | Self::BillingQuota | Self::ContentPolicy => "critical",
+            Self::ModelUnavailable
+            | Self::ContextTooLarge
+            | Self::ToolUnavailable
+            | Self::ToolFailed
+            | Self::InvalidRequest => "high",
+            Self::ProviderTransient | Self::ProviderRateLimit => "normal",
+            Self::Cancelled | Self::Unknown => "normal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowFailureReport {
+    pub workflow_id: String,
+    pub category: WorkflowFailureCategory,
+    pub summary: String,
+    pub detail: String,
+    pub chat_id: Option<String>,
+}
+
 pub fn workflow_label(workflow_id: &str) -> &str {
     match workflow_id {
         "commit_msg" => "commit message generation",
@@ -44,6 +119,10 @@ struct WorkflowEntry {
     input_summary: String,
     output_summary: String,
     success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_category: Option<WorkflowFailureCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_summary: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,6 +182,8 @@ where
             timestamp: Utc::now().to_rfc3339(),
             activity_type: "workflow".to_string(),
             chat_id: None,
+            failure_category: None,
+            failure_summary: None,
         };
 
         let mut completed_quest = None;
@@ -132,6 +213,8 @@ where
                                 last_run: Some(now.clone()),
                                 run_count: 1,
                                 last_outcome: Some("success".to_string()),
+                                failure_category: None,
+                                failure_summary: None,
                             },
                         );
                     }
@@ -201,11 +284,24 @@ where
 }
 
 pub async fn append_workflow_entry(path: &std::path::Path, output_summary: &str, success: bool) {
+    append_workflow_entry_with_failure(path, output_summary, success, None).await;
+}
+
+pub async fn append_workflow_entry_with_failure(
+    path: &std::path::Path,
+    output_summary: &str,
+    success: bool,
+    failure: Option<(&WorkflowFailureCategory, &str)>,
+) {
     let entry = WorkflowEntry {
         timestamp: Utc::now().to_rfc3339(),
         input_summary: String::new(),
         output_summary: output_summary.to_string(),
         success,
+        failure_category: failure.map(|(category, _)| category.clone()),
+        failure_summary: failure
+            .map(|(_, summary)| summary.trim().to_string())
+            .filter(|summary| !summary.is_empty()),
     };
 
     let mut transcript = match tokio::fs::read_to_string(path).await {
@@ -225,5 +321,34 @@ pub async fn append_workflow_entry(path: &std::path::Path, output_summary: &str,
             "buddy: failed to write workflow transcript {:?}: {}",
             path, e
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn workflow_transcript_records_failure_category() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.json");
+
+        append_workflow_entry_with_failure(
+            &path,
+            "model unavailable: refact/gpt-4.1-nano",
+            false,
+            Some((
+                &WorkflowFailureCategory::ModelUnavailable,
+                "Model unavailable",
+            )),
+        )
+        .await;
+
+        let value: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        let entry = &value["entries"][0];
+        assert_eq!(entry["success"], false);
+        assert_eq!(entry["failure_category"], "model_unavailable");
+        assert_eq!(entry["failure_summary"], "Model unavailable");
     }
 }

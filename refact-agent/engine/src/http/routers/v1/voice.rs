@@ -44,6 +44,8 @@ pub async fn handle_v1_voice_transcribe(
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     activity_type: "voice_transcribed".to_string(),
                     chat_id: None,
+                    failure_category: None,
+                    failure_summary: None,
                 }),
                 ..Default::default()
             },

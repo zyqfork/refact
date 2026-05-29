@@ -175,6 +175,8 @@ pub(crate) fn buddy_runtime_event_for_import_report(report: &ImportReport) -> Bu
         Some(priority),
     );
     event.description = Some(description);
+    event.failure_category = None;
+    event.failure_summary = None;
     event.persistent = attention > 0;
     event.ttl_ms = if attention > 0 {
         None

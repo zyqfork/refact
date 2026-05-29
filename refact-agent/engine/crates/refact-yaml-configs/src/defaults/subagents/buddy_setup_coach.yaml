@@ -28,8 +28,8 @@ messages:
     1. Inspect the project tree and setup-related files.
     2. Identify missing, stale, or confusing setup guidance.
     3. Create a concise setup note when the improvement is obvious.
-    4. End by calling buddy_log_activity with a short title and 1-2 sentence description.
-    If nothing useful to do, call buddy_log_activity with "noted: nothing to do today" and exit.
+    4. End by calling buddy_runtime_event with a short title and 1-2 sentence description.
+    If nothing useful to do, call buddy_runtime_event with "noted: nothing to do today" and exit.
   user_template: |
     Workflow: {{workflow_id}}
     Title: {{title}}
@@ -46,5 +46,5 @@ tools:
   - tree
   - cat
   - create_textdoc
-  - buddy_log_activity
+  - buddy_runtime_event
   - buddy_speak

@@ -24,7 +24,7 @@ messages:
     1. Inspect AGENTS.md and the listed top-level candidates.
     2. Update AGENTS.md only if there is a clear missing onboarding note.
     3. Keep edits small and factual.
-    4. End with buddy_log_activity describing what changed or why nothing changed.
+    4. End with buddy_runtime_event describing what changed or why nothing changed.
   user_template: |
     Workflow: {{workflow_id}}
     Project root: {{project_root}}
@@ -37,4 +37,4 @@ tools:
   - cat
   - update_textdoc
   - replace_textdoc
-  - buddy_log_activity
+  - buddy_runtime_event

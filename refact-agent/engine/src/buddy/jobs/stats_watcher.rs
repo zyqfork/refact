@@ -116,6 +116,8 @@ impl BuddyJob for StatsWatcherJob {
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     activity_type: "milestone".to_string(),
                     chat_id: None,
+                    failure_category: None,
+                    failure_summary: None,
                 };
                 return BuddyJobResult {
                     speech_intent: Some(super::super::voice_service::SpeechIntent::Milestone),

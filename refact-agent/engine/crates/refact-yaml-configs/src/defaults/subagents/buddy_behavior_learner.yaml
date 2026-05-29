@@ -28,8 +28,8 @@ messages:
     1. Review current preferences and the behavior evidence.
     2. Upsert or remove a preference only when the signal is stable.
     3. Leave uncertain observations untouched.
-    4. End by calling buddy_log_activity with a short title and 1-2 sentence description.
-    If nothing useful to do, call buddy_log_activity with "noted: nothing to do today" and exit.
+    4. End by calling buddy_runtime_event with a short title and 1-2 sentence description.
+    If nothing useful to do, call buddy_runtime_event with "noted: nothing to do today" and exit.
   user_template: |
     Workflow: {{workflow_id}}
     Title: {{title}}
@@ -46,4 +46,4 @@ tools:
   - buddy_user_pref_list
   - buddy_user_pref_upsert
   - buddy_user_pref_remove
-  - buddy_log_activity
+  - buddy_runtime_event

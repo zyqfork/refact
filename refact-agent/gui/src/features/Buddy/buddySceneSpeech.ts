@@ -68,20 +68,21 @@ export function formatBuddyRuntimeEventText(event: BuddyRuntimeEvent): string {
   if (speechText) return normalizeRuntimeText(speechText);
 
   const description = event.description?.trim();
+  const failureSummary = event.failure_summary?.trim();
   const rawText = stripNoisyRuntimePrefixes(
-    description ? `${event.title}: ${description}` : event.title,
+    failureSummary ||
+      (description ? `${event.title}: ${description}` : event.title),
   );
 
-  if (isContextWindowError(rawText)) {
+  if (
+    isContextWindowError(rawText) ||
+    event.failure_category === "context_too_large"
+  ) {
     return "I ran out of context room. Want me to compress this and try again?";
   }
 
   if (event.status === "failed" && /\bLLM error\b/i.test(rawText)) {
     return rawText.replace(/^LLM error:\s*/i, "I hit an LLM snag: ");
-  }
-
-  if (description) {
-    return rawText;
   }
 
   return rawText;

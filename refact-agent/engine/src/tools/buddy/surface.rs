@@ -160,6 +160,8 @@ impl Tool for ToolBuddyLogActivity {
             timestamp: chrono::Utc::now().to_rfc3339(),
             activity_type: "buddy_tool".to_string(),
             chat_id,
+            failure_category: None,
+            failure_summary: None,
         };
         buddy_apply(
             crate::app_state::AppState::from_gcx(gcx).await,

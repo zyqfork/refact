@@ -258,7 +258,7 @@ mod tests {
         let expected = [
             (
                 "buddy_onboarding",
-                vec!["tree", "cat", "replace_textdoc", "buddy_log_activity"],
+                vec!["tree", "cat", "replace_textdoc", "buddy_runtime_event"],
             ),
             (
                 "buddy_refactor_hunter",
@@ -268,13 +268,18 @@ mod tests {
                     "search_symbol_definition",
                     "search_pattern",
                     "apply_patch",
-                    "buddy_log_activity",
+                    "buddy_runtime_event",
                     "buddy_memory_create",
                 ],
             ),
             (
                 "buddy_skill_author",
-                vec!["cat", "create_textdoc", "buddy_log_activity", "buddy_speak"],
+                vec![
+                    "cat",
+                    "create_textdoc",
+                    "buddy_runtime_event",
+                    "buddy_speak",
+                ],
             ),
             (
                 "buddy_test_coverage_watcher",
@@ -283,7 +288,7 @@ mod tests {
                     "cat",
                     "search_symbol_definition",
                     "create_textdoc",
-                    "buddy_log_activity",
+                    "buddy_runtime_event",
                     "buddy_open_issue",
                 ],
             ),

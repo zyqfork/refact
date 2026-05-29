@@ -30,6 +30,10 @@ pub struct BuddyRuntimeEvent {
     pub description: Option<String>,
     pub source: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_summary: Option<String>,
     pub progress: Option<u8>,
     pub dedupe_key: Option<String>,
     pub priority: String,
@@ -216,6 +220,10 @@ pub struct BuddyWorkflowSummary {
     pub last_run: Option<String>,
     pub run_count: u64,
     pub last_outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +243,10 @@ pub struct BuddyActivity {
     pub activity_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_summary: Option<String>,
 }
 
 fn default_quest_status() -> String {

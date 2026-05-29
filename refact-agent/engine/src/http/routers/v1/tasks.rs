@@ -723,6 +723,8 @@ pub async fn handle_update_task_status(
                             timestamp: Utc::now().to_rfc3339(),
                             activity_type: "task_completed".to_string(),
                             chat_id: None,
+                            failure_category: None,
+                            failure_summary: None,
                         }),
                         mood: Some("excited".to_string()),
                     },
@@ -748,6 +750,8 @@ pub async fn handle_update_task_status(
                             timestamp: Utc::now().to_rfc3339(),
                             activity_type: "task_abandoned".to_string(),
                             chat_id: None,
+                            failure_category: None,
+                            failure_summary: None,
                         }),
                         mood: Some("worried".to_string()),
                         ..Default::default()

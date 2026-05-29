@@ -28,8 +28,8 @@ messages:
     1. Review the dependency evidence and relevant manifests.
     2. Search current package context only for likely important findings.
     3. Open an issue for clear dependency work that should not be forgotten.
-    4. End by calling buddy_log_activity with a short title and 1-2 sentence description.
-    If nothing useful to do, call buddy_log_activity with "noted: nothing to do today" and exit.
+    4. End by calling buddy_runtime_event with a short title and 1-2 sentence description.
+    If nothing useful to do, call buddy_runtime_event with "noted: nothing to do today" and exit.
   user_template: |
     Workflow: {{workflow_id}}
     Title: {{title}}
@@ -46,5 +46,5 @@ tools:
   - cat
   - search_pattern
   - web_search
-  - buddy_log_activity
+  - buddy_runtime_event
   - buddy_open_issue

@@ -181,6 +181,8 @@ pub async fn handle_v1_git_commit(
                             timestamp: chrono::Utc::now().to_rfc3339(),
                             activity_type: "git_commit".to_string(),
                             chat_id: None,
+                            failure_category: None,
+                            failure_summary: None,
                         }),
                         mood: Some("proud".to_string()),
                     },

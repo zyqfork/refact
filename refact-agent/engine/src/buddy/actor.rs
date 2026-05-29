@@ -856,6 +856,8 @@ impl BuddyService {
             timestamp: Utc::now().to_rfc3339(),
             activity_type: "quest_completed".to_string(),
             chat_id: None,
+            failure_category: None,
+            failure_summary: None,
         });
         self.update_speech(BuddySpeechItem {
             id: format!("quest-complete-{}", quest.id),
@@ -876,6 +878,8 @@ impl BuddyService {
             persistent: false,
             controls: vec![],
             chat_id: None,
+            failure_category: None,
+            failure_summary: None,
             ..make_runtime_event(
                 "task_completed",
                 &format!("Quest complete: {title}"),
@@ -1033,6 +1037,8 @@ impl BuddyService {
                     workflow_id: workflow_id.to_string(),
                     last_run: Some(now),
                     run_count: 1,
+                    failure_category: None,
+                    failure_summary: None,
                     last_outcome: Some("success".to_string()),
                 });
         }
@@ -1062,6 +1068,8 @@ impl BuddyService {
                     workflow_id: workflow_id.to_string(),
                     last_run: Some(now),
                     run_count: 1,
+                    failure_category: None,
+                    failure_summary: None,
                     last_outcome: Some("failed".to_string()),
                 });
         }
@@ -1070,6 +1078,99 @@ impl BuddyService {
         let _ = self.events_tx.send(BuddyEvent::StateUpdated {
             state: self.state.clone(),
         });
+    }
+
+    pub async fn record_workflow_failure_report(
+        &mut self,
+        report: super::workflows::WorkflowFailureReport,
+    ) {
+        let title = format!(
+            "{} failed: {}",
+            super::workflows::workflow_label(&report.workflow_id),
+            report.category.title()
+        );
+        let summary = redact_sensitive(&report.summary);
+        let detail = redact_sensitive(&report.detail);
+        let description = if summary.trim().is_empty() {
+            detail.clone()
+        } else {
+            summary.clone()
+        };
+        let activity = BuddyActivity {
+            icon: "⚠️".to_string(),
+            title: title.clone(),
+            description: crate::llm::safe_truncate(&description, 240).to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            activity_type: report.workflow_id.clone(),
+            chat_id: report.chat_id.clone(),
+            failure_category: Some(report.category.as_str().to_string()),
+            failure_summary: Some(summary.clone()),
+        };
+        self.add_activity(activity);
+
+        let now = Utc::now().to_rfc3339();
+        let outcome = format!("failed:{}", report.category.as_str());
+        if let Some(ws) = self
+            .state
+            .workflow_summaries
+            .iter_mut()
+            .find(|w| w.workflow_id == report.workflow_id)
+        {
+            ws.last_run = Some(now.clone());
+            ws.run_count += 1;
+            ws.failure_category = Some(report.category.as_str().to_string());
+            ws.failure_summary = Some(summary.clone());
+            ws.last_outcome = Some(outcome.clone());
+        } else {
+            self.state
+                .workflow_summaries
+                .push(super::types::BuddyWorkflowSummary {
+                    workflow_id: report.workflow_id.clone(),
+                    last_run: Some(now),
+                    run_count: 1,
+                    failure_category: Some(report.category.as_str().to_string()),
+                    failure_summary: Some(summary.clone()),
+                    last_outcome: Some(outcome),
+                });
+        }
+        self.refresh_active_quest();
+        self.dirty = true;
+        let _ = self.events_tx.send(BuddyEvent::StateUpdated {
+            state: self.state.clone(),
+        });
+
+        let mut event = make_runtime_event(
+            &format!("{}_failed", report.workflow_id),
+            &title,
+            "buddy",
+            &format!(
+                "workflow_failure:{}:{}",
+                report.workflow_id,
+                report.category.as_str()
+            ),
+            "failed",
+            Some(report.category.priority()),
+        );
+        event.description = Some(crate::llm::safe_truncate(&detail, 600).to_string());
+        event.failure_category = Some(report.category.as_str().to_string());
+        event.failure_summary = Some(summary.clone());
+        event.speech_text = Some(if summary.trim().is_empty() {
+            format!(
+                "{}: {}",
+                report.category.title(),
+                crate::llm::safe_truncate(&detail, 160)
+            )
+        } else {
+            summary.clone()
+        });
+        event.scene = Some("alert".to_string());
+        event.duration_hint = Some(12);
+        event.persistent = true;
+        event.bubble_policy = Some(super::types::BuddyBubblePolicy::Durable);
+        event.chat_id = report.chat_id.clone();
+        self.enqueue_runtime_event(event);
+
+        self.append_workflow_failure_transcript(&report).await;
     }
 
     pub fn add_diagnostic(&mut self, mut ctx: super::diagnostics::DiagnosticContext) {
@@ -1195,6 +1296,30 @@ impl BuddyService {
         super::workflows::append_workflow_entry(&path, output_summary, success).await;
     }
 
+    async fn append_workflow_failure_transcript(
+        &self,
+        report: &super::workflows::WorkflowFailureReport,
+    ) {
+        if !validate_workflow_id(&report.workflow_id) {
+            warn!(
+                "buddy: rejecting invalid workflow_id: {:?}",
+                report.workflow_id
+            );
+            return;
+        }
+        let path = self.project_root.join(format!(
+            ".refact/buddy/chats/workflows/{}.json",
+            report.workflow_id
+        ));
+        super::workflows::append_workflow_entry_with_failure(
+            &path,
+            &report.detail,
+            false,
+            Some((&report.category, report.summary.as_str())),
+        )
+        .await;
+    }
+
     pub fn report_error(
         &mut self,
         error_type: &str,
@@ -1231,6 +1356,8 @@ impl BuddyService {
             timestamp: Utc::now().to_rfc3339(),
             activity_type: "error".to_string(),
             chat_id: chat_id.map(|s| s.to_string()),
+            failure_category: None,
+            failure_summary: None,
         });
         self.dirty = true;
     }
@@ -1285,6 +1412,8 @@ pub fn make_runtime_event(
         description: None,
         source: source.to_string(),
         status: status.to_string(),
+        failure_category: None,
+        failure_summary: None,
         progress: None,
         dedupe_key: Some(dedupe_key.to_string()),
         priority: priority.unwrap_or("normal").to_string(),
@@ -1387,6 +1516,8 @@ pub async fn complete_quest_with_voice(
                 timestamp: Utc::now().to_rfc3339(),
                 activity_type: "quest_completed".to_string(),
                 chat_id: None,
+                failure_category: None,
+                failure_summary: None,
             }),
             runtime_event: Some(BuddyRuntimeEvent {
                 speech_text: event_speech,

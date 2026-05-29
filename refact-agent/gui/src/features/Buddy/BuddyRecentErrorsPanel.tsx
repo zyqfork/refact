@@ -18,6 +18,16 @@ interface BuddyRecentErrorsPanelProps {
   onDismiss: (event: RecentBuddyError) => void | Promise<void>;
 }
 
+function formatFailureLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export const BuddyRecentErrorsPanel: React.FC<BuddyRecentErrorsPanelProps> = ({
   recentErrors,
   onInvestigate,
@@ -51,7 +61,8 @@ export const BuddyRecentErrorsPanel: React.FC<BuddyRecentErrorsPanelProps> = ({
         ]
           .filter(Boolean)
           .join(" · ");
-        const detail = e.description ? e.description : subtitle;
+        const failureLabel = formatFailureLabel(e.failure_category);
+        const detail = e.failure_summary || e.description || subtitle;
         return (
           <div
             key={e.id}
@@ -67,6 +78,9 @@ export const BuddyRecentErrorsPanel: React.FC<BuddyRecentErrorsPanelProps> = ({
                 {e.title}
                 {e.occurrences != null && e.occurrences > 1 && (
                   <span className={styles.countBadge}>×{e.occurrences}</span>
+                )}
+                {failureLabel && (
+                  <span className={styles.ackBadge}>{failureLabel}</span>
                 )}
                 {acknowledged && (
                   <span className={styles.ackBadge}>acknowledged</span>

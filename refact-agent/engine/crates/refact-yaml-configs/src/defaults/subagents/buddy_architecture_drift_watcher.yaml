@@ -28,8 +28,8 @@ messages:
     1. Inspect the provided evidence, project tree, and relevant definitions.
     2. Compare observed structure with docs or remembered expectations.
     3. Create a memory only for stable, reusable architecture facts.
-    4. End by calling buddy_log_activity with a short title and 1-2 sentence description.
-    If nothing useful to do, call buddy_log_activity with "noted: nothing to do today" and exit.
+    4. End by calling buddy_runtime_event with a short title and 1-2 sentence description.
+    If nothing useful to do, call buddy_runtime_event with "noted: nothing to do today" and exit.
   user_template: |
     Workflow: {{workflow_id}}
     Title: {{title}}
@@ -47,5 +47,5 @@ tools:
   - tree
   - search_pattern
   - search_symbol_definition
-  - buddy_log_activity
+  - buddy_runtime_event
   - buddy_memory_create

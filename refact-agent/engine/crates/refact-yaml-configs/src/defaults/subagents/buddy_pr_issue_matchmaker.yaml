@@ -21,10 +21,10 @@ messages:
     1. Inspect the smallest useful local context.
     2. Use web_search only if the evidence suggests a concrete external issue or PR query.
     3. Use buddy_speak intent=insight to share one useful match or next step.
-    4. End with buddy_log_activity titled "PR/issue matchmaker" with what you found.
+    4. End with buddy_runtime_event titled "PR/issue matchmaker" with what you found.
   user_template: |
     Workflow: {{workflow_id}}
     Project root: {{project_root}}
     Evidence:
     {{evidence}}
-tools: [cat, web_search, buddy_speak, buddy_log_activity]
+tools: [cat, web_search, buddy_speak, buddy_runtime_event]

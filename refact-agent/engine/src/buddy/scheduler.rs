@@ -39,6 +39,7 @@ pub struct BuddyJobResult {
     pub suggestion: Option<BuddySuggestion>,
     pub activity: Option<BuddyActivity>,
     pub runtime_event: Option<BuddyRuntimeEvent>,
+    pub workflow_failure: Option<super::workflows::WorkflowFailureReport>,
     pub last_result: Option<String>,
     pub xp: u64,
 }
@@ -51,6 +52,7 @@ impl Default for BuddyJobResult {
             suggestion: None,
             activity: None,
             runtime_event: None,
+            workflow_failure: None,
             last_result: None,
             xp: 0,
         }
@@ -63,6 +65,7 @@ impl BuddyJobResult {
             || self.suggestion.is_some()
             || self.activity.is_some()
             || self.runtime_event.is_some()
+            || self.workflow_failure.is_some()
             || self.xp > 0
     }
 }
@@ -461,6 +464,9 @@ impl BuddyScheduler {
                     if let Some(event) = result.runtime_event {
                         svc.enqueue_runtime_event(event);
                     }
+                    if let Some(report) = result.workflow_failure {
+                        svc.record_workflow_failure_report(report).await;
+                    }
                     if result.xp > 0 {
                         svc.grant_xp(result.xp);
                     }
@@ -540,6 +546,8 @@ mod tests {
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     activity_type: "test".to_string(),
                     chat_id: None,
+                    failure_category: None,
+                    failure_summary: None,
                 }),
                 ..Default::default()
             }
@@ -634,6 +642,8 @@ mod tests {
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     activity_type: "test".to_string(),
                     chat_id: None,
+                    failure_category: None,
+                    failure_summary: None,
                 }),
                 runtime_event: self.runtime_event.then(|| {
                     let title = format!("runtime {}", self.id);
@@ -1103,6 +1113,8 @@ mod tests {
                 description: None,
                 source: "test".to_string(),
                 status: "failed".to_string(),
+                failure_category: None,
+                failure_summary: None,
                 progress: None,
                 dedupe_key: None,
                 priority: "normal".to_string(),
