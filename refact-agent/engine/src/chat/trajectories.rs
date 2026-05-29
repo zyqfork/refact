@@ -1537,7 +1537,10 @@ pub async fn save_trajectory_snapshot(
             && !snapshot.messages.is_empty();
 
         if should_generate_title {
-            let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
+            let trajectories_dir = file_path
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| "Trajectory file path has no parent directory".to_string())?;
             let _ = spawn_title_generation_task(
                 gcx.clone(),
                 snapshot.chat_id.clone(),
@@ -6029,6 +6032,71 @@ mod tests {
         assert!(raw.get("claude_code_identity").is_none());
         assert!(raw.get("previous_response_id").is_none());
         assert!(!tokio::fs::try_exists(project_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mode_transition_global_placeholder_title_save_uses_original_path_without_workspace() {
+        let gcx = crate::global_context::tests::make_test_gcx().await;
+        let chat_id = "transition-global-placeholder-title-save";
+        let global_trajectories_dir = get_global_trajectories_dir(gcx.clone()).await;
+        tokio::fs::create_dir_all(&global_trajectories_dir)
+            .await
+            .unwrap();
+        let path = global_trajectories_dir.join(format!("{chat_id}.json"));
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "New Chat",
+                "model": "model",
+                "mode": "task_planner",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "mode_transition",
+                "previous_response_id": "resp_source",
+                "messages": [{"role":"user","content":"hello from global"}],
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "isTitleGenerated": false
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut snapshot = test_snapshot(
+            chat_id,
+            "New Chat",
+            vec![ChatMessage::new(
+                "user".to_string(),
+                "hello from global".to_string(),
+            )],
+        );
+        snapshot.mode = "task_planner".to_string();
+        snapshot.parent_id = Some("source-chat".to_string());
+        snapshot.link_type = Some("mode_transition".to_string());
+        snapshot.previous_response_id = Some("resp_source".to_string());
+        snapshot.claude_code_identity = Some(ClaudeCodeIdentity {
+            device_id: "source-device".to_string(),
+            session_id: "source-session".to_string(),
+        });
+        snapshot.is_title_generated = false;
+        let project_dir_error = get_trajectories_dir(gcx.clone()).await.unwrap_err();
+        assert_eq!(project_dir_error, "No workspace folder found");
+
+        save_trajectory_snapshot(gcx.clone(), snapshot).await.unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(raw["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(find_trajectory_or_buddy_path(gcx.clone(), chat_id).await, Some(path));
+        let all_dirs = get_all_trajectories_dirs(gcx).await;
+        assert_eq!(all_dirs, vec![global_trajectories_dir]);
     }
 
     #[tokio::test]
