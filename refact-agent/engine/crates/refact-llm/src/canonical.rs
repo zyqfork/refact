@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use refact_chat_api::ClaudeCodeIdentity;
 use refact_core::chat_types::{ChatMessage, ChatUsage};
 use crate::params::{CacheControl, CommonParams, ReasoningIntent};
 
@@ -27,6 +28,8 @@ pub struct LlmRequest {
     pub extra_body: Option<serde_json::Map<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_code_identity: Option<ClaudeCodeIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +62,7 @@ impl LlmRequest {
             cache_control: CacheControl::Off,
             extra_body: None,
             previous_response_id: None,
+            claude_code_identity: None,
         }
     }
 
@@ -92,6 +96,11 @@ impl LlmRequest {
 
     pub fn with_previous_response_id(mut self, previous_response_id: Option<String>) -> Self {
         self.previous_response_id = previous_response_id;
+        self
+    }
+
+    pub fn with_claude_code_identity(mut self, identity: Option<ClaudeCodeIdentity>) -> Self {
+        self.claude_code_identity = identity;
         self
     }
 
@@ -164,16 +173,29 @@ mod tests {
 
     #[test]
     fn test_llm_request_builder() {
+        let identity = ClaudeCodeIdentity {
+            device_id: "device".to_string(),
+            session_id: "session".to_string(),
+        };
         let req = LlmRequest::new("gpt-4".to_string(), vec![])
             .with_params(CommonParams {
                 max_tokens: 1000,
                 ..Default::default()
             })
-            .with_reasoning(ReasoningIntent::Medium);
+            .with_reasoning(ReasoningIntent::Medium)
+            .with_claude_code_identity(Some(identity.clone()));
 
         assert_eq!(req.model_id, "gpt-4");
         assert_eq!(req.params.max_tokens, 1000);
         assert_eq!(req.reasoning, ReasoningIntent::Medium);
+        assert_eq!(req.claude_code_identity, Some(identity));
+    }
+
+    #[test]
+    fn test_llm_request_omits_absent_claude_code_identity() {
+        let req = LlmRequest::new("gpt-4".to_string(), vec![]);
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("claude_code_identity").is_none());
     }
 
     #[test]

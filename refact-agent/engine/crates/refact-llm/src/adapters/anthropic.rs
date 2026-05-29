@@ -38,7 +38,10 @@ impl LlmWireAdapter for AnthropicAdapter {
         let is_github_copilot = crate::provider_quirks::is_github_copilot_request(req, settings);
         if is_cc {
             claude_code_compat::apply_oauth_headers(&mut headers, &settings.auth_token)?;
-            claude_code_compat::apply_stainless_headers(&mut headers)?;
+            claude_code_compat::apply_stainless_headers(
+                &mut headers,
+                req.claude_code_identity.as_ref(),
+            )?;
         } else if is_github_copilot && !settings.api_key.is_empty() {
             headers.insert(
                 AUTHORIZATION,
@@ -185,7 +188,7 @@ impl LlmWireAdapter for AnthropicAdapter {
 
         if is_cc {
             claude_code_compat::inject_billing_block(&mut body);
-            claude_code_compat::inject_metadata(&mut body);
+            claude_code_compat::inject_metadata(&mut body, req.claude_code_identity.as_ref());
         }
 
         if let Some(extra) = &req.extra_body {
@@ -925,8 +928,9 @@ fn parse_anthropic_usage(usage: &Value) -> Option<ChatUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use refact_core::chat_types::{ChatContent, ChatMessage};
+    use crate::canonical::ClaudeCodeIdentity;
     use crate::params::CacheControl;
+    use refact_core::chat_types::{ChatContent, ChatMessage};
 
     fn settings() -> AdapterSettings {
         AdapterSettings {
@@ -943,6 +947,14 @@ mod tests {
             eof_is_done: false,
             supports_web_search: false,
             supports_cache_control: true,
+        }
+    }
+
+    fn claude_code_settings() -> AdapterSettings {
+        AdapterSettings {
+            auth_token: "cc-oauth-token".to_string(),
+            api_key: String::new(),
+            ..settings()
         }
     }
 
@@ -972,6 +984,69 @@ mod tests {
             extra,
             ..Default::default()
         }
+    }
+
+    fn metadata_user_id(body: &Value) -> Value {
+        serde_json::from_str(body["metadata"]["user_id"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn test_claude_code_request_uses_persisted_identity() {
+        let adapter = AnthropicAdapter;
+        let identity = ClaudeCodeIdentity {
+            device_id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_string(),
+            session_id: "11111111-2222-4333-8444-555555555555".to_string(),
+        };
+        let req = LlmRequest::new(
+            "claude_code/claude-sonnet-4".to_string(),
+            vec![ChatMessage::new(
+                "user".to_string(),
+                "Hello from reload".to_string(),
+            )],
+        )
+        .with_claude_code_identity(Some(identity.clone()));
+
+        let http = adapter.build_http(&req, &claude_code_settings()).unwrap();
+
+        assert_eq!(
+            http.headers.get("x-claude-code-session-id").unwrap(),
+            identity.session_id.as_str()
+        );
+        let metadata = metadata_user_id(&http.body);
+        assert_eq!(metadata["device_id"], identity.device_id);
+        assert_eq!(metadata["session_id"], identity.session_id);
+        assert_eq!(
+            http.body["metadata"]["rename_table_version"],
+            claude_code_compat::rename_table_version()
+        );
+    }
+
+    #[test]
+    fn test_claude_code_persisted_identity_bytes_repeat_after_reload() {
+        let adapter = AnthropicAdapter;
+        let serialized = r#"{
+            "device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "session_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        }"#;
+        let identity: ClaudeCodeIdentity = serde_json::from_str(serialized).unwrap();
+        let messages = vec![ChatMessage::new(
+            "user".to_string(),
+            "Stable first message for billing".to_string(),
+        )];
+        let req_a = LlmRequest::new("claude_code/claude-sonnet-4".to_string(), messages.clone())
+            .with_claude_code_identity(Some(identity.clone()));
+        let req_b = LlmRequest::new("claude_code/claude-sonnet-4".to_string(), messages)
+            .with_claude_code_identity(Some(identity));
+
+        let http_a = adapter.build_http(&req_a, &claude_code_settings()).unwrap();
+        let http_b = adapter.build_http(&req_b, &claude_code_settings()).unwrap();
+
+        assert_eq!(
+            http_a.headers.get("x-claude-code-session-id"),
+            http_b.headers.get("x-claude-code-session-id")
+        );
+        assert_eq!(http_a.body["metadata"], http_b.body["metadata"]);
     }
 
     fn contains_key_recursive(value: &Value, key: &str) -> bool {

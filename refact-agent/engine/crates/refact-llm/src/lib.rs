@@ -9,7 +9,7 @@ pub mod params;
 pub mod provider_quirks;
 
 pub use adapter::{get_adapter, WireFormat};
-pub use canonical::{CanonicalToolChoice, LlmRequest, LlmStreamDelta};
+pub use canonical::{CanonicalToolChoice, ClaudeCodeIdentity, LlmRequest, LlmStreamDelta};
 pub use embedding_retry::{get_embedding, get_embedding_with_retries};
 pub use embeddings::get_embedding_openai_style;
 pub use logging::safe_truncate;

@@ -4,6 +4,8 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::canonical::ClaudeCodeIdentity;
+
 pub const CC_VERSION: &str = "2.1.126";
 pub const USER_AGENT: &str = "claude-cli/2.1.126 (external, cli)";
 pub const SYSTEM_PREFIX: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
@@ -39,6 +41,25 @@ lazy_static! {
     static ref SESSION_ID: String = uuid::Uuid::new_v4().to_string();
 }
 
+pub fn generate_claude_code_identity() -> ClaudeCodeIdentity {
+    let mut rng = rand::thread_rng();
+    let device_id = (0..32u8)
+        .map(|_| rng.gen::<u8>())
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    ClaudeCodeIdentity {
+        device_id,
+        session_id: uuid::Uuid::new_v4().to_string(),
+    }
+}
+
+fn identity_or_process_fallback(identity: Option<&ClaudeCodeIdentity>) -> ClaudeCodeIdentity {
+    identity.cloned().unwrap_or_else(|| ClaudeCodeIdentity {
+        device_id: DEVICE_ID.clone(),
+        session_id: SESSION_ID.clone(),
+    })
+}
+
 pub fn is_claude_code_oauth(auth_token: &str) -> bool {
     !auth_token.is_empty()
 }
@@ -57,7 +78,10 @@ pub fn apply_oauth_headers(headers: &mut HeaderMap, auth_token: &str) -> Result<
 /// Inject Stainless SDK + Claude Code identity headers that real CC sends on every request
 /// via the Anthropic JS SDK. These are required for Anthropic's server to recognise the
 /// request as a legitimate CLI session.
-pub fn apply_stainless_headers(headers: &mut HeaderMap) -> Result<(), String> {
+pub fn apply_stainless_headers(
+    headers: &mut HeaderMap,
+    identity: Option<&ClaudeCodeIdentity>,
+) -> Result<(), String> {
     let os_name = if cfg!(target_os = "macos") {
         "macOS"
     } else if cfg!(target_os = "windows") {
@@ -92,10 +116,10 @@ pub fn apply_stainless_headers(headers: &mut HeaderMap) -> Result<(), String> {
         );
     }
 
-    // Per-process session id.
+    let identity = identity_or_process_fallback(identity);
     headers.insert(
         "x-claude-code-session-id",
-        HeaderValue::from_str(SESSION_ID.as_str())
+        HeaderValue::from_str(identity.session_id.as_str())
             .map_err(|e| format!("invalid x-claude-code-session-id: {e}"))?,
     );
     Ok(())
@@ -174,6 +198,17 @@ pub fn cc_rename_base_tool(base_name: &str) -> &str {
         }
     }
     base_name
+}
+
+pub fn rename_table_version() -> String {
+    let mut hasher = Sha256::new();
+    for (original, renamed) in CC_TOOL_RENAMES {
+        hasher.update(original.as_bytes());
+        hasher.update([0]);
+        hasher.update(renamed.as_bytes());
+        hasher.update([0xff]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 pub fn cc_resolve_tool_name(name: &str) -> String {
@@ -545,13 +580,17 @@ pub fn inject_billing_block(body: &mut Value) {
 
 /// Inject CC metadata into `body["metadata"]`.
 /// Real CC encodes `{device_id, session_id}` as a JSON string in `user_id`.
-pub fn inject_metadata(body: &mut Value) {
+pub fn inject_metadata(body: &mut Value, identity: Option<&ClaudeCodeIdentity>) {
+    let identity = identity_or_process_fallback(identity);
     let meta_value = serde_json::to_string(&json!({
-        "device_id": DEVICE_ID.as_str(),
-        "session_id": SESSION_ID.as_str(),
+        "device_id": identity.device_id,
+        "session_id": identity.session_id,
     }))
     .unwrap_or_default();
-    body["metadata"] = json!({"user_id": meta_value});
+    body["metadata"] = json!({
+        "user_id": meta_value,
+        "rename_table_version": rename_table_version(),
+    });
 }
 
 #[cfg(test)]
@@ -766,11 +805,56 @@ mod tests {
     #[test]
     fn test_inject_metadata_structure() {
         let mut body = json!({"messages": []});
-        inject_metadata(&mut body);
+        inject_metadata(&mut body, None);
         let uid = body["metadata"]["user_id"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(uid).unwrap();
         assert!(parsed["device_id"].as_str().unwrap().len() == 64);
         assert!(!parsed["session_id"].as_str().unwrap().is_empty());
+        assert_eq!(
+            body["metadata"]["rename_table_version"].as_str().unwrap(),
+            rename_table_version()
+        );
+    }
+
+    #[test]
+    fn test_inject_metadata_uses_provided_identity() {
+        let identity = ClaudeCodeIdentity {
+            device_id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_string(),
+            session_id: "11111111-2222-4333-8444-555555555555".to_string(),
+        };
+        let mut body = json!({"messages": []});
+
+        inject_metadata(&mut body, Some(&identity));
+
+        let uid = body["metadata"]["user_id"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(uid).unwrap();
+        assert_eq!(parsed["device_id"], identity.device_id);
+        assert_eq!(parsed["session_id"], identity.session_id);
+    }
+
+    #[test]
+    fn test_apply_stainless_headers_uses_provided_identity() {
+        let identity = ClaudeCodeIdentity {
+            device_id: "d".repeat(64),
+            session_id: "22222222-3333-4444-8555-666666666666".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+
+        apply_stainless_headers(&mut headers, Some(&identity)).unwrap();
+
+        assert_eq!(
+            headers.get("x-claude-code-session-id").unwrap(),
+            identity.session_id.as_str()
+        );
+    }
+
+    #[test]
+    fn test_rename_table_version_stable_for_current_table() {
+        assert_eq!(
+            rename_table_version(),
+            "b11ba8de3ffd2f21b49ea620c1371688011d10b55c3ef4dd3941503b51f172c1"
+        );
     }
 
     #[test]

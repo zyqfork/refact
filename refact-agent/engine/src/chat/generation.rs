@@ -42,6 +42,7 @@ use crate::chat::diagnostics::{
 };
 use crate::chat::history_limit::{tier0_deterministic_compact_with, CompactAggression};
 use crate::chat::trajectory_ops::approx_token_count;
+use refact_core::llm_types::BaseModelRecord;
 
 const TOKEN_BUDGET_CADENCE: usize = 6;
 const TOKEN_BUDGET_MARKER: &str = "token_budget_info";
@@ -523,6 +524,50 @@ fn tail_needs_assistant(messages: &[ChatMessage]) -> bool {
     }
 
     false
+}
+
+fn is_claude_code_model(model: &BaseModelRecord) -> bool {
+    model.wire_format == crate::llm::WireFormat::AnthropicMessages && !model.auth_token.is_empty()
+}
+
+async fn ensure_claude_code_identity(
+    session_arc: &Arc<AMutex<ChatSession>>,
+    model: &BaseModelRecord,
+) -> Option<crate::llm::ClaudeCodeIdentity> {
+    if !is_claude_code_model(model) {
+        return None;
+    }
+
+    let mut session = session_arc.lock().await;
+    if let Some(identity) = session.thread.claude_code_identity.clone() {
+        return Some(identity);
+    }
+
+    let identity = crate::llm::adapters::claude_code_compat::generate_claude_code_identity();
+    session.thread.claude_code_identity = Some(identity.clone());
+    session.increment_version();
+    session.touch();
+    Some(identity)
+}
+
+#[cfg(test)]
+fn ensure_claude_code_identity_for_test(
+    session: &mut ChatSession,
+    model: &BaseModelRecord,
+) -> Option<crate::llm::ClaudeCodeIdentity> {
+    if !is_claude_code_model(model) {
+        return None;
+    }
+
+    if let Some(identity) = session.thread.claude_code_identity.clone() {
+        return Some(identity);
+    }
+
+    let identity = crate::llm::adapters::claude_code_compat::generate_claude_code_identity();
+    session.thread.claude_code_identity = Some(identity.clone());
+    session.increment_version();
+    session.touch();
+    Some(identity)
 }
 
 fn is_reasoning_token_limit_stop(message: &ChatMessage) -> bool {
@@ -1302,7 +1347,7 @@ pub async fn run_llm_generation(
     };
 
     check_aborted_before_stream(&abort_flag)?;
-    let prepared = prepare_chat_passthrough(
+    let mut prepared = prepare_chat_passthrough(
         gcx.clone(),
         ccx_arc.clone(),
         &t,
@@ -1316,6 +1361,11 @@ pub async fn run_llm_generation(
         &options,
     )
     .await?;
+
+    let claude_code_identity = ensure_claude_code_identity(&session_arc, &model_rec.base).await;
+    prepared.llm_request = prepared
+        .llm_request
+        .with_claude_code_identity(claude_code_identity);
 
     {
         let mut session = session_arc.lock().await;
@@ -2147,6 +2197,63 @@ mod tests {
             content: ChatContent::SimpleText("file content".to_string()),
             ..Default::default()
         }
+    }
+
+    fn claude_code_model() -> BaseModelRecord {
+        BaseModelRecord {
+            wire_format: crate::llm::WireFormat::AnthropicMessages,
+            auth_token: "cc-oauth-token".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_claude_code_identity_generated_once_per_session() {
+        let model = claude_code_model();
+        let mut session = ChatSession::new("cc-identity".to_string());
+
+        let first = ensure_claude_code_identity_for_test(&mut session, &model).unwrap();
+        let version_after_first = session.trajectory_version;
+        let second = ensure_claude_code_identity_for_test(&mut session, &model).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(session.thread.claude_code_identity, Some(first));
+        assert_eq!(session.trajectory_version, version_after_first);
+        assert!(session.trajectory_dirty);
+    }
+
+    #[test]
+    fn test_claude_code_identity_reuses_deserialized_identity() {
+        let model = claude_code_model();
+        let identity: crate::llm::ClaudeCodeIdentity = serde_json::from_str(
+            r#"{
+                "device_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "session_id":"bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+            }"#,
+        )
+        .unwrap();
+        let mut session = ChatSession::new("cc-reload".to_string());
+        session.thread.claude_code_identity = Some(identity.clone());
+
+        let reused = ensure_claude_code_identity_for_test(&mut session, &model).unwrap();
+
+        assert_eq!(reused, identity);
+        assert_eq!(session.trajectory_version, 0);
+        assert!(!session.trajectory_dirty);
+    }
+
+    #[test]
+    fn test_claude_code_identity_skips_non_claude_code_models() {
+        let mut session = ChatSession::new("not-cc".to_string());
+        let model = BaseModelRecord {
+            wire_format: crate::llm::WireFormat::AnthropicMessages,
+            auth_token: String::new(),
+            ..Default::default()
+        };
+
+        assert!(ensure_claude_code_identity_for_test(&mut session, &model).is_none());
+        assert!(session.thread.claude_code_identity.is_none());
+        assert_eq!(session.trajectory_version, 0);
     }
 
     #[test]

@@ -75,7 +75,7 @@ fn token_request_headers() -> Result<HeaderMap, String> {
         reqwest::header::USER_AGENT,
         reqwest::header::HeaderValue::from_static(claude_code_compat::USER_AGENT),
     );
-    claude_code_compat::apply_stainless_headers(&mut headers)?;
+    claude_code_compat::apply_stainless_headers(&mut headers, None)?;
     Ok(headers)
 }
 
