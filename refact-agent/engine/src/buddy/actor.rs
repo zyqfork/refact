@@ -1080,10 +1080,10 @@ impl BuddyService {
         });
     }
 
-    pub async fn record_workflow_failure_report(
+    pub fn record_workflow_failure_report(
         &mut self,
         report: super::workflows::WorkflowFailureReport,
-    ) {
+    ) -> Option<(std::path::PathBuf, super::workflows::WorkflowFailureReport)> {
         let title = format!(
             "{} failed: {}",
             super::workflows::workflow_label(&report.workflow_id),
@@ -1170,7 +1170,7 @@ impl BuddyService {
         event.chat_id = report.chat_id.clone();
         self.enqueue_runtime_event(event);
 
-        self.append_workflow_failure_transcript(&report).await;
+        self.workflow_failure_transcript_write(&report)
     }
 
     pub fn add_diagnostic(&mut self, mut ctx: super::diagnostics::DiagnosticContext) {
@@ -1296,28 +1296,44 @@ impl BuddyService {
         super::workflows::append_workflow_entry(&path, output_summary, success).await;
     }
 
-    async fn append_workflow_failure_transcript(
-        &self,
+    pub async fn append_workflow_failure_transcript(
+        path: &std::path::Path,
         report: &super::workflows::WorkflowFailureReport,
     ) {
-        if !validate_workflow_id(&report.workflow_id) {
-            warn!(
-                "buddy: rejecting invalid workflow_id: {:?}",
-                report.workflow_id
-            );
-            return;
+        if let Some(parent) = path.parent() {
+            if let Err(err) = tokio::fs::create_dir_all(parent).await {
+                warn!(
+                    "buddy: failed to create workflow transcript dir {:?}: {}",
+                    parent, err
+                );
+                return;
+            }
         }
-        let path = self.project_root.join(format!(
-            ".refact/buddy/chats/workflows/{}.json",
-            report.workflow_id
-        ));
         super::workflows::append_workflow_entry_with_failure(
-            &path,
+            path,
             &report.detail,
             false,
             Some((&report.category, report.summary.as_str())),
         )
         .await;
+    }
+
+    fn workflow_failure_transcript_write(
+        &self,
+        report: &super::workflows::WorkflowFailureReport,
+    ) -> Option<(std::path::PathBuf, super::workflows::WorkflowFailureReport)> {
+        if !validate_workflow_id(&report.workflow_id) {
+            warn!(
+                "buddy: rejecting invalid workflow_id: {:?}",
+                report.workflow_id
+            );
+            return None;
+        }
+        let path = self.project_root.join(format!(
+            ".refact/buddy/chats/workflows/{}.json",
+            report.workflow_id
+        ));
+        Some((path, report.clone()))
     }
 
     pub fn report_error(

@@ -46,7 +46,8 @@ pub use trajectories::{
     start_trajectory_watcher, TrajectoryEvent, TrajectoryMeta, handle_v1_trajectories_list,
     handle_v1_trajectories_all, handle_v1_trajectories_get, handle_v1_trajectories_save,
     handle_v1_trajectories_delete, handle_v1_trajectories_subscribe, maybe_save_trajectory,
-    find_trajectory_path, list_all_trajectories_meta, list_trajectories_page,
+    find_trajectory_path, find_trajectory_or_buddy_path, list_all_trajectories_meta,
+    list_trajectories_page,
 };
 pub use handlers::{handle_v1_chat_subscribe, handle_v1_chat_command, handle_v1_chat_cancel_queued};
 pub use task_agent_monitor::start_agent_monitor;

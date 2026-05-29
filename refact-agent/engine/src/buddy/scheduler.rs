@@ -430,6 +430,7 @@ impl BuddyScheduler {
                 result.speech_intent = None;
             }
             if should_record_job_result(&result, records_empty_result) {
+                let mut workflow_failure_write = None;
                 let mut buddy = buddy_arc.lock().await;
                 if let Some(svc) = buddy.as_mut() {
                     let mut js = svc
@@ -465,11 +466,15 @@ impl BuddyScheduler {
                         svc.enqueue_runtime_event(event);
                     }
                     if let Some(report) = result.workflow_failure {
-                        svc.record_workflow_failure_report(report).await;
+                        workflow_failure_write = svc.record_workflow_failure_report(report);
                     }
                     if result.xp > 0 {
                         svc.grant_xp(result.xp);
                     }
+                }
+                drop(buddy);
+                if let Some((path, report)) = workflow_failure_write {
+                    BuddyService::append_workflow_failure_transcript(&path, &report).await;
                 }
             }
         }

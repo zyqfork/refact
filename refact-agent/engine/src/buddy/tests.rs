@@ -53,7 +53,10 @@ async fn workflow_failure_report_emits_runtime_event_activity_and_transcript() {
         chat_id: None,
     };
 
-    svc.record_workflow_failure_report(report).await;
+    let write = svc
+        .record_workflow_failure_report(report)
+        .expect("workflow failure transcript write should be returned");
+    BuddyService::append_workflow_failure_transcript(&write.0, &write.1).await;
 
     assert!(svc.state.recent_activities.iter().any(|activity| {
         activity.title.contains("Model unavailable")
@@ -95,6 +98,23 @@ async fn workflow_failure_report_emits_runtime_event_activity_and_transcript() {
         .failure_summary
         .as_deref()
         .is_some_and(|summary| summary.contains("Buddy/default model")));
+
+    let value: serde_json::Value = serde_json::from_str(
+        &tokio::fs::read_to_string(
+            svc.project_root
+                .join(".refact/buddy/chats/workflows/buddy_dependency_radar.json"),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let entry = &value["entries"][0];
+    assert_eq!(entry["success"], false);
+    assert_eq!(entry["failure_category"], "model_unavailable");
+    assert_eq!(
+        entry["failure_summary"],
+        "Model unavailable — check Buddy/default model settings."
+    );
 }
 
 fn make_suggestion(id: &str, stype: &str, created_at: &str) -> BuddySuggestion {

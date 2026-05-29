@@ -433,13 +433,6 @@ fn fix_tool_call_indexes(messages: &mut [ChatMessage]) {
 }
 
 pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Option<PathBuf> {
-    if let Ok(buddy_dir) = get_buddy_conversations_dir(gcx.clone()).await {
-        let buddy_path = buddy_dir.join(format!("{}.json", chat_id));
-        if buddy_path.exists() {
-            return Some(buddy_path);
-        }
-    }
-
     let traj_dirs = get_all_trajectories_dirs(gcx.clone()).await;
     if let Some(path) = traj_dirs
         .iter()
@@ -480,6 +473,22 @@ pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Opt
                     }
                 }
             }
+        }
+    }
+    None
+}
+
+pub async fn find_trajectory_or_buddy_path(
+    gcx: Arc<GlobalContext>,
+    chat_id: &str,
+) -> Option<PathBuf> {
+    if let Some(path) = find_trajectory_path(gcx.clone(), chat_id).await {
+        return Some(path);
+    }
+    if let Ok(buddy_dir) = get_buddy_conversations_dir(gcx).await {
+        let buddy_path = buddy_dir.join(format!("{}.json", chat_id));
+        if buddy_path.exists() {
+            return Some(buddy_path);
         }
     }
     None
@@ -683,7 +692,7 @@ pub async fn load_trajectory_for_chat(
     chat_id: &str,
 ) -> Option<LoadedTrajectory> {
     let app = AppState::from_gcx(gcx.clone()).await;
-    let traj_path = find_trajectory_path(gcx.clone(), chat_id).await?;
+    let traj_path = find_trajectory_or_buddy_path(gcx.clone(), chat_id).await?;
     let content = tokio::fs::read_to_string(&traj_path).await.ok()?;
     let t: serde_json::Value = serde_json::from_str(&content).ok()?;
 
@@ -2856,7 +2865,7 @@ pub async fn handle_v1_trajectories_get(
 ) -> Result<Response<Body>, ScratchError> {
     let gcx = app.gcx.clone();
     validate_trajectory_id(&id)?;
-    let file_path = find_trajectory_path(gcx, &id).await.ok_or_else(|| {
+    let file_path = find_trajectory_or_buddy_path(gcx, &id).await.ok_or_else(|| {
         ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
     })?;
     let content = fs::read_to_string(&file_path)
@@ -3165,6 +3174,32 @@ mod tests {
         .unwrap();
     }
 
+    async fn write_buddy_conversation_file(path: &Path, id: &str, title: &str) {
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            path,
+            serde_json::to_string(&json!({
+                "id": id,
+                "chat_id": id,
+                "title": title,
+                "model": "model",
+                "mode": "buddy",
+                "tool_use": "agent",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": false,
+                "messages": [{"role":"user","content":"hello buddy"}],
+                "buddy_meta": {"is_buddy_chat": true, "buddy_chat_kind": "investigation"}
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+
     async fn wait_for_watcher_start() {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
@@ -3428,6 +3463,57 @@ mod tests {
         assert!(validate_trajectory_id("../etc/passwd").is_err());
         assert!(validate_trajectory_id("..").is_err());
         assert!(validate_trajectory_id("a/../b").is_err());
+    }
+
+    #[tokio::test]
+    async fn generic_trajectory_delete_does_not_delete_buddy_conversation_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "buddy-delete-isolated";
+        let buddy_path = dir
+            .path()
+            .join(".refact")
+            .join("buddy")
+            .join("chats")
+            .join("conversations")
+            .join(format!("{}.json", chat_id));
+        write_buddy_conversation_file(&buddy_path, chat_id, "Keep Buddy").await;
+
+        let err = handle_v1_trajectories_delete(State(app), AxumPath(chat_id.to_string()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.status_code, StatusCode::NOT_FOUND);
+        assert!(tokio::fs::try_exists(&buddy_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn explicit_buddy_inclusive_lookup_loads_buddy_conversation_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "buddy-read-inclusive";
+        let buddy_path = dir
+            .path()
+            .join(".refact")
+            .join("buddy")
+            .join("chats")
+            .join("conversations")
+            .join(format!("{}.json", chat_id));
+        write_buddy_conversation_file(&buddy_path, chat_id, "Readable Buddy").await;
+
+        assert!(find_trajectory_path(gcx.clone(), chat_id).await.is_none());
+        assert_eq!(
+            find_trajectory_or_buddy_path(gcx.clone(), chat_id).await,
+            Some(buddy_path.clone())
+        );
+        let loaded = load_trajectory_for_chat(gcx, chat_id).await.unwrap();
+
+        assert_eq!(loaded.thread.title, "Readable Buddy");
+        assert_eq!(
+            loaded.thread.buddy_meta.unwrap().buddy_chat_kind,
+            "investigation"
+        );
+        assert_eq!(loaded.messages.len(), 1);
     }
 
     #[test]
