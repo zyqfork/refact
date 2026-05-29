@@ -17,6 +17,8 @@ const SEGMENT_SUMMARY_OVERHEAD_TOKENS: usize = 1024;
 const TOOL_CALL_ARGUMENTS_MAX_CHARS: usize = 1000;
 const SEGMENT_MESSAGE_CONTENT_MAX_CHARS: usize = 6000;
 const SEGMENT_REDACTION_SCAN_EXTRA_CHARS: usize = 4096;
+const CONTEXT_FILE_NAME_COMPONENT_MAX_CHARS: usize = 64;
+const CONTEXT_FILE_NAME_MAX_CHARS: usize = 180;
 const MESSAGE_CONTENT_TRUNCATED_MARKER: &str = "\n[... message content truncated ...]";
 const TOOL_CALL_ARGUMENTS_TRUNCATED_MARKER: &str = "…";
 const SUMMARY_KIND: &str = "llm_segment_summary";
@@ -222,7 +224,12 @@ fn role_label(role: &str) -> &str {
 }
 
 fn bounded_redacted_tool_arguments(arguments: &str) -> String {
-    let redacted = refact_core::string_utils::redact_sensitive(arguments);
+    let scan_cap = TOOL_CALL_ARGUMENTS_MAX_CHARS.saturating_add(SEGMENT_REDACTION_SCAN_EXTRA_CHARS);
+    let (window, truncated) = bounded_redaction_window(arguments, scan_cap);
+    let mut redacted = refact_core::string_utils::redact_sensitive(window);
+    if truncated {
+        redacted.push_str(TOOL_CALL_ARGUMENTS_TRUNCATED_MARKER);
+    }
     let truncated =
         refact_core::string_utils::safe_truncate(&redacted, TOOL_CALL_ARGUMENTS_MAX_CHARS);
     if truncated.len() == redacted.len() {
@@ -270,6 +277,10 @@ fn bounded_redaction_window(text: &str, scan_cap: usize) -> (&str, bool) {
     (&prefix[..end], true)
 }
 
+fn omitted_long_token_marker(omitted_chars: usize) -> String {
+    format!("[long token omitted chars={}]", omitted_chars)
+}
+
 fn cap_redacted_message_content(text: &str, max_chars: usize) -> String {
     if text.len() <= max_chars {
         return text.to_string();
@@ -289,14 +300,68 @@ fn cap_redacted_message_content(text: &str, max_chars: usize) -> String {
 }
 
 fn redact_and_cap_message_content(text: &str) -> String {
-    let scan_cap = SEGMENT_MESSAGE_CONTENT_MAX_CHARS
-        .saturating_add(SEGMENT_REDACTION_SCAN_EXTRA_CHARS);
+    let scan_cap =
+        SEGMENT_MESSAGE_CONTENT_MAX_CHARS.saturating_add(SEGMENT_REDACTION_SCAN_EXTRA_CHARS);
     let (window, truncated) = bounded_redaction_window(text, scan_cap);
     let mut redacted = refact_core::string_utils::redact_sensitive(window);
     if truncated {
-        redacted.push_str(MESSAGE_CONTENT_TRUNCATED_MARKER);
+        if window.is_empty() {
+            redacted.push_str(&omitted_long_token_marker(text.chars().count()));
+        } else {
+            redacted.push_str(MESSAGE_CONTENT_TRUNCATED_MARKER);
+        }
     }
     cap_redacted_message_content(&redacted, SEGMENT_MESSAGE_CONTENT_MAX_CHARS)
+}
+
+fn shorten_context_file_component(component: &str) -> String {
+    if component.len() <= CONTEXT_FILE_NAME_COMPONENT_MAX_CHARS {
+        return component.to_string();
+    }
+    let ext_len = component
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.len().saturating_add(1))
+        .filter(|len| *len <= 16)
+        .unwrap_or(0);
+    let suffix_budget = ext_len.min(CONTEXT_FILE_NAME_COMPONENT_MAX_CHARS / 2);
+    let prefix_budget = CONTEXT_FILE_NAME_COMPONENT_MAX_CHARS.saturating_sub(suffix_budget + 1);
+    let prefix = refact_core::string_utils::safe_truncate(component, prefix_budget);
+    let suffix_start = safe_char_boundary(component, component.len().saturating_sub(suffix_budget));
+    format!("{}…{}", prefix, &component[suffix_start..])
+}
+
+fn context_file_path_components(file_name: &str) -> Vec<&str> {
+    file_name
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect()
+}
+
+fn sanitize_context_file_name(file_name: &str) -> String {
+    let components = context_file_path_components(file_name)
+        .into_iter()
+        .map(refact_core::string_utils::redact_sensitive)
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>();
+    if components.is_empty() {
+        return "[redacted path]".to_string();
+    }
+    let keep_count = components.len().min(3);
+    let start = components.len() - keep_count;
+    let mut kept = components[start..]
+        .iter()
+        .map(|component| shorten_context_file_component(component))
+        .collect::<Vec<_>>();
+    if start > 0 || file_name.starts_with('/') || file_name.contains(":\\") {
+        kept.insert(0, "…".to_string());
+    }
+    let short = kept.join("/");
+    let capped = refact_core::string_utils::safe_truncate(&short, CONTEXT_FILE_NAME_MAX_CHARS);
+    if capped.len() == short.len() {
+        short
+    } else {
+        format!("{}…", capped.trim_end_matches('/'))
+    }
 }
 
 fn segment_content_text(message: &ChatMessage) -> String {
@@ -312,7 +377,8 @@ fn segment_content_text(message: &ChatMessage) -> String {
             .iter()
             .map(|file| {
                 let content = redact_and_cap_message_content(&file.file_content);
-                format!("{}:{}-{}\n{}", file.file_name, file.line1, file.line2, content)
+                let file_name = sanitize_context_file_name(&file.file_name);
+                format!("{}:{}-{}\n{}", file_name, file.line1, file.line2, content)
             })
             .collect::<Vec<_>>()
             .join("\n\n"),
@@ -845,9 +911,25 @@ mod tests {
         }
     }
 
+    fn context_file_named(file_name: &str, content: &str) -> ContextFile {
+        ContextFile {
+            file_name: file_name.to_string(),
+            file_content: content.to_string(),
+            line1: 10,
+            line2: 20,
+            ..Default::default()
+        }
+    }
+
     fn assert_no_raw_secrets(text: &str) {
-        assert!(!text.contains("sk-abcdefghijklmnop"), "sk token leaked: {text}");
-        assert!(!text.contains("secret-bearer-value"), "bearer leaked: {text}");
+        assert!(
+            !text.contains("sk-abcdefghijklmnop"),
+            "sk token leaked: {text}"
+        );
+        assert!(
+            !text.contains("secret-bearer-value"),
+            "bearer leaked: {text}"
+        );
     }
 
     #[test]
@@ -949,6 +1031,23 @@ mod tests {
     }
 
     #[test]
+    fn huge_tool_call_args_are_windowed_before_redaction_and_still_redact_secrets() {
+        let early_secret = "api_key=sk-abcdefghijklmnop";
+        let huge_tail = "a".repeat(TOOL_CALL_ARGUMENTS_MAX_CHARS * 100);
+        let args = format!(
+            "{{\"cmd\":\"run\",\"{}\",\"tail\":\"{}\"}}",
+            early_secret, huge_tail
+        );
+        let text = segment_text(&[assistant_with_tool_call_args(&args)]);
+
+        assert!(text.contains("shell(call_args) args="));
+        assert!(text.contains("api_key=[REDACTED]") || text.contains("[REDACTED_SK_TOKEN]"));
+        assert!(!text.contains("sk-abcdefghijklmnop"));
+        assert!(text.contains(TOOL_CALL_ARGUMENTS_TRUNCATED_MARKER));
+        assert!(text.len() <= TOOL_CALL_ARGUMENTS_MAX_CHARS + 128);
+    }
+
+    #[test]
     fn message_content_is_redacted_for_segment_text_roles() {
         let messages = vec![
             assistant("assistant saw sk-abcdefghijklmnop and Bearer secret-bearer-value"),
@@ -969,13 +1068,10 @@ mod tests {
     #[test]
     fn structured_context_file_content_is_redacted_and_bounded() {
         let huge_tail = "x".repeat(SEGMENT_MESSAGE_CONTENT_MAX_CHARS * 2);
-        let messages = vec![context_files(vec![ContextFile {
-            file_name: "src/secret.rs".to_string(),
-            file_content: format!("prefix token=sk-abcdefghijklmnop\n{}", huge_tail),
-            line1: 10,
-            line2: 20,
-            ..Default::default()
-        }])];
+        let messages = vec![context_files(vec![context_file_named(
+            "src/secret.rs",
+            &format!("prefix token=sk-abcdefghijklmnop\n{}", huge_tail),
+        )])];
         let text = segment_text(&messages);
 
         assert!(text.contains("src/secret.rs:10-20"));
@@ -983,6 +1079,26 @@ mod tests {
         assert!(text.contains("token=[REDACTED]") || text.contains("[REDACTED_SK_TOKEN]"));
         assert!(!text.contains("sk-abcdefghijklmnop"));
         assert!(text.len() < huge_tail.len());
+    }
+
+    #[test]
+    fn structured_context_file_name_is_shortened_and_redacted() {
+        let file_name = "/home/alice/projects/customer-token=secret-bearer-value/deep/private/sk-abcdefghijklmnop/very_long_component_name_that_should_not_be_fully_preserved_because_it_is_noisy.rs";
+        let messages = vec![context_files(vec![context_file_named(
+            file_name,
+            "safe body",
+        )])];
+        let text = segment_text(&messages);
+
+        assert!(text.contains("[CONTEXT_FILE]"));
+        assert!(text.contains("very_long_component_name_that_should_not_be_fully"));
+        assert!(text.contains(":10-20"));
+        assert!(!text.contains("because_it_is_noisy.rs"));
+        assert!(text.contains("…/"));
+        assert!(!text.contains("/home/alice"));
+        assert!(!text.contains("customer-token=secret-bearer-value"));
+        assert!(!text.contains("sk-abcdefghijklmnop"));
+        assert!(text.len() < file_name.len() + 64);
     }
 
     #[test]
@@ -1022,6 +1138,16 @@ mod tests {
         assert!(!text.contains(" end"));
         assert!(text.len() < huge.len());
         assert!(text.len() <= SEGMENT_MESSAGE_CONTENT_MAX_CHARS + 64);
+    }
+
+    #[test]
+    fn long_no_boundary_message_content_gets_omission_marker() {
+        let huge = "z".repeat(SEGMENT_MESSAGE_CONTENT_MAX_CHARS * 3);
+        let text = segment_text(&[assistant(&huge)]);
+
+        assert!(text.contains("[long token omitted chars="));
+        assert!(!text.contains(MESSAGE_CONTENT_TRUNCATED_MARKER));
+        assert!(text.len() < 128);
     }
 
     #[test]
