@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { Button, Text } from "@radix-ui/themes";
 import { useAppDispatch, useAppSelector } from "../../hooks";
 import { push } from "../Pages/pagesSlice";
 import { BuddyCanvas } from "./BuddyCanvas";
@@ -12,7 +13,7 @@ import { useBuddyState } from "./hooks/useBuddyState";
 import { useBuddyOpportunities } from "./hooks/useBuddyOpportunities";
 import {
   selectBuddySnapshot,
-  selectIsBuddyEnabled,
+  selectIsBuddyInteractiveEnabled,
   selectNowPlaying,
   selectActiveSpeech,
   selectBuddyDiagnostics,
@@ -32,13 +33,16 @@ import {
   opportunityActionControls,
   opportunitySpeechText,
 } from "./buddyOpportunityActions";
-import { useDismissBuddyRuntimeEventMutation } from "../../services/refact/buddy";
+import {
+  useDismissBuddyRuntimeEventMutation,
+  useUpdateBuddySettingsMutation,
+} from "../../services/refact/buddy";
 import styles from "./BuddyPanel.module.css";
 
 export const BuddyPanel: React.FC = () => {
   const dispatch = useAppDispatch();
   const snapshot = useAppSelector(selectBuddySnapshot);
-  const enabled = useAppSelector(selectIsBuddyEnabled);
+  const enabled = useAppSelector(selectIsBuddyInteractiveEnabled);
   const nowPlaying = useAppSelector(selectNowPlaying);
   const activeSpeech = useAppSelector(selectActiveSpeech);
   const diagnostics = useAppSelector(selectBuddyDiagnostics);
@@ -51,6 +55,8 @@ export const BuddyPanel: React.FC = () => {
   const pendingOpportunityRef = useRef(false);
   const executeOpportunityAction = useExecuteBuddyAction();
   const [dismissRuntimeMutation] = useDismissBuddyRuntimeEventMutation();
+  const [updateSettings, { isLoading: isEnabling }] =
+    useUpdateBuddySettingsMutation();
 
   const buddy = useBuddyState();
   const { state } = buddy;
@@ -208,8 +214,34 @@ export const BuddyPanel: React.FC = () => {
     dispatch(push({ name: "buddy" }));
   }, [dispatch]);
 
+  const handleEnable = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      void updateSettings({ enabled: true });
+    },
+    [updateSettings],
+  );
+
   if (snapshot === null) return null;
-  if (!enabled) return null;
+  if (!enabled) {
+    return (
+      <div
+        className={styles.disabledBlock}
+        data-testid="buddy-panel-disabled"
+        onClick={handleOpen}
+      >
+        <Text size="2" weight="bold">
+          Pixel is disabled
+        </Text>
+        <Text size="1" color="gray" align="center">
+          Buddy is paused, not gone. Tiny gremlin standby mode.
+        </Text>
+        <Button size="1" onClick={handleEnable} disabled={isEnabling}>
+          Enable
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div

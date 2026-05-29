@@ -986,6 +986,11 @@ export const buddySlice = createSlice({
     selectBuddySuggestions: (state) =>
       state.snapshot?.state.suggestion_state ?? EMPTY_BUDDY_SUGGESTIONS,
     selectBuddyConversations: (state) => state.conversations,
+    selectIsBuddySnapshotAvailable: (state) => state.snapshot !== null,
+    selectIsBuddyUserEnabled: (state) =>
+      state.snapshot?.settings.enabled === true,
+    selectIsBuddyInteractiveEnabled: (state) =>
+      state.snapshot?.enabled === true && state.snapshot.settings.enabled,
     selectIsBuddyEnabled: (state) =>
       state.snapshot?.enabled === true && state.snapshot.settings.enabled,
     selectBuddyDiagnostics: (state) => state.recentDiagnostics,
@@ -1049,6 +1054,9 @@ export const {
   selectBuddyActivities,
   selectBuddySuggestions,
   selectBuddyConversations,
+  selectIsBuddySnapshotAvailable,
+  selectIsBuddyUserEnabled,
+  selectIsBuddyInteractiveEnabled,
   selectIsBuddyEnabled,
   selectBuddyDiagnostics,
   selectRuntimeQueue,

@@ -5,11 +5,13 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { Button, Text } from "@radix-ui/themes";
 import { useAppDispatch, useAppSelector } from "../../hooks";
 import {
+  selectBuddySnapshot,
   selectNowPlaying,
   selectBuddyDiagnostics,
-  selectIsBuddyEnabled,
+  selectIsBuddyInteractiveEnabled,
   selectRuntimeQueue,
   selectBuddySuggestions,
   selectActiveSpeech,
@@ -31,6 +33,7 @@ import { push } from "../Pages/pagesSlice";
 import {
   useDismissBuddySuggestionMutation,
   useDismissBuddyRuntimeEventMutation,
+  useUpdateBuddySettingsMutation,
 } from "../../services/refact/buddy";
 import { useBuddyState } from "./hooks/useBuddyState";
 import { BuddyCanvas } from "./BuddyCanvas";
@@ -387,7 +390,8 @@ function threadErrorKey(chatId: string, error: string): string {
 
 export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
   const dispatch = useAppDispatch();
-  const enabled = useAppSelector(selectIsBuddyEnabled);
+  const snapshot = useAppSelector(selectBuddySnapshot);
+  const enabled = useAppSelector(selectIsBuddyInteractiveEnabled);
   const runtimeQueue = useAppSelector(selectRuntimeQueue);
   const nowPlaying = useAppSelector(selectNowPlaying);
   const diagnostics = useAppSelector(selectBuddyDiagnostics);
@@ -405,6 +409,8 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
   const executeOpportunityAction = useExecuteBuddyAction();
   const [dismissMutation] = useDismissBuddySuggestionMutation();
   const [dismissRuntimeMutation] = useDismissBuddyRuntimeEventMutation();
+  const [updateSettings, { isLoading: isEnabling }] =
+    useUpdateBuddySettingsMutation();
 
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<
     Set<string>
@@ -775,6 +781,10 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
     dispatch(snoozeChatBubbles(undefined));
   }, [dispatch]);
 
+  const handleEnable = useCallback(() => {
+    void updateSettings({ enabled: true });
+  }, [updateSettings]);
+
   const handleControl = useCallback(
     async (ctrl: BuddyControl) => {
       if (!notification) return;
@@ -967,7 +977,24 @@ export const BuddyChatCompanion: React.FC<Props> = ({ chatId }) => {
     ],
   );
 
-  if (!enabled) return null;
+  if (!snapshot) return null;
+  if (!enabled) {
+    return (
+      <div className={styles.disabledCompanion}>
+        <Text size="1" color="gray">
+          Pixel is disabled
+        </Text>
+        <Button
+          size="1"
+          variant="soft"
+          onClick={handleEnable}
+          disabled={isEnabling}
+        >
+          Enable
+        </Button>
+      </div>
+    );
+  }
   if (!notification) return null;
 
   return (

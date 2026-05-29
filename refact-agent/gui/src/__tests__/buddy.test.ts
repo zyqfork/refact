@@ -24,6 +24,9 @@ import {
   setBuddyConversations,
   selectBuddySnapshot,
   selectIsBuddyEnabled,
+  selectIsBuddySnapshotAvailable,
+  selectIsBuddyUserEnabled,
+  selectIsBuddyInteractiveEnabled,
   setActiveSpeech,
   clearActiveSpeech,
   enqueueRuntimeEvent,
@@ -572,6 +575,41 @@ describe("Buddy chat notification freshness", () => {
     const { container } = renderBuddyChatCompanion(store, "chat-a");
 
     await expectNoCompanionNotification(container, "speech:other-chat-speech");
+  });
+
+  test("disabled chat companion renders re-enable affordance and sends enabled patch", async () => {
+    let capturedBody: unknown;
+    server.use(
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/settings",
+        async ({ request }) => {
+          capturedBody = await request.json();
+          return HttpResponse.json(defaultBuddySettings());
+        },
+      ),
+    );
+    const store = setUpStore({
+      config: { apiKey: "test", lspPort: 8001, themeProps: {}, host: "vscode" },
+    });
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot({
+          enabled: false,
+          settings: { ...defaultBuddySettings(), enabled: false },
+        }),
+      ),
+    );
+
+    const { user } = renderBuddyChatCompanion(store, "chat-a");
+
+    expect(await screen.findByText("Pixel is disabled")).toBeInTheDocument();
+    expect(screen.queryByText("Fresh server speech")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Enable" }));
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({ enabled: true });
+    });
   });
 
   test("global active speech still renders", async () => {
@@ -1740,6 +1778,9 @@ describe("buddySlice reducers", () => {
 
     expect(state.snapshot?.enabled).toBe(false);
     expect(state.snapshot?.settings.enabled).toBe(false);
+    expect(selectIsBuddySnapshotAvailable(rootState)).toBe(true);
+    expect(selectIsBuddyUserEnabled(rootState)).toBe(false);
+    expect(selectIsBuddyInteractiveEnabled(rootState)).toBe(false);
     expect(selectIsBuddyEnabled(rootState)).toBe(false);
   });
 

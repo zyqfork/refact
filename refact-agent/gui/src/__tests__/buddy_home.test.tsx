@@ -19,6 +19,7 @@ import {
   setPulse,
   addOpportunity,
   addBuddySuggestion,
+  defaultBuddySettings,
   selectHomeSnoozedUntil,
   selectSeenNotificationIds,
 } from "../features/Buddy/buddySlice";
@@ -3575,6 +3576,43 @@ describe("BuddyPanel_opportunity_notifications", () => {
 
     expect(screen.queryByTestId("buddy-unread-badge")).not.toBeInTheDocument();
   });
+
+  it("renders disabled state instead of disappearing and sends enabled patch", async () => {
+    let capturedBody: unknown;
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [] }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/settings",
+        async ({ request }) => {
+          capturedBody = await request.json();
+          return HttpResponse.json(defaultBuddySettings());
+        },
+      ),
+    );
+
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot(undefined, {
+          enabled: false,
+          settings: { ...makeSnapshot().settings, enabled: false },
+        }),
+      ),
+    );
+
+    const { user } = render(<BuddyPanel />, { store });
+
+    expect(await screen.findByTestId("buddy-panel-disabled")).toBeInTheDocument();
+    expect(screen.getByText("Pixel is disabled")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Enable" }));
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({ enabled: true });
+    });
+  });
 });
 
 describe("BuddyOpportunitiesFeed_suggestions", () => {
@@ -3648,6 +3686,52 @@ describe("BuddyHome_disabled_state", () => {
     );
     expect(settingsSection).toBeInTheDocument();
     expect(settingsSection).not.toHaveAttribute("style");
+  });
+
+  it("disabled Buddy Home enable button sends exact enabled patch", async () => {
+    let capturedBody: unknown;
+    const store = setUpStore({ ...CONFIG_STATE });
+    store.dispatch(
+      setBuddySnapshot(
+        makeSnapshot(undefined, {
+          enabled: false,
+          settings: { ...makeSnapshot().settings, enabled: false },
+        }),
+      ),
+    );
+
+    server.use(
+      http.get("http://127.0.0.1:8001/v1/buddy/opportunities", () =>
+        HttpResponse.json({ opportunities: [] }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/buddy/conversations", () =>
+        HttpResponse.json([]),
+      ),
+      http.get("http://127.0.0.1:8001/v1/stats/llm/summary", () =>
+        HttpResponse.json({
+          totals: { total_calls: 0, successful_calls: 0, total_tokens: 0 },
+        }),
+      ),
+      http.get("http://127.0.0.1:8001/v1/setup/status", () =>
+        HttpResponse.json({ configured: true, reasons: [], detail: {} }),
+      ),
+      http.post(
+        "http://127.0.0.1:8001/v1/buddy/settings",
+        async ({ request }) => {
+          capturedBody = await request.json();
+          return HttpResponse.json(defaultBuddySettings());
+        },
+      ),
+    );
+
+    const { user } = render(<BuddyHome />, { store });
+
+    expect(await screen.findByTestId("buddy-home-disabled")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Enable Buddy" }));
+
+    await waitFor(() => {
+      expect(capturedBody).toEqual({ enabled: true });
+    });
   });
 
   it("settings.enabled false shows disabled UI when top-level enabled is stale", async () => {

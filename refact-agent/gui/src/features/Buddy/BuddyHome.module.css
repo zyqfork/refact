@@ -316,6 +316,11 @@
   padding: 0 var(--space-3) var(--space-3);
 }
 
+.disabledState {
+  min-height: 220px;
+  padding: var(--space-5) var(--space-3);
+}
+
 /* Slim chip strip used for project-setup quick actions placed inline
  * below the summary; intentionally has no panel chrome of its own. */
 .chipStrip {

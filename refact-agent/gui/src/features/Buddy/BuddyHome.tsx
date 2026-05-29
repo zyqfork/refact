@@ -21,7 +21,7 @@ import { useBuddyState } from "./hooks/useBuddyState";
 import {
   selectBuddySnapshot,
   selectBuddyLoaded,
-  selectIsBuddyEnabled,
+  selectIsBuddyInteractiveEnabled,
   selectBuddyActivities,
   selectNowPlaying,
   selectActiveSpeech,
@@ -214,7 +214,7 @@ export const BuddyHome: React.FC = () => {
     currentPage?.name === "buddy" ? currentPage.draftId : undefined;
   const snapshot = useAppSelector(selectBuddySnapshot);
   const loaded = useAppSelector(selectBuddyLoaded);
-  const enabled = useAppSelector(selectIsBuddyEnabled);
+  const enabled = useAppSelector(selectIsBuddyInteractiveEnabled);
   const activities = useAppSelector(selectBuddyActivities);
   const nowPlaying = useAppSelector(selectNowPlaying);
   const activeSpeech = useAppSelector(selectActiveSpeech);
@@ -292,6 +292,10 @@ export const BuddyHome: React.FC = () => {
   const handleSettings = useCallback(() => {
     void updateSettings({ proactive_enabled: !settings?.proactive_enabled });
   }, [settings?.proactive_enabled, updateSettings]);
+
+  const handleEnable = useCallback(() => {
+    void updateSettings({ enabled: true });
+  }, [updateSettings]);
 
   const handleViewStats = useCallback(() => {
     dispatch(push({ name: "stats dashboard" }));
@@ -674,10 +678,23 @@ export const BuddyHome: React.FC = () => {
           </Button>
         </div>
         <main className={styles.content} data-testid="buddy-home-disabled">
-          <Flex align="center" justify="center" direction="column" gap="2">
-            <Text size="2" color="gray">
-              {name} is disabled
+          <Flex
+            align="center"
+            justify="center"
+            direction="column"
+            gap="3"
+            className={styles.disabledState}
+          >
+            <Text size="2" color="gray" align="center">
+              {name} is disabled. Pixel is still here, just politely lurking.
             </Text>
+            <Button
+              size="2"
+              onClick={handleEnable}
+              disabled={isSavingSettings}
+            >
+              Enable {name}
+            </Button>
           </Flex>
           {showSettings && (
             <div
