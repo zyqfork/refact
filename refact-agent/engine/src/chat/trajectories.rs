@@ -252,6 +252,7 @@ struct TrajectoryListCandidate {
 
 #[derive(Clone)]
 pub struct LoadedTrajectory {
+    pub source_path: PathBuf,
     pub messages: Vec<ChatMessage>,
     pub thread: ThreadParams,
     pub created_at: String,
@@ -261,6 +262,29 @@ pub struct LoadedTrajectory {
     pub auto_approve_editing_tools_present: bool,
     pub auto_approve_dangerous_commands_present: bool,
     pub transition_identity_repaired: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct TrajectoryRepairPatch {
+    pub chat_id: String,
+    pub source_path: PathBuf,
+    pub created_at: String,
+    pub frozen_request_prefix: Option<FrozenRequestPrefix>,
+    pub auto_approve_editing_tools: bool,
+    pub auto_approve_dangerous_commands: bool,
+}
+
+impl LoadedTrajectory {
+    pub(crate) fn repair_patch(&self) -> TrajectoryRepairPatch {
+        TrajectoryRepairPatch {
+            chat_id: self.thread.id.clone(),
+            source_path: self.source_path.clone(),
+            created_at: self.created_at.clone(),
+            frozen_request_prefix: self.thread.frozen_request_prefix.clone(),
+            auto_approve_editing_tools: self.thread.auto_approve_editing_tools,
+            auto_approve_dangerous_commands: self.thread.auto_approve_dangerous_commands,
+        }
+    }
 }
 
 pub use refact_chat_history::trajectory_snapshot::TrajectorySnapshot;
@@ -1182,6 +1206,7 @@ pub async fn load_trajectory_for_chat(
         .to_string();
 
     Some(LoadedTrajectory {
+        source_path: traj_path,
         messages,
         thread,
         created_at,
@@ -1619,14 +1644,11 @@ pub async fn maybe_save_trajectory(app: AppState, session_arc: Arc<AMutex<ChatSe
 }
 
 pub(crate) async fn persist_loaded_trajectory_repair_raw(
-    gcx: Arc<GlobalContext>,
-    loaded: &LoadedTrajectory,
+    repair: &TrajectoryRepairPatch,
 ) -> Result<(), String> {
-    let chat_id = &loaded.thread.id;
+    let chat_id = &repair.chat_id;
     validate_trajectory_id(chat_id).map_err(|e| e.message)?;
-    let file_path = find_trajectory_or_buddy_path(gcx, chat_id)
-        .await
-        .ok_or_else(|| "Trajectory not found".to_string())?;
+    let file_path = &repair.source_path;
     let content = tokio::fs::read_to_string(&file_path)
         .await
         .map_err(|e| format!("Failed to read trajectory: {}", e))?;
@@ -1638,7 +1660,7 @@ pub(crate) async fn persist_loaded_trajectory_repair_raw(
 
     trajectory_object.remove("previous_response_id");
     trajectory_object.remove("claude_code_identity");
-    match &loaded.thread.frozen_request_prefix {
+    match &repair.frozen_request_prefix {
         Some(frozen_request_prefix) => {
             trajectory_object.insert(
                 "frozen_request_prefix".to_string(),
@@ -1651,26 +1673,26 @@ pub(crate) async fn persist_loaded_trajectory_repair_raw(
     }
     trajectory_object.insert(
         "created_at".to_string(),
-        serde_json::Value::String(loaded.created_at.clone()),
+        serde_json::Value::String(repair.created_at.clone()),
     );
     trajectory_object.insert(
         "auto_approve_editing_tools".to_string(),
-        json!(loaded.thread.auto_approve_editing_tools),
+        json!(repair.auto_approve_editing_tools),
     );
     trajectory_object.insert(
         "auto_approve_dangerous_commands".to_string(),
-        json!(loaded.thread.auto_approve_dangerous_commands),
+        json!(repair.auto_approve_dangerous_commands),
     );
     trajectory_object.insert(
         "updated_at".to_string(),
         serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
     );
 
-    let tmp_path = unique_trajectory_tmp_path(&file_path);
+    let tmp_path = unique_trajectory_tmp_path(file_path);
     let json_result = serde_json::to_string_pretty(&trajectory)
         .map_err(|e| format!("Failed to serialize trajectory: {}", e));
     atomic_write_json_with_tmp_path(
-        &file_path,
+        file_path,
         &tmp_path,
         json_result,
         Some("Failed to write trajectory"),
@@ -1687,7 +1709,7 @@ async fn persist_loaded_trajectory_repair(gcx: Arc<GlobalContext>, mut loaded: L
         loaded.auto_approve_dangerous_commands_present,
     )
     .await;
-    if let Err(e) = persist_loaded_trajectory_repair_raw(gcx, &loaded).await {
+    if let Err(e) = persist_loaded_trajectory_repair_raw(&loaded.repair_patch()).await {
         warn!(
             "Failed to persist repaired trajectory for {}: {}",
             chat_id, e
@@ -1724,11 +1746,10 @@ pub async fn check_external_reload_pending(
             loaded.auto_approve_dangerous_commands_present,
         )
         .await;
-        let mut loaded_for_repair = loaded.clone();
-        loaded_for_repair.auto_approve_editing_tools_present =
-            loaded_had_auto_approve_editing_tools_present;
-        loaded_for_repair.auto_approve_dangerous_commands_present =
+        loaded.auto_approve_editing_tools_present = loaded_had_auto_approve_editing_tools_present;
+        loaded.auto_approve_dangerous_commands_present =
             loaded_had_auto_approve_dangerous_commands_present;
+        let repair_patch = loaded.repair_patch();
         let repaired_version = {
             let mut session = session_arc.lock().await;
             if session.runtime.state == SessionState::Idle && !session.trajectory_dirty {
@@ -1751,7 +1772,7 @@ pub async fn check_external_reload_pending(
             }
         };
         if let Some(repaired_version) = repaired_version {
-            if let Err(e) = persist_loaded_trajectory_repair_raw(gcx, &loaded_for_repair).await {
+            if let Err(e) = persist_loaded_trajectory_repair_raw(&repair_patch).await {
                 warn!(
                     "Failed to persist repaired trajectory for {}: {}",
                     chat_id, e
@@ -1949,11 +1970,10 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
             loaded.auto_approve_dangerous_commands_present,
         )
         .await;
-        let mut loaded_for_repair = loaded.clone();
-        loaded_for_repair.auto_approve_editing_tools_present =
-            loaded_had_auto_approve_editing_tools_present;
-        loaded_for_repair.auto_approve_dangerous_commands_present =
+        loaded.auto_approve_editing_tools_present = loaded_had_auto_approve_editing_tools_present;
+        loaded.auto_approve_dangerous_commands_present =
             loaded_had_auto_approve_dangerous_commands_present;
+        let repair_patch = loaded.repair_patch();
         let repaired_version = {
             let mut session = session_arc.lock().await;
             if session.runtime.state != SessionState::Idle || session.trajectory_dirty {
@@ -1976,7 +1996,7 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
             transition_identity_repaired.then_some(session.trajectory_version)
         };
         if let Some(repaired_version) = repaired_version {
-            if let Err(e) = persist_loaded_trajectory_repair_raw(gcx, &loaded_for_repair).await {
+            if let Err(e) = persist_loaded_trajectory_repair_raw(&repair_patch).await {
                 warn!(
                     "Failed to persist repaired trajectory for {}: {}",
                     chat_id, e
@@ -6708,6 +6728,127 @@ mod tests {
             json!(["https://example.com"])
         );
         assert_eq!(raw["custom_future_field"]["nested"]["value"], 42);
+    }
+
+    #[tokio::test]
+    async fn mode_transition_repair_persists_to_loaded_task_path_with_normal_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "transition-task-normal-collision-repair";
+        let task_path = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join("task-loaded-repair")
+            .join("trajectories")
+            .join("agents")
+            .join("agent-1")
+            .join(format!("{chat_id}.json"));
+        tokio::fs::create_dir_all(task_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &task_path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Task Collision Repair",
+                "model": "model",
+                "mode": "task_planner",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "mode_transition",
+                "previous_response_id": "task-response",
+                "messages": [
+                    {"role":"system","content":"target task planner system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "source system",
+                    "tools_canonical": [{"type":"function","function":{"name":"source_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "task_meta": {
+                    "task_id": "task-loaded-repair",
+                    "role": "agents",
+                    "agent_id": "agent-1",
+                    "card_id": "T-1"
+                },
+                "custom_future_field": {"task": true}
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let mut loaded = load_trajectory_for_chat(gcx.clone(), chat_id).await.unwrap();
+        assert_eq!(loaded.source_path, task_path);
+        assert!(loaded.transition_identity_repaired);
+        apply_mode_defaults_to_thread(
+            gcx.clone(),
+            &mut loaded.thread,
+            loaded.auto_approve_editing_tools_present,
+            loaded.auto_approve_dangerous_commands_present,
+        )
+        .await;
+        let repair_patch = loaded.repair_patch();
+
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        tokio::fs::create_dir_all(normal_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &normal_path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Normal Collision Must Stay",
+                "model": "model",
+                "mode": "agent",
+                "tool_use": "agent",
+                "messages": [],
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "previous_response_id": "normal-response",
+                "custom_future_field": {"normal": true}
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let normal_before = tokio::fs::read_to_string(&normal_path).await.unwrap();
+
+        persist_loaded_trajectory_repair_raw(&repair_patch)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(&normal_path).await.unwrap(),
+            normal_before
+        );
+        let task_raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&task_path).await.unwrap()).unwrap();
+        assert_eq!(
+            task_raw["frozen_request_prefix"]["system_prompt"],
+            "target task planner system"
+        );
+        assert!(task_raw["frozen_request_prefix"]["tools_canonical"].is_null());
+        assert!(task_raw.get("claude_code_identity").is_none());
+        assert!(task_raw.get("previous_response_id").is_none());
+        assert_eq!(task_raw["custom_future_field"]["task"], true);
     }
 
     #[tokio::test]

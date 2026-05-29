@@ -1397,7 +1397,7 @@ pub async fn get_or_create_session_with_trajectory(
 
     let trajectory_events_tx = app.chat.trajectory_events_tx.clone();
 
-    let (mut session, is_new, transition_identity_repaired) = if let Some(mut loaded) =
+    let (mut session, is_new, transition_repair_patch) = if let Some(mut loaded) =
         super::trajectories::load_trajectory_for_chat(gcx.clone(), chat_id).await
     {
         info!(
@@ -1413,6 +1413,7 @@ pub async fn get_or_create_session_with_trajectory(
         )
         .await;
         let transition_identity_repaired = loaded.transition_identity_repaired;
+        let transition_repair_patch = transition_identity_repaired.then(|| loaded.repair_patch());
         let mut session = ChatSession::new_with_trajectory(
             chat_id.to_string(),
             loaded.messages,
@@ -1424,11 +1425,11 @@ pub async fn get_or_create_session_with_trajectory(
         if transition_identity_repaired {
             session.increment_version();
         }
-        (session, false, transition_identity_repaired)
+        (session, false, transition_repair_patch)
     } else {
         let mut s = ChatSession::new(chat_id.to_string());
         s.increment_version();
-        (s, true, false)
+        (s, true, None)
     };
 
     let background_agents = app
@@ -1496,33 +1497,16 @@ pub async fn get_or_create_session_with_trajectory(
     }
 
     if inserted && !is_new {
-        if !transition_identity_repaired {
+        if transition_repair_patch.is_none() {
             migrate_legacy_frozen_prefix_on_open(app.clone(), session_arc.clone()).await;
         }
-        if transition_identity_repaired {
-            let loaded_for_repair = {
-                let session = session_arc.lock().await;
-                super::trajectories::LoadedTrajectory {
-                    messages: session.messages.clone(),
-                    thread: session.thread.clone(),
-                    created_at: session.created_at.clone(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
-                    wake_up_at: session.wake_up_at,
-                    waiting_for_card_ids: session.waiting_for_card_ids.clone(),
-                    auto_approve_editing_tools_present: true,
-                    auto_approve_dangerous_commands_present: true,
-                    transition_identity_repaired: true,
-                }
-            };
+        if let Some(repair_patch) = transition_repair_patch {
             let repaired_version = {
                 let session = session_arc.lock().await;
                 session.trajectory_version
             };
-            if let Err(e) = super::trajectories::persist_loaded_trajectory_repair_raw(
-                gcx.clone(),
-                &loaded_for_repair,
-            )
-            .await
+            if let Err(e) =
+                super::trajectories::persist_loaded_trajectory_repair_raw(&repair_patch).await
             {
                 warn!(
                     "Failed to persist repaired trajectory for {}: {}",
