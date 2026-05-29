@@ -974,6 +974,16 @@ mod tests {
         }
     }
 
+    fn contains_key_recursive(value: &Value, key: &str) -> bool {
+        match value {
+            Value::Object(map) => {
+                map.contains_key(key) || map.values().any(|v| contains_key_recursive(v, key))
+            }
+            Value::Array(items) => items.iter().any(|v| contains_key_recursive(v, key)),
+            _ => false,
+        }
+    }
+
     #[test]
     fn convert_event_to_user_wrapped_xml() {
         let messages = vec![event_message(
@@ -1254,6 +1264,69 @@ mod tests {
         let http = adapter.build_http(&req, &settings()).unwrap();
         assert_eq!(http.body["cache_control"]["type"], "ephemeral");
         assert_eq!(http.body["cache_control"]["ttl"], "1h");
+    }
+
+    #[test]
+    fn test_top_level_cache_control_only_with_tools_and_multi_turn_messages() {
+        use refact_core::chat_types::{ChatToolCall, ChatToolFunction};
+
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![
+                ChatMessage::new("system".to_string(), "Be stable".to_string()),
+                ChatMessage::new("user".to_string(), "Call the tool".to_string()),
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: ChatContent::SimpleText("I'll check".to_string()),
+                    tool_calls: Some(vec![ChatToolCall {
+                        id: "call_1".to_string(),
+                        tool_type: "function".to_string(),
+                        extra_content: None,
+                        function: ChatToolFunction {
+                            name: "lookup".to_string(),
+                            arguments: r#"{"query":"cache"}"#.to_string(),
+                        },
+                        index: None,
+                    }]),
+                    ..Default::default()
+                },
+                ChatMessage {
+                    role: "tool".to_string(),
+                    content: ChatContent::SimpleText("tool output".to_string()),
+                    tool_call_id: "call_1".to_string(),
+                    ..Default::default()
+                },
+                ChatMessage::new("user".to_string(), "Continue".to_string()),
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral)
+        .with_tools(
+            vec![json!({
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Look up data",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+                }
+            })],
+            Some(CanonicalToolChoice::Auto),
+        );
+
+        let http = adapter.build_http(&req, &settings()).unwrap();
+
+        assert_eq!(
+            http.body["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+        assert!(!contains_key_recursive(
+            &http.body["messages"],
+            "cache_control"
+        ));
+        assert!(!contains_key_recursive(
+            &http.body["tools"],
+            "cache_control"
+        ));
     }
 
     #[test]

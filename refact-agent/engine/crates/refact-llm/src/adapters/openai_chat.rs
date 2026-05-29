@@ -123,18 +123,18 @@ impl LlmWireAdapter for OpenAiChatAdapter {
 
         let mut messages = convert_messages_to_openai(&req.messages);
 
-        // For OpenRouter Anthropic models, prefer automatic caching via top-level cache_control.
-        // This avoids per-message breakpoint churn in long tool loops.
+        let is_anthropic_family_target = is_anthropic_family_model(settings);
+
+        // Anthropic-family targets use provider automatic caching via the top-level field only.
         let use_top_level_cache_control = matches!(req.cache_control, CacheControl::Ephemeral)
             && settings.supports_cache_control
             && is_openrouter_anthropic_model(settings);
 
-        // Legacy explicit block-level cache_control is still used for non-Anthropic targets
-        // that may rely on Anthropic-compatible message-level markers.
-        // Skip entirely for providers like vLLM that reject unknown message fields.
+        // Legacy explicit block markers are only for non-Anthropic compatible providers.
         if matches!(req.cache_control, CacheControl::Ephemeral)
             && settings.supports_cache_control
             && !use_top_level_cache_control
+            && !is_anthropic_family_target
         {
             inject_cache_control(&mut messages);
         }
@@ -629,11 +629,15 @@ fn is_openrouter_anthropic_model(settings: &AdapterSettings) -> bool {
         return false;
     }
 
+    is_anthropic_family_model(settings)
+}
+
+fn is_anthropic_family_model(settings: &AdapterSettings) -> bool {
     let model = settings.model_name.to_ascii_lowercase();
     model.starts_with("anthropic/") || model.contains("claude")
 }
 
-/// Inject cache_control breakpoints for OpenRouter -> Anthropic routing.
+/// Inject cache_control breakpoints for non-Anthropic compatible routing.
 /// Converts simple text messages to multipart format with cache_control on last block.
 /// Strategy: cache system message + 4 strategically positioned messages (quarter, middle, last2, last).
 fn inject_cache_control(messages: &mut [Value]) {
@@ -1825,6 +1829,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_non_openrouter_anthropic_family_skips_block_level_cache_control() {
+        let adapter = OpenAiChatAdapter;
+        let req = LlmRequest::new(
+            "claude-compatible".to_string(),
+            vec![
+                ChatMessage::new("system".to_string(), "You are helpful".to_string()),
+                ChatMessage::new("user".to_string(), "Hello".to_string()),
+                ChatMessage::new("assistant".to_string(), "Hi".to_string()),
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral);
+        let mut settings = default_settings();
+        settings.model_name = "claude-compatible".to_string();
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert!(http.body.get("cache_control").is_none());
+        assert!(!http.body.to_string().contains("cache_control"));
     }
 
     #[test]
