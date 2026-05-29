@@ -21,7 +21,7 @@ impl ToolGetPlan {
     }
 }
 
-fn plan_value(message: &ChatMessage) -> Result<Value, String> {
+fn plan_value(session: &ChatSession, message: &ChatMessage) -> Result<Value, String> {
     let meta = message
         .extra
         .get("plan")
@@ -38,12 +38,16 @@ fn plan_value(message: &ChatMessage) -> Result<Value, String> {
         .get("created_at_ms")
         .and_then(Value::as_u64)
         .ok_or_else(|| "current plan is missing created_at_ms".to_string())?;
+    let content = plan_role::synthesize_current_plan(session)
+        .ok_or_else(|| "current plan could not be synthesized".to_string())?;
+    let delta_count = plan_role::plan_delta_events(session).len();
 
     Ok(json!({
-        "content": message.content.content_text_only(),
+        "content": content,
         "mode": mode,
         "version": version,
         "created_at_ms": created_at_ms,
+        "delta_count": delta_count,
     }))
 }
 
@@ -95,8 +99,8 @@ impl Tool for ToolGetPlan {
 
         let snapshot = chat_facade.session_snapshot(&chat_id).await?;
         let session = session_from_snapshot(chat_id, snapshot.thread, snapshot.messages);
-        let plan = match plan_role::current_plan(&session) {
-            Some(message) => plan_value(message)?,
+        let plan = match plan_role::current_base_plan(&session) {
+            Some(message) => plan_value(&session, message)?,
             None => Value::Null,
         };
         Ok((
@@ -121,6 +125,7 @@ fn session_from_snapshot(
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::chat::internal_roles;
 
     async fn ccx(app: AppState, chat_id: &str) -> Arc<AMutex<AtCommandsContext>> {
         Arc::new(AMutex::new(
@@ -176,14 +181,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_plan_returns_latest_version() {
+    async fn with_plan_returns_synthesized_plan() {
         let gcx = crate::global_context::tests::make_test_gcx().await;
         let app = AppState::from_gcx(gcx).await;
         let chat_id = "get-plan-with-plan";
         let mut session = ChatSession::new(chat_id.to_string());
-        session.install_plan("agent", "first plan");
-        session.install_plan("task_agent", "latest plan");
-        let latest_created_at_ms = session.messages[1].extra["plan"]["created_at_ms"]
+        session.install_plan("agent", "base plan");
+        session.add_message(internal_roles::plan_delta(
+            "tool.update_plan",
+            json!({"seq": 1}),
+            "first update",
+        ));
+        session.add_message(internal_roles::plan_delta(
+            "tool.update_plan",
+            json!({"seq": 2}),
+            "second update",
+        ));
+        let created_at_ms = session.messages[0].extra["plan"]["created_at_ms"]
             .as_u64()
             .unwrap();
         insert_session(&app, session).await;
@@ -195,9 +209,13 @@ mod tests {
                 .unwrap(),
         );
 
-        assert_eq!(output["plan"]["content"], json!("latest plan"));
-        assert_eq!(output["plan"]["mode"], json!("task_agent"));
-        assert_eq!(output["plan"]["version"], json!(2));
-        assert_eq!(output["plan"]["created_at_ms"], json!(latest_created_at_ms));
+        assert_eq!(
+            output["plan"]["content"],
+            json!("base plan\n\n---\n\n## Plan updates\n\nfirst update\n\nsecond update")
+        );
+        assert_eq!(output["plan"]["mode"], json!("agent"));
+        assert_eq!(output["plan"]["version"], json!(1));
+        assert_eq!(output["plan"]["created_at_ms"], json!(created_at_ms));
+        assert_eq!(output["plan"]["delta_count"], json!(2));
     }
 }

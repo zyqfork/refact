@@ -33,6 +33,12 @@ pub struct ToolStrategicPlanning {
 
 static TOKENS_EXTRA_BUDGET_PERCENT: f32 = 0.06;
 
+pub fn format_adopt_plan_instruction(abs_path: &str) -> String {
+    format!(
+        "If you want to use this as your working plan, call `set_plan(path=\"{abs_path}\")`. Otherwise continue. Adopt this as your plan?"
+    )
+}
+
 fn get_gather_files_params(config: &CodeSubagentConfig) -> GatherFilesParams<'_> {
     GatherFilesParams {
         default_subagent_id: "strategic_planning_gather_files",
@@ -172,7 +178,14 @@ async fn execute_strategic_planning(
     external_messages: Vec<ChatMessage>,
     tool_call_id: String,
     config: &CodeSubagentConfig,
-) -> Result<(String, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<
+    (
+        String,
+        serde_json::Map<String, serde_json::Value>,
+        Option<String>,
+    ),
+    String,
+> {
     let (subchat_tx, abort_flag, parent_depth, parent_task_meta, parent_worktree) = {
         let ccx_lock = ccx.lock().await;
         (
@@ -245,10 +258,12 @@ async fn execute_strategic_planning(
         source_chat_id: (!root_chat_id.is_empty()).then_some(root_chat_id),
     };
 
+    let mut saved_plan_path = None;
     let memory_note = match memories_add_enriched(ccx.clone(), &solution_content, enrichment_params)
         .await
     {
         Ok(path) => {
+            saved_plan_path = Some(path.display().to_string());
             format!(
                 "\n\n---\n📝 **This plan has been saved to the knowledge base:** `{}`\n\nRelated memories may be shown elsewhere in short form. To load full content of a memory, call `cat(paths=\"{}\")`.",
                 path.display(),
@@ -264,7 +279,7 @@ async fn execute_strategic_planning(
     let final_message = format!("{}{}", solution_content, memory_note);
     let metering = result.metering;
 
-    Ok((final_message, metering))
+    Ok((final_message, metering, saved_plan_path))
 }
 
 #[async_trait]
@@ -323,7 +338,7 @@ impl Tool for ToolStrategicPlanning {
             important_paths.len()
         );
 
-        let (final_message, metering) = execute_strategic_planning(
+        let (final_message, metering, saved_plan_path) = execute_strategic_planning(
             gcx,
             ccx.clone(),
             important_paths,
@@ -333,30 +348,49 @@ impl Tool for ToolStrategicPlanning {
         )
         .await?;
 
-        Ok((
-            false,
-            vec![
-                ContextEnum::ChatMessage(ChatMessage {
-                    role: "tool".to_string(),
-                    content: ChatContent::SimpleText(final_message),
-                    tool_calls: None,
-                    tool_call_id: tool_call_id.clone(),
-                    usage: None,
-                    preserve: Some(true),
-                    extra: metering,
-                    output_filter: Some(OutputFilter::no_limits()),
-                    ..Default::default()
-                }),
-                ContextEnum::ChatMessage(ChatMessage {
-                    role: "cd_instruction".to_string(),
-                    content: ChatContent::SimpleText(guardrails_prompt),
-                    ..Default::default()
-                }),
-            ],
-        ))
+        let mut output = vec![
+            ContextEnum::ChatMessage(ChatMessage {
+                role: "tool".to_string(),
+                content: ChatContent::SimpleText(final_message),
+                tool_calls: None,
+                tool_call_id: tool_call_id.clone(),
+                usage: None,
+                preserve: Some(true),
+                extra: metering,
+                output_filter: Some(OutputFilter::no_limits()),
+                ..Default::default()
+            }),
+            ContextEnum::ChatMessage(ChatMessage {
+                role: "cd_instruction".to_string(),
+                content: ChatContent::SimpleText(guardrails_prompt),
+                ..Default::default()
+            }),
+        ];
+        if let Some(path) = saved_plan_path {
+            output.push(ContextEnum::ChatMessage(ChatMessage {
+                role: "cd_instruction".to_string(),
+                content: ChatContent::SimpleText(format_adopt_plan_instruction(&path)),
+                ..Default::default()
+            }));
+        }
+
+        Ok((false, output))
     }
 
     fn tool_depends_on(&self) -> Vec<String> {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_adopt_plan_instruction_contains_command_and_prompt() {
+        let instruction = format_adopt_plan_instruction("/abs/x.md");
+
+        assert!(instruction.contains("set_plan(path=\"/abs/x.md\")"));
+        assert!(instruction.to_lowercase().contains("adopt"));
     }
 }

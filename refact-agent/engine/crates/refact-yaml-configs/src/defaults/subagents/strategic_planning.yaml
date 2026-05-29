@@ -47,6 +47,6 @@ prompts:
 
     Prefer plans with bite-sized, independently verifiable tasks. Avoid placeholders, vague instructions, and mega-tasks.
 
-  guardrails: "💿 Now confirm the plan with the user"
+  guardrails: "💿 Now confirm the plan with the user. If you are adopting the saved plan, call `set_plan(path=\"<returned absolute path>\")` with the returned absolute path."
 
 tools: []
