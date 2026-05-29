@@ -248,6 +248,53 @@ pub struct BuddyService {
     pub chat_reaction_debug: crate::buddy::chat_reactions::ChatReactionDebugState,
 }
 
+fn normalize_generated_buddy_text(raw: &str) -> String {
+    raw.replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+        .trim()
+        .to_string()
+}
+
+fn contains_redaction_marker(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("[redacted") || lower.contains("<redacted") || lower.contains("&lt;redacted")
+}
+
+fn safe_generated_buddy_text(generated: &str, fallback: String) -> String {
+    let normalized = normalize_generated_buddy_text(generated);
+    let redacted = redact_sensitive(&normalized);
+    if normalized.is_empty() || redacted != normalized || contains_redaction_marker(&normalized) {
+        fallback
+    } else {
+        normalized
+    }
+}
+
+fn safe_generated_buddy_text_opt(
+    generated: Option<String>,
+    fallback: Option<String>,
+) -> Option<String> {
+    match generated {
+        Some(text) => {
+            let normalized = normalize_generated_buddy_text(&text);
+            let redacted = redact_sensitive(&normalized);
+            if normalized.is_empty()
+                || redacted != normalized
+                || contains_redaction_marker(&normalized)
+            {
+                fallback
+            } else {
+                Some(normalized)
+            }
+        }
+        None => fallback,
+    }
+}
+
 pub async fn render_buddy_speech(
     gcx: AppState,
     persona: BuddyPersonalityProfile,
@@ -273,9 +320,7 @@ pub async fn render_buddy_speech(
         .await
         .render_speech(gcx, voice_ctx, intent)
         .await;
-    if speech.text.trim().is_empty() {
-        speech.text = fallback_text;
-    }
+    speech.text = safe_generated_buddy_text(&speech.text, fallback_text);
     speech
 }
 
@@ -306,12 +351,8 @@ pub async fn render_buddy_runtime_event(
         .render_runtime_event(gcx, voice_ctx, status)
         .await;
     (
-        if title.trim().is_empty() {
-            fallback_title
-        } else {
-            title
-        },
-        description.or(fallback_description),
+        safe_generated_buddy_text(&title, fallback_title),
+        safe_generated_buddy_text_opt(description, fallback_description),
     )
 }
 
@@ -340,11 +381,7 @@ pub async fn render_buddy_activity_title(
         .await
         .render_activity_title(gcx, voice_ctx, intent)
         .await;
-    if title.trim().is_empty() {
-        fallback_title
-    } else {
-        title
-    }
+    safe_generated_buddy_text(&title, fallback_title)
 }
 
 impl BuddyService {
