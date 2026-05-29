@@ -673,6 +673,39 @@ fn extract_text_content(content: &ChatContent) -> String {
     }
 }
 
+fn plan_version(message: &ChatMessage) -> Option<u32> {
+    if message.role != "plan" {
+        return None;
+    }
+    message
+        .extra
+        .get("plan")?
+        .get("version")?
+        .as_u64()
+        .and_then(|version| u32::try_from(version).ok())
+}
+
+fn current_base_plan_message(messages: &[ChatMessage]) -> Option<&ChatMessage> {
+    messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            plan_version(message).map(|version| (index, version, message))
+        })
+        .max_by_key(|(index, version, _)| (*version, *index))
+        .map(|(_, _, message)| message)
+}
+
+fn is_plan_delta_event(message: &ChatMessage) -> bool {
+    message.role == "event"
+        && message
+            .extra
+            .get("event")
+            .and_then(|event| event.get("subkind"))
+            .and_then(|subkind| subkind.as_str())
+            == Some("plan_delta")
+}
+
 pub async fn assemble_new_chat(
     original_messages: &[ChatMessage],
     decisions: &ParsedDecisions,
@@ -865,7 +898,15 @@ pub async fn assemble_new_chat(
         }
     }
 
-    if let Some(initial_plan) = decisions
+    if let Some(existing_plan) = current_base_plan_message(original_messages) {
+        new_messages.push(existing_plan.clone());
+        new_messages.extend(
+            original_messages
+                .iter()
+                .filter(|message| is_plan_delta_event(message))
+                .cloned(),
+        );
+    } else if let Some(initial_plan) = decisions
         .initial_plan
         .as_deref()
         .map(str::trim)
@@ -880,7 +921,6 @@ pub async fn assemble_new_chat(
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             let mut extra = serde_json::Map::new();
-            // Mirrors engine internal_roles::plan without adding an engine dependency.
             extra.insert(
                 "plan".to_string(),
                 serde_json::json!({
@@ -1553,6 +1593,164 @@ MSG_ID:2
         assert!(!new_messages.iter().any(|msg| {
             msg.role == "user" && msg.content.content_text_only().contains("## Initial Plan")
         }));
+    }
+
+    #[tokio::test]
+    async fn assemble_new_chat_preserves_existing_plan_and_deltas() {
+        let mut older_plan_extra = serde_json::Map::new();
+        older_plan_extra.insert(
+            "plan".to_string(),
+            serde_json::json!({
+                "mode": "agent",
+                "version": 1,
+                "created_at_ms": 1000,
+                "supersedes": null,
+            }),
+        );
+        let mut current_plan_extra = serde_json::Map::new();
+        current_plan_extra.insert(
+            "plan".to_string(),
+            serde_json::json!({
+                "mode": "task_agent",
+                "version": 2,
+                "created_at_ms": 2000,
+                "supersedes": "old-plan-id",
+                "truncated": true,
+                "original_chars": 12345,
+            }),
+        );
+        let mut first_delta_extra = serde_json::Map::new();
+        first_delta_extra.insert(
+            "event".to_string(),
+            serde_json::json!({
+                "subkind": "plan_delta",
+                "source": "tool.update_plan",
+                "payload": {"seq": 1, "summary": "first summary"},
+            }),
+        );
+        let mut other_event_extra = serde_json::Map::new();
+        other_event_extra.insert(
+            "event".to_string(),
+            serde_json::json!({
+                "subkind": "system_notice",
+                "source": "test",
+                "payload": {"ignore": true},
+            }),
+        );
+        let mut second_delta_extra = serde_json::Map::new();
+        second_delta_extra.insert(
+            "event".to_string(),
+            serde_json::json!({
+                "subkind": "plan_delta",
+                "source": "tool.update_plan",
+                "payload": {"seq": 2, "summary": "second summary"},
+            }),
+        );
+        let messages = vec![
+            ChatMessage {
+                role: "plan".to_string(),
+                message_id: "older-plan-id".to_string(),
+                content: ChatContent::SimpleText("older plan".to_string()),
+                preserve: Some(true),
+                extra: older_plan_extra,
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "event".to_string(),
+                message_id: "delta-1".to_string(),
+                content: ChatContent::SimpleText("first update".to_string()),
+                extra: first_delta_extra,
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "event".to_string(),
+                message_id: "other-event".to_string(),
+                content: ChatContent::SimpleText("do not copy".to_string()),
+                extra: other_event_extra,
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "plan".to_string(),
+                message_id: "current-plan-id".to_string(),
+                content: ChatContent::SimpleText("current base plan bytes".to_string()),
+                preserve: Some(true),
+                extra: current_plan_extra,
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "event".to_string(),
+                message_id: "delta-2".to_string(),
+                content: ChatContent::SimpleText("second update".to_string()),
+                extra: second_delta_extra,
+                ..Default::default()
+            },
+        ];
+        let decisions = ParsedDecisions {
+            initial_plan: Some("fallback".to_string()),
+            ..Default::default()
+        };
+
+        let new_messages = assemble_new_chat(&messages, &decisions, &[]).await.unwrap();
+        let hidden_messages: Vec<_> = new_messages
+            .iter()
+            .filter(|message| message.role == "plan" || message.role == "event")
+            .collect();
+
+        assert_eq!(hidden_messages.len(), 3);
+        assert_eq!(hidden_messages[0].role, "plan");
+        assert_eq!(hidden_messages[0].message_id, "current-plan-id");
+        assert_eq!(
+            hidden_messages[0].content.content_text_only(),
+            "current base plan bytes"
+        );
+        assert_eq!(
+            hidden_messages[0].extra["plan"]["mode"],
+            serde_json::json!("task_agent")
+        );
+        assert_eq!(
+            hidden_messages[0].extra["plan"]["version"],
+            serde_json::json!(2)
+        );
+        assert_eq!(
+            hidden_messages[0].extra["plan"]["created_at_ms"],
+            serde_json::json!(2000)
+        );
+        assert_eq!(
+            hidden_messages[0].extra["plan"]["supersedes"],
+            serde_json::json!("old-plan-id")
+        );
+        assert_eq!(
+            hidden_messages[0].extra["plan"]["truncated"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            hidden_messages[0].extra["plan"]["original_chars"],
+            serde_json::json!(12345)
+        );
+        assert_eq!(hidden_messages[1].message_id, "delta-1");
+        assert_eq!(
+            hidden_messages[1].content.content_text_only(),
+            "first update"
+        );
+        assert_eq!(
+            hidden_messages[1].extra["event"]["payload"],
+            serde_json::json!({"seq": 1, "summary": "first summary"})
+        );
+        assert_eq!(hidden_messages[2].message_id, "delta-2");
+        assert_eq!(
+            hidden_messages[2].content.content_text_only(),
+            "second update"
+        );
+        assert_eq!(
+            hidden_messages[2].extra["event"]["payload"],
+            serde_json::json!({"seq": 2, "summary": "second summary"})
+        );
+        assert!(!new_messages
+            .iter()
+            .any(|message| message.content.content_text_only() == "fallback"));
+        assert!(!new_messages
+            .iter()
+            .any(|message| message.message_id == "other-event"));
     }
 
     #[tokio::test]
