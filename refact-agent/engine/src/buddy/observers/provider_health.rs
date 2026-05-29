@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 
+use crate::app_state::AppState;
 use crate::buddy::observers::{BuddyObserver, ObserverContext};
 use crate::buddy::settings::BuddySettings;
 use crate::buddy::types::{BuddyFact, BuddyFactKind};
 use crate::caps::DefaultModels;
-use crate::app_state::AppState;
 
 pub struct ProviderHealthObserver;
 
@@ -31,12 +33,41 @@ fn check_default_model(
     {
         facts.push(BuddyFact {
             kind: BuddyFactKind::BrokenModelReference,
-            key: format!("provider:broken_ref:{}", field_name),
+            key: format!("provider:broken_ref:{}", model_id),
             source: "provider_health",
             payload: serde_json::json!({ "field": payload_field, "model_id": model_id }),
             seen_at: now,
             confidence: 0.9,
         });
+    }
+}
+
+fn check_default_model_once(
+    facts: &mut Vec<BuddyFact>,
+    seen_broken_models: &mut HashSet<String>,
+    field_name: &str,
+    model_id: &str,
+    payload_field: &str,
+    available_models: &[String],
+    now: DateTime<Utc>,
+) {
+    let before = facts.len();
+    check_default_model(
+        facts,
+        field_name,
+        model_id,
+        payload_field,
+        available_models,
+        now,
+    );
+    let Some(fact) = facts.get(before) else {
+        return;
+    };
+    if fact.kind != BuddyFactKind::BrokenModelReference {
+        return;
+    }
+    if !seen_broken_models.insert(model_id.to_string()) {
+        facts.pop();
     }
 }
 
@@ -69,9 +100,11 @@ pub fn detect_provider_health_facts(
             "chat_light_model",
         ),
     ];
+    let mut seen_broken_models = HashSet::new();
     for (field_name, model_id, payload_field) in &chat_fields {
-        check_default_model(
+        check_default_model_once(
             &mut facts,
+            &mut seen_broken_models,
             field_name,
             model_id,
             payload_field,

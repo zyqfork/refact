@@ -424,7 +424,7 @@ mod rules {
                     BuddyPriority::High,
                     fact.confidence,
                     vec![fact.key.clone()],
-                    format!("provider:broken_ref:{}:{}", field, model),
+                    format!("provider:broken_ref:{}", model),
                     vec![
                         BuddyAction::OpenPage {
                             page: BuddyPage::DefaultModels,

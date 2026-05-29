@@ -4698,6 +4698,54 @@ fn provider_health_broken_ref() {
 }
 
 #[test]
+fn provider_health_coalesces_same_missing_model_id() {
+    use super::facts::FactStore;
+    use super::observers::provider_health::detect_provider_health_facts;
+    use super::opportunities::{OpportunityDetector, OpportunityQueue};
+    use crate::caps::DefaultModels;
+    let now = chrono::Utc::now();
+    let defaults = DefaultModels {
+        completion_default_model: String::new(),
+        chat_default_model: "openai/gpt-4o".to_string(),
+        chat_thinking_model: String::new(),
+        chat_light_model: "refact/gpt-4.1-nano".to_string(),
+        chat_buddy_model: "refact/gpt-4.1-nano".to_string(),
+    };
+    let facts = detect_provider_health_facts(&defaults, &["openai/gpt-4o".to_string()], &[], now);
+    let broken: Vec<_> = facts
+        .iter()
+        .filter(|f| f.kind == BuddyFactKind::BrokenModelReference)
+        .collect();
+    assert_eq!(broken.len(), 1);
+    assert_eq!(broken[0].key, "provider:broken_ref:refact/gpt-4.1-nano");
+    assert_eq!(
+        broken[0].payload.get("model_id").and_then(|v| v.as_str()),
+        Some("refact/gpt-4.1-nano")
+    );
+
+    let mut store = FactStore::new();
+    store.ingest_many(facts);
+    let opps =
+        OpportunityDetector::new().detect(&store, &BuddyPulse::default(), &OpportunityQueue::new());
+    let unavailable_opps: Vec<_> = opps
+        .iter()
+        .filter(|(opp, _)| {
+            opp.kind == BuddyOpportunityKind::ProviderTuning
+                && opp.summary.contains("not available")
+        })
+        .collect();
+    assert_eq!(unavailable_opps.len(), 1);
+    assert!(unavailable_opps[0]
+        .0
+        .summary
+        .contains("refact/gpt-4.1-nano"));
+    assert_eq!(
+        unavailable_opps[0].0.cooldown_key,
+        "provider:broken_ref:refact/gpt-4.1-nano"
+    );
+}
+
+#[test]
 fn provider_health_no_emit_when_ok() {
     use super::observers::provider_health::detect_provider_health_facts;
     use crate::caps::DefaultModels;
