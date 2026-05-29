@@ -12,10 +12,7 @@ use crate::postprocessing::pp_command_output::OutputFilter;
 use crate::tools::tools_description::{
     json_schema_from_params, Tool, ToolDesc, ToolSource, ToolSourceType,
 };
-use refact_chat_history::history_limit::{
-    compress_duplicate_context_files, compute_context_budget,
-    remove_invalid_tool_calls_and_tool_calls_results,
-};
+use refact_chat_history::history_limit::{compress_duplicate_context_files, compute_context_budget};
 use refact_chat_history::trajectory_ops::TOOLS_TO_PRESERVE;
 use refact_runtime_api::{ChatSessionUpdate, SessionState};
 
@@ -66,9 +63,249 @@ fn aggressive_summary_required_reason(
     }
 }
 
+#[derive(Default)]
+struct CompressChatApplyStats {
+    context_files_dropped: usize,
+    context_messages_dropped: usize,
+    memory_dropped: usize,
+    tool_truncated: usize,
+    tool_dropped: usize,
+    project_info_dropped: usize,
+    dedup_count: usize,
+    aggressive_summary_skipped_reason: Option<&'static str>,
+}
+
+struct CompressChatApplyRequest<'a> {
+    drop_context_files: &'a HashSet<String>,
+    drop_memories: &'a HashSet<String>,
+    drop_all_memories: bool,
+    truncate_tool_outputs: &'a HashSet<String>,
+    drop_tool_outputs: &'a HashSet<String>,
+    drop_context_messages: &'a HashSet<String>,
+    dedup_context_files: bool,
+    drop_project_information: bool,
+    strength: &'a str,
+    preserve_last_turns: Option<usize>,
+    target_tokens: Option<usize>,
+    tool_call_names: &'a HashMap<String, String>,
+}
+
+fn tokens_with_tail(
+    modifiable_prefix: &[ChatMessage],
+    preserved_tail: &[ChatMessage],
+    immutable_tail: &[ChatMessage],
+) -> usize {
+    modifiable_prefix
+        .iter()
+        .chain(preserved_tail.iter())
+        .chain(immutable_tail.iter())
+        .map(approx_tokens_for_message)
+        .sum()
+}
+
+fn remove_invalid_tool_calls_and_tool_calls_results_before(
+    modifiable_prefix: &mut Vec<ChatMessage>,
+    immutable_tail: &[ChatMessage],
+) {
+    let tool_call_ids: HashSet<String> = modifiable_prefix
+        .iter()
+        .chain(immutable_tail.iter())
+        .filter(|m| (m.role == "tool" || m.role == "diff") && !m.tool_call_id.is_empty())
+        .map(|m| m.tool_call_id.clone())
+        .collect();
+
+    modifiable_prefix.retain(|m| {
+        if let Some(tool_calls) = &m.tool_calls {
+            tool_calls.iter().all(|tc| tool_call_ids.contains(&tc.id))
+        } else {
+            true
+        }
+    });
+
+    let assistant_tool_call_ids: HashSet<String> = modifiable_prefix
+        .iter()
+        .chain(immutable_tail.iter())
+        .filter_map(|x| x.tool_calls.clone())
+        .flatten()
+        .map(|x| x.id)
+        .collect();
+
+    modifiable_prefix.retain(|m| {
+        let is_tool_result = m.role == "tool" || m.role == "diff";
+        !(is_tool_result
+            && !m.tool_call_id.is_empty()
+            && !assistant_tool_call_ids.contains(&m.tool_call_id))
+    });
+
+    let mut last_occurrence: HashMap<String, usize> = HashMap::new();
+    for (i, m) in modifiable_prefix
+        .iter()
+        .chain(immutable_tail.iter())
+        .enumerate()
+    {
+        let is_tool_result = m.role == "tool" || m.role == "diff";
+        if is_tool_result && !m.tool_call_id.is_empty() {
+            last_occurrence.insert(m.tool_call_id.clone(), i);
+        }
+    }
+    let indices_to_keep: HashSet<usize> = last_occurrence.values().cloned().collect();
+    let mut current_idx = 0usize;
+    modifiable_prefix.retain(|m| {
+        let idx = current_idx;
+        current_idx += 1;
+        let is_tool_result = m.role == "tool" || m.role == "diff";
+        m.tool_call_id.is_empty() || !is_tool_result || indices_to_keep.contains(&idx)
+    });
+}
+
+fn compress_chat_apply_head_messages(
+    mut head_messages: Vec<ChatMessage>,
+    immutable_tail: &[ChatMessage],
+    request: &CompressChatApplyRequest,
+) -> (Vec<ChatMessage>, CompressChatApplyStats) {
+    let preserve_cutoff = preserve_cutoff_for(&head_messages, request.preserve_last_turns);
+    let mut preserved_tail = head_messages.split_off(preserve_cutoff.min(head_messages.len()));
+    let mut stats = CompressChatApplyStats::default();
+
+    if request.drop_project_information {
+        let first_system_idx = head_messages.iter().position(|m| m.role == "system");
+        let mut idx = 0usize;
+        head_messages.retain(|msg| {
+            let keep = if msg.role != "system" {
+                true
+            } else if Some(idx) == first_system_idx {
+                true
+            } else {
+                let text = msg.content.content_text_only().to_lowercase();
+                if text.contains("project") || text.contains("workspace") {
+                    stats.project_info_dropped += 1;
+                    false
+                } else {
+                    true
+                }
+            };
+            idx += 1;
+            keep
+        });
+    }
+
+    let mut updated_head: Vec<ChatMessage> = Vec::with_capacity(head_messages.len());
+    for msg in head_messages.into_iter() {
+        if msg.role != "context_file" {
+            updated_head.push(msg);
+            continue;
+        }
+        if !msg.tool_call_id.is_empty() && request.drop_context_messages.contains(&msg.tool_call_id)
+        {
+            stats.context_messages_dropped += 1;
+            continue;
+        }
+
+        let mut files = extract_context_files(&msg);
+        if files.is_empty() {
+            updated_head.push(msg);
+            continue;
+        }
+
+        let mut remaining: Vec<ContextFile> = Vec::new();
+        for cf in files.drain(..) {
+            let is_memory = is_memory_path(&cf.file_name);
+            if request.drop_context_files.contains(&cf.file_name) {
+                stats.context_files_dropped += 1;
+                continue;
+            }
+            if request.drop_all_memories && is_memory {
+                stats.memory_dropped += 1;
+                continue;
+            }
+            if request.drop_memories.contains(&cf.file_name) {
+                stats.memory_dropped += 1;
+                continue;
+            }
+            remaining.push(cf);
+        }
+
+        if remaining.is_empty() {
+            stats.context_messages_dropped += 1;
+            continue;
+        }
+
+        let mut new_msg = msg.clone();
+        new_msg.content = ChatContent::ContextFiles(remaining);
+        updated_head.push(new_msg);
+    }
+
+    head_messages = updated_head;
+
+    if request.dedup_context_files {
+        if let Ok((count, _)) = compress_duplicate_context_files(&mut head_messages) {
+            stats.dedup_count = count;
+        }
+    }
+
+    for msg in head_messages.iter_mut() {
+        if msg.role != "tool" && msg.role != "diff" {
+            continue;
+        }
+        if msg.tool_call_id.is_empty() {
+            continue;
+        }
+        if request.drop_tool_outputs.contains(&msg.tool_call_id) {
+            msg.content =
+                ChatContent::SimpleText("Tool result removed by compress_chat_apply".to_string());
+            stats.tool_dropped += 1;
+            continue;
+        }
+        if request.truncate_tool_outputs.contains(&msg.tool_call_id) {
+            if let Some(name) = request.tool_call_names.get(&msg.tool_call_id) {
+                if should_preserve_tool(name) {
+                    continue;
+                }
+            }
+            let content = msg.content.content_text_only();
+            if content.len() > TOOL_OUTPUT_TRUNCATE_LIMIT {
+                let preview: String = content.chars().take(TOOL_OUTPUT_TRUNCATE_LIMIT).collect();
+                msg.content =
+                    ChatContent::SimpleText(format!("Tool result compressed: {}...", preview));
+                stats.tool_truncated += 1;
+            }
+        }
+    }
+
+    let mut cleanup_tail = Vec::with_capacity(preserved_tail.len() + immutable_tail.len());
+    cleanup_tail.extend_from_slice(&preserved_tail);
+    cleanup_tail.extend_from_slice(immutable_tail);
+    remove_invalid_tool_calls_and_tool_calls_results_before(&mut head_messages, &cleanup_tail);
+
+    if (request.strength == "balanced" || request.strength == "aggressive")
+        && !request.dedup_context_files
+    {
+        let cur_tokens = tokens_with_tail(&head_messages, &preserved_tail, immutable_tail);
+        let needs_more = request.target_tokens.map_or(true, |t| cur_tokens > t);
+        if needs_more {
+            if let Ok((count, _)) = compress_duplicate_context_files(&mut head_messages) {
+                stats.dedup_count += count;
+            }
+        }
+    }
+
+    if request.strength == "aggressive" {
+        let cur_tokens = tokens_with_tail(&head_messages, &preserved_tail, immutable_tail);
+        let needs_more = request.target_tokens.map_or(true, |t| cur_tokens > t);
+        if needs_more {
+            stats.aggressive_summary_skipped_reason =
+                aggressive_summary_required_reason(&head_messages, head_messages.len());
+        }
+    }
+
+    head_messages.append(&mut preserved_tail);
+    (head_messages, stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::call_validation::{ChatToolCall, ChatToolFunction};
 
     fn user_message(text: &str) -> ChatMessage {
         ChatMessage {
@@ -93,6 +330,96 @@ mod tests {
             content: ChatContent::SimpleText(text.to_string()),
             ..Default::default()
         }
+    }
+
+    fn system_message(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: "system".to_string(),
+            content: ChatContent::SimpleText(text.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn context_file_message(
+        tool_call_id: &str,
+        file_name: &str,
+        file_content: &str,
+    ) -> ChatMessage {
+        ChatMessage {
+            role: "context_file".to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            content: ChatContent::ContextFiles(vec![ContextFile {
+                file_name: file_name.to_string(),
+                file_content: file_content.to_string(),
+                line1: 1,
+                line2: 1,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn assistant_tool_call_message(tool_call_id: &str, tool_name: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText(String::new()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: tool_call_id.to_string(),
+                index: Some(0),
+                function: ChatToolFunction {
+                    name: tool_name.to_string(),
+                    arguments: "{}".to_string(),
+                },
+                tool_type: "function".to_string(),
+                extra_content: None,
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn tool_message(tool_call_id: &str, text: &str) -> ChatMessage {
+        ChatMessage {
+            role: "tool".to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            content: ChatContent::SimpleText(text.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn apply_request<'a>(
+        drop_context_files: &'a HashSet<String>,
+        drop_memories: &'a HashSet<String>,
+        truncate_tool_outputs: &'a HashSet<String>,
+        drop_tool_outputs: &'a HashSet<String>,
+        drop_context_messages: &'a HashSet<String>,
+        tool_call_names: &'a HashMap<String, String>,
+    ) -> CompressChatApplyRequest<'a> {
+        CompressChatApplyRequest {
+            drop_context_files,
+            drop_memories,
+            drop_all_memories: false,
+            truncate_tool_outputs,
+            drop_tool_outputs,
+            drop_context_messages,
+            dedup_context_files: false,
+            drop_project_information: false,
+            strength: "conservative",
+            preserve_last_turns: Some(1),
+            target_tokens: None,
+            tool_call_names,
+        }
+    }
+
+    fn assert_preserved_tail_unchanged(
+        before: &[ChatMessage],
+        after: &[ChatMessage],
+        turns: usize,
+    ) {
+        let cutoff = find_preserve_cutoff(before, turns);
+        let expected = serde_json::to_string(&before[cutoff..]).unwrap();
+        let actual_start = after.len() - (before.len() - cutoff);
+        let actual = serde_json::to_string(&after[actual_start..]).unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -211,6 +538,199 @@ mod tests {
         assert!(!messages
             .iter()
             .any(crate::chat::summarization::is_segment_summary));
+    }
+    #[test]
+    fn apply_drop_all_memories_preserves_tail_context_files() {
+        let messages = vec![
+            user_message("old user"),
+            context_file_message("old_memory", "/repo/.refact/knowledge/old.md", "old memory"),
+            user_message("tail user"),
+            context_file_message(
+                "tail_memory",
+                "/repo/.refact/knowledge/tail.md",
+                "tail memory",
+            ),
+        ];
+        let drop_context_files = HashSet::new();
+        let drop_memories = HashSet::new();
+        let truncate_tool_outputs = HashSet::new();
+        let drop_tool_outputs = HashSet::new();
+        let drop_context_messages = HashSet::new();
+        let tool_call_names = HashMap::new();
+        let mut request = apply_request(
+            &drop_context_files,
+            &drop_memories,
+            &truncate_tool_outputs,
+            &drop_tool_outputs,
+            &drop_context_messages,
+            &tool_call_names,
+        );
+        request.drop_all_memories = true;
+
+        let (after, stats) = compress_chat_apply_head_messages(messages.clone(), &[], &request);
+
+        assert_eq!(stats.memory_dropped, 1);
+        assert_preserved_tail_unchanged(&messages, &after, 1);
+        assert!(after
+            .iter()
+            .any(|message| message.content.content_text_only().contains("tail memory")));
+    }
+
+    #[test]
+    fn apply_context_drop_options_preserve_tail_context_file_messages() {
+        let messages = vec![
+            user_message("old user"),
+            context_file_message("old_context", "old.rs", "old context"),
+            user_message("tail user"),
+            context_file_message("tail_context", "tail.rs", "tail context"),
+        ];
+        let drop_context_files = HashSet::from(["tail.rs".to_string(), "old.rs".to_string()]);
+        let drop_memories = HashSet::new();
+        let truncate_tool_outputs = HashSet::new();
+        let drop_tool_outputs = HashSet::new();
+        let drop_context_messages =
+            HashSet::from(["tail_context".to_string(), "old_context".to_string()]);
+        let tool_call_names = HashMap::new();
+        let request = apply_request(
+            &drop_context_files,
+            &drop_memories,
+            &truncate_tool_outputs,
+            &drop_tool_outputs,
+            &drop_context_messages,
+            &tool_call_names,
+        );
+
+        let (after, stats) = compress_chat_apply_head_messages(messages.clone(), &[], &request);
+
+        assert_eq!(stats.context_messages_dropped, 1);
+        assert_preserved_tail_unchanged(&messages, &after, 1);
+    }
+
+    #[test]
+    fn apply_tool_drop_and_truncate_preserve_tail_tool_results() {
+        let long_old = "old tool output ".repeat(30);
+        let long_tail = "tail tool output ".repeat(30);
+        let messages = vec![
+            user_message("old user"),
+            assistant_tool_call_message("old_call", "shell"),
+            tool_message("old_call", &long_old),
+            user_message("tail user"),
+            assistant_tool_call_message("tail_drop_call", "shell"),
+            tool_message("tail_drop_call", "tail drop output"),
+            assistant_tool_call_message("tail_truncate_call", "shell"),
+            tool_message("tail_truncate_call", &long_tail),
+        ];
+        let drop_context_files = HashSet::new();
+        let drop_memories = HashSet::new();
+        let truncate_tool_outputs =
+            HashSet::from(["old_call".to_string(), "tail_truncate_call".to_string()]);
+        let drop_tool_outputs = HashSet::from(["tail_drop_call".to_string()]);
+        let drop_context_messages = HashSet::new();
+        let tool_call_names = HashMap::from([
+            ("old_call".to_string(), "shell".to_string()),
+            ("tail_drop_call".to_string(), "shell".to_string()),
+            ("tail_truncate_call".to_string(), "shell".to_string()),
+        ]);
+        let request = apply_request(
+            &drop_context_files,
+            &drop_memories,
+            &truncate_tool_outputs,
+            &drop_tool_outputs,
+            &drop_context_messages,
+            &tool_call_names,
+        );
+
+        let (after, stats) = compress_chat_apply_head_messages(messages.clone(), &[], &request);
+
+        assert_eq!(stats.tool_truncated, 1);
+        assert_eq!(stats.tool_dropped, 0);
+        assert!(after.iter().any(|message| message
+            .content
+            .content_text_only()
+            .starts_with("Tool result compressed:")));
+        assert_preserved_tail_unchanged(&messages, &after, 1);
+    }
+
+    #[test]
+    fn apply_drop_project_information_preserves_tail_system_messages() {
+        let messages = vec![
+            system_message("root prompt"),
+            system_message("old project workspace details"),
+            user_message("tail user"),
+            system_message("tail project workspace details"),
+        ];
+        let drop_context_files = HashSet::new();
+        let drop_memories = HashSet::new();
+        let truncate_tool_outputs = HashSet::new();
+        let drop_tool_outputs = HashSet::new();
+        let drop_context_messages = HashSet::new();
+        let tool_call_names = HashMap::new();
+        let mut request = apply_request(
+            &drop_context_files,
+            &drop_memories,
+            &truncate_tool_outputs,
+            &drop_tool_outputs,
+            &drop_context_messages,
+            &tool_call_names,
+        );
+        request.drop_project_information = true;
+
+        let (after, stats) = compress_chat_apply_head_messages(messages.clone(), &[], &request);
+
+        assert_eq!(stats.project_info_dropped, 1);
+        assert!(!after.iter().any(|message| message
+            .content
+            .content_text_only()
+            .contains("old project workspace details")));
+        assert_preserved_tail_unchanged(&messages, &after, 1);
+    }
+
+    #[test]
+    fn apply_aggressive_combination_preserves_tail_byte_identically() {
+        let messages = vec![
+            system_message("root prompt"),
+            user_message("old user"),
+            assistant_message("old assistant"),
+            context_file_message("old_memory", "/repo/.refact/knowledge/old.md", "old memory"),
+            user_message("middle user"),
+            assistant_message("middle assistant"),
+            user_message("tail user"),
+            context_file_message(
+                "tail_memory",
+                "/repo/.refact/knowledge/tail.md",
+                "tail memory",
+            ),
+            assistant_tool_call_message("tail_call", "shell"),
+            tool_message("tail_call", &"tail tool output ".repeat(30)),
+        ];
+        let drop_context_files = HashSet::new();
+        let drop_memories = HashSet::new();
+        let truncate_tool_outputs = HashSet::from(["tail_call".to_string()]);
+        let drop_tool_outputs = HashSet::new();
+        let drop_context_messages = HashSet::new();
+        let tool_call_names = HashMap::from([("tail_call".to_string(), "shell".to_string())]);
+        let mut request = apply_request(
+            &drop_context_files,
+            &drop_memories,
+            &truncate_tool_outputs,
+            &drop_tool_outputs,
+            &drop_context_messages,
+            &tool_call_names,
+        );
+        request.drop_all_memories = true;
+        request.drop_project_information = true;
+        request.strength = "aggressive";
+        request.target_tokens = Some(0);
+
+        let (after, stats) = compress_chat_apply_head_messages(messages.clone(), &[], &request);
+
+        assert_eq!(stats.memory_dropped, 1);
+        assert_eq!(stats.tool_truncated, 0);
+        assert_eq!(
+            stats.aggressive_summary_skipped_reason,
+            Some(AGGRESSIVE_SUMMARY_SKIPPED_REASON)
+        );
+        assert_preserved_tail_unchanged(&messages, &after, 1);
     }
 }
 
@@ -692,7 +1212,6 @@ impl Tool for ToolCompressChatApply {
             .flatten()
             .map(|tc| (tc.id.clone(), tc.function.name.clone()))
             .collect();
-        let mut head_messages = session_snapshot.messages[..active_start].to_vec();
         let tail_messages = session_snapshot.messages[active_start..].to_vec();
 
         let drop_context_files: HashSet<String> = drop_context_files.into_iter().collect();
@@ -701,180 +1220,26 @@ impl Tool for ToolCompressChatApply {
         let truncate_tool_outputs: HashSet<String> = truncate_tool_outputs.into_iter().collect();
         let drop_tool_outputs: HashSet<String> = drop_tool_outputs.into_iter().collect();
 
-        let mut context_files_dropped = 0usize;
-        let mut context_messages_dropped = 0usize;
-        let mut memory_dropped = 0usize;
-        let mut tool_truncated = 0usize;
-        let mut tool_dropped = 0usize;
-        let mut project_info_dropped = 0usize;
-        let mut dedup_count = 0usize;
-        let mut aggressive_summary_skipped_reason: Option<&'static str> = None;
-
-        if drop_project_information {
-            let first_system_idx = head_messages.iter().position(|m| m.role == "system");
-            let mut idx = 0usize;
-            head_messages.retain(|msg| {
-                let keep = if msg.role != "system" {
-                    true
-                } else if Some(idx) == first_system_idx {
-                    true
-                } else {
-                    let text = msg.content.content_text_only().to_lowercase();
-                    if text.contains("project") || text.contains("workspace") {
-                        project_info_dropped += 1;
-                        false
-                    } else {
-                        true
-                    }
-                };
-                idx += 1;
-                keep
-            });
-        }
-
-        // Modify context files
-        let mut updated_head: Vec<ChatMessage> = Vec::with_capacity(head_messages.len());
-        for msg in head_messages.into_iter() {
-            if msg.role != "context_file" {
-                updated_head.push(msg);
-                continue;
-            }
-            if !msg.tool_call_id.is_empty() && drop_context_messages.contains(&msg.tool_call_id) {
-                context_messages_dropped += 1;
-                continue;
-            }
-
-            let mut files = extract_context_files(&msg);
-            if files.is_empty() {
-                updated_head.push(msg);
-                continue;
-            }
-
-            let mut remaining: Vec<ContextFile> = Vec::new();
-            for cf in files.drain(..) {
-                let is_memory = is_memory_path(&cf.file_name);
-                if drop_context_files.contains(&cf.file_name) {
-                    context_files_dropped += 1;
-                    continue;
-                }
-                if drop_all_memories && is_memory {
-                    memory_dropped += 1;
-                    continue;
-                }
-                if drop_memories.contains(&cf.file_name) {
-                    memory_dropped += 1;
-                    continue;
-                }
-                remaining.push(cf);
-            }
-
-            if remaining.is_empty() {
-                context_messages_dropped += 1;
-                continue;
-            }
-
-            let mut new_msg = msg.clone();
-            new_msg.content = ChatContent::ContextFiles(remaining);
-            updated_head.push(new_msg);
-        }
-
-        head_messages = updated_head;
-
-        if dedup_context_files {
-            if let Ok((count, _)) = compress_duplicate_context_files(&mut head_messages) {
-                dedup_count = count;
-            }
-        }
-
-        // Modify tool outputs
-        for msg in head_messages.iter_mut() {
-            if msg.role != "tool" && msg.role != "diff" {
-                continue;
-            }
-            if msg.tool_call_id.is_empty() {
-                continue;
-            }
-            if drop_tool_outputs.contains(&msg.tool_call_id) {
-                msg.content = ChatContent::SimpleText(
-                    "Tool result removed by compress_chat_apply".to_string(),
-                );
-                tool_dropped += 1;
-                continue;
-            }
-            if truncate_tool_outputs.contains(&msg.tool_call_id) {
-                if let Some(name) = tool_call_names.get(&msg.tool_call_id) {
-                    if should_preserve_tool(name) {
-                        continue;
-                    }
-                }
-                let content = msg.content.content_text_only();
-                if content.len() > TOOL_OUTPUT_TRUNCATE_LIMIT {
-                    let preview: String =
-                        content.chars().take(TOOL_OUTPUT_TRUNCATE_LIMIT).collect();
-                    msg.content =
-                        ChatContent::SimpleText(format!("Tool result compressed: {}...", preview));
-                    tool_truncated += 1;
-                }
-            }
-        }
-
+        let request = CompressChatApplyRequest {
+            drop_context_files: &drop_context_files,
+            drop_memories: &drop_memories,
+            drop_all_memories,
+            truncate_tool_outputs: &truncate_tool_outputs,
+            drop_tool_outputs: &drop_tool_outputs,
+            drop_context_messages: &drop_context_messages,
+            dedup_context_files,
+            drop_project_information,
+            strength: &strength,
+            preserve_last_turns,
+            target_tokens,
+            tool_call_names: &tool_call_names,
+        };
+        let (mut head_messages, stats) = compress_chat_apply_head_messages(
+            session_snapshot.messages[..active_start].to_vec(),
+            &tail_messages,
+            &request,
+        );
         head_messages.extend(tail_messages);
-        let active_call_id = tool_call_id.clone();
-        let active_msg = head_messages
-            .iter()
-            .enumerate()
-            .find(|(_, msg)| {
-                msg.role == "assistant"
-                    && msg
-                        .tool_calls
-                        .as_ref()
-                        .map(|tcs| tcs.iter().any(|tc| tc.id == active_call_id))
-                        .unwrap_or(false)
-            })
-            .map(|(idx, msg)| (idx, msg.clone()));
-
-        remove_invalid_tool_calls_and_tool_calls_results(&mut head_messages);
-
-        if let Some((active_idx, active_msg)) = active_msg {
-            let still_present = head_messages.iter().any(|msg| {
-                msg.role == "assistant"
-                    && msg
-                        .tool_calls
-                        .as_ref()
-                        .map(|tcs| tcs.iter().any(|tc| tc.id == active_call_id))
-                        .unwrap_or(false)
-            });
-            if !still_present {
-                head_messages.insert(active_idx.min(head_messages.len()), active_msg);
-            }
-        }
-
-        if (strength == "balanced" || strength == "aggressive") && !dedup_context_files {
-            let cur_tokens: usize = head_messages.iter().map(approx_tokens_for_message).sum();
-            let needs_more = target_tokens.map_or(true, |t| cur_tokens > t);
-            if needs_more {
-                let preserve_cutoff = preserve_cutoff_for(&head_messages, preserve_last_turns);
-                let mut modifiable =
-                    head_messages[..preserve_cutoff.min(head_messages.len())].to_vec();
-                if let Ok((count, _)) = compress_duplicate_context_files(&mut modifiable) {
-                    if count > 0 {
-                        dedup_count += count;
-                        head_messages
-                            .splice(..preserve_cutoff.min(head_messages.len()), modifiable);
-                    }
-                }
-            }
-        }
-
-        if strength == "aggressive" {
-            let cur_tokens: usize = head_messages.iter().map(approx_tokens_for_message).sum();
-            let needs_more = target_tokens.map_or(true, |t| cur_tokens > t);
-            if needs_more {
-                let preserve_cutoff = preserve_cutoff_for(&head_messages, preserve_last_turns);
-                aggressive_summary_skipped_reason =
-                    aggressive_summary_required_reason(&head_messages, preserve_cutoff);
-            }
-        }
 
         let after_tokens = head_messages
             .iter()
@@ -915,14 +1280,14 @@ impl Tool for ToolCompressChatApply {
             "target_tokens": target_tokens,
             "target_met": target_met,
             "strength": strength,
-            "context_files_dropped": context_files_dropped,
-            "context_messages_dropped": context_messages_dropped,
-            "memories_dropped": memory_dropped,
-            "tool_outputs_truncated": tool_truncated,
-            "tool_outputs_dropped": tool_dropped,
-            "project_info_dropped": project_info_dropped,
-            "dedup_context_files": dedup_count,
-            "aggressive_summary_skipped_reason": aggressive_summary_skipped_reason,
+            "context_files_dropped": stats.context_files_dropped,
+            "context_messages_dropped": stats.context_messages_dropped,
+            "memories_dropped": stats.memory_dropped,
+            "tool_outputs_truncated": stats.tool_truncated,
+            "tool_outputs_dropped": stats.tool_dropped,
+            "project_info_dropped": stats.project_info_dropped,
+            "dedup_context_files": stats.dedup_count,
+            "aggressive_summary_skipped_reason": stats.aggressive_summary_skipped_reason,
             "active_tail_start": active_start,
         });
 
