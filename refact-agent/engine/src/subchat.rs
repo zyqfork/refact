@@ -68,7 +68,7 @@ async fn emit_parent_compaction_diagnostics(
         )
     } else {
         format!(
-            "Context limit error had no eligible closed non-user segment to summarize (attempt {}):\n{}",
+            "Context limit error could not summarize an eligible closed non-user segment (attempt {}):\n{}",
             attempt, error,
         )
     };
@@ -80,40 +80,52 @@ async fn emit_parent_compaction_diagnostics(
     let _ = parent_tx.lock().await.send(msg);
 }
 
+fn append_reactive_compaction_diagnostic(
+    messages: &mut Vec<ChatMessage>,
+    error: &str,
+    preserve_last_message: bool,
+) {
+    if preserve_last_message {
+        if let Some(last) = messages.pop() {
+            messages.push(make_ui_only_error_message(error));
+            messages.push(last);
+            return;
+        }
+    }
+    messages.push(make_ui_only_error_message(error));
+}
+
 async fn apply_subchat_reactive_compaction(
+    gcx: Arc<GlobalContext>,
     config: &SubchatConfig,
     messages: &mut Vec<ChatMessage>,
     error: &str,
     attempt: usize,
     preserve_last_message: bool,
 ) -> bool {
-    let last = if preserve_last_message {
-        messages.pop()
-    } else {
-        None
-    };
-    if let Some(msg) = last {
-        messages.push(msg);
-        let compacted = crate::chat::summarization::summarize_oldest_segment_with_static_summary(
-            messages,
-            "Previous non-user subchat activity was summarized after a context-limit error.",
-            "subchat_reactive",
-        );
-        if let Some(msg) = messages.pop() {
-            messages.push(make_ui_only_error_message(error));
-            messages.push(msg);
-        } else {
-            messages.push(make_ui_only_error_message(error));
-        }
-        emit_parent_compaction_diagnostics(config, error, attempt, compacted).await;
-        return compacted;
-    }
-    messages.push(make_ui_only_error_message(error));
-    let compacted = crate::chat::summarization::summarize_oldest_segment_with_static_summary(
+    let original_messages = messages.clone();
+    append_reactive_compaction_diagnostic(messages, error, preserve_last_message);
+    let compacted = match crate::chat::summarization::summarize_oldest_segment_with_resolved_model(
+        gcx,
         messages,
-        "Previous non-user subchat activity was summarized after a context-limit error.",
-        "subchat_reactive",
-    );
+        &config.model,
+        config.n_ctx,
+    )
+    .await
+    {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(failure) => {
+            warn!(
+                "Subchat context-limit segment summarization failed; preserving original messages: {}",
+                failure
+            );
+            *messages = original_messages;
+            append_reactive_compaction_diagnostic(messages, error, preserve_last_message);
+            false
+        }
+    };
+
     emit_parent_compaction_diagnostics(config, error, attempt, compacted).await;
     compacted
 }
@@ -1169,6 +1181,7 @@ async fn run_subchat_loop(
                         original_error,
                     );
                     apply_subchat_reactive_compaction(
+                        ccx.lock().await.global_context.clone(),
                         config,
                         &mut messages,
                         &original_error,
@@ -1287,6 +1300,7 @@ async fn run_subchat_with_wrap_up(
                         original_error,
                     );
                     apply_subchat_reactive_compaction(
+                        ccx.lock().await.global_context.clone(),
                         config,
                         &mut messages,
                         &original_error,
@@ -1378,6 +1392,7 @@ async fn run_subchat_with_wrap_up(
                     original_error,
                 );
                 apply_subchat_reactive_compaction(
+                    ccx.lock().await.global_context.clone(),
                     config,
                     &mut messages,
                     &original_error,
@@ -2138,6 +2153,7 @@ mod subchat_tests {
 
     #[tokio::test]
     async fn subchat_reactive_compaction_appends_diagnostics_and_preserves_last_message() {
+        let gcx = make_test_gcx().await;
         let config = test_subchat_config();
         let mut messages = vec![
             ChatMessage::new("user".to_string(), "first".to_string()),
@@ -2151,6 +2167,7 @@ mod subchat_tests {
         ];
 
         apply_subchat_reactive_compaction(
+            gcx,
             &config,
             &mut messages,
             "context_length_exceeded",
@@ -2166,13 +2183,20 @@ mod subchat_tests {
         assert!(messages
             .iter()
             .any(|message| message.role == "error" && is_ui_only_message(message)));
-        assert!(messages
+        assert!(!messages
             .iter()
             .any(crate::chat::summarization::is_segment_summary));
+        assert!(!messages.iter().any(|message| {
+            message
+                .content
+                .content_text_only()
+                .contains("Previous non-user subchat activity was summarized")
+        }));
     }
 
     #[tokio::test]
     async fn subchat_reactive_compaction_emits_parent_diagnostics() {
+        let gcx = make_test_gcx().await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = test_subchat_config();
         config.parent_tool_call_id = Some("call_1".to_string());
@@ -2189,6 +2213,7 @@ mod subchat_tests {
         ];
 
         apply_subchat_reactive_compaction(
+            gcx,
             &config,
             &mut messages,
             "context_length_exceeded",
@@ -2206,7 +2231,7 @@ mod subchat_tests {
             .get("subchat_id")
             .and_then(|v| v.as_str())
             .unwrap()
-            .contains("summarizing the oldest closed non-user segment"));
+            .contains("could not summarize an eligible closed non-user segment"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use refact_chat_history::compression_exemption::{exemption_for, CompressionExemp
 
 pub const MAX_SEGMENT_SUMMARY_ATTEMPTS: usize = 2;
 const SEGMENT_SUMMARY_OVERHEAD_TOKENS: usize = 1024;
+const TOOL_CALL_ARGUMENTS_MAX_CHARS: usize = 1000;
 const SUMMARY_KIND: &str = "llm_segment_summary";
 const SUMMARY_SCHEMA_VERSION: u64 = 1;
 
@@ -25,6 +26,7 @@ pub enum SegmentSummaryFailure {
         budget_chars: usize,
     },
     NoMessagesToSummarize,
+    EmptySummary,
     PressureTooLow,
     Transient(String),
 }
@@ -44,6 +46,9 @@ impl std::fmt::Display for SegmentSummaryFailure {
                 excerpt_chars, budget_chars
             ),
             SegmentSummaryFailure::NoMessagesToSummarize => write!(f, "no messages to summarize"),
+            SegmentSummaryFailure::EmptySummary => {
+                write!(f, "segment summarizer produced no assistant summary")
+            }
             SegmentSummaryFailure::PressureTooLow => write!(f, "context pressure not high enough"),
             SegmentSummaryFailure::Transient(msg) => write!(f, "{}", msg),
         }
@@ -107,7 +112,7 @@ fn segment_summary_source_hash(message: &ChatMessage) -> Option<&str> {
 }
 
 fn is_excluded_from_segment(message: &ChatMessage) -> bool {
-    if message.role == "system" || message.role == "user" {
+    if message.role == "system" || message.role == "user" || is_ui_only_message(message) {
         return true;
     }
     exemption_for(message) == CompressionExemption::Never
@@ -212,6 +217,17 @@ fn role_label(role: &str) -> &str {
     }
 }
 
+fn bounded_redacted_tool_arguments(arguments: &str) -> String {
+    let redacted = refact_core::string_utils::redact_sensitive(arguments);
+    let truncated =
+        refact_core::string_utils::safe_truncate(&redacted, TOOL_CALL_ARGUMENTS_MAX_CHARS);
+    if truncated.len() == redacted.len() {
+        truncated.to_string()
+    } else {
+        format!("{}…", truncated)
+    }
+}
+
 fn segment_text(messages: &[ChatMessage]) -> String {
     messages
         .iter()
@@ -225,7 +241,14 @@ fn segment_text(messages: &[ChatMessage]) -> String {
                 if !tool_calls.is_empty() {
                     let calls: Vec<String> = tool_calls
                         .iter()
-                        .map(|call| format!("{}({})", call.function.name, call.id))
+                        .map(|call| {
+                            format!(
+                                "{}({}) args={}",
+                                call.function.name,
+                                call.id,
+                                bounded_redacted_tool_arguments(&call.function.arguments)
+                            )
+                        })
                         .collect();
                     parts.push(format!("tool_calls={}", calls.join(", ")));
                 }
@@ -283,13 +306,24 @@ async fn summarize_segment_text(
         .await
         .map_err(SegmentSummaryFailure::Transient)?;
 
-    Ok(result
-        .messages
+    extract_non_empty_assistant_summary(&result.messages)
+}
+
+fn extract_non_empty_assistant_summary(
+    messages: &[ChatMessage],
+) -> Result<String, SegmentSummaryFailure> {
+    let summary = messages
         .iter()
         .rev()
-        .find(|message| message.role == "assistant")
+        .find(|message| message.role == "assistant" && !is_ui_only_message(message))
         .map(|message| message.content.content_text_only())
-        .unwrap_or_else(|| "Summary unavailable".to_string()))
+        .unwrap_or_default();
+    let summary = summary.trim().to_string();
+    if summary.is_empty() {
+        Err(SegmentSummaryFailure::EmptySummary)
+    } else {
+        Ok(summary)
+    }
 }
 
 fn make_segment_summary_message(
@@ -297,6 +331,7 @@ fn make_segment_summary_message(
     source_messages: &[ChatMessage],
     summary_model: &str,
 ) -> ChatMessage {
+    debug_assert!(!summary.trim().is_empty());
     let source_hash = source_hash_for_messages(source_messages);
     let source_ids = source_message_ids(source_messages);
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -379,12 +414,12 @@ async fn resolve_summary_model(
     let caps = crate::global_context::try_load_caps_quickly_if_not_present(gcx, 0)
         .await
         .map_err(|e| SegmentSummaryFailure::Transient(e.message.clone()))?;
-    let model = if !caps.defaults.chat_light_model.is_empty() {
+    let model = if !thread_model.is_empty() {
+        thread_model.to_string()
+    } else if !caps.defaults.chat_light_model.is_empty() {
         caps.defaults.chat_light_model.clone()
     } else if !caps.defaults.chat_default_model.is_empty() {
         caps.defaults.chat_default_model.clone()
-    } else if !thread_model.is_empty() {
-        thread_model.to_string()
     } else {
         return Err(SegmentSummaryFailure::NoModelAvailable);
     };
@@ -393,7 +428,7 @@ async fn resolve_summary_model(
     let model_n_ctx = if model_rec.base.n_ctx > 0 {
         model_rec.base.n_ctx
     } else {
-        16384
+        crate::chat::config::tokens().default_n_ctx
     };
     Ok((model, model_n_ctx))
 }
@@ -439,11 +474,39 @@ fn replace_segment(messages: &mut Vec<ChatMessage>, segment: SummarySegment, sum
     messages.splice(segment.start..=segment.end, [summary]);
 }
 
+pub async fn summarize_oldest_segment_with_resolved_model(
+    gcx: Arc<GlobalContext>,
+    messages: &mut Vec<ChatMessage>,
+    model: &str,
+    model_n_ctx: usize,
+) -> Result<bool, SegmentSummaryFailure> {
+    if model.is_empty() {
+        return Err(SegmentSummaryFailure::NoModelAvailable);
+    }
+    let Some(segment) = first_eligible_segment(messages) else {
+        return Err(SegmentSummaryFailure::NoMessagesToSummarize);
+    };
+    let source_messages = messages[segment.start..=segment.end].to_vec();
+    let summary = summarize_segment(gcx, &source_messages, model.to_string(), model_n_ctx).await?;
+    replace_segment(messages, segment, summary);
+    Ok(true)
+}
+
+fn should_attempt_segment_summarization(
+    thread: &crate::chat::types::ThreadParams,
+    force: bool,
+) -> bool {
+    force || thread.auto_compact_enabled_effective()
+}
+
 pub fn summarize_oldest_segment_with_static_summary(
     messages: &mut Vec<ChatMessage>,
     summary_text: &str,
     summary_model: &str,
 ) -> bool {
+    if summary_text.trim().is_empty() {
+        return false;
+    }
     let Some(segment) = first_eligible_segment(messages) else {
         return false;
     };
@@ -460,7 +523,7 @@ pub async fn apply_segment_summarization(
     thread: &crate::chat::types::ThreadParams,
     force: bool,
 ) -> bool {
-    if !thread.auto_compact_enabled_effective() {
+    if !should_attempt_segment_summarization(thread, force) {
         return false;
     }
 
@@ -560,6 +623,32 @@ pub async fn apply_segment_summarization(
 mod tests {
     use super::*;
     use crate::call_validation::{ChatContent, ChatToolCall, ChatToolFunction};
+    use crate::caps::{BaseModelRecord, ChatModelRecord, CodeAssistantCaps};
+    use crate::global_context::tests::make_test_gcx;
+
+    fn chat_model_record(id: &str, n_ctx: usize) -> Arc<ChatModelRecord> {
+        Arc::new(ChatModelRecord {
+            base: BaseModelRecord {
+                id: id.to_string(),
+                name: id.to_string(),
+                n_ctx,
+                endpoint: "https://example.com/v1/chat/completions".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    async fn install_caps(gcx: Arc<GlobalContext>, caps: CodeAssistantCaps) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_add(60);
+        let mut caps_state = gcx.caps_state.write().await;
+        caps_state.caps = Some(Arc::new(caps));
+        caps_state.last_attempted_ts = now;
+    }
 
     fn user(text: &str) -> ChatMessage {
         ChatMessage {
@@ -621,6 +710,24 @@ mod tests {
                 function: ChatToolFunction {
                     name: "shell".to_string(),
                     arguments: "{}".to_string(),
+                },
+                tool_type: "function".to_string(),
+                extra_content: None,
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn assistant_with_tool_call_args(arguments: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::SimpleText(String::new()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call_args".to_string(),
+                index: Some(0),
+                function: ChatToolFunction {
+                    name: "shell".to_string(),
+                    arguments: arguments.to_string(),
                 },
                 tool_type: "function".to_string(),
                 extra_content: None,
@@ -692,6 +799,71 @@ mod tests {
                 SummarySegment { start: 3, end: 3 },
             ]
         );
+    }
+
+    #[test]
+    fn ui_only_diagnostic_between_users_is_not_eligible_for_visible_summary() {
+        let messages = vec![
+            user("first"),
+            crate::chat::diagnostics::make_ui_only_error_message("context_length_exceeded"),
+            user("second"),
+        ];
+
+        assert!(closed_non_user_segments(&messages).is_empty());
+        assert!(!summarize_oldest_segment_with_static_summary(
+            &mut messages.clone(),
+            "summary",
+            "test-model",
+        ));
+    }
+
+    #[test]
+    fn assistant_tool_call_args_are_included_bounded_and_redacted_in_segment_text() {
+        let long_tail = "x".repeat(TOOL_CALL_ARGUMENTS_MAX_CHARS + 200);
+        let args = format!(
+            "{{\"cmd\":\"sed -n '1,20p' src/foo.rs\",\"api_key\":\"sk-abcdefghijklmnop\",\"tail\":\"{}\"}}",
+            long_tail
+        );
+        let text = segment_text(&[assistant_with_tool_call_args(&args)]);
+
+        assert!(text.contains("shell(call_args) args="));
+        assert!(text.contains("sed -n '1,20p' src/foo.rs"));
+        assert!(text.contains("[REDACTED_SK_TOKEN]") || text.contains("api_key=[REDACTED]"));
+        assert!(!text.contains("sk-abcdefghijklmnop"));
+        assert!(text.contains('…'));
+        assert!(text.len() < args.len());
+    }
+
+    #[test]
+    fn empty_or_missing_assistant_summary_is_an_error() {
+        let empty = vec![assistant("   ")];
+        assert!(matches!(
+            extract_non_empty_assistant_summary(&empty),
+            Err(SegmentSummaryFailure::EmptySummary)
+        ));
+
+        let missing = vec![tool("tool-only result")];
+        assert!(matches!(
+            extract_non_empty_assistant_summary(&missing),
+            Err(SegmentSummaryFailure::EmptySummary)
+        ));
+    }
+
+    #[test]
+    fn static_summary_rejects_empty_placeholder_loss() {
+        let mut messages = vec![user("a"), assistant("old"), user("b")];
+        let before = serde_json::to_string(&messages).unwrap();
+
+        assert!(!summarize_oldest_segment_with_static_summary(
+            &mut messages,
+            " ",
+            "test-model",
+        ));
+
+        assert_eq!(serde_json::to_string(&messages).unwrap(), before);
+        assert!(!messages
+            .iter()
+            .any(|message| message.content.content_text_only() == "Summary unavailable"));
     }
 
     #[test]
@@ -824,6 +996,44 @@ mod tests {
             estimated_context_pressure(&messages, 1_000_000),
             ContextPressure::Low
         ));
+    }
+
+    #[test]
+    fn forced_context_limit_summarization_bypasses_auto_compact_disabled_gate() {
+        let mut thread = crate::chat::types::ThreadParams::default();
+        thread.auto_compact_enabled = Some(false);
+
+        assert!(!should_attempt_segment_summarization(&thread, false));
+        assert!(should_attempt_segment_summarization(&thread, true));
+    }
+
+    #[tokio::test]
+    async fn resolve_summary_model_prefers_thread_model_over_global_defaults() {
+        let gcx = make_test_gcx().await;
+        let thread_model = "private-thread-model";
+        let light_model = "global-light-model";
+        let default_model = "global-default-model";
+        let mut caps = CodeAssistantCaps::default();
+        caps.chat_models.insert(
+            thread_model.to_string(),
+            chat_model_record(thread_model, 12_345),
+        );
+        caps.chat_models.insert(
+            light_model.to_string(),
+            chat_model_record(light_model, 65_536),
+        );
+        caps.chat_models.insert(
+            default_model.to_string(),
+            chat_model_record(default_model, 65_536),
+        );
+        caps.defaults.chat_light_model = light_model.to_string();
+        caps.defaults.chat_default_model = default_model.to_string();
+        install_caps(gcx.clone(), caps).await;
+
+        let (model, n_ctx) = resolve_summary_model(gcx, thread_model).await.unwrap();
+
+        assert_eq!(model, thread_model);
+        assert_eq!(n_ctx, 12_345);
     }
 
     #[test]

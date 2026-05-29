@@ -902,57 +902,44 @@ pub fn start_generation(
                     continue;
                 }
                 if retry_decision.is_context_limit() && !abort_flag.load(Ordering::SeqCst) {
-                    let auto_compact_enabled = {
+                    let reactive_attempt = {
                         let session = session_arc.lock().await;
-                        session.thread.auto_compact_enabled_effective()
+                        session.thread.reactive_compact_attempts.unwrap_or(0) + 1
                     };
-                    if !auto_compact_enabled {
+                    if reactive_attempt <= crate::chat::summarization::MAX_SEGMENT_SUMMARY_ATTEMPTS
+                    {
+                        let original_error = error.message.clone();
                         warn!(
-                            "Context limit error and auto_compact_enabled=false; surfacing error: {}",
-                            error.message
+                            "Context limit error, summarizing oldest eligible segment attempt {}/{}: {}",
+                            reactive_attempt,
+                            crate::chat::summarization::MAX_SEGMENT_SUMMARY_ATTEMPTS,
+                            original_error,
                         );
-                    } else {
-                        let reactive_attempt = {
-                            let session = session_arc.lock().await;
-                            session.thread.reactive_compact_attempts.unwrap_or(0) + 1
-                        };
-                        if reactive_attempt
-                            <= crate::chat::summarization::MAX_SEGMENT_SUMMARY_ATTEMPTS
                         {
-                            let original_error = error.message.clone();
-                            warn!(
-                                "Context limit error, summarizing oldest eligible segment attempt {}/{}: {}",
-                                reactive_attempt,
-                                crate::chat::summarization::MAX_SEGMENT_SUMMARY_ATTEMPTS,
-                                original_error,
-                            );
-                            {
-                                let mut session = session_arc.lock().await;
-                                session.clear_stream_for_retry();
-                                session.add_message(make_ui_only_error_message(&original_error));
-                                session.thread.reactive_compact_attempts = Some(reactive_attempt);
-                            }
-                            let compacted =
-                                crate::chat::summarization::apply_segment_summarization(
-                                    gcx.clone(),
-                                    &session_arc,
-                                    &thread,
-                                    true,
-                                )
-                                .await;
-                            if compacted {
-                                let mut session = session_arc.lock().await;
-                                session.clear_stream_for_retry();
-                                session.thread.previous_response_id = None;
-                                session.cache_guard_force_next = true;
-                                continue;
-                            }
+                            let mut session = session_arc.lock().await;
+                            session.clear_stream_for_retry();
+                            session.add_message(make_ui_only_error_message(&original_error));
+                            session.thread.reactive_compact_attempts = Some(reactive_attempt);
                         }
-                        error.message = format!(
-                            "Context too large and no eligible segment summary could be applied. Original error: {}",
-                            error.message
-                        );
+                        let compacted = crate::chat::summarization::apply_segment_summarization(
+                            gcx.clone(),
+                            &session_arc,
+                            &thread,
+                            true,
+                        )
+                        .await;
+                        if compacted {
+                            let mut session = session_arc.lock().await;
+                            session.clear_stream_for_retry();
+                            session.thread.previous_response_id = None;
+                            session.cache_guard_force_next = true;
+                            continue;
+                        }
                     }
+                    error.message = format!(
+                        "Context too large and no eligible segment summary could be applied. Original error: {}",
+                        error.message
+                    );
                 }
 
                 if error.partial_output_emitted && !abort_flag.load(Ordering::SeqCst) {
