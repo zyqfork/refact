@@ -1,6 +1,6 @@
 import type { EventSubkind } from "../../../services/refact/types";
 
-const EVENT_SUBKIND_ICONS: Record<EventSubkind, string> = {
+const EVENT_SUBKIND_ICONS: Partial<Record<EventSubkind, string>> = {
   mode_switch: "🔁",
   tool_decision: "✅",
   ide_callback: "💻",
@@ -14,5 +14,5 @@ const EVENT_SUBKIND_ICONS: Record<EventSubkind, string> = {
 };
 
 export function eventSubkindIcon(subkind: EventSubkind): string {
-  return EVENT_SUBKIND_ICONS[subkind];
+  return EVENT_SUBKIND_ICONS[subkind] ?? "ℹ️";
 }

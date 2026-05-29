@@ -5,7 +5,11 @@ import type {
   Chat,
   ChatThreadRuntime,
 } from "../../../features/Chat/Thread/types";
-import type { ChatMessages, PlanMessage } from "../../../services/refact/types";
+import type {
+  ChatMessages,
+  EventMessage,
+  PlanMessage,
+} from "../../../services/refact/types";
 import { PlanBanner } from "./PlanBanner";
 
 const threadId = "plan-banner-thread";
@@ -27,6 +31,16 @@ function makePlan(
       },
     },
     ...overrides,
+  };
+}
+
+function makePlanDelta(content: string, messageId: string): EventMessage {
+  return {
+    role: "event",
+    message_id: messageId,
+    content,
+    subkind: "plan_delta",
+    source: "test",
   };
 }
 
@@ -111,6 +125,36 @@ describe("PlanBanner", () => {
     expect(screen.getByText("📋 Plan — agent · v1 · 2m ago")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Plan 1" })).toBeTruthy();
     expect(screen.getByText("item 1")).toBeTruthy();
+    expect(screen.queryByText("Edit plan")).toBeNull();
+  });
+
+  it("renders synthesized plan text with ordered updates", () => {
+    renderPlanBanner([
+      makePlan(1),
+      makePlanDelta("first update", "delta-1"),
+      makePlanDelta("second update", "delta-2"),
+    ]);
+
+    expect(screen.getByRole("heading", { name: "Plan 1" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Plan updates" })).toBeTruthy();
+    expect(screen.getByText("first update")).toBeTruthy();
+    expect(screen.getByText("second update")).toBeTruthy();
+  });
+
+  it("opens history with base plan and delta notes", () => {
+    renderPlanBanner([
+      makePlan(1),
+      makePlanDelta("first update", "delta-1"),
+      makePlanDelta("second update", "delta-2"),
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    expect(screen.getByRole("heading", { name: "Plan history" })).toBeTruthy();
+    expect(screen.getByText("📋 Base plan — agent · v1")).toBeTruthy();
+    expect(screen.getByText("📋 Plan update 1")).toBeTruthy();
+    expect(screen.getByText("📋 Plan update 2")).toBeTruthy();
+    expect(screen.queryByText("Edit plan")).toBeNull();
   });
 
   it("renders graceful fallbacks when plan metadata fields are missing", () => {
@@ -147,7 +191,10 @@ describe("PlanBanner", () => {
     renderPlanBanner([makePlan(1)]);
 
     const banner = screen.getByTestId("plan-banner");
+    const body = screen.getByTestId("plan-banner-body");
     expect(banner.className).toContain("sticky");
     expect(banner.firstElementChild?.className).toContain("card");
+    expect(body.className).toContain("body");
+    expect(body).toBeTruthy();
   });
 });

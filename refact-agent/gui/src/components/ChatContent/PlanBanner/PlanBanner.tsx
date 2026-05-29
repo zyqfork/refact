@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Flex, Text } from "@radix-ui/themes";
+import { Box, Button, Flex, Text } from "@radix-ui/themes";
 import { useAppSelector } from "../../../hooks";
-import { selectCurrentPlan } from "../../../features/Chat/Thread/selectors";
+import { selectPlanBannerState } from "../../../features/Chat/Thread/selectors";
 import { Markdown } from "../../Markdown";
 import styles from "./PlanBanner.module.css";
 import { getPlanMetadata } from "../../../services/refact/types";
+import { PlanHistoryModal } from "./PlanHistoryModal";
 
 type PlanBannerProps = {
   threadId: string;
@@ -51,8 +52,13 @@ function writeCollapsed(threadId: string, collapsed: boolean): void {
 }
 
 export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
-  const plan = useAppSelector((state) => selectCurrentPlan(state, threadId));
+  const {
+    base: plan,
+    synthesizedText,
+    history: planHistory,
+  } = useAppSelector((state) => selectPlanBannerState(state, threadId));
   const [collapsed, setCollapsed] = useState(() => readCollapsed(threadId));
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const metadata = useMemo(
     () => (plan ? getPlanMetadata(plan) : undefined),
@@ -66,6 +72,10 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
   useEffect(() => {
     setNowMs(Date.now());
   }, [metadata?.created_at_ms]);
+
+  useEffect(() => {
+    setHistoryOpen(false);
+  }, [threadId]);
 
   const title = useMemo(() => {
     if (!plan) return "";
@@ -86,6 +96,11 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
     writeCollapsed(threadId, nextCollapsed);
   };
 
+  const handleHistoryClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    setHistoryOpen(true);
+  };
+
   return (
     <Box className={styles.sticky} data-testid="plan-banner">
       <Box className={styles.card}>
@@ -100,13 +115,27 @@ export const PlanBanner: React.FC<PlanBannerProps> = ({ threadId }) => {
           <Text size="1" className={styles.title}>
             {title}
           </Text>
+          <Button
+            type="button"
+            size="1"
+            variant="ghost"
+            color="gray"
+            onClick={handleHistoryClick}
+          >
+            History
+          </Button>
         </Flex>
         {!collapsed && (
           <Box className={styles.body} data-testid="plan-banner-body">
-            <Markdown>{plan.content}</Markdown>
+            <Markdown>{synthesizedText ?? plan.content}</Markdown>
           </Box>
         )}
       </Box>
+      <PlanHistoryModal
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        items={planHistory}
+      />
     </Box>
   );
 };

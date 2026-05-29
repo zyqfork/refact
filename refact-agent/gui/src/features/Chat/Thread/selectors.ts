@@ -32,6 +32,10 @@ import type { BackgroundAgentSummary } from "../../../services/refact/types";
 const EMPTY_MESSAGES: ChatMessages = [];
 const EMPTY_EVENT_MESSAGES: EventMessage[] = [];
 const EMPTY_PLAN_MESSAGES: PlanMessage[] = [];
+export type PlanHistoryItem = PlanMessage | EventMessage;
+
+const EMPTY_PLAN_HISTORY: PlanHistoryItem[] = [];
+const PLAN_SYNTHESIS_SEPARATOR = "\n\n---\n\n## Plan updates\n\n";
 const EMPTY_QUEUED: QueuedItem[] = [];
 const EMPTY_PAUSE_REASONS: ThreadConfirmation["pause_reasons"] = [];
 const EMPTY_IMAGES: ImageFile[] = [];
@@ -221,15 +225,16 @@ export const selectEventLog = (
   threadId: string,
 ): EventMessage[] => {
   const eventMessages = selectMessagesById(state, threadId).filter(
-    isEventMessage,
+    (message): message is EventMessage =>
+      isEventMessage(message) && message.subkind !== "plan_delta",
   );
   return eventMessages.length > 0 ? eventMessages : EMPTY_EVENT_MESSAGES;
 };
 
-export const selectPlanHistory = (
+function selectBasePlanMessages(
   state: RootState,
   threadId: string,
-): PlanMessage[] => {
+): PlanMessage[] {
   const planMessages = selectMessagesById(state, threadId)
     .map((message, index) => ({ message, index }))
     .filter((entry): entry is { message: PlanMessage; index: number } =>
@@ -248,12 +253,78 @@ export const selectPlanHistory = (
       return b.index - a.index;
     })
     .map((entry) => entry.message);
-};
+}
+
+function collectPlanDeltaEvents(messages: ChatMessages): EventMessage[] {
+  let deltas: EventMessage[] | null = null;
+  for (const message of messages) {
+    if (!isEventMessage(message) || message.subkind !== "plan_delta") continue;
+    if (!deltas) deltas = [];
+    deltas.push(message);
+  }
+  return deltas ?? EMPTY_EVENT_MESSAGES;
+}
+
+function synthesizePlanText(
+  base: PlanMessage | undefined,
+  deltas: EventMessage[],
+): string | undefined {
+  if (!base) return undefined;
+  if (deltas.length === 0) return base.content;
+
+  const notes = deltas.map((delta) => delta.content).join("\n\n");
+  return `${base.content}${PLAN_SYNTHESIS_SEPARATOR}${notes}`;
+}
+
+function combinePlanHistory(
+  base: PlanMessage | undefined,
+  deltas: EventMessage[],
+): PlanHistoryItem[] {
+  if (!base) return EMPTY_PLAN_HISTORY;
+  return deltas.length > 0 ? [base, ...deltas] : [base];
+}
 
 export const selectCurrentPlan = (
   state: RootState,
   threadId: string,
-): PlanMessage | undefined => selectPlanHistory(state, threadId)[0];
+): PlanMessage | undefined => selectBasePlanMessages(state, threadId)[0];
+
+export const selectPlanDeltaEvents = (
+  state: RootState,
+  threadId: string,
+): EventMessage[] =>
+  collectPlanDeltaEvents(selectMessagesById(state, threadId));
+
+export const selectSynthesizedPlanText = (
+  state: RootState,
+  threadId: string,
+): string | undefined =>
+  synthesizePlanText(
+    selectCurrentPlan(state, threadId),
+    selectPlanDeltaEvents(state, threadId),
+  );
+
+export const selectPlanHistory = (
+  state: RootState,
+  threadId: string,
+): PlanHistoryItem[] =>
+  combinePlanHistory(
+    selectCurrentPlan(state, threadId),
+    selectPlanDeltaEvents(state, threadId),
+  );
+
+export const selectPlanBannerState = createSelector(
+  [
+    (state: RootState, threadId: string) => selectCurrentPlan(state, threadId),
+    (state: RootState, threadId: string) =>
+      selectPlanDeltaEvents(state, threadId),
+  ],
+  (base, deltas) => ({
+    base,
+    synthesizedText: synthesizePlanText(base, deltas),
+    history: combinePlanHistory(base, deltas),
+  }),
+);
 
 export const selectToolUse = (state: RootState) => state.chat.tool_use;
 

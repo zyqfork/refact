@@ -45,16 +45,14 @@
 }
 
 .body {
+  composes: scrollbarThin from "../../shared/scrollbar.module.css";
   padding: var(--space-2) 0 var(--space-1);
+  max-height: 400px;
+  overflow-y: auto;
 }
 
-/* Modal styles used by PlanHistoryModal and PlanEditor */
 .modalContent {
   max-width: 720px;
-}
-
-.editorArea {
-  min-height: 320px;
 }
 
 .historyList {

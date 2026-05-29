@@ -4,7 +4,9 @@ import { chatReducer } from "../features/Chat/Thread/reducer";
 import {
   selectCurrentPlan,
   selectEventLog,
+  selectPlanDeltaEvents,
   selectPlanHistory,
+  selectSynthesizedPlanText,
   selectVisibleMessages,
 } from "../features/Chat/Thread/selectors";
 import type { Chat, ChatThreadRuntime } from "../features/Chat/Thread/types";
@@ -112,6 +114,16 @@ const eventTwo = makeEventMessage({
   content: "second event",
   subkind: "tool_decision",
 });
+const planDeltaOne = makeEventMessage({
+  message_id: "plan-delta-1",
+  content: "first update",
+  subkind: "plan_delta",
+});
+const planDeltaTwo = makeEventMessage({
+  message_id: "plan-delta-2",
+  content: "second update",
+  subkind: "plan_delta",
+});
 const planOne = makePlanMessage(1, { message_id: "plan-1" });
 const planTwo = makePlanMessage(3, { message_id: "plan-3" });
 const planThree = makePlanMessage(2, { message_id: "plan-2" });
@@ -126,9 +138,11 @@ const mixedMessages: ChatMessages = [
     message_id: "assistant-1",
   },
   planOne,
+  planDeltaOne,
   eventTwo,
   planTwo,
   planThree,
+  planDeltaTwo,
 ];
 
 function makeMessageAddedEvent(
@@ -144,7 +158,7 @@ function makeMessageAddedEvent(
 }
 
 describe("hidden chat roles", () => {
-  it("selectVisibleMessages excludes event and plan", () => {
+  it("selectVisibleMessages excludes event, plan, and plan_delta", () => {
     const visible = selectVisibleMessages(
       makeRootState(mixedMessages),
       threadId,
@@ -158,7 +172,7 @@ describe("hidden chat roles", () => {
     ]);
   });
 
-  it("selectEventLog returns only event messages", () => {
+  it("selectEventLog returns only non-plan-delta event messages", () => {
     const events = selectEventLog(makeRootState(mixedMessages), threadId);
 
     expect(events).toEqual([eventOne, eventTwo]);
@@ -170,10 +184,30 @@ describe("hidden chat roles", () => {
     expect(plan).toEqual(planTwo);
   });
 
-  it("selectPlanHistory returns plans desc by version", () => {
+  it("selectPlanDeltaEvents returns plan_delta messages in index order", () => {
+    const deltas = selectPlanDeltaEvents(
+      makeRootState(mixedMessages),
+      threadId,
+    );
+
+    expect(deltas).toEqual([planDeltaOne, planDeltaTwo]);
+  });
+
+  it("selectSynthesizedPlanText concatenates current base and deltas in order", () => {
+    const text = selectSynthesizedPlanText(
+      makeRootState(mixedMessages),
+      threadId,
+    );
+
+    expect(text).toBe(
+      "plan 3\n\n---\n\n## Plan updates\n\nfirst update\n\nsecond update",
+    );
+  });
+
+  it("selectPlanHistory returns current base plus deltas", () => {
     const plans = selectPlanHistory(makeRootState(mixedMessages), threadId);
 
-    expect(plans).toEqual([planTwo, planThree, planOne]);
+    expect(plans).toEqual([planTwo, planDeltaOne, planDeltaTwo]);
   });
 
   it("reducer accepts MessageAdded for role=event", () => {

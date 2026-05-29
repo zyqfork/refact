@@ -17,7 +17,10 @@ export type EventLogProps = {
   onProcessCompletedClick?: (processId: string) => void;
 };
 
-const EVENT_SUBKINDS: EventSubkind[] = [
+type EventLogSubkind = Exclude<EventSubkind, "plan_delta">;
+type EventLogMessage = EventMessage & { subkind: EventLogSubkind };
+
+const EVENT_SUBKINDS: EventLogSubkind[] = [
   "mode_switch",
   "tool_decision",
   "ide_callback",
@@ -38,10 +41,15 @@ function filterStorageKey(threadId: string): string {
   return `event-log-filter-${threadId}`;
 }
 
-function isEventSubkind(value: unknown): value is EventSubkind {
+function isEventSubkind(value: unknown): value is EventLogSubkind {
   return (
-    typeof value === "string" && EVENT_SUBKINDS.includes(value as EventSubkind)
+    typeof value === "string" &&
+    EVENT_SUBKINDS.includes(value as EventLogSubkind)
   );
+}
+
+function isEventLogMessage(event: EventMessage): event is EventLogMessage {
+  return event.subkind !== "plan_delta";
 }
 
 function readCollapsed(threadId: string): boolean {
@@ -64,7 +72,7 @@ function writeCollapsed(threadId: string, collapsed: boolean): void {
   }
 }
 
-function readSelectedSubkinds(threadId: string): EventSubkind[] {
+function readSelectedSubkinds(threadId: string): EventLogSubkind[] {
   try {
     if (typeof localStorage === "undefined") return EVENT_SUBKINDS;
     const stored = localStorage.getItem(filterStorageKey(threadId));
@@ -80,7 +88,7 @@ function readSelectedSubkinds(threadId: string): EventSubkind[] {
 
 function writeSelectedSubkinds(
   threadId: string,
-  selectedSubkinds: EventSubkind[],
+  selectedSubkinds: EventLogSubkind[],
 ): void {
   try {
     if (typeof localStorage === "undefined") return;
@@ -110,7 +118,7 @@ function payloadString(event: EventMessage, field: string): string | null {
 export const EventLog: React.FC<EventLogProps> = ({
   events,
   threadId,
-  filterEvents = events,
+  filterEvents: rawFilterEvents = events,
   onProcessCompletedClick,
 }) => {
   const dispatch = useAppDispatch();
@@ -124,6 +132,16 @@ export const EventLog: React.FC<EventLogProps> = ({
     setSelectedSubkinds(readSelectedSubkinds(threadId));
   }, [threadId]);
 
+  const visibleEvents = useMemo(
+    () => events.filter(isEventLogMessage),
+    [events],
+  );
+
+  const filterEvents = useMemo(
+    () => rawFilterEvents.filter(isEventLogMessage),
+    [rawFilterEvents],
+  );
+
   const presentSubkinds = useMemo(() => {
     return EVENT_SUBKINDS.filter((subkind) =>
       filterEvents.some((event) => event.subkind === subkind),
@@ -131,16 +149,16 @@ export const EventLog: React.FC<EventLogProps> = ({
   }, [filterEvents]);
 
   const selectedSet = useMemo(
-    () => new Set<EventSubkind>(selectedSubkinds),
+    () => new Set<EventLogSubkind>(selectedSubkinds),
     [selectedSubkinds],
   );
 
   const filteredEvents = useMemo(
-    () => events.filter((event) => selectedSet.has(event.subkind)),
-    [events, selectedSet],
+    () => visibleEvents.filter((event) => selectedSet.has(event.subkind)),
+    [visibleEvents, selectedSet],
   );
 
-  if (events.length === 0) return null;
+  if (visibleEvents.length === 0) return null;
 
   const handleSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
     event.preventDefault();
@@ -151,7 +169,7 @@ export const EventLog: React.FC<EventLogProps> = ({
     });
   };
 
-  const toggleSubkind = (subkind: EventSubkind) => {
+  const toggleSubkind = (subkind: EventLogSubkind) => {
     setSelectedSubkinds((current) => {
       const currentSet = new Set(current);
       if (currentSet.has(subkind)) {
@@ -195,7 +213,8 @@ export const EventLog: React.FC<EventLogProps> = ({
               Event log
             </Text>
             <Text as="span" size="1" className={styles.count}>
-              {events.length} {events.length === 1 ? "event" : "events"}
+              {visibleEvents.length}{" "}
+              {visibleEvents.length === 1 ? "event" : "events"}
             </Text>
           </Flex>
         </summary>

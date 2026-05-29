@@ -1,29 +1,30 @@
 import React from "react";
 import { Box, Button, Dialog, Flex, Text } from "@radix-ui/themes";
-import {
-  getPlanMetadata,
-  type PlanMessage,
-} from "../../../services/refact/types";
+import type { PlanHistoryItem } from "../../../features/Chat/Thread/selectors";
+import { getPlanMetadata, isPlanMessage } from "../../../services/refact/types";
 import { Markdown } from "../../Markdown";
 import styles from "./PlanBanner.module.css";
 
 type PlanHistoryModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  plans: PlanMessage[];
+  items: PlanHistoryItem[];
 };
 
 export const PlanHistoryModal: React.FC<PlanHistoryModalProps> = ({
   open,
   onOpenChange,
-  plans,
+  items,
 }) => {
-  const planTitle = (plan: PlanMessage): string => {
-    const metadata = getPlanMetadata(plan);
+  const itemTitle = (item: PlanHistoryItem, index: number): string => {
+    if (!isPlanMessage(item)) return `📋 Plan update ${index}`;
+
+    const label = index === 0 ? "Base plan" : "Plan";
+    const metadata = getPlanMetadata(item);
     const mode = metadata.mode ?? "Mode unknown";
     const version =
       metadata.version !== undefined ? `v${metadata.version}` : "v?";
-    return `📋 Plan — ${mode} · ${version}`;
+    return `📋 ${label} — ${mode} · ${version}`;
   };
 
   return (
@@ -31,13 +32,13 @@ export const PlanHistoryModal: React.FC<PlanHistoryModalProps> = ({
       <Dialog.Content className={styles.modalContent}>
         <Dialog.Title>Plan history</Dialog.Title>
         <Dialog.Description size="2" color="gray">
-          Previous plan versions for this chat.
+          Base plan and append-only updates for this chat.
         </Dialog.Description>
 
         <Flex direction="column" gap="3" mt="3" className={styles.historyList}>
-          {plans.map((plan, index) => (
+          {items.map((item, index) => (
             <Box
-              key={plan.message_id ?? `${index}-${plan.content}`}
+              key={item.message_id ?? `${index}-${item.content}`}
               className={styles.historyItem}
             >
               <Text
@@ -46,10 +47,10 @@ export const PlanHistoryModal: React.FC<PlanHistoryModalProps> = ({
                 weight="bold"
                 className={styles.historyTitle}
               >
-                {planTitle(plan)}
+                {itemTitle(item, index)}
               </Text>
               <Box className={styles.historyBody}>
-                <Markdown>{plan.content}</Markdown>
+                <Markdown>{item.content}</Markdown>
               </Box>
             </Box>
           ))}

@@ -138,9 +138,11 @@ Always use selectors. Never access `state.chat.threads[id]` directly in componen
 Hidden-role selector convention:
 
 - `selectVisibleMessages(state, threadId)` excludes `event` and `plan`; use this for normal transcript rendering.
-- `selectEventLog(state, threadId)` returns normalized `EventMessage[]` for EventLog surfaces.
-- `selectCurrentPlan(state, threadId)` returns the latest `PlanMessage` by version/index for PlanBanner.
-- `selectPlanHistory(state, threadId)` returns all plan versions for history/diff UI.
+- `selectEventLog(state, threadId)` returns normalized `EventMessage[]` for EventLog surfaces and excludes `plan_delta` events.
+- `selectCurrentPlan(state, threadId)` returns the latest base `PlanMessage` by version/index for PlanBanner.
+- `selectPlanDeltaEvents(state, threadId)` returns hidden `event(plan_delta)` messages in index order.
+- `selectSynthesizedPlanText(state, threadId)` returns base plan text plus append-only plan-delta notes using the synthesis separator.
+- `selectPlanHistory(state, threadId)` returns the current base plan followed by plan-delta events for history UI.
 
 If a new component needs hidden-role data, add or reuse a selector first instead of filtering `thread.messages` inside the component.
 
@@ -207,12 +209,13 @@ EventLog renders hidden `event` messages without polluting the main transcript.
 
 ### PlanBanner component pattern (src/components/ChatContent/PlanBanner/)
 
-PlanBanner renders the latest hidden `plan` role message as sticky context above the virtualized transcript.
+PlanBanner renders synthesized plan text from the latest hidden base `plan` role plus hidden `event(plan_delta)` notes as sticky context above the virtualized transcript.
 
-- Read plan data with `selectCurrentPlan` and `selectPlanHistory`; do not scan messages directly.
+- Read plan data with `selectCurrentPlan`, `selectSynthesizedPlanText`, and `selectPlanHistory`; do not scan messages directly.
 - Header format: `📋 Plan — {mode} · v{version} · {humanizedAge}`.
-- Body uses existing Markdown rendering and a persisted collapse toggle. Keep v1 expanded by default unless the user toggles.
-- History modal lists all plan versions in chronological order and should use `supersedes` metadata when implementing diffs.
+- Body uses existing Markdown rendering, bounded scrolling, and a persisted collapse toggle. Keep v1 expanded by default unless the user toggles.
+- Manual plan editing is not exposed in the banner; plan changes arrive as append-only `plan_delta` events.
+- History modal lists the current base plan followed by each delta note in index order.
 - Keep sticky styles in `PlanBanner.module.css`; avoid inline styles.
 
 ### ToolsContent (src/components/ChatContent/ToolsContent.tsx)
@@ -291,7 +294,7 @@ Chat can proceed when ALL true: `snapshot_received && !streaming && !waiting_for
 ## Special Features
 
 - **Checkpoints**: Workspace rollback via git commits. Preview → Restore. Per-message reset button.
-- **Hidden Roles**: `event` messages feed EventLog; `plan` messages feed PlanBanner. Both stay out of `selectVisibleMessages`.
+- **Hidden Roles**: `event` messages feed EventLog except `plan_delta`; `plan` plus `plan_delta` messages feed PlanBanner. Both stay out of `selectVisibleMessages`.
 - **Thinking Blocks**: `thinking_blocks: [{thinking, signature}]` on assistant messages. Collapsible UI. Signatures are opaque — never mutate.
 - **Reasoning Content**: Separate `reasoning_content` field. Collapsible.
 - **Knowledge/Memory**: `remember_how_to_use_tools` → vecdb → `context_file` messages. Knowledge graph view.

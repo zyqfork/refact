@@ -495,6 +495,7 @@ export type EventSubkind =
   | "summarization_marker"
   | "verifier_report"
   | "cancellation_note"
+  | "plan_delta"
   | "system_notice";
 
 export type EventMessage = MessageEnvelope & {
