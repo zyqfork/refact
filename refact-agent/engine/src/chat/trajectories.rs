@@ -724,6 +724,21 @@ pub async fn find_trajectory_or_buddy_path(
     None
 }
 
+fn repaired_created_at(raw_created_at: Option<&str>, transition_identity_repaired: bool) -> String {
+    if transition_identity_repaired {
+        if let Some(created_at) = raw_created_at {
+            if parsed_rfc3339_utc(created_at).is_some() {
+                return created_at.to_string();
+            }
+        }
+        return chrono::Utc::now().to_rfc3339();
+    }
+
+    raw_created_at
+        .map(ToString::to_string)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
+}
+
 fn parse_worktree_meta(value: &serde_json::Value) -> Option<WorktreeMeta> {
     if value.is_null() {
         return None;
@@ -1148,11 +1163,10 @@ pub async fn load_trajectory_for_chat(
         .and_then(|v| v.as_bool())
         .is_some();
 
-    let created_at = t
-        .get("created_at")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&chrono::Utc::now().to_rfc3339())
-        .to_string();
+    let created_at = repaired_created_at(
+        t.get("created_at").and_then(|v| v.as_str()),
+        transition_prefix_repaired,
+    );
 
     let updated_at = t
         .get("updated_at")
@@ -1319,7 +1333,7 @@ pub async fn save_trajectory_snapshot(
 ) -> Result<(), String> {
     let app = AppState::from_gcx(gcx.clone()).await;
     let existing_no_meta_path = if snapshot.task_meta.is_none() && snapshot.buddy_meta.is_none() {
-        find_trajectory_or_buddy_path(gcx.clone(), &snapshot.chat_id).await
+        find_trajectory_path(gcx.clone(), &snapshot.chat_id).await
     } else {
         None
     };
@@ -1596,6 +1610,32 @@ pub async fn maybe_save_trajectory(app: AppState, session_arc: Arc<AMutex<ChatSe
     }
 }
 
+async fn persist_loaded_trajectory_repair(gcx: Arc<GlobalContext>, mut loaded: LoadedTrajectory) {
+    let chat_id = loaded.thread.id.clone();
+    apply_mode_defaults_to_thread(
+        gcx.clone(),
+        &mut loaded.thread,
+        loaded.auto_approve_editing_tools_present,
+        loaded.auto_approve_dangerous_commands_present,
+    )
+    .await;
+    let mut snapshot = TrajectorySnapshot::from_thread_parts(
+        chat_id.clone(),
+        &loaded.thread,
+        loaded.messages,
+        loaded.created_at,
+        0,
+    );
+    snapshot.wake_up_at = loaded.wake_up_at;
+    snapshot.waiting_for_card_ids = loaded.waiting_for_card_ids;
+    if let Err(e) = save_trajectory_snapshot(gcx, snapshot).await {
+        warn!(
+            "Failed to persist repaired trajectory for {}: {}",
+            chat_id, e
+        );
+    }
+}
+
 pub async fn check_external_reload_pending(
     gcx: Arc<GlobalContext>,
     session_arc: Arc<AMutex<ChatSession>>,
@@ -1784,6 +1824,13 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
     };
 
     let Some(session_arc) = session_arc else {
+        if !is_remove {
+            if let Some(loaded) = load_trajectory_for_chat(gcx.clone(), chat_id).await {
+                if loaded.transition_identity_repaired {
+                    persist_loaded_trajectory_repair(gcx, loaded).await;
+                }
+            }
+        }
         return;
     };
 
@@ -6089,14 +6136,67 @@ mod tests {
         let project_dir_error = get_trajectories_dir(gcx.clone()).await.unwrap_err();
         assert_eq!(project_dir_error, "No workspace folder found");
 
-        save_trajectory_snapshot(gcx.clone(), snapshot).await.unwrap();
+        save_trajectory_snapshot(gcx.clone(), snapshot)
+            .await
+            .unwrap();
 
         let raw: serde_json::Value =
             serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
         assert_eq!(raw["messages"].as_array().unwrap().len(), 1);
-        assert_eq!(find_trajectory_or_buddy_path(gcx.clone(), chat_id).await, Some(path));
+        assert_eq!(
+            find_trajectory_or_buddy_path(gcx.clone(), chat_id).await,
+            Some(path)
+        );
         let all_dirs = get_all_trajectories_dirs(gcx).await;
         assert_eq!(all_dirs, vec![global_trajectories_dir]);
+    }
+
+    #[tokio::test]
+    async fn no_meta_snapshot_does_not_overwrite_buddy_conversation_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "buddy-normal-collision";
+        let buddy_path = dir
+            .path()
+            .join(".refact")
+            .join("buddy")
+            .join("chats")
+            .join("conversations")
+            .join(format!("{chat_id}.json"));
+        write_buddy_conversation_file(&buddy_path, chat_id, "Keep Buddy Collision").await;
+
+        save_trajectory_snapshot(
+            gcx.clone(),
+            test_snapshot(
+                chat_id,
+                "Normal Chat",
+                vec![ChatMessage::new(
+                    "user".to_string(),
+                    "hello normal".to_string(),
+                )],
+            ),
+        )
+        .await
+        .unwrap();
+
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        assert!(tokio::fs::try_exists(&normal_path).await.unwrap());
+        let buddy_raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&buddy_path).await.unwrap()).unwrap();
+        assert_eq!(buddy_raw["title"], "Keep Buddy Collision");
+        assert!(buddy_raw.get("buddy_meta").is_some());
+        assert_eq!(
+            find_trajectory_path(gcx.clone(), chat_id).await,
+            Some(normal_path)
+        );
+        assert_ne!(
+            find_trajectory_or_buddy_path(gcx, chat_id).await,
+            Some(buddy_path)
+        );
     }
 
     #[tokio::test]
@@ -6173,6 +6273,235 @@ mod tests {
         assert!(raw.get("frozen_request_prefix").is_none());
         assert!(raw.get("claude_code_identity").is_none());
         assert!(raw.get("previous_response_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn mode_transition_pending_external_reload_persists_provider_cleanup_when_idle() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "transition-pending-external-reload-provider";
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&trajectories_dir).await.unwrap();
+        let path = trajectories_dir.join(format!("{chat_id}.json"));
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Pending Transition External Reload",
+                "model": "model",
+                "mode": "task_planner",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "mode_transition",
+                "previous_response_id": "resp_source",
+                "messages": [
+                    {"role":"system","content":"target task planner system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "source system",
+                    "tools_canonical": [{"type":"function","function":{"name":"source_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let session_arc = Arc::new(AMutex::new(ChatSession::new(chat_id.to_string())));
+        {
+            let mut session = session_arc.lock().await;
+            session.runtime.state = SessionState::Generating;
+            session.trajectory_dirty = true;
+        }
+        app.chat
+            .sessions
+            .write()
+            .await
+            .insert(chat_id.to_string(), session_arc.clone());
+
+        process_trajectory_change(gcx.clone(), chat_id, false).await;
+        {
+            let session = session_arc.lock().await;
+            assert!(session.external_reload_pending);
+            assert!(session.thread.claude_code_identity.is_none());
+            assert!(session.thread.frozen_request_prefix.is_none());
+        }
+
+        {
+            let mut session = session_arc.lock().await;
+            session.runtime.state = SessionState::Idle;
+            session.trajectory_dirty = false;
+        }
+        check_external_reload_pending(gcx, session_arc.clone()).await;
+
+        {
+            let session = session_arc.lock().await;
+            assert!(!session.external_reload_pending);
+            let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+            assert_eq!(
+                prefix.system_prompt.as_deref(),
+                Some("target task planner system")
+            );
+            assert!(prefix.tools_canonical.is_none());
+            assert!(session.thread.claude_code_identity.is_none());
+            assert!(session.thread.previous_response_id.is_none());
+            assert!(!session.trajectory_dirty);
+        }
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "target task planner system"
+        );
+        assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
+        assert!(raw.get("claude_code_identity").is_none());
+        assert!(raw.get("previous_response_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn mode_transition_no_active_session_external_change_persists_provider_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "transition-no-active-session-repair";
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&trajectories_dir).await.unwrap();
+        let path = trajectories_dir.join(format!("{chat_id}.json"));
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "No Active Session Repair",
+                "model": "model",
+                "mode": "task_planner",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "mode_transition",
+                "previous_response_id": "resp_source",
+                "messages": [
+                    {"role":"system","content":"target task planner system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "source system",
+                    "tools_canonical": [{"type":"function","function":{"name":"source_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        process_trajectory_change(gcx, chat_id, false).await;
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "target task planner system"
+        );
+        assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
+        assert!(raw.get("claude_code_identity").is_none());
+        assert!(raw.get("previous_response_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn handoff_invalid_or_missing_created_at_repairs_and_normalizes_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&trajectories_dir).await.unwrap();
+
+        for (chat_id, created_at) in [
+            ("handoff-invalid-created-at-open", Some(json!("not-a-date"))),
+            ("handoff-missing-created-at-open", None),
+        ] {
+            let path = trajectories_dir.join(format!("{chat_id}.json"));
+            let mut payload = json!({
+                "id": chat_id,
+                "title": "Handoff Open",
+                "model": "model",
+                "mode": "agent",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "handoff",
+                "previous_response_id": "resp_source",
+                "messages": [
+                    {"role":"system","content":"target handoff system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2024-01-03T00:00:00Z",
+                    "system_prompt": "target handoff system",
+                    "tools_canonical": [{"type":"function","function":{"name":"source_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true
+            });
+            if let Some(created_at) = created_at {
+                payload["created_at"] = created_at;
+            }
+            tokio::fs::write(&path, serde_json::to_string(&payload).unwrap())
+                .await
+                .unwrap();
+
+            let session_arc = crate::chat::get_or_create_session_with_trajectory(
+                app.clone(),
+                &app.chat.sessions,
+                chat_id,
+            )
+            .await;
+            {
+                let session = session_arc.lock().await;
+                let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+                assert_eq!(
+                    prefix.system_prompt.as_deref(),
+                    Some("target handoff system")
+                );
+                assert!(prefix.tools_canonical.is_none());
+                assert!(session.thread.claude_code_identity.is_none());
+                assert!(session.thread.previous_response_id.is_none());
+                assert!(parsed_rfc3339_utc(&session.created_at).is_some());
+            }
+
+            let raw: serde_json::Value =
+                serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+            let saved_created_at = raw["created_at"].as_str().unwrap();
+            assert!(parsed_rfc3339_utc(saved_created_at).is_some());
+            assert_ne!(saved_created_at, "not-a-date");
+            assert_eq!(
+                raw["frozen_request_prefix"]["system_prompt"],
+                "target handoff system"
+            );
+            assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
+            assert!(raw.get("claude_code_identity").is_none());
+            assert!(raw.get("previous_response_id").is_none());
+        }
     }
 
     #[test]
