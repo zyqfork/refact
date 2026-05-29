@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use refact_chat_history::retry_policy::{classify_user_error, user_error_info};
+use refact_core::string_utils::redact_sensitive;
 
 use crate::call_validation::{ChatContent, ChatMessage};
 
@@ -25,6 +26,7 @@ fn mark_ui_only(extra: &mut serde_json::Map<String, Value>) {
 pub fn make_ui_only_error_message(error: &str) -> ChatMessage {
     let category = classify_user_error(error);
     let info = user_error_info(category);
+    let redacted_error = redact_sensitive(error);
     let mut extra = json!({
         "error_info": {
             "category": format!("{:?}", info.category),
@@ -32,7 +34,7 @@ pub fn make_ui_only_error_message(error: &str) -> ChatMessage {
             "explanation": info.explanation,
             "suggested_action": info.suggested_action,
             "is_retryable": info.is_retryable,
-            "raw_error": error,
+            "raw_error": redacted_error.clone(),
         }
     })
     .as_object()
@@ -43,7 +45,7 @@ pub fn make_ui_only_error_message(error: &str) -> ChatMessage {
     ChatMessage {
         message_id: Uuid::new_v4().to_string(),
         role: "error".to_string(),
-        content: ChatContent::SimpleText(error.to_string()),
+        content: ChatContent::SimpleText(redacted_error),
         extra,
         ..Default::default()
     }
@@ -57,6 +59,7 @@ pub fn make_ui_only_retry_status_message(
 ) -> ChatMessage {
     let category = classify_user_error(error);
     let base_info = user_error_info(category);
+    let redacted_error = redact_sensitive(error);
     let title = format!(
         "Retrying — {} (attempt {}/{})",
         base_info.title, attempt, max_attempts
@@ -73,7 +76,7 @@ pub fn make_ui_only_retry_status_message(
             "explanation": explanation,
             "suggested_action": base_info.suggested_action,
             "is_retryable": true,
-            "raw_error": error,
+            "raw_error": redacted_error,
         },
         "retry_status": {
             "attempt": attempt,
@@ -129,6 +132,26 @@ mod tests {
     }
 
     #[test]
+    fn error_message_redacts_secret_from_content_and_raw_error() {
+        let message = make_ui_only_error_message(
+            "provider failed with Authorization: Bearer sk-abcdefgh12345678",
+        );
+
+        let content = message.content.content_text_only();
+        assert!(!content.contains("sk-abcdefgh12345678"));
+        assert!(content.contains("[REDACTED"));
+
+        let raw_error = message
+            .extra
+            .get("error_info")
+            .and_then(|info| info.get("raw_error"))
+            .and_then(|raw_error| raw_error.as_str())
+            .unwrap_or_default();
+        assert!(!raw_error.contains("sk-abcdefgh12345678"));
+        assert!(raw_error.contains("[REDACTED"));
+    }
+
+    #[test]
     fn retry_status_message_carries_attempt_and_delay() {
         let message = make_ui_only_retry_status_message(
             "LLM error (429 Too Many Requests): rate limit",
@@ -178,5 +201,23 @@ mod tests {
             retry_status.get("in_progress").and_then(|v| v.as_bool()),
             Some(true),
         );
+    }
+
+    #[test]
+    fn retry_status_message_redacts_secret_from_content_and_raw_error() {
+        let message =
+            make_ui_only_retry_status_message("LLM error: token=sk-retrysecret12345678", 3, 5, 30);
+
+        let content = message.content.content_text_only();
+        assert!(!content.contains("sk-retrysecret12345678"));
+
+        let raw_error = message
+            .extra
+            .get("error_info")
+            .and_then(|info| info.get("raw_error"))
+            .and_then(|raw_error| raw_error.as_str())
+            .unwrap_or_default();
+        assert!(!raw_error.contains("sk-retrysecret12345678"));
+        assert!(raw_error.contains("[REDACTED"));
     }
 }
