@@ -436,6 +436,10 @@ fn frozen_prefix_has_tools(prefix: &FrozenRequestPrefix) -> bool {
     prefix.tools_canonical.is_some()
 }
 
+fn is_mode_transition_or_handoff(link_type: Option<&str>) -> bool {
+    matches!(link_type, Some("mode_transition" | "handoff"))
+}
+
 pub fn frozen_prefix_is_complete(prefix: &FrozenRequestPrefix) -> bool {
     frozen_prefix_has_system_prompt(prefix) && frozen_prefix_has_tools(prefix)
 }
@@ -451,6 +455,43 @@ pub fn first_system_prompt(messages: &[ChatMessage]) -> Option<String> {
             None
         }
     })
+}
+
+fn repair_transition_frozen_prefix(
+    link_type: Option<&str>,
+    messages: &[ChatMessage],
+    frozen_request_prefix: Option<FrozenRequestPrefix>,
+) -> (Option<FrozenRequestPrefix>, bool) {
+    let Some(prefix) = frozen_request_prefix else {
+        return (
+            first_system_prompt(messages).map(|system_prompt| {
+                new_legacy_incomplete_frozen_request_prefix(Some(system_prompt))
+            }),
+            false,
+        );
+    };
+    if !is_mode_transition_or_handoff(link_type) {
+        return (Some(prefix), false);
+    }
+    let Some(frozen_system) = prefix
+        .system_prompt
+        .as_ref()
+        .filter(|text| !text.trim().is_empty())
+    else {
+        return (Some(prefix), false);
+    };
+    let Some(first_system) = first_system_prompt(messages) else {
+        return (Some(prefix), false);
+    };
+    if first_system == *frozen_system {
+        return (Some(prefix), false);
+    }
+    (
+        Some(new_legacy_incomplete_frozen_request_prefix(Some(
+            first_system,
+        ))),
+        true,
+    )
 }
 
 pub fn new_frozen_request_prefix(
@@ -910,6 +951,42 @@ pub async fn load_trajectory_for_chat(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
+    let parent_id = t
+        .get("parent_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let link_type = t
+        .get("link_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let root_chat_id = t
+        .get("root_chat_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let previous_response_id = t
+        .get("previous_response_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let loaded_frozen_request_prefix = t
+        .get("frozen_request_prefix")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let (frozen_request_prefix, transition_prefix_repaired) = repair_transition_frozen_prefix(
+        link_type.as_deref(),
+        &messages,
+        loaded_frozen_request_prefix,
+    );
+    let claude_code_identity = if transition_prefix_repaired {
+        None
+    } else {
+        t.get("claude_code_identity")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    };
+    let previous_response_id = if transition_prefix_repaired {
+        None
+    } else {
+        previous_response_id
+    };
+
     let thread = ThreadParams {
         id: chat_id.to_string(),
         title: t
@@ -962,18 +1039,9 @@ pub async fn load_trajectory_for_chat(
             .unwrap_or(false),
         task_meta,
         worktree,
-        parent_id: t
-            .get("parent_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        link_type: t
-            .get("link_type")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        root_chat_id: t
-            .get("root_chat_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        parent_id,
+        link_type,
+        root_chat_id,
         reasoning_effort: t
             .get("reasoning_effort")
             .and_then(|v| v.as_str())
@@ -996,10 +1064,7 @@ pub async fn load_trajectory_for_chat(
             .map(|n| n as usize),
         parallel_tool_calls: t.get("parallel_tool_calls").and_then(|v| v.as_bool()),
 
-        previous_response_id: t
-            .get("previous_response_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        previous_response_id,
 
         browser_meta: t
             .get("browser_meta")
@@ -1017,17 +1082,8 @@ pub async fn load_trajectory_for_chat(
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
 
         auto_compact_enabled: t.get("auto_compact_enabled").and_then(|v| v.as_bool()),
-        frozen_request_prefix: t
-            .get("frozen_request_prefix")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .or_else(|| {
-                first_system_prompt(&messages).map(|system_prompt| {
-                    new_legacy_incomplete_frozen_request_prefix(Some(system_prompt))
-                })
-            }),
-        claude_code_identity: t
-            .get("claude_code_identity")
-            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        frozen_request_prefix,
+        claude_code_identity,
         reactive_compact_attempts: t
             .get("reactive_compact_attempts")
             .and_then(|v| v.as_u64())
@@ -5009,6 +5065,188 @@ mod tests {
         assert_eq!(prefix.system_prompt.as_deref(), Some("legacy system"));
         assert!(prefix.tools_canonical.is_none());
         assert!(loaded.thread.claude_code_identity.is_none());
+    }
+
+    #[tokio::test]
+    async fn mode_transition_load_discards_stale_copied_frozen_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let traj_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&traj_dir).await.unwrap();
+        tokio::fs::write(
+            traj_dir.join("transition-stale-frozen.json"),
+            serde_json::to_string(&json!({
+                "id":"transition-stale-frozen",
+                "title":"Transition",
+                "created_at":"2024-01-01T00:00:00Z",
+                "updated_at":"2024-01-01T00:00:00Z",
+                "model":"model",
+                "mode":"task_planner",
+                "tool_use":"agent",
+                "parent_id":"source-chat",
+                "link_type":"mode_transition",
+                "previous_response_id":"resp_source",
+                "messages":[
+                    {"role":"system","content":"target task planner system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "old planning system",
+                    "tools_canonical": [{"type":"function","function":{"name":"old_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "include_project_info":true,
+                "checkpoints_enabled":true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let loaded = load_trajectory_for_chat(gcx, "transition-stale-frozen")
+            .await
+            .unwrap();
+        let prefix = loaded.thread.frozen_request_prefix.unwrap();
+        assert_eq!(
+            prefix.system_prompt.as_deref(),
+            Some("target task planner system")
+        );
+        assert!(prefix.tools_canonical.is_none());
+        assert!(loaded.thread.claude_code_identity.is_none());
+        assert!(loaded.thread.previous_response_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn ordinary_branch_load_preserves_copied_frozen_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let traj_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&traj_dir).await.unwrap();
+        tokio::fs::write(
+            traj_dir.join("branch-preserve-frozen.json"),
+            serde_json::to_string(&json!({
+                "id":"branch-preserve-frozen",
+                "title":"Branch",
+                "created_at":"2024-01-01T00:00:00Z",
+                "updated_at":"2024-01-01T00:00:00Z",
+                "model":"model",
+                "mode":"agent",
+                "tool_use":"agent",
+                "parent_id":"source-chat",
+                "link_type":"branch",
+                "previous_response_id":"resp_source",
+                "messages":[
+                    {"role":"system","content":"branch system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "source system",
+                    "tools_canonical": [{"type":"function","function":{"name":"source_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "include_project_info":true,
+                "checkpoints_enabled":true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let loaded = load_trajectory_for_chat(gcx, "branch-preserve-frozen")
+            .await
+            .unwrap();
+        let prefix = loaded.thread.frozen_request_prefix.unwrap();
+        assert_eq!(prefix.system_prompt.as_deref(), Some("source system"));
+        assert_eq!(
+            prefix.tools_canonical,
+            Some(json!([{"type":"function","function":{"name":"source_tool"}}]))
+        );
+        assert!(loaded.thread.claude_code_identity.is_some());
+        assert_eq!(
+            loaded.thread.previous_response_id.as_deref(),
+            Some("resp_source")
+        );
+    }
+
+    #[tokio::test]
+    async fn mode_transition_open_persists_repaired_frozen_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "transition-open-repair";
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&trajectories_dir).await.unwrap();
+        let path = trajectories_dir.join(format!("{chat_id}.json"));
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Transition Open",
+                "model": "model",
+                "mode": "task_planner",
+                "tool_use": "agent",
+                "parent_id": "source-chat",
+                "link_type": "mode_transition",
+                "previous_response_id": "resp_source",
+                "messages": [
+                    {"role":"system","content":"target task planner system"},
+                    {"role":"user","content":"hello"}
+                ],
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "old planning system",
+                    "tools_canonical": [{"type":"function","function":{"name":"old_tool"}}]
+                },
+                "claude_code_identity": {
+                    "device_id":"source-device",
+                    "session_id":"source-session"
+                },
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let session_arc = crate::chat::get_or_create_session_with_trajectory(
+            app.clone(),
+            &app.chat.sessions,
+            chat_id,
+        )
+        .await;
+        {
+            let session = session_arc.lock().await;
+            let prefix = session.thread.frozen_request_prefix.as_ref().unwrap();
+            assert_eq!(
+                prefix.system_prompt.as_deref(),
+                Some("target task planner system")
+            );
+            assert!(prefix.tools_canonical.is_none());
+            assert!(session.thread.claude_code_identity.is_none());
+        }
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(
+            raw["frozen_request_prefix"]["system_prompt"],
+            "target task planner system"
+        );
+        assert!(raw["frozen_request_prefix"]["tools_canonical"].is_null());
+        assert!(raw.get("claude_code_identity").is_none());
+        assert!(raw.get("previous_response_id").is_none());
     }
 
     #[test]

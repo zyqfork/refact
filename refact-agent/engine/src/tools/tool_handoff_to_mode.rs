@@ -415,8 +415,8 @@ impl Tool for ToolHandoffToMode {
             auto_enrichment_enabled: thread.auto_enrichment_enabled,
             buddy_meta: None,
             auto_compact_enabled: thread.auto_compact_enabled,
-            frozen_request_prefix: thread.frozen_request_prefix.clone(),
-            claude_code_identity: thread.claude_code_identity.clone(),
+            frozen_request_prefix: None,
+            claude_code_identity: None,
             reactive_compact_attempts: None,
             wake_up_at: None,
             waiting_for_card_ids: Vec::new(),
@@ -752,6 +752,41 @@ mod tests {
         snap.session_state = SessionState::WaitingUserInput;
         snap.pause_reasons = vec![];
         tool_with_snapshot(snap).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handoff_to_mode_does_not_copy_source_frozen_prefix_or_claude_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let facade = Arc::new(MockChatFacade::default());
+        let mut snapshot = source_snapshot();
+        snapshot.thread.frozen_request_prefix = Some(refact_chat_api::FrozenRequestPrefix {
+            schema_version: 1,
+            created_at: "2026-05-29T00:00:00Z".to_string(),
+            system_prompt: Some("source system".to_string()),
+            tools_canonical: Some(json!([{"type":"function","function":{"name":"source_tool"}}])),
+        });
+        snapshot.thread.claude_code_identity = Some(refact_chat_api::ClaudeCodeIdentity {
+            device_id: "source-device".to_string(),
+            session_id: "source-session".to_string(),
+        });
+        snapshot.thread.previous_response_id = Some("resp_source".to_string());
+        facade.snapshot.lock().unwrap().replace(snapshot);
+        let app = test_app_with_workspace(temp.path(), facade.clone()).await;
+        let ccx = handoff_ccx(app).await;
+        let mut tool = ToolHandoffToMode {
+            config_path: String::new(),
+        };
+        let args = HashMap::from([("target_mode".to_string(), json!("task_planner"))]);
+
+        tool.tool_execute(ccx, &"call-id".to_string(), &args)
+            .await
+            .unwrap();
+
+        let saved = facade.saved.lock().unwrap().clone();
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].frozen_request_prefix.is_none());
+        assert!(saved[0].claude_code_identity.is_none());
+        assert!(saved[0].previous_response_id.is_none());
     }
 
     #[tokio::test]

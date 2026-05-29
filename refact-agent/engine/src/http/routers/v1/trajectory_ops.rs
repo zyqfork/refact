@@ -19,6 +19,12 @@ use crate::chat::get_or_create_session_with_trajectory;
 use refact_chat_history::trajectory_snapshot::TrajectorySnapshot;
 use crate::custom_error::ScratchError;
 
+fn reset_transition_snapshot_identity(snapshot: &mut TrajectorySnapshot) {
+    snapshot.previous_response_id = None;
+    snapshot.frozen_request_prefix = None;
+    snapshot.claude_code_identity = None;
+}
+
 async fn create_initial_plan_document_for_transition(
     gcx: Arc<GlobalContext>,
     task_id: &str,
@@ -342,7 +348,7 @@ pub async fn handle_handoff_apply(
     let new_chat_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let snapshot = TrajectorySnapshot {
+    let mut snapshot = TrajectorySnapshot {
         chat_id: new_chat_id.clone(),
         title: thread.title.clone(),
         model: thread.model.clone(),
@@ -384,6 +390,7 @@ pub async fn handle_handoff_apply(
         wake_up_at: None,
         waiting_for_card_ids: Vec::new(),
     };
+    reset_transition_snapshot_identity(&mut snapshot);
 
     save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "handoff")
         .await
@@ -501,7 +508,7 @@ pub async fn handle_mode_transition_apply(
     let new_chat_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let snapshot = TrajectorySnapshot {
+    let mut snapshot = TrajectorySnapshot {
         chat_id: new_chat_id.clone(),
         title: String::new(),
         model: thread.model.clone(),
@@ -543,6 +550,7 @@ pub async fn handle_mode_transition_apply(
         wake_up_at: None,
         waiting_for_card_ids: Vec::new(),
     };
+    reset_transition_snapshot_identity(&mut snapshot);
 
     save_trajectory_snapshot_with_parent(gcx.clone(), snapshot, &chat_id, "mode_transition")
         .await
@@ -638,7 +646,7 @@ pub async fn handle_planner_from_transition(
         planner_chat_id: Some(new_chat_id.clone()),
     };
 
-    let snapshot = TrajectorySnapshot {
+    let mut snapshot = TrajectorySnapshot {
         chat_id: new_chat_id.clone(),
         title: String::new(),
         model: thread.model.clone(),
@@ -680,6 +688,7 @@ pub async fn handle_planner_from_transition(
         wake_up_at: None,
         waiting_for_card_ids: Vec::new(),
     };
+    reset_transition_snapshot_identity(&mut snapshot);
 
     // task_meta is set, so this saves into the task's planner directory
     save_trajectory_snapshot_with_parent(
@@ -715,6 +724,7 @@ pub async fn handle_planner_from_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn sample_worktree(root: &std::path::Path) -> crate::worktrees::types::WorktreeMeta {
         crate::worktrees::types::WorktreeMeta {
@@ -731,6 +741,83 @@ mod tests {
             agent_id: None,
             enforce: true,
         }
+    }
+
+    fn transition_identity_snapshot(link_type: &str) -> TrajectorySnapshot {
+        let mut snapshot = TrajectorySnapshot {
+            chat_id: "transition-identity".to_string(),
+            title: String::new(),
+            model: "gpt-4".to_string(),
+            mode: "task_planner".to_string(),
+            tool_use: "agent".to_string(),
+            messages: vec![crate::call_validation::ChatMessage::new(
+                "user".to_string(),
+                "hello".to_string(),
+            )],
+            created_at: chrono::Utc::now().to_rfc3339(),
+            boost_reasoning: false,
+            checkpoints_enabled: true,
+            context_tokens_cap: None,
+            include_project_info: true,
+            is_title_generated: false,
+            auto_approve_editing_tools: false,
+            auto_approve_dangerous_commands: false,
+            autonomous_no_confirm: false,
+            version: 1,
+            task_meta: None,
+            worktree: None,
+            parent_id: Some("source-chat".to_string()),
+            link_type: Some(link_type.to_string()),
+            root_chat_id: Some("source-chat".to_string()),
+            reasoning_effort: None,
+            thinking_budget: None,
+            temperature: None,
+            frequency_penalty: None,
+            max_tokens: None,
+            parallel_tool_calls: None,
+            previous_response_id: Some("resp_source".to_string()),
+            active_skill: None,
+            auto_enrichment_enabled: None,
+            buddy_meta: None,
+            auto_compact_enabled: None,
+            frozen_request_prefix: Some(refact_chat_api::FrozenRequestPrefix {
+                schema_version: 1,
+                created_at: "2026-05-29T00:00:00Z".to_string(),
+                system_prompt: Some("source system".to_string()),
+                tools_canonical: Some(
+                    json!([{"type":"function","function":{"name":"source_tool"}}]),
+                ),
+            }),
+            claude_code_identity: Some(refact_chat_api::ClaudeCodeIdentity {
+                device_id: "source-device".to_string(),
+                session_id: "source-session".to_string(),
+            }),
+            reactive_compact_attempts: None,
+            wake_up_at: None,
+            waiting_for_card_ids: Vec::new(),
+        };
+        reset_transition_snapshot_identity(&mut snapshot);
+        snapshot
+    }
+
+    #[test]
+    fn trajectory_ops_mode_transition_snapshot_does_not_copy_source_identity() {
+        let snapshot = transition_identity_snapshot("mode_transition");
+
+        assert_eq!(snapshot.link_type.as_deref(), Some("mode_transition"));
+        assert!(snapshot.previous_response_id.is_none());
+        assert!(snapshot.frozen_request_prefix.is_none());
+        assert!(snapshot.claude_code_identity.is_none());
+    }
+
+    #[test]
+    fn trajectory_ops_handoff_snapshot_does_not_copy_source_identity() {
+        let snapshot = transition_identity_snapshot("handoff");
+
+        assert_eq!(snapshot.link_type.as_deref(), Some("handoff"));
+        assert!(snapshot.previous_response_id.is_none());
+        assert!(snapshot.frozen_request_prefix.is_none());
+        assert!(snapshot.claude_code_identity.is_none());
     }
 
     #[tokio::test]
