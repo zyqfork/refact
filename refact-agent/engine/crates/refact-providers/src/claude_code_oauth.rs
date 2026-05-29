@@ -27,6 +27,7 @@ pub enum OAuthMode {
 #[derive(Debug, Clone)]
 pub struct PkceSession {
     pub verifier: String,
+    pub state: String,
     #[allow(dead_code)]
     pub authorize_url: String,
     #[allow(dead_code)]
@@ -105,12 +106,18 @@ fn generate_code_verifier() -> String {
         .collect()
 }
 
+fn generate_state() -> String {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill(&mut bytes[..]);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 fn generate_code_challenge(verifier: &str) -> String {
     let hash = Sha256::digest(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(hash)
 }
 
-fn build_authorize_url(_mode: &OAuthMode, code_challenge: &str, verifier: &str) -> String {
+fn build_authorize_url(_mode: &OAuthMode, code_challenge: &str, state: &str) -> String {
     let mut url = url::Url::parse("https://claude.ai/oauth/authorize").expect("valid base URL");
 
     url.query_pairs_mut()
@@ -121,7 +128,7 @@ fn build_authorize_url(_mode: &OAuthMode, code_challenge: &str, verifier: &str) 
         .append_pair("scope", SCOPE)
         .append_pair("code_challenge", code_challenge)
         .append_pair("code_challenge_method", "S256")
-        .append_pair("state", verifier);
+        .append_pair("state", state);
 
     url.to_string()
 }
@@ -136,12 +143,14 @@ pub async fn start_oauth_session(
     provider_instance_id: impl Into<String>,
 ) -> (String, String) {
     let verifier = generate_code_verifier();
+    let state = generate_state();
     let challenge = generate_code_challenge(&verifier);
-    let authorize_url = build_authorize_url(&mode, &challenge, &verifier);
+    let authorize_url = build_authorize_url(&mode, &challenge, &state);
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let session = PkceSession {
         verifier,
+        state,
         authorize_url: authorize_url.clone(),
         mode,
         provider_instance_id: provider_instance_id.into(),
@@ -178,6 +187,9 @@ pub async fn exchange_code(
     let parts: Vec<&str> = code_raw.split('#').collect();
     let code = parts[0];
     let state = if parts.len() > 1 { parts[1] } else { "" };
+    if state != session.state {
+        return Err("OAuth state mismatch".to_string());
+    }
 
     let body = serde_json::json!({
         "code": code,
@@ -318,6 +330,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oauth_session_uses_independent_authorize_state() {
+        let _guard = pending_sessions_test_guard().await;
+        clear_pending_sessions_for_test().await;
+        let (session_id, authorize_url) =
+            start_oauth_session(OAuthMode::Max, "claude_code_work").await;
+
+        let sessions = PENDING_SESSIONS.lock().await;
+        let session = sessions.get(&session_id).unwrap();
+        assert_ne!(session.state, session.verifier);
+        let url = url::Url::parse(&authorize_url).unwrap();
+        let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+        assert_eq!(params.get("state"), Some(&session.state));
+        assert_ne!(params.get("state"), Some(&session.verifier));
+        assert!(!authorize_url.contains(&session.verifier));
+        drop(sessions);
+
+        clear_pending_sessions_for_test().await;
+    }
+
+    #[tokio::test]
     async fn mismatched_provider_exchange_rejects_and_removes_session() {
         let _guard = pending_sessions_test_guard().await;
         clear_pending_sessions_for_test().await;
@@ -329,6 +361,29 @@ mod tests {
             .unwrap_err();
 
         assert!(err.contains("claude_code_work"));
+        assert!(pending_session_provider_instance_id(&session_id)
+            .await
+            .is_none());
+        clear_pending_sessions_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn mismatched_state_exchange_rejects_before_token_request() {
+        let _guard = pending_sessions_test_guard().await;
+        clear_pending_sessions_for_test().await;
+        let (session_id, _) = start_oauth_session(OAuthMode::Max, "claude_code_work").await;
+        let client = reqwest::Client::new();
+
+        let err = exchange_code(
+            &client,
+            &session_id,
+            "code#mismatched-state",
+            "claude_code_work",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("OAuth state mismatch"));
         assert!(pending_session_provider_instance_id(&session_id)
             .await
             .is_none());
