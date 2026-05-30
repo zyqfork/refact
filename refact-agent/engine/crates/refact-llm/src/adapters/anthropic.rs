@@ -7,6 +7,7 @@ use crate::adapter::{
     insert_extra_headers,
 };
 use crate::canonical::{CanonicalToolChoice, LlmRequest, LlmStreamDelta};
+use crate::params::CacheControl;
 use super::claude_code_compat;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -21,6 +22,7 @@ const PROTECTED_FIELDS: &[&str] = &[
     "tools",
     "tool_choice",
     "metadata",
+    "cache_control",
 ];
 
 pub struct AnthropicAdapter;
@@ -62,6 +64,8 @@ impl LlmWireAdapter for AnthropicAdapter {
         );
 
         let is_effort_mode = settings.reasoning_type.as_deref() == Some("anthropic_effort");
+        let enable_prompt_cache =
+            matches!(req.cache_control, CacheControl::Ephemeral) && settings.supports_cache_control;
 
         insert_extra_headers(&mut headers, &settings.extra_headers);
         crate::provider_quirks::apply_github_copilot_request_headers(&mut headers, req, settings);
@@ -150,9 +154,6 @@ impl LlmWireAdapter for AnthropicAdapter {
             }
         }
 
-        // anthropic always supports caching
-        body["cache_control"] = json!({"type": "ephemeral", "ttl": "1h"});
-
         if settings.supports_reasoning {
             if is_effort_mode {
                 match &req.reasoning {
@@ -208,6 +209,23 @@ impl LlmWireAdapter for AnthropicAdapter {
 
         crate::provider_quirks::remove_anthropic_unsupported_fields(&mut body, settings);
 
+        if is_cc {
+            if let Some(msgs) = body.get_mut("messages") {
+                claude_code_compat::apply_cc_tool_use_in_messages(msgs);
+            }
+        }
+
+        if enable_prompt_cache {
+            inject_anthropic_cache_control(&mut body);
+            let marker_count = count_cache_control_markers(&body);
+            if marker_count > 4 {
+                tracing::warn!(
+                    marker_count,
+                    "anthropic prompt cache marker count exceeds provider limit"
+                );
+            }
+        }
+
         {
             let mut betas: Vec<&str> = Vec::new();
             let thinking_type = body
@@ -258,12 +276,6 @@ impl LlmWireAdapter for AnthropicAdapter {
         } else {
             settings.endpoint.clone()
         };
-
-        if is_cc {
-            if let Some(msgs) = body.get_mut("messages") {
-                claude_code_compat::apply_cc_tool_use_in_messages(msgs);
-            }
-        }
 
         Ok(HttpParts { url, headers, body })
     }
@@ -887,6 +899,168 @@ fn convert_tools_to_anthropic(tools: &[Value]) -> Value {
     json!(converted)
 }
 
+fn anthropic_cache_control() -> Value {
+    json!({"type": "ephemeral", "ttl": "1h"})
+}
+
+fn inject_anthropic_cache_control(body: &mut Value) {
+    let cache_control = anthropic_cache_control();
+
+    if let Some(system) = body.get_mut("system") {
+        add_system_cache_breakpoint(system, &cache_control);
+    }
+    if let Some(tools) = body.get_mut("tools") {
+        add_tool_cache_breakpoint(tools, &cache_control);
+    }
+    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+        add_message_cache_breakpoint(messages, &cache_control, false);
+    }
+}
+
+fn add_system_cache_breakpoint(system: &mut Value, cache_control: &Value) -> bool {
+    match system {
+        Value::String(text) => {
+            if text.is_empty() {
+                return false;
+            }
+            *system = json!([{
+                "type": "text",
+                "text": text.clone(),
+                "cache_control": cache_control.clone()
+            }]);
+            true
+        }
+        Value::Array(blocks) => add_cache_to_last_cacheable_system_block(blocks, cache_control),
+        _ => false,
+    }
+}
+
+fn add_message_cache_breakpoint(
+    messages: &mut [Value],
+    cache_control: &Value,
+    skip_cache_write: bool,
+) -> bool {
+    if messages.is_empty() {
+        return false;
+    }
+
+    let preferred_index = if skip_cache_write && messages.len() > 1 {
+        messages.len() - 2
+    } else {
+        messages.len() - 1
+    };
+
+    let Some(content) = messages[preferred_index]
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    add_cache_to_last_cacheable_content_block(content, cache_control)
+}
+
+fn add_tool_cache_breakpoint(tools: &mut Value, cache_control: &Value) -> bool {
+    let Some(tools) = tools.as_array_mut() else {
+        return false;
+    };
+
+    for tool in tools.iter_mut().rev() {
+        if is_server_side_tool(tool) {
+            continue;
+        }
+        if let Some(obj) = tool.as_object_mut() {
+            obj.insert("cache_control".to_string(), cache_control.clone());
+            return true;
+        }
+    }
+    false
+}
+
+fn add_cache_to_last_cacheable_content_block(content: &mut [Value], cache_control: &Value) -> bool {
+    for block in content.iter_mut().rev() {
+        if !is_cacheable_content_block(block) {
+            continue;
+        }
+        if let Some(obj) = block.as_object_mut() {
+            obj.insert("cache_control".to_string(), cache_control.clone());
+            return true;
+        }
+    }
+    false
+}
+
+fn add_cache_to_last_cacheable_system_block(content: &mut [Value], cache_control: &Value) -> bool {
+    for block in content.iter_mut().rev() {
+        if !is_cacheable_system_block(block) {
+            continue;
+        }
+        if let Some(obj) = block.as_object_mut() {
+            obj.insert("cache_control".to_string(), cache_control.clone());
+            return true;
+        }
+    }
+    false
+}
+
+fn is_cacheable_content_block(block: &Value) -> bool {
+    let Some(obj) = block.as_object() else {
+        return false;
+    };
+    matches!(
+        obj.get("type").and_then(Value::as_str),
+        Some("text" | "image" | "document" | "tool_use" | "tool_result")
+    )
+}
+
+fn is_cacheable_system_block(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("text")
+        && block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+}
+
+fn is_server_side_tool(tool: &Value) -> bool {
+    tool.get("type").and_then(Value::as_str) == Some("web_search_20250305")
+        || tool.get("name").and_then(Value::as_str) == Some("web_search")
+}
+
+fn count_cache_control_markers(value: &Value) -> usize {
+    count_block_markers(value.get("system"))
+        + value
+            .get("messages")
+            .and_then(Value::as_array)
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| count_block_markers(message.get("content")))
+                    .sum::<usize>()
+            })
+            .unwrap_or(0)
+        + value
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter(|tool| tool.get("cache_control").is_some())
+                    .count()
+            })
+            .unwrap_or(0)
+}
+
+fn count_block_markers(value: Option<&Value>) -> usize {
+    value
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block.get("cache_control").is_some())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 fn tool_choice_to_anthropic(choice: &CanonicalToolChoice) -> Value {
     match choice {
         CanonicalToolChoice::Auto => json!({"type": "auto"}),
@@ -1044,16 +1218,6 @@ mod tests {
             http_b.headers.get("x-claude-code-session-id")
         );
         assert_eq!(http_a.body["metadata"], http_b.body["metadata"]);
-    }
-
-    fn contains_key_recursive(value: &Value, key: &str) -> bool {
-        match value {
-            Value::Object(map) => {
-                map.contains_key(key) || map.values().any(|v| contains_key_recursive(v, key))
-            }
-            Value::Array(items) => items.iter().any(|v| contains_key_recursive(v, key)),
-            _ => false,
-        }
     }
 
     #[test]
@@ -1325,7 +1489,7 @@ mod tests {
     }
 
     #[test]
-    fn test_top_level_cache_control_ephemeral() {
+    fn anthropic_cache_control_uses_block_markers_not_top_level() {
         let adapter = AnthropicAdapter;
         let req = LlmRequest::new(
             "claude".to_string(),
@@ -1334,12 +1498,16 @@ mod tests {
         .with_cache_control(CacheControl::Ephemeral);
 
         let http = adapter.build_http(&req, &settings()).unwrap();
-        assert_eq!(http.body["cache_control"]["type"], "ephemeral");
-        assert_eq!(http.body["cache_control"]["ttl"], "1h");
+        assert!(http.body.get("cache_control").is_none());
+        assert_eq!(count_cache_control_markers(&http.body), 1);
+        assert_eq!(
+            http.body["messages"][0]["content"][0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
     }
 
     #[test]
-    fn test_top_level_cache_control_only_with_tools_and_multi_turn_messages() {
+    fn anthropic_cache_control_marks_system_tools_and_last_message() {
         use refact_core::chat_types::{ChatToolCall, ChatToolFunction};
 
         let adapter = AnthropicAdapter;
@@ -1387,22 +1555,29 @@ mod tests {
 
         let http = adapter.build_http(&req, &settings()).unwrap();
 
+        assert!(http.body.get("cache_control").is_none());
+        assert_eq!(count_cache_control_markers(&http.body), 3);
         assert_eq!(
-            http.body["cache_control"],
+            http.body["system"][0]["cache_control"],
             json!({"type": "ephemeral", "ttl": "1h"})
         );
-        assert!(!contains_key_recursive(
-            &http.body["messages"],
-            "cache_control"
-        ));
-        assert!(!contains_key_recursive(
-            &http.body["tools"],
-            "cache_control"
-        ));
+        assert_eq!(
+            http.body["tools"][0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+
+        let messages = http.body["messages"].as_array().unwrap();
+        let last_message_content = messages.last().unwrap()["content"].as_array().unwrap();
+        assert_eq!(last_message_content[0]["type"], "tool_result");
+        assert_eq!(last_message_content[1]["type"], "text");
+        assert_eq!(
+            last_message_content[1]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
     }
 
     #[test]
-    fn test_anthropic_supported_flags_keep_cache_control_tools_and_reasoning() {
+    fn anthropic_supported_flags_keep_cache_markers_tools_and_reasoning() {
         use crate::params::ReasoningIntent;
 
         let adapter = AnthropicAdapter;
@@ -1422,11 +1597,278 @@ mod tests {
 
         let http = adapter.build_http(&req, &settings()).unwrap();
 
-        assert_eq!(http.body["cache_control"]["type"], "ephemeral");
+        assert!(http.body.get("cache_control").is_none());
+        assert_eq!(count_cache_control_markers(&http.body), 2);
+        assert_eq!(
+            http.body["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(http.body["tools"][0]["cache_control"]["type"], "ephemeral");
         assert!(http.body.get("tools").is_some());
         assert_eq!(http.body["tool_choice"], json!({"type": "any"}));
         assert_eq!(http.body["thinking"]["type"], "enabled");
         assert!(http.headers.get("anthropic-beta").is_some());
+    }
+
+    #[test]
+    fn anthropic_cache_control_off_has_no_markers() {
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![ChatMessage::new("user".to_string(), "test".to_string())],
+        )
+        .with_cache_control(CacheControl::Off);
+
+        let http = adapter.build_http(&req, &settings()).unwrap();
+
+        assert!(http.body.get("cache_control").is_none());
+        assert_eq!(count_cache_control_markers(&http.body), 0);
+    }
+
+    #[test]
+    fn anthropic_cache_control_disabled_by_settings_has_no_markers() {
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![ChatMessage::new("user".to_string(), "test".to_string())],
+        )
+        .with_cache_control(CacheControl::Ephemeral);
+        let mut settings = settings();
+        settings.supports_cache_control = false;
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert!(http.body.get("cache_control").is_none());
+        assert_eq!(count_cache_control_markers(&http.body), 0);
+    }
+
+    #[test]
+    fn anthropic_cache_marks_system_block() {
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![
+                ChatMessage::new("system".to_string(), "Be helpful".to_string()),
+                ChatMessage::new("user".to_string(), "Hi".to_string()),
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral);
+
+        let http = adapter.build_http(&req, &settings()).unwrap();
+
+        let system = http.body["system"].as_array().unwrap();
+        assert_eq!(system.len(), 1);
+        assert_eq!(system[0]["type"], "text");
+        assert_eq!(system[0]["text"], "Be helpful");
+        assert_eq!(
+            system[0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+    }
+
+    #[test]
+    fn anthropic_cache_marks_last_system_text_block_only() {
+        let mut system = json!([
+            {"type": "text", "text": "Be helpful"},
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/img.png"}}
+        ]);
+
+        assert!(add_system_cache_breakpoint(
+            &mut system,
+            &anthropic_cache_control()
+        ));
+
+        assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
+        assert!(system[1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn anthropic_cache_marks_tool_schema_before_web_search() {
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![ChatMessage::new("user".to_string(), "test".to_string())],
+        )
+        .with_cache_control(CacheControl::Ephemeral)
+        .with_tools(
+            vec![json!({
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {}}
+            })],
+            None,
+        );
+        let mut settings = settings();
+        settings.supports_web_search = true;
+
+        let http = adapter.build_http(&req, &settings).unwrap();
+
+        assert_eq!(http.body["tools"][0]["name"], "lookup");
+        assert_eq!(http.body["tools"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(http.body["tools"][1]["name"], "web_search");
+        assert!(http.body["tools"][1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn anthropic_cache_marker_count_stays_under_limit() {
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![
+                ChatMessage::new("system".to_string(), "Be stable".to_string()),
+                ChatMessage::new("user".to_string(), "test".to_string()),
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral)
+        .with_tools(
+            vec![json!({
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {}}
+            })],
+            None,
+        );
+
+        let http = adapter.build_http(&req, &settings()).unwrap();
+
+        assert!(count_cache_control_markers(&http.body) <= 4);
+        assert_eq!(count_cache_control_markers(&http.body), 3);
+    }
+
+    #[test]
+    fn anthropic_cache_does_not_mark_thinking_blocks() {
+        use refact_core::chat_types::{ChatToolCall, ChatToolFunction};
+
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude".to_string(),
+            vec![
+                ChatMessage::new("user".to_string(), "Do something".to_string()),
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: ChatContent::SimpleText("".to_string()),
+                    thinking_blocks: Some(vec![
+                        json!({
+                            "type": "thinking",
+                            "thinking": "Let me think",
+                            "signature": "sig_1"
+                        }),
+                        json!({
+                            "type": "redacted_thinking",
+                            "data": "encrypted"
+                        }),
+                    ]),
+                    tool_calls: Some(vec![ChatToolCall {
+                        id: "call_1".to_string(),
+                        tool_type: "function".to_string(),
+                        extra_content: None,
+                        function: ChatToolFunction {
+                            name: "lookup".to_string(),
+                            arguments: "{}".to_string(),
+                        },
+                        index: None,
+                    }]),
+                    ..Default::default()
+                },
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral);
+
+        let http = adapter.build_http(&req, &settings()).unwrap();
+
+        let assistant_content = http.body["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(assistant_content[0]["type"], "thinking");
+        assert_eq!(assistant_content[1]["type"], "redacted_thinking");
+        assert!(assistant_content[0].get("cache_control").is_none());
+        assert!(assistant_content[1].get("cache_control").is_none());
+        assert_eq!(assistant_content[2]["type"], "tool_use");
+        assert_eq!(assistant_content[2]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn anthropic_message_cache_marker_does_not_fallback_to_earlier_message() {
+        let mut messages = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "markable"}]}),
+            json!({"role": "assistant", "content": [{"type": "thinking", "thinking": "nope"}]}),
+        ];
+
+        assert!(!add_message_cache_breakpoint(
+            &mut messages,
+            &anthropic_cache_control(),
+            false
+        ));
+
+        assert_eq!(count_block_markers(messages[0].get("content")), 0);
+        assert_eq!(count_block_markers(messages[1].get("content")), 0);
+    }
+
+    #[test]
+    fn anthropic_message_cache_marker_skips_unknown_and_server_blocks() {
+        let mut messages = vec![json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "markable"},
+                {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+                {"type": "future_provider_block", "data": true}
+            ]
+        })];
+
+        assert!(add_message_cache_breakpoint(
+            &mut messages,
+            &anthropic_cache_control(),
+            false
+        ));
+
+        let content = messages[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["cache_control"]["type"], "ephemeral");
+        assert!(content[1].get("cache_control").is_none());
+        assert!(content[2].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn claude_code_oauth_cache_markers_preserve_system_prefix_and_betas() {
+        let adapter = AnthropicAdapter;
+        let req = LlmRequest::new(
+            "claude_code/claude-sonnet-4".to_string(),
+            vec![
+                ChatMessage::new("system".to_string(), "Be helpful".to_string()),
+                ChatMessage::new("user".to_string(), "Hello".to_string()),
+            ],
+        )
+        .with_cache_control(CacheControl::Ephemeral)
+        .with_tools(
+            vec![json!({
+                "type": "function",
+                "function": {"name": "strategic_planning", "parameters": {}}
+            })],
+            None,
+        );
+
+        let http = adapter.build_http(&req, &claude_code_settings()).unwrap();
+
+        assert!(http.body.get("cache_control").is_none());
+        let system = http.body["system"].as_array().unwrap();
+        assert!(system[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("x-anthropic-billing-header:"));
+        assert!(system[0].get("cache_control").is_none());
+        assert_eq!(system[1]["text"], claude_code_compat::SYSTEM_PREFIX);
+        assert!(system[1].get("cache_control").is_none());
+        assert_eq!(system[2]["text"], "Be helpful");
+        assert_eq!(system[2]["cache_control"]["type"], "ephemeral");
+        assert_eq!(http.body["tools"][0]["name"], "t_plan");
+        assert_eq!(http.body["tools"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            http.body["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+
+        let beta = http
+            .headers
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(beta.contains("prompt-caching-scope-2026-01-05"));
     }
 
     #[test]
@@ -1459,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn test_system_no_block_level_cache_control() {
+    fn test_convert_system_no_block_level_cache_control() {
         let messages = vec![
             ChatMessage::new("system".to_string(), "Be helpful".to_string()),
             ChatMessage::new("user".to_string(), "Hi".to_string()),
@@ -1467,7 +1909,6 @@ mod tests {
         let (system, msgs) = convert_to_anthropic(&messages, None);
         assert_eq!(system, Some(json!("Be helpful")));
         assert_eq!(msgs.len(), 1);
-        // Block-level cache_control is no longer injected by the adapter
         assert!(msgs[0]["content"][0].get("cache_control").is_none());
     }
 
