@@ -972,14 +972,20 @@ async fn resolve_trajectory_data_save_path(
     if data.id != id {
         return Err("ID mismatch".to_string());
     }
-    if let Some(candidate) = find_trajectory_or_buddy_file(gcx.clone(), id).await {
-        return Ok(candidate.path);
-    }
-    if let Some(task_meta) = data
+
+    let task_meta_value = data.extra.get("task_meta").filter(|value| !value.is_null());
+    let buddy_meta_present = data
         .extra
-        .get("task_meta")
-        .and_then(|value| serde_json::from_value::<super::types::TaskMeta>(value.clone()).ok())
-    {
+        .get("buddy_meta")
+        .is_some_and(|value| !value.is_null());
+
+    if task_meta_value.is_some() && buddy_meta_present {
+        return Err("Trajectory cannot contain both task_meta and buddy_meta".to_string());
+    }
+
+    if let Some(value) = task_meta_value {
+        let task_meta = serde_json::from_value::<super::types::TaskMeta>(value.clone())
+            .map_err(|e| format!("Invalid task_meta: {}", e))?;
         let task_dir =
             crate::tasks::storage::find_task_dir(gcx.clone(), &task_meta.task_id).await?;
         let traj_dir = crate::tasks::storage::get_task_trajectory_dir(
@@ -992,16 +998,17 @@ async fn resolve_trajectory_data_save_path(
             .map_err(|e| format!("Failed to create task trajectories dir: {}", e))?;
         return Ok(traj_dir.join(format!("{}.json", id)));
     }
-    if data
-        .extra
-        .get("buddy_meta")
-        .is_some_and(|value| !value.is_null())
-    {
+
+    if buddy_meta_present {
         let buddy_dir = get_buddy_conversations_dir(gcx.clone()).await?;
         fs::create_dir_all(&buddy_dir)
             .await
             .map_err(|e| format!("Failed to create buddy conversations dir: {}", e))?;
         return Ok(buddy_dir.join(format!("{}.json", id)));
+    }
+
+    if let Some(candidate) = find_normal_trajectory_file(gcx.clone(), id).await {
+        return Ok(candidate.path);
     }
     let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
     fs::create_dir_all(&trajectories_dir)
@@ -5031,6 +5038,288 @@ mod tests {
             .join("trajectories")
             .join(format!("{chat_id}.json"));
         assert!(!tokio::fs::try_exists(project_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_namespace_generic_save_does_not_overwrite_existing_buddy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "namespace-generic-buddy-collision";
+        let buddy_path = dir
+            .path()
+            .join(".refact")
+            .join("buddy")
+            .join("chats")
+            .join("conversations")
+            .join(format!("{chat_id}.json"));
+        write_buddy_conversation_file(&buddy_path, chat_id, "Keep Buddy").await;
+        let before = tokio::fs::read_to_string(&buddy_path).await.unwrap();
+        let mut payload = sample_trajectory(chat_id, "Generic Saved", "2024-01-01T00:00:01Z");
+        payload["messages"] = json!([{ "role": "user", "content": "generic" }]);
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(&buddy_path).await.unwrap(),
+            before
+        );
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&normal_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Generic Saved");
+        assert!(saved.get("buddy_meta").is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_namespace_generic_save_does_not_overwrite_existing_task_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "namespace-generic-task-collision";
+        let task_path = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join("task-generic-collision")
+            .join("trajectories")
+            .join("agents")
+            .join("agent-1")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(&task_path, chat_id, "Keep Task", "2024-01-01T00:00:00Z").await;
+        let before = tokio::fs::read_to_string(&task_path).await.unwrap();
+        let payload = sample_trajectory(chat_id, "Generic Saved", "2024-01-01T00:00:01Z");
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(tokio::fs::read_to_string(&task_path).await.unwrap(), before);
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&normal_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Generic Saved");
+        assert!(saved.get("task_meta").is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_namespace_task_save_does_not_overwrite_existing_normal_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "namespace-task-normal-collision";
+        let task_id = "task-normal-collision";
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(&normal_path, chat_id, "Keep Normal", "2024-01-01T00:00:00Z").await;
+        let before = tokio::fs::read_to_string(&normal_path).await.unwrap();
+        let task_dir = dir.path().join(".refact").join("tasks").join(task_id);
+        tokio::fs::create_dir_all(&task_dir).await.unwrap();
+        let mut payload = sample_trajectory(chat_id, "Task Saved", "2024-01-01T00:00:01Z");
+        payload["task_meta"] = json!({
+            "task_id": task_id,
+            "role": "agents",
+            "agent_id": "agent-1",
+            "card_id": "card-1"
+        });
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(&normal_path).await.unwrap(),
+            before
+        );
+        let task_path = task_dir
+            .join("trajectories")
+            .join("agents")
+            .join("agent-1")
+            .join(format!("{chat_id}.json"));
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&task_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Task Saved");
+        assert_eq!(saved["task_meta"]["task_id"], task_id);
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_namespace_buddy_save_does_not_overwrite_existing_normal_or_task_file()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "namespace-buddy-normal-task-collision";
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        let task_path = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join("task-buddy-collision")
+            .join("trajectories")
+            .join("planner")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(&normal_path, chat_id, "Keep Normal", "2024-01-01T00:00:00Z").await;
+        write_trajectory_file(&task_path, chat_id, "Keep Task", "2024-01-01T00:00:00Z").await;
+        let normal_before = tokio::fs::read_to_string(&normal_path).await.unwrap();
+        let task_before = tokio::fs::read_to_string(&task_path).await.unwrap();
+        let mut payload = sample_trajectory(chat_id, "Buddy Saved", "2024-01-01T00:00:01Z");
+        payload["mode"] = json!("buddy");
+        payload["buddy_meta"] = json!({
+            "is_buddy_chat": true,
+            "buddy_chat_kind": "investigation",
+            "workflow_id": null
+        });
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(&normal_path).await.unwrap(),
+            normal_before
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&task_path).await.unwrap(),
+            task_before
+        );
+        let buddy_path = dir
+            .path()
+            .join(".refact")
+            .join("buddy")
+            .join("chats")
+            .join("conversations")
+            .join(format!("{chat_id}.json"));
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&buddy_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Buddy Saved");
+        assert_eq!(saved["buddy_meta"]["is_buddy_chat"], true);
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_namespace_task_and_buddy_meta_rejects_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "namespace-task-buddy-meta-conflict";
+        let task_id = "task-meta-conflict";
+        tokio::fs::create_dir_all(dir.path().join(".refact").join("tasks").join(task_id))
+            .await
+            .unwrap();
+        let mut payload = sample_trajectory(chat_id, "Meta Conflict", "2024-01-01T00:00:01Z");
+        payload["task_meta"] = json!({
+            "task_id": task_id,
+            "role": "planner",
+            "planner_chat_id": chat_id
+        });
+        payload["buddy_meta"] = json!({
+            "is_buddy_chat": true,
+            "buddy_chat_kind": "investigation",
+            "workflow_id": null
+        });
+
+        let err = handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.status_code, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.message.contains("both task_meta and buddy_meta"));
+        assert!(!tokio::fs::try_exists(
+            dir.path()
+                .join(".refact")
+                .join("trajectories")
+                .join(format!("{chat_id}.json"))
+        )
+        .await
+        .unwrap());
+        assert!(!tokio::fs::try_exists(
+            dir.path()
+                .join(".refact")
+                .join("buddy")
+                .join("chats")
+                .join("conversations")
+                .join(format!("{chat_id}.json"))
+        )
+        .await
+        .unwrap());
+        assert!(!tokio::fs::try_exists(
+            dir.path()
+                .join(".refact")
+                .join("tasks")
+                .join(task_id)
+                .join("trajectories")
+                .join("planner")
+                .join(format!("{chat_id}.json"))
+        )
+        .await
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn trajectory_save_namespace_malformed_non_null_task_meta_rejects_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "namespace-malformed-task-meta";
+        let mut payload = sample_trajectory(chat_id, "Malformed Task", "2024-01-01T00:00:01Z");
+        payload["task_meta"] = json!({"task_id": "task-malformed"});
+
+        let err = handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.status_code, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.message.contains("Invalid task_meta"));
+        assert!(!tokio::fs::try_exists(
+            dir.path()
+                .join(".refact")
+                .join("trajectories")
+                .join(format!("{chat_id}.json"))
+        )
+        .await
+        .unwrap());
+        assert!(!tokio::fs::try_exists(
+            dir.path()
+                .join(".refact")
+                .join("tasks")
+                .join("task-malformed")
+        )
+        .await
+        .unwrap());
     }
 
     #[tokio::test]
