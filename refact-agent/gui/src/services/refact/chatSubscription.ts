@@ -71,6 +71,7 @@ export type RuntimeState = {
   queue_size: number;
   pause_reasons: PauseReason[];
   queued_items: QueuedItem[];
+  is_compressing?: boolean;
 };
 
 type BackgroundAgentSummaryWithDefaults = Omit<

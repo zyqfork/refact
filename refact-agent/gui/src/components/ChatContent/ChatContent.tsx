@@ -235,7 +235,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
   }, [messages, isStreaming]);
 
   const augmentedDisplayItems = useMemo(() => {
-    if (isCompressing && !isStreaming) {
+    if (isCompressing) {
       return [
         ...displayItems,
         {
@@ -246,7 +246,7 @@ export const ChatContent: React.FC<ChatContentProps> = ({
       ];
     }
     return displayItems;
-  }, [displayItems, isCompressing, isStreaming]);
+  }, [displayItems, isCompressing]);
 
   const initialScrollIndex = useMemo(() => {
     return augmentedDisplayItems.length > 0

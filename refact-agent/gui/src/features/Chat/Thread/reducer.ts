@@ -1074,6 +1074,7 @@ export const chatReducer = createReducer(initialState, (builder) => {
   builder.addCase(markThreadSseError, (state, action) => {
     const rt = getRuntime(state, action.payload.id);
     if (!rt) return;
+    rt.is_compressing = false;
     const wasBusy =
       rt.streaming ||
       rt.waiting_for_response ||
@@ -1364,6 +1365,10 @@ export const chatReducer = createReducer(initialState, (builder) => {
             },
           },
           snapshot_received: true,
+          is_compressing:
+            typeof event.runtime.is_compressing === "boolean"
+              ? event.runtime.is_compressing
+              : false,
           task_widget_expanded: existingRuntime?.task_widget_expanded ?? false,
           last_applied_seq: event.seq,
           message_index_by_id: rebuildMessageIndexById(snapshotMessages),
@@ -1911,6 +1916,13 @@ export const chatReducer = createReducer(initialState, (builder) => {
         }
         if (typeof event.is_compressing === "boolean") {
           rt.is_compressing = event.is_compressing;
+        } else if (
+          newState === "idle" ||
+          newState === "completed" ||
+          newState === "error" ||
+          newState === "waiting_user_input"
+        ) {
+          rt.is_compressing = false;
         }
         rt.last_applied_seq = event.seq;
         break;
