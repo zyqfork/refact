@@ -687,21 +687,17 @@ fn fix_tool_call_indexes(messages: &mut [ChatMessage]) {
     }
 }
 
-async fn find_normal_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Option<PathBuf> {
-    validate_trajectory_id(chat_id).ok()?;
+async fn normal_trajectory_candidate_paths(gcx: Arc<GlobalContext>, chat_id: &str) -> Vec<PathBuf> {
     get_all_trajectories_dirs(gcx)
         .await
-        .iter()
+        .into_iter()
         .map(|dir| dir.join(format!("{}.json", chat_id)))
-        .find(|p| p.exists())
+        .filter(|path| path.exists())
+        .collect()
 }
 
-pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Option<PathBuf> {
-    validate_trajectory_id(chat_id).ok()?;
-    if let Some(path) = find_normal_trajectory_path(gcx.clone(), chat_id).await {
-        return Some(path);
-    }
-
+async fn trajectory_candidate_paths(gcx: Arc<GlobalContext>, chat_id: &str) -> Vec<PathBuf> {
+    let mut candidates = normal_trajectory_candidate_paths(gcx.clone(), chat_id).await;
     let tasks_dirs = crate::tasks::storage::get_all_tasks_dirs(gcx.clone()).await;
     for tasks_dir in tasks_dirs {
         if tasks_dir.exists() {
@@ -715,7 +711,7 @@ pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Opt
                             if role_dir.exists() {
                                 let direct = role_dir.join(format!("{}.json", chat_id));
                                 if direct.exists() {
-                                    return Some(direct);
+                                    candidates.push(direct);
                                 }
                                 if let Ok(mut sub_entries) = tokio::fs::read_dir(&role_dir).await {
                                     while let Ok(Some(sub_entry)) = sub_entries.next_entry().await {
@@ -723,7 +719,7 @@ pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Opt
                                         if sub_path.is_dir() {
                                             let nested = sub_path.join(format!("{}.json", chat_id));
                                             if nested.exists() {
-                                                return Some(nested);
+                                                candidates.push(nested);
                                             }
                                         }
                                     }
@@ -735,24 +731,141 @@ pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Opt
             }
         }
     }
+    candidates
+}
+
+struct ValidTrajectoryCandidate {
+    path: PathBuf,
+    content: String,
+    json: serde_json::Value,
+}
+
+async fn read_valid_trajectory_candidate(
+    path: PathBuf,
+    chat_id: &str,
+) -> Option<ValidTrajectoryCandidate> {
+    let content = match fs::read_to_string(&path).await {
+        Ok(content) => content,
+        Err(e) => {
+            warn!(
+                "Skipping trajectory candidate {} for chat {}: failed to read: {}",
+                path.display(),
+                chat_id,
+                e
+            );
+            return None;
+        }
+    };
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!(
+                "Skipping trajectory candidate {} for chat {}: failed to parse: {}",
+                path.display(),
+                chat_id,
+                e
+            );
+            return None;
+        }
+    };
+    if !trajectory_root_id_matches(&json, chat_id, &path) {
+        return None;
+    }
+    Some(ValidTrajectoryCandidate {
+        path,
+        content,
+        json,
+    })
+}
+
+async fn first_valid_trajectory_candidate(
+    paths: Vec<PathBuf>,
+    chat_id: &str,
+) -> Option<ValidTrajectoryCandidate> {
+    for path in paths {
+        if let Some(candidate) = read_valid_trajectory_candidate(path, chat_id).await {
+            return Some(candidate);
+        }
+    }
     None
+}
+
+async fn find_normal_trajectory_file(
+    gcx: Arc<GlobalContext>,
+    chat_id: &str,
+) -> Option<ValidTrajectoryCandidate> {
+    validate_trajectory_id(chat_id).ok()?;
+    first_valid_trajectory_candidate(
+        normal_trajectory_candidate_paths(gcx, chat_id).await,
+        chat_id,
+    )
+    .await
+}
+
+async fn find_trajectory_file(
+    gcx: Arc<GlobalContext>,
+    chat_id: &str,
+) -> Option<ValidTrajectoryCandidate> {
+    validate_trajectory_id(chat_id).ok()?;
+    first_valid_trajectory_candidate(trajectory_candidate_paths(gcx, chat_id).await, chat_id).await
+}
+
+async fn find_normal_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Option<PathBuf> {
+    find_normal_trajectory_file(gcx, chat_id)
+        .await
+        .map(|candidate| candidate.path)
+}
+
+pub async fn find_trajectory_path(gcx: Arc<GlobalContext>, chat_id: &str) -> Option<PathBuf> {
+    find_trajectory_file(gcx, chat_id)
+        .await
+        .map(|candidate| candidate.path)
 }
 
 pub async fn find_trajectory_or_buddy_path(
     gcx: Arc<GlobalContext>,
     chat_id: &str,
 ) -> Option<PathBuf> {
+    find_trajectory_or_buddy_file(gcx, chat_id)
+        .await
+        .map(|candidate| candidate.path)
+}
+
+async fn find_trajectory_or_buddy_file(
+    gcx: Arc<GlobalContext>,
+    chat_id: &str,
+) -> Option<ValidTrajectoryCandidate> {
     validate_trajectory_id(chat_id).ok()?;
-    if let Some(path) = find_trajectory_path(gcx.clone(), chat_id).await {
-        return Some(path);
-    }
+    let mut candidates = trajectory_candidate_paths(gcx.clone(), chat_id).await;
     if let Ok(buddy_dir) = get_buddy_conversations_dir(gcx).await {
         let buddy_path = buddy_dir.join(format!("{}.json", chat_id));
         if buddy_path.exists() {
-            return Some(buddy_path);
+            candidates.push(buddy_path);
         }
     }
-    None
+    first_valid_trajectory_candidate(candidates, chat_id).await
+}
+
+async fn ensure_existing_trajectory_file_matches(path: &Path, chat_id: &str) -> Result<(), String> {
+    if !fs::try_exists(path)
+        .await
+        .map_err(|e| format!("Failed to check trajectory existence: {}", e))?
+    {
+        return Ok(());
+    }
+    let content = fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("Failed to read existing trajectory: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse existing trajectory: {}", e))?;
+    if trajectory_root_id_matches(&json, chat_id, path) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Existing trajectory file id mismatch for {}",
+            path.display()
+        ))
+    }
 }
 
 fn repaired_created_at(raw_created_at: Option<&str>, transition_identity_repaired: bool) -> String {
@@ -1007,12 +1120,9 @@ pub async fn load_trajectory_for_chat(
     chat_id: &str,
 ) -> Option<LoadedTrajectory> {
     let app = AppState::from_gcx(gcx.clone()).await;
-    let traj_path = find_trajectory_or_buddy_path(gcx.clone(), chat_id).await?;
-    let content = tokio::fs::read_to_string(&traj_path).await.ok()?;
-    let t: serde_json::Value = serde_json::from_str(&content).ok()?;
-    if !trajectory_root_id_matches(&t, chat_id, &traj_path) {
-        return None;
-    }
+    let candidate = find_trajectory_or_buddy_file(gcx.clone(), chat_id).await?;
+    let traj_path = candidate.path;
+    let t = candidate.json;
 
     let mut messages: Vec<ChatMessage> = t
         .get("messages")
@@ -1543,6 +1653,7 @@ pub async fn save_trajectory_snapshot(
             .map_err(|e| format!("Failed to create trajectories dir: {}", e))?;
         trajectories_dir.join(format!("{}.json", snapshot.chat_id))
     };
+    ensure_existing_trajectory_file_matches(&file_path, &snapshot.chat_id).await?;
 
     let updated_at = chrono::Utc::now().to_rfc3339();
     trajectory["updated_at"] = serde_json::Value::String(updated_at.clone());
@@ -2587,6 +2698,14 @@ fn spawn_title_generation_task(
                 return;
             }
         };
+        if data.id != id {
+            warn!(
+                "Skipping title update for {}: JSON id mismatch, found {}",
+                file_path.display(),
+                data.id
+            );
+            return;
+        }
         let already_generated = data
             .extra
             .get("isTitleGenerated")
@@ -3135,6 +3254,22 @@ fn apply_task_trajectory_context(path: &Path, task_roots: &[PathBuf], meta: &mut
     }
 }
 
+fn trajectory_list_candidate_matches_hydrated_data(
+    candidate: &TrajectoryListCandidate,
+    data: &TrajectoryData,
+) -> bool {
+    if data.id == candidate.id && trajectory_path_stem_matches_id(&candidate.path, &data.id) {
+        return true;
+    }
+    warn!(
+        "Ignoring trajectory {} during hydration: expected id {}, found {}",
+        candidate.path.display(),
+        candidate.id,
+        data.id
+    );
+    false
+}
+
 async fn collect_trajectory_list_candidates(
     gcx: &Arc<GlobalContext>,
     cursor_filter: Option<&(String, String)>,
@@ -3235,6 +3370,9 @@ pub async fn list_trajectories_page(
         let Ok(data) = serde_json::from_str::<TrajectoryData>(&content) else {
             continue;
         };
+        if !trajectory_list_candidate_matches_hydrated_data(&candidate, &data) {
+            continue;
+        }
         let mut meta = trajectory_data_to_meta_validated(app.clone(), &data).await;
         apply_task_trajectory_context(&candidate.path, &task_roots, &mut meta);
         items.push(meta);
@@ -3363,26 +3501,12 @@ pub async fn handle_v1_trajectories_get(
 ) -> Result<Response<Body>, ScratchError> {
     let gcx = app.gcx.clone();
     validate_trajectory_id(&id)?;
-    let file_path = find_trajectory_or_buddy_path(gcx, &id)
+    let candidate = find_trajectory_or_buddy_file(gcx, &id)
         .await
         .ok_or_else(|| {
             ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
         })?;
-    let content = fs::read_to_string(&file_path)
-        .await
-        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-        ScratchError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to parse trajectory: {}", e),
-        )
-    })?;
-    if !trajectory_root_id_matches(&parsed, &id, &file_path) {
-        return Err(ScratchError::new(
-            StatusCode::NOT_FOUND,
-            "Trajectory not found".to_string(),
-        ));
-    }
+    let content = candidate.content;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
@@ -3418,6 +3542,9 @@ pub async fn handle_v1_trajectories_save(
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let file_path = trajectories_dir.join(format!("{}.json", id));
+    ensure_existing_trajectory_file_matches(&file_path, &id)
+        .await
+        .map_err(|e| ScratchError::new(StatusCode::CONFLICT, e))?;
     let is_new = !file_path.exists();
     let is_title_generated = data
         .extra
@@ -3532,11 +3659,12 @@ pub async fn handle_v1_trajectories_delete(
 ) -> Result<Response<Body>, ScratchError> {
     let gcx = app.gcx.clone();
     validate_trajectory_id(&id)?;
-    let file_path = find_trajectory_path(gcx.clone(), &id)
+    let candidate = find_trajectory_file(gcx.clone(), &id)
         .await
         .ok_or_else(|| {
             ScratchError::new(StatusCode::NOT_FOUND, "Trajectory not found".to_string())
         })?;
+    let file_path = candidate.path;
     fs::remove_file(&file_path)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -4090,6 +4218,222 @@ mod tests {
         write_trajectory_file(&path, "other-chat", "Mismatched", "2024-01-01T00:00:00Z").await;
 
         assert!(load_trajectory_for_chat(gcx, "safe").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_normal_candidate_does_not_shadow_task_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "safe-task-shadow";
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        let task_path = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join("task-shadow")
+            .join("trajectories")
+            .join("planner")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &normal_path,
+            "other-chat",
+            "Mismatched Normal",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        write_trajectory_file(&task_path, chat_id, "Valid Task", "2024-01-01T00:00:01Z").await;
+
+        assert_eq!(
+            find_trajectory_path(gcx.clone(), chat_id).await,
+            Some(task_path)
+        );
+        let loaded = load_trajectory_for_chat(gcx, chat_id).await.unwrap();
+        assert_eq!(loaded.thread.title, "Valid Task");
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_workspace_candidate_does_not_shadow_global_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "safe-global-shadow";
+        let workspace_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        let global_dir = get_global_trajectories_dir(gcx.clone()).await;
+        let global_path = global_dir.join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &workspace_path,
+            "other-chat",
+            "Mismatched Workspace",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        write_trajectory_file(
+            &global_path,
+            chat_id,
+            "Valid Global",
+            "2024-01-01T00:00:01Z",
+        )
+        .await;
+
+        assert_eq!(
+            find_trajectory_path(gcx.clone(), chat_id).await,
+            Some(global_path)
+        );
+        let loaded = load_trajectory_for_chat(gcx, chat_id).await.unwrap();
+        assert_eq!(loaded.thread.title, "Valid Global");
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_delete_skips_invalid_higher_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "delete-shadow";
+        let normal_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        let task_path = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join("task-delete-shadow")
+            .join("trajectories")
+            .join("planner")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &normal_path,
+            "other-chat",
+            "Keep Mismatched",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        write_trajectory_file(&task_path, chat_id, "Delete Valid", "2024-01-01T00:00:01Z").await;
+
+        handle_v1_trajectories_delete(State(app), AxumPath(chat_id.to_string()))
+            .await
+            .unwrap();
+
+        assert!(tokio::fs::try_exists(&normal_path).await.unwrap());
+        assert!(!tokio::fs::try_exists(&task_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_save_snapshot_does_not_overwrite_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "save-mismatch-guard";
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &path,
+            "other-chat",
+            "Keep Mismatched",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        let before = tokio::fs::read_to_string(&path).await.unwrap();
+
+        let err = save_trajectory_snapshot(
+            gcx,
+            test_snapshot(
+                chat_id,
+                "Should Not Save",
+                vec![ChatMessage::new("user".to_string(), "hello".to_string())],
+            ),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("Existing trajectory file id mismatch"));
+        assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_http_save_does_not_overwrite_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "http-save-mismatch-guard";
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &path,
+            "other-chat",
+            "Keep Mismatched",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        let before = tokio::fs::read_to_string(&path).await.unwrap();
+        let payload = sample_trajectory(chat_id, "Should Not Save", "2024-01-01T00:00:01Z");
+
+        let err = handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.status_code, StatusCode::CONFLICT);
+        assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_title_generation_does_not_update_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "title-mismatch-guard";
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        let path = trajectories_dir.join(format!("{chat_id}.json"));
+        write_trajectory_file(&path, "other-chat", "New Chat", "2024-01-01T00:00:00Z").await;
+        let before = tokio::fs::read_to_string(&path).await.unwrap();
+
+        spawn_title_generation_task(
+            gcx,
+            chat_id.to_string(),
+            vec![json!({"role":"user","content":"Generate guarded title"})],
+            trajectories_dir,
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), before);
+    }
+
+    #[test]
+    fn trajectory_id_mismatch_list_hydration_recheck_rejects_changed_data() {
+        let candidate = TrajectoryListCandidate {
+            id: "hydration-chat".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            path: PathBuf::from("hydration-chat.json"),
+        };
+        let data = TrajectoryData {
+            id: "other-chat".to_string(),
+            title: "Changed".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:01Z".to_string(),
+            model: "model".to_string(),
+            mode: "agent".to_string(),
+            tool_use: "agent".to_string(),
+            messages: Vec::new(),
+            extra: serde_json::Map::new(),
+        };
+
+        assert!(!trajectory_list_candidate_matches_hydrated_data(
+            &candidate, &data
+        ));
     }
 
     #[tokio::test]
