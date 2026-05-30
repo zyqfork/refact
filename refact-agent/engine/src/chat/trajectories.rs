@@ -2144,6 +2144,12 @@ pub async fn check_external_reload_pending(
 async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_remove: bool) {
     let app = AppState::from_gcx(gcx.clone()).await;
     let sessions = app.chat.sessions.clone();
+    let mut loaded = if is_remove {
+        None
+    } else {
+        load_trajectory_for_chat(gcx.clone(), chat_id).await
+    };
+
     if is_remove {
         let tx = &app.chat.trajectory_events_tx;
         {
@@ -2180,7 +2186,6 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
             });
         }
     } else {
-        let loaded = load_trajectory_for_chat(gcx.clone(), chat_id).await;
         let (
             updated_at,
             title,
@@ -2198,7 +2203,7 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
             tasks_done,
             tasks_failed,
             token_totals,
-        ) = if let Some(t) = loaded {
+        ) = if let Some(t) = loaded.as_ref() {
             let effective_root = t
                 .thread
                 .root_chat_id
@@ -2210,16 +2215,16 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
                 calculate_task_progress_from_chat_messages(&t.messages);
             let tok = calculate_token_totals_from_chat_messages(&t.messages);
             (
-                Some(t.updated_at),
+                Some(t.updated_at.clone()),
                 Some(trajectory_meta_title(&t.thread.title)),
                 Some(t.thread.is_title_generated),
                 Some(t.messages.len()),
-                t.thread.parent_id,
-                t.thread.link_type,
+                t.thread.parent_id.clone(),
+                t.thread.link_type.clone(),
                 Some(effective_root),
-                Some(t.thread.model),
-                Some(t.thread.mode),
-                t.thread.worktree,
+                Some(t.thread.model.clone()),
+                Some(t.thread.mode.clone()),
+                t.thread.worktree.clone(),
                 Some(lines_added),
                 Some(lines_removed),
                 Some(t_total),
@@ -2277,11 +2282,9 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
     };
 
     let Some(session_arc) = session_arc else {
-        if !is_remove {
-            if let Some(loaded) = load_trajectory_for_chat(gcx.clone(), chat_id).await {
-                if loaded.transition_identity_repaired {
-                    persist_loaded_trajectory_repair(gcx, loaded).await;
-                }
+        if let Some(loaded) = loaded.take() {
+            if loaded.transition_identity_repaired {
+                persist_loaded_trajectory_repair(gcx, loaded).await;
             }
         }
         return;
@@ -2311,7 +2314,7 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
         return;
     }
 
-    if let Some(mut loaded) = load_trajectory_for_chat(gcx.clone(), chat_id).await {
+    if let Some(mut loaded) = loaded.take() {
         let transition_identity_repaired = loaded.transition_identity_repaired;
         apply_mode_defaults_to_thread(
             gcx.clone(),
