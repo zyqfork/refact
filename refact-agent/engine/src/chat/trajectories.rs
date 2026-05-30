@@ -963,6 +963,45 @@ async fn synthesize_legacy_task_agent_worktree(
     })
 }
 
+fn trajectory_root_id_matches(t: &serde_json::Value, chat_id: &str, path: &Path) -> bool {
+    match t.get("id").and_then(|value| value.as_str()) {
+        Some(id) if id == chat_id => true,
+        Some(id) => {
+            warn!(
+                "Rejecting trajectory {}: JSON id mismatch, expected {}, found {}",
+                path.display(),
+                chat_id,
+                id
+            );
+            false
+        }
+        None => {
+            warn!(
+                "Rejecting trajectory {}: missing or non-string JSON id for requested chat {}",
+                path.display(),
+                chat_id
+            );
+            false
+        }
+    }
+}
+
+fn trajectory_path_stem_matches_id(path: &Path, id: &str) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    if stem == id {
+        return true;
+    }
+    warn!(
+        "Ignoring trajectory {} in list: filename id mismatch, expected {}, found {}",
+        path.display(),
+        stem,
+        id
+    );
+    false
+}
+
 pub async fn load_trajectory_for_chat(
     gcx: Arc<GlobalContext>,
     chat_id: &str,
@@ -971,6 +1010,9 @@ pub async fn load_trajectory_for_chat(
     let traj_path = find_trajectory_or_buddy_path(gcx.clone(), chat_id).await?;
     let content = tokio::fs::read_to_string(&traj_path).await.ok()?;
     let t: serde_json::Value = serde_json::from_str(&content).ok()?;
+    if !trajectory_root_id_matches(&t, chat_id, &traj_path) {
+        return None;
+    }
 
     let mut messages: Vec<ChatMessage> = t
         .get("messages")
@@ -3122,6 +3164,9 @@ async fn collect_trajectory_list_candidates(
             if data.extra.get("buddy_meta").map_or(false, |v| !v.is_null()) {
                 continue;
             }
+            if !trajectory_path_stem_matches_id(&path, &data.id) {
+                continue;
+            }
             if !seen_ids.insert(data.id.clone()) {
                 continue;
             }
@@ -3258,6 +3303,9 @@ pub async fn list_all_trajectories_meta(app: AppState) -> Result<Vec<TrajectoryM
                     if data.extra.get("buddy_meta").map_or(false, |v| !v.is_null()) {
                         continue;
                     }
+                    if !trajectory_path_stem_matches_id(&path, &data.id) {
+                        continue;
+                    }
                     if seen_ids.insert(data.id.clone()) {
                         let mut meta = trajectory_data_to_meta_validated(app.clone(), &data).await;
                         apply_task_trajectory_context(&path, &task_roots, &mut meta);
@@ -3323,6 +3371,18 @@ pub async fn handle_v1_trajectories_get(
     let content = fs::read_to_string(&file_path)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        ScratchError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to parse trajectory: {}", e),
+        )
+    })?;
+    if !trajectory_root_id_matches(&parsed, &id, &file_path) {
+        return Err(ScratchError::new(
+            StatusCode::NOT_FOUND,
+            "Trajectory not found".to_string(),
+        ));
+    }
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
@@ -4016,6 +4076,94 @@ mod tests {
             "investigation"
         );
         assert_eq!(loaded.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_is_not_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join("safe.json");
+        write_trajectory_file(&path, "other-chat", "Mismatched", "2024-01-01T00:00:00Z").await;
+
+        assert!(load_trajectory_for_chat(gcx, "safe").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_open_creates_fresh_session_without_file_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join("safe.json");
+        write_trajectory_file(&path, "other-chat", "Mismatched", "2024-01-01T00:00:00Z").await;
+
+        let session_arc = crate::chat::get_or_create_session_with_trajectory(
+            app.clone(),
+            &app.chat.sessions,
+            "safe",
+        )
+        .await;
+        let session = session_arc.lock().await;
+
+        assert_eq!(session.chat_id, "safe");
+        assert_eq!(session.thread.id, "safe");
+        assert_ne!(session.thread.title, "Mismatched");
+        assert!(session.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_missing_is_not_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join("missing-id.json");
+        let mut payload = sample_trajectory("missing-id", "Missing Id", "2024-01-01T00:00:00Z");
+        payload.as_object_mut().unwrap().remove("id");
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&path, serde_json::to_string(&payload).unwrap())
+            .await
+            .unwrap();
+
+        assert!(load_trajectory_for_chat(gcx, "missing-id").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn trajectory_id_mismatch_is_not_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let root = dir.path().join(".refact").join("trajectories");
+        write_trajectory_file(
+            &root.join("safe.json"),
+            "other-chat",
+            "Mismatched",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        write_trajectory_file(
+            &root.join("valid-chat.json"),
+            "valid-chat",
+            "Valid",
+            "2024-01-01T00:00:01Z",
+        )
+        .await;
+
+        let listed = list_all_trajectories_meta(app).await.unwrap();
+        let ids: std::collections::HashSet<_> =
+            listed.iter().map(|item| item.id.as_str()).collect();
+
+        assert!(ids.contains("valid-chat"));
+        assert!(!ids.contains("other-chat"));
     }
 
     #[test]
