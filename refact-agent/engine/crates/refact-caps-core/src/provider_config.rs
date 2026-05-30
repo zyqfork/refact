@@ -19,6 +19,8 @@ pub struct CapsProvider {
     pub enabled: bool,
     #[serde(default = "default_true")]
     pub supports_completion: bool,
+    #[serde(default = "default_true")]
+    pub supports_cache_control: bool,
 
     #[serde(default)]
     pub wire_format: WireFormat,
@@ -89,6 +91,11 @@ impl CapsProvider {
         set_field_if_exists::<String>(&mut self.base_provider, "base_provider", &value)?;
         set_field_if_exists::<bool>(&mut self.enabled, "enabled", &value)?;
         set_field_if_exists::<bool>(&mut self.supports_completion, "supports_completion", &value)?;
+        set_field_if_exists::<bool>(
+            &mut self.supports_cache_control,
+            "supports_cache_control",
+            &value,
+        )?;
         set_field_if_exists::<WireFormat>(&mut self.wire_format, "wire_format", &value)?;
         set_field_if_exists::<String>(&mut self.endpoint_style, "endpoint_style", &value)?;
         set_field_if_exists::<String>(
@@ -174,6 +181,7 @@ impl Default for CapsProvider {
             base_provider: String::new(),
             enabled: default_true(),
             supports_completion: default_true(),
+            supports_cache_control: default_true(),
             wire_format: WireFormat::default(),
             endpoint_style: default_endpoint_style(),
             completion_endpoint: String::new(),
@@ -204,6 +212,7 @@ impl fmt::Debug for CapsProvider {
             .field("base_provider", &self.base_provider)
             .field("enabled", &self.enabled)
             .field("supports_completion", &self.supports_completion)
+            .field("supports_cache_control", &self.supports_cache_control)
             .field("wire_format", &self.wire_format)
             .field("endpoint_style", &self.endpoint_style)
             .field("completion_endpoint", &self.completion_endpoint)
@@ -330,6 +339,7 @@ mod tests {
             base_provider: "template".to_string(),
             enabled: true,
             supports_completion: true,
+            supports_cache_control: true,
             wire_format: WireFormat::OpenaiChatCompletions,
             endpoint_style: "openai".to_string(),
             completion_endpoint: "old-completion".to_string(),
@@ -353,6 +363,7 @@ mod tests {
 base_provider: openai
 enabled: false
 supports_completion: false
+supports_cache_control: false
 wire_format: anthropic_messages
 endpoint_style: anthropic
 completion_endpoint: new-completion
@@ -395,6 +406,7 @@ chat_buddy_model: buddy-default
         assert_eq!(provider.base_provider, "openai");
         assert!(!provider.enabled);
         assert!(!provider.supports_completion);
+        assert!(!provider.supports_cache_control);
         assert_eq!(provider.wire_format, WireFormat::AnthropicMessages);
         assert_eq!(provider.endpoint_style, "anthropic");
         assert_eq!(provider.completion_endpoint, "new-completion");

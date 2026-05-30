@@ -353,11 +353,15 @@ pub fn add_models_to_caps(caps: &mut CodeAssistantCaps, providers: Vec<CapsProvi
         base_model_rec.endpoint_style = provider.endpoint_style.clone();
         base_model_rec.wire_format = provider.wire_format;
         base_model_rec.extra_headers = provider.extra_headers.clone();
+        base_model_rec.supports_cache_control =
+            base_model_rec.supports_cache_control && provider.supports_cache_control;
     }
 
     for mut provider in providers {
         let completion_models = std::mem::take(&mut provider.completion_models);
         for (model_name, mut model_rec) in completion_models {
+            model_rec.base.supports_cache_control =
+                model_rec.base.supports_cache_control && provider.supports_cache_control;
             if model_rec.base.endpoint.is_empty() {
                 add_provider_details_to_model(
                     &mut model_rec.base,
@@ -381,6 +385,8 @@ pub fn add_models_to_caps(caps: &mut CodeAssistantCaps, providers: Vec<CapsProvi
 
         let chat_models = std::mem::take(&mut provider.chat_models);
         for (model_name, mut model_rec) in chat_models {
+            model_rec.base.supports_cache_control =
+                model_rec.base.supports_cache_control && provider.supports_cache_control;
             if model_rec.base.endpoint.is_empty() {
                 add_provider_details_to_model(
                     &mut model_rec.base,
@@ -396,6 +402,8 @@ pub fn add_models_to_caps(caps: &mut CodeAssistantCaps, providers: Vec<CapsProvi
 
         if provider.embedding_model.is_configured() && provider.embedding_model.base.enabled {
             let mut embedding_model = std::mem::take(&mut provider.embedding_model);
+            embedding_model.base.supports_cache_control =
+                embedding_model.base.supports_cache_control && provider.supports_cache_control;
 
             if embedding_model.base.endpoint.is_empty() {
                 let model_name = embedding_model.base.name.clone();
@@ -557,6 +565,7 @@ fn populate_model_records(provider: &mut CapsProvider, experimental: bool) {
             let placeholder = ChatModelRecord {
                 base: BaseModelRecord {
                     enabled: true,
+                    supports_cache_control: provider.supports_cache_control,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -1059,6 +1068,94 @@ extra_headers:
             model.base.extra_headers.get("X-Tenant").map(String::as_str),
             Some("team-a")
         );
+    }
+
+    #[test]
+    fn provider_cache_control_false_disables_placeholder_chat_model() {
+        let mut provider = CapsProvider {
+            name: "anthropic_proxy".to_string(),
+            base_provider: "anthropic".to_string(),
+            supports_cache_control: false,
+            running_models: vec!["claude-proxy".to_string()],
+            ..Default::default()
+        };
+        populate_model_records(&mut provider, false);
+        post_process_provider(&mut provider, false, false);
+
+        let mut caps = CodeAssistantCaps::default();
+        add_models_to_caps(&mut caps, vec![provider]);
+
+        let model = caps
+            .chat_models
+            .get("anthropic_proxy/claude-proxy")
+            .unwrap();
+        assert!(!model.base.supports_cache_control);
+    }
+
+    #[test]
+    fn provider_cache_control_false_disables_explicit_endpoint_chat_model() {
+        let mut provider = CapsProvider {
+            name: "anthropic_proxy".to_string(),
+            base_provider: "anthropic".to_string(),
+            supports_cache_control: false,
+            chat_endpoint: "https://proxy.example/v1/messages".to_string(),
+            chat_models: IndexMap::from([(
+                "claude-proxy".to_string(),
+                ChatModelRecord {
+                    base: BaseModelRecord {
+                        id: "anthropic_proxy/claude-proxy".to_string(),
+                        name: "claude-proxy".to_string(),
+                        endpoint: "https://proxy.example/v1/messages".to_string(),
+                        supports_cache_control: true,
+                        enabled: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        post_process_provider(&mut provider, false, false);
+
+        let mut caps = CodeAssistantCaps::default();
+        add_models_to_caps(&mut caps, vec![provider]);
+
+        let model = caps
+            .chat_models
+            .get("anthropic_proxy/claude-proxy")
+            .unwrap();
+        assert_eq!(model.base.endpoint, "https://proxy.example/v1/messages");
+        assert!(!model.base.supports_cache_control);
+    }
+
+    #[test]
+    fn model_cache_control_false_stays_false_when_provider_supports_it() {
+        let provider = CapsProvider {
+            name: "anthropic".to_string(),
+            base_provider: "anthropic".to_string(),
+            supports_cache_control: true,
+            chat_endpoint: "https://api.anthropic.com/v1/messages".to_string(),
+            chat_models: IndexMap::from([(
+                "claude".to_string(),
+                ChatModelRecord {
+                    base: BaseModelRecord {
+                        id: "anthropic/claude".to_string(),
+                        name: "claude".to_string(),
+                        supports_cache_control: false,
+                        enabled: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let mut caps = CodeAssistantCaps::default();
+        add_models_to_caps(&mut caps, vec![provider]);
+
+        let model = caps.chat_models.get("anthropic/claude").unwrap();
+        assert!(!model.base.supports_cache_control);
     }
 
     #[tokio::test]
