@@ -19,10 +19,14 @@ const SEGMENT_SUMMARY_OVERHEAD_TOKENS: usize = 1024;
 const TOOL_CALL_ARGUMENTS_MAX_CHARS: usize = 1000;
 const SEGMENT_MESSAGE_CONTENT_MAX_CHARS: usize = 6000;
 const SEGMENT_REDACTION_SCAN_EXTRA_CHARS: usize = 4096;
+const GOAL_HINT_MAX_CHARS: usize = 4_000;
+const GOAL_HINT_BUDGET_CUSHION_CHARS: usize = 256;
 const CONTEXT_FILE_NAME_COMPONENT_MAX_CHARS: usize = 64;
 const CONTEXT_FILE_NAME_MAX_CHARS: usize = 180;
 const MESSAGE_CONTENT_TRUNCATED_MARKER: &str = "\n[... message content truncated ...]";
 const TOOL_CALL_ARGUMENTS_TRUNCATED_MARKER: &str = "…";
+const GOAL_HINT_TRUNCATED_MARKER: &str = "\n[... user goal truncated ...]";
+const GOAL_HINT_PROMPT_PREFIX: &str = "User goal for this segment: ";
 const SUMMARY_KIND: &str = "llm_segment_summary";
 const SUMMARY_SCHEMA_VERSION: u64 = 2;
 
@@ -336,6 +340,71 @@ fn redact_and_cap_message_content(text: &str) -> String {
     cap_redacted_message_content(&redacted, SEGMENT_MESSAGE_CONTENT_MAX_CHARS)
 }
 
+fn cap_goal_hint_with_marker(text: &str) -> String {
+    if GOAL_HINT_MAX_CHARS <= GOAL_HINT_TRUNCATED_MARKER.len() {
+        return refact_core::string_utils::safe_truncate(
+            GOAL_HINT_TRUNCATED_MARKER,
+            GOAL_HINT_MAX_CHARS,
+        )
+        .to_string();
+    }
+    let keep = GOAL_HINT_MAX_CHARS - GOAL_HINT_TRUNCATED_MARKER.len();
+    let prefix = refact_core::string_utils::safe_truncate(text, keep)
+        .trim_end()
+        .to_string();
+    format!("{}{}", prefix, GOAL_HINT_TRUNCATED_MARKER)
+}
+
+fn sanitize_goal_hint(goal_hint: Option<String>) -> Option<String> {
+    let raw = goal_hint?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let scan_cap = GOAL_HINT_MAX_CHARS.saturating_add(SEGMENT_REDACTION_SCAN_EXTRA_CHARS);
+    let (window, window_truncated) = bounded_redaction_window(trimmed, scan_cap);
+    let redacted = refact_core::string_utils::redact_sensitive(window)
+        .trim()
+        .to_string();
+    if redacted.is_empty() && !window_truncated {
+        return None;
+    }
+    let output = if window_truncated || redacted.len() > GOAL_HINT_MAX_CHARS {
+        cap_goal_hint_with_marker(&redacted)
+    } else {
+        redacted
+    };
+    if output.trim().is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
+fn goal_hint_budget_overhead_chars(goal_hint: Option<&str>) -> usize {
+    goal_hint
+        .map(|hint| {
+            GOAL_HINT_PROMPT_PREFIX
+                .len()
+                .saturating_add(hint.len())
+                .saturating_add("\n\n".len())
+                .saturating_add(GOAL_HINT_BUDGET_CUSHION_CHARS)
+        })
+        .unwrap_or(0)
+}
+
+fn segment_input_budget_chars(
+    model_n_ctx: usize,
+    max_new_tokens: usize,
+    goal_hint: Option<&str>,
+) -> usize {
+    model_n_ctx
+        .saturating_sub(max_new_tokens)
+        .saturating_sub(SEGMENT_SUMMARY_OVERHEAD_TOKENS)
+        .saturating_mul(3)
+        .saturating_sub(goal_hint_budget_overhead_chars(goal_hint))
+}
+
 fn shorten_context_file_component(component: &str) -> String {
     if component.len() <= CONTEXT_FILE_NAME_COMPONENT_MAX_CHARS {
         return component.to_string();
@@ -494,7 +563,8 @@ async fn summarize_segment_text(
     let user_content = match goal_hint {
         Some(hint) if !hint.trim().is_empty() => {
             format!(
-                "User goal for this segment: {}\n\nSummarize this segment:\n\n{}",
+                "{}{}\n\nSummarize this segment:\n\n{}",
+                GOAL_HINT_PROMPT_PREFIX,
                 hint.trim(),
                 text
             )
@@ -602,11 +672,10 @@ async fn summarize_segment(
     goal_hint: Option<String>,
 ) -> Result<ChatMessage, SegmentSummaryFailure> {
     let mut text = segment_text(messages);
+    let goal_hint = sanitize_goal_hint(goal_hint);
     let max_new_tokens = (model_n_ctx / 4).min(6000).max(1024);
-    let input_budget_tokens = model_n_ctx
-        .saturating_sub(max_new_tokens)
-        .saturating_sub(SEGMENT_SUMMARY_OVERHEAD_TOKENS);
-    let input_budget_chars = input_budget_tokens.saturating_mul(3);
+    let input_budget_chars =
+        segment_input_budget_chars(model_n_ctx, max_new_tokens, goal_hint.as_deref());
     if input_budget_chars == 0 {
         return Err(SegmentSummaryFailure::InputTooLarge {
             excerpt_chars: text.len(),
@@ -1078,6 +1147,44 @@ mod tests {
             !text.contains("secret-bearer-value"),
             "bearer leaked: {text}"
         );
+    }
+
+    #[test]
+    fn goal_hint_is_redacted_and_bounded() {
+        let raw = format!(
+            "  Keep working with api_key=sk-abcdefghijklmnop and Bearer secret-bearer-value. {}  ",
+            "tail ".repeat(GOAL_HINT_MAX_CHARS)
+        );
+
+        let hint = sanitize_goal_hint(Some(raw)).unwrap();
+
+        assert!(hint.len() <= GOAL_HINT_MAX_CHARS, "len={}", hint.len());
+        assert!(hint.contains("api_key=[REDACTED]") || hint.contains("[REDACTED_SK_TOKEN]"));
+        assert!(hint.contains("Bearer [REDACTED]"));
+        assert!(hint.ends_with(GOAL_HINT_TRUNCATED_MARKER));
+        assert_no_raw_secrets(&hint);
+    }
+
+    #[test]
+    fn empty_goal_hint_is_removed() {
+        assert_eq!(sanitize_goal_hint(Some(" \n\t ".to_string())), None);
+        assert_eq!(sanitize_goal_hint(None), None);
+    }
+
+    #[test]
+    fn goal_hint_budget_is_subtracted_from_segment_budget() {
+        let max_new_tokens = 1_024;
+        let no_hint_budget = segment_input_budget_chars(8_000, max_new_tokens, None);
+        let hint = sanitize_goal_hint(Some("preserve edited files ".repeat(400))).unwrap();
+        let hint_budget = segment_input_budget_chars(8_000, max_new_tokens, Some(&hint));
+
+        assert!(hint.len() <= GOAL_HINT_MAX_CHARS);
+        assert!(hint_budget < no_hint_budget);
+        assert_eq!(
+            hint_budget,
+            no_hint_budget.saturating_sub(goal_hint_budget_overhead_chars(Some(&hint)))
+        );
+        assert_eq!(segment_input_budget_chars(1, 1_024, Some(&hint)), 0);
     }
 
     #[test]
