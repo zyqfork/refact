@@ -248,6 +248,8 @@ pub struct RuntimeState {
     pub error: Option<String>,
     pub queue_size: usize,
     #[serde(default)]
+    pub is_compressing: bool,
+    #[serde(default)]
     pub pause_reasons: Vec<PauseReason>,
     #[serde(default)]
     pub queued_items: Vec<QueuedItem>,
@@ -266,6 +268,7 @@ impl Default for RuntimeState {
             paused: false,
             error: None,
             queue_size: 0,
+            is_compressing: false,
             pause_reasons: Vec::new(),
             queued_items: Vec::new(),
             auto_approved_tool_ids: Vec::new(),
@@ -382,6 +385,7 @@ pub enum ChatEvent {
         state: SessionState,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(default)]
         is_compressing: bool,
     },
     Ack {
@@ -895,7 +899,22 @@ mod tests {
         assert!(!runtime.paused);
         assert!(runtime.error.is_none());
         assert_eq!(runtime.queue_size, 0);
+        assert!(!runtime.is_compressing);
         assert!(runtime.pause_reasons.is_empty());
+    }
+
+    #[test]
+    fn test_runtime_state_missing_is_compressing_defaults_false() {
+        let json = r#"{
+            "state":"idle",
+            "paused":false,
+            "error":null,
+            "queue_size":0
+        }"#;
+
+        let runtime: RuntimeState = serde_json::from_str(json).unwrap();
+
+        assert!(!runtime.is_compressing);
     }
 
     #[test]
@@ -1223,6 +1242,29 @@ mod tests {
         assert_eq!(json2["state"], "error");
         assert_eq!(json2["error"], "test error");
         assert_eq!(json2["is_compressing"], true);
+    }
+
+    #[test]
+    fn test_runtime_updated_missing_is_compressing_defaults_false() {
+        let json = r#"{
+            "type":"runtime_updated",
+            "state":"completed"
+        }"#;
+
+        let event: ChatEvent = serde_json::from_str(json).unwrap();
+
+        match event {
+            ChatEvent::RuntimeUpdated {
+                state,
+                error,
+                is_compressing,
+            } => {
+                assert_eq!(state, SessionState::Completed);
+                assert_eq!(error, None);
+                assert!(!is_compressing);
+            }
+            other => panic!("expected RuntimeUpdated, got {other:?}"),
+        }
     }
 
     #[test]

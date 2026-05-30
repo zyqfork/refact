@@ -426,6 +426,7 @@ impl ChatSession {
         }
         let mut runtime = self.runtime.clone();
         runtime.queue_size = self.command_queue.len();
+        runtime.is_compressing = self.is_compressing;
         runtime.queued_items = self.build_queued_items();
         ChatEvent::Snapshot {
             thread: self.thread.clone(),
@@ -3339,6 +3340,21 @@ mod tests {
                 assert_eq!(runtime.queue_size, 1);
                 assert_eq!(runtime.queued_items.len(), 1);
                 assert_eq!(runtime.queued_items[0].client_request_id, "req-1");
+            }
+            _ => panic!("Expected Snapshot"),
+        }
+    }
+
+    #[test]
+    fn test_snapshot_includes_is_compressing() {
+        let mut session = make_session();
+        session.is_compressing = true;
+
+        let snap = session.snapshot();
+
+        match snap {
+            ChatEvent::Snapshot { runtime, .. } => {
+                assert!(runtime.is_compressing);
             }
             _ => panic!("Expected Snapshot"),
         }
