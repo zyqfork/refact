@@ -1130,7 +1130,7 @@ pub async fn load_trajectory_for_chat(
         .unwrap_or_default();
     fix_tool_call_indexes(&mut messages);
 
-    for msg in &mut messages {
+    for (message_index, msg) in messages.iter_mut().enumerate() {
         if msg.message_id.is_empty() {
             let role = msg.role.clone();
             let content = msg.content.content_text_only();
@@ -1143,7 +1143,7 @@ pub async fn load_trajectory_for_chat(
             msg.message_id = format!(
                 "legacy:{}:{:x}",
                 role,
-                md5::compute(format!("{role}\n{source}\n{content}").as_bytes())
+                md5::compute(format!("{message_index}\n{role}\n{source}\n{content}").as_bytes())
             );
         }
 
@@ -2520,7 +2520,12 @@ fn build_title_generation_context(messages: &[serde_json::Value]) -> String {
         if role == "error" {
             continue;
         }
-        if role == "system" || role == "tool" || role == "context_file" || role == "cd_instruction"
+        if role == "system"
+            || role == "tool"
+            || role == "context_file"
+            || role == "cd_instruction"
+            || role == "plan"
+            || role == "event"
         {
             continue;
         }
@@ -4754,6 +4759,37 @@ mod tests {
     }
 
     #[test]
+    fn build_title_generation_context_skips_hidden_plan_and_event_roles() {
+        let messages = vec![
+            json!({"role": "user", "content": "Visible user request"}),
+            json!({
+                "role": "plan",
+                "content": "Hidden base plan must not title the chat",
+                "extra": {"plan": {"mode": "agent", "version": 1}}
+            }),
+            json!({
+                "role": "event",
+                "content": "Hidden plan delta must not title the chat",
+                "extra": {
+                    "event": {
+                        "subkind": "plan_delta",
+                        "source": "tool.update_plan",
+                        "payload": {"seq": 1}
+                    }
+                }
+            }),
+            json!({"role": "assistant", "content": "Visible assistant response"}),
+        ];
+
+        let context = build_title_generation_context(&messages);
+
+        assert!(context.contains("Visible user request"));
+        assert!(context.contains("Visible assistant response"));
+        assert!(!context.contains("Hidden base plan"));
+        assert!(!context.contains("Hidden plan delta"));
+    }
+
+    #[test]
     fn build_title_generation_context_skips_ui_only_error() {
         let messages = vec![
             json!({"role": "error", "content": "context_length_exceeded", "_ui_only": true}),
@@ -5376,6 +5412,70 @@ mod tests {
             .collect();
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].content.content_text_only(), "append update");
+    }
+
+    #[tokio::test]
+    async fn legacy_fallback_ids_are_distinct_for_repeated_hidden_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        tokio::fs::create_dir_all(&trajectories_dir).await.unwrap();
+        tokio::fs::write(
+            trajectories_dir.join("legacy-hidden-events.json"),
+            serde_json::to_string(&json!({
+                "id": "legacy-hidden-events",
+                "title": "Legacy Hidden Events",
+                "model": "model",
+                "mode": "agent",
+                "tool_use": "agent",
+                "messages": [
+                    {
+                        "role": "event",
+                        "content": "append update",
+                        "extra": {
+                            "event": {
+                                "subkind": "plan_delta",
+                                "source": "tool.update_plan",
+                                "payload": {"seq": 1}
+                            }
+                        }
+                    },
+                    {
+                        "role": "event",
+                        "content": "append update",
+                        "extra": {
+                            "event": {
+                                "subkind": "plan_delta",
+                                "source": "tool.update_plan",
+                                "payload": {"seq": 2}
+                            }
+                        }
+                    },
+                    {
+                        "message_id": "kept-existing-id",
+                        "role": "user",
+                        "content": "visible"
+                    }
+                ],
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let loaded = load_trajectory_for_chat(gcx, "legacy-hidden-events")
+            .await
+            .unwrap();
+
+        assert_eq!(loaded.messages.len(), 3);
+        assert!(loaded.messages[0].message_id.starts_with("legacy:event:"));
+        assert!(loaded.messages[1].message_id.starts_with("legacy:event:"));
+        assert_ne!(loaded.messages[0].message_id, loaded.messages[1].message_id);
+        assert_eq!(loaded.messages[2].message_id, "kept-existing-id");
     }
 
     #[tokio::test]
