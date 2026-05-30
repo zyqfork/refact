@@ -868,6 +868,79 @@ async fn ensure_existing_trajectory_file_matches(path: &Path, chat_id: &str) -> 
     }
 }
 
+async fn resolve_trajectory_data_save_path(
+    gcx: Arc<GlobalContext>,
+    id: &str,
+    data: &TrajectoryData,
+) -> Result<PathBuf, String> {
+    validate_trajectory_id(id).map_err(|e| e.message)?;
+    if data.id != id {
+        return Err("ID mismatch".to_string());
+    }
+    if let Some(candidate) = find_trajectory_or_buddy_file(gcx.clone(), id).await {
+        return Ok(candidate.path);
+    }
+    if let Some(task_meta) = data
+        .extra
+        .get("task_meta")
+        .and_then(|value| serde_json::from_value::<super::types::TaskMeta>(value.clone()).ok())
+    {
+        let task_dir =
+            crate::tasks::storage::find_task_dir(gcx.clone(), &task_meta.task_id).await?;
+        let traj_dir = crate::tasks::storage::get_task_trajectory_dir(
+            &task_dir,
+            &task_meta.role,
+            task_meta.agent_id.as_deref(),
+        );
+        fs::create_dir_all(&traj_dir)
+            .await
+            .map_err(|e| format!("Failed to create task trajectories dir: {}", e))?;
+        return Ok(traj_dir.join(format!("{}.json", id)));
+    }
+    if data
+        .extra
+        .get("buddy_meta")
+        .is_some_and(|value| !value.is_null())
+    {
+        let buddy_dir = get_buddy_conversations_dir(gcx.clone()).await?;
+        fs::create_dir_all(&buddy_dir)
+            .await
+            .map_err(|e| format!("Failed to create buddy conversations dir: {}", e))?;
+        return Ok(buddy_dir.join(format!("{}.json", id)));
+    }
+    let trajectories_dir = get_trajectories_dir(gcx.clone()).await?;
+    fs::create_dir_all(&trajectories_dir)
+        .await
+        .map_err(|e| format!("Failed to create trajectories dir: {}", e))?;
+    Ok(trajectories_dir.join(format!("{}.json", id)))
+}
+
+async fn title_generation_backing_file_matches(file_path: &Path, chat_id: &str) -> bool {
+    let content = match fs::read_to_string(file_path).await {
+        Ok(content) => content,
+        Err(e) => {
+            warn!(
+                "Skipping title update for {}: failed to read backing trajectory: {}",
+                file_path.display(),
+                e
+            );
+            return false;
+        }
+    };
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!(
+                "Skipping title update for {}: failed to parse backing trajectory: {}",
+                file_path.display(),
+                e
+            );
+            return false;
+        }
+    };
+    trajectory_root_id_matches(&json, chat_id, file_path)
+}
+
 fn repaired_created_at(raw_created_at: Option<&str>, transition_identity_repaired: bool) -> String {
     if transition_identity_repaired {
         if let Some(created_at) = raw_created_at {
@@ -2702,11 +2775,15 @@ fn spawn_title_generation_task(
             },
         };
         let sessions = app.chat.sessions.clone();
+        let file_path = trajectories_dir.join(format!("{}.json", id));
         let maybe_session_arc = {
             let sessions_read = sessions.read().await;
             sessions_read.get(&id).cloned()
         };
         if let Some(session_arc) = maybe_session_arc {
+            if !title_generation_backing_file_matches(&file_path, &id).await {
+                return;
+            }
             let mut session = session_arc.lock().await;
             if session.thread.is_title_generated {
                 info!("Title already generated for {}, skipping", id);
@@ -2718,7 +2795,6 @@ fn spawn_title_generation_task(
             info!("Updated session {} with generated title: {}", id, title);
             return;
         }
-        let file_path = trajectories_dir.join(format!("{}.json", id));
         let content = match fs::read_to_string(&file_path).await {
             Ok(c) => c,
             Err(e) => {
@@ -3590,13 +3666,9 @@ pub async fn handle_v1_trajectories_save(
             "ID mismatch".to_string(),
         ));
     }
-    let trajectories_dir = get_trajectories_dir(gcx.clone())
+    let file_path = resolve_trajectory_data_save_path(gcx.clone(), &id, &data)
         .await
         .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    fs::create_dir_all(&trajectories_dir)
-        .await
-        .map_err(|e| ScratchError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let file_path = trajectories_dir.join(format!("{}.json", id));
     ensure_existing_trajectory_file_matches(&file_path, &id)
         .await
         .map_err(|e| ScratchError::new(StatusCode::CONFLICT, e))?;
@@ -3694,6 +3766,12 @@ pub async fn handle_v1_trajectories_save(
     };
     let _ = app.chat.trajectory_events_tx.send(event);
     if should_generate_title {
+        let trajectories_dir = file_path.parent().map(Path::to_path_buf).ok_or_else(|| {
+            ScratchError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Trajectory file path has no parent directory".to_string(),
+            )
+        })?;
         spawn_title_generation_task(
             gcx.clone(),
             id.clone(),
@@ -4565,6 +4643,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_save_updates_existing_global_trajectory_without_project_shadow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "http-save-global-original";
+        let global_dir = get_global_trajectories_dir(gcx).await;
+        let global_path = global_dir.join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &global_path,
+            chat_id,
+            "Global Original",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        let mut payload = sample_trajectory(chat_id, "Global Updated", "2024-01-01T00:00:01Z");
+        payload["messages"] = json!([{"role":"user","content":"saved globally"}]);
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&global_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Global Updated");
+        assert_eq!(saved["messages"].as_array().unwrap().len(), 1);
+        let project_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        assert!(!tokio::fs::try_exists(project_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn http_save_updates_existing_task_trajectory_without_project_shadow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "http-save-task-original";
+        let task_id = "task-http-save";
+        let task_path = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join(task_id)
+            .join("trajectories")
+            .join("agents")
+            .join("agent-1")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(&task_path, chat_id, "Task Original", "2024-01-01T00:00:00Z").await;
+        let mut payload = sample_trajectory(chat_id, "Task Updated", "2024-01-01T00:00:01Z");
+        payload["task_meta"] = json!({
+            "task_id": task_id,
+            "role": "agents",
+            "agent_id": "agent-1",
+            "card_id": "card-1"
+        });
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&task_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Task Updated");
+        assert_eq!(saved["task_meta"]["task_id"], task_id);
+        let project_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        assert!(!tokio::fs::try_exists(project_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn http_save_updates_existing_buddy_trajectory_without_project_shadow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "http-save-buddy-original";
+        let buddy_path = dir
+            .path()
+            .join(".refact")
+            .join("buddy")
+            .join("chats")
+            .join("conversations")
+            .join(format!("{chat_id}.json"));
+        write_buddy_conversation_file(&buddy_path, chat_id, "Buddy Original").await;
+        let mut payload = sample_trajectory(chat_id, "Buddy Updated", "2024-01-01T00:00:01Z");
+        payload["mode"] = json!("buddy");
+        payload["buddy_meta"] = json!({
+            "is_buddy_chat": true,
+            "buddy_chat_kind": "investigation"
+        });
+
+        handle_v1_trajectories_save(
+            State(app),
+            AxumPath(chat_id.to_string()),
+            hyper::body::Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&buddy_path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Buddy Updated");
+        assert!(saved["buddy_meta"]["is_buddy_chat"].as_bool().unwrap());
+        let project_path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        assert!(!tokio::fs::try_exists(project_path).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn trajectory_id_mismatch_title_generation_does_not_update_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let (gcx, _) = make_app_with_workspace(dir.path()).await;
@@ -4583,6 +4782,39 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn title_generation_mismatched_backing_file_does_not_update_active_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "title-active-mismatch-guard";
+        let trajectories_dir = dir.path().join(".refact").join("trajectories");
+        let path = trajectories_dir.join(format!("{chat_id}.json"));
+        write_trajectory_file(&path, "other-chat", "New Chat", "2024-01-01T00:00:00Z").await;
+        let session_arc = Arc::new(AMutex::new(ChatSession::new(chat_id.to_string())));
+        {
+            let mut session = session_arc.lock().await;
+            session.thread.title = "New Chat".to_string();
+            session.thread.is_title_generated = false;
+        }
+        app.chat
+            .sessions
+            .write()
+            .await
+            .insert(chat_id.to_string(), session_arc.clone());
+
+        spawn_title_generation_task(
+            gcx,
+            chat_id.to_string(),
+            vec![json!({"role":"user","content":"Generate guarded active title"})],
+            trajectories_dir,
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let session = session_arc.lock().await;
+        assert_eq!(session.thread.title, "New Chat");
+        assert!(!session.thread.is_title_generated);
     }
 
     #[test]
