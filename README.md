@@ -20,8 +20,6 @@
 > This repository is kept as the legacy archive for the original Refact project and is no longer the active development home.
 > Ongoing development has moved to [JegernOUTT/refact](https://github.com/JegernOUTT/refact); please use that repository for new issues, pull requests, and future updates.
 
-Refact runs a local Rust engine (`refact-lsp`) from your IDE and connects only to the model providers, local runtimes, and integrations you configure. It brings together chat, codebase search, autonomous agents, browser automation, and tool integrations while keeping project state, indexes, trajectories, and task data on your machine.
-
 > Refact Cloud has been retired. Read the announcement: [Refact Cloud is shutting down](https://refact.ai/blog/2026/refact-cloud-is-shutting-down/).
 
 ## License
