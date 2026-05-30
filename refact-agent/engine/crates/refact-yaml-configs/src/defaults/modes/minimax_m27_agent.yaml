@@ -1,4 +1,4 @@
-schema_version: 18
+schema_version: 19
 id: minimax_m27_agent
 title: MiniMax M2.7 Agent
 description: Optimized for MiniMax M2.7/M2-series agentic coding with Anthropic-compatible content-block preservation while inheriting all base Agent tools

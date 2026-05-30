@@ -1,4 +1,4 @@
-schema_version: 18
+schema_version: 19
 id: kimi_k26_agent
 title: Kimi K2.6 Agent
 description: Optimized for Kimi K and K2.6 long-context coding with thinking continuity and inherited Agent tools

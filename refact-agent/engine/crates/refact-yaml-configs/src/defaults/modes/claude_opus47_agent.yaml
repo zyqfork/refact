@@ -1,4 +1,4 @@
-schema_version: 18
+schema_version: 19
 id: claude_opus47_agent
 title: Claude Opus 4.7 Agent
 description: Claude Opus 4.7 overlay for adaptive thinking and agentic coding while inheriting all Agent tools.

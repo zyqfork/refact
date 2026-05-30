@@ -1,4 +1,4 @@
-schema_version: 18
+schema_version: 19
 id: qwen36_agent
 title: Qwen3.6 Agent
 description: Optimized for Qwen3.6 agentic coding, repo-level reasoning, thinking preservation, and inherited Agent tools.

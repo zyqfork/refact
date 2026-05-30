@@ -1,4 +1,4 @@
-schema_version: 18
+schema_version: 19
 id: gemini3_agent
 title: Gemini 3 Agent
 description: Optimized for Gemini 3 and latest Gemini models with function calling, thinking levels, and inherited Agent tools
