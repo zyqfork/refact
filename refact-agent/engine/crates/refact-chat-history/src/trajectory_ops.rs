@@ -11,11 +11,10 @@ pub fn is_ui_only_message(msg: &ChatMessage) -> bool {
 }
 
 pub fn sanitize_message_for_new_thread(m: &ChatMessage) -> ChatMessage {
-    let extra = match m.role.as_str() {
-        _ if is_ui_only_message(m) => m.extra.clone(),
-        "plan" => preserve_extra_key(&m.extra, "plan"),
-        "event" => preserve_extra_key(&m.extra, "event"),
-        _ => serde_json::Map::new(),
+    let extra = if is_ui_only_message(m) {
+        m.extra.clone()
+    } else {
+        preserve_hidden_role_extra(m)
     };
 
     ChatMessage {
@@ -38,6 +37,14 @@ pub fn sanitize_message_for_new_thread(m: &ChatMessage) -> ChatMessage {
         summarized_token_estimate: m.summarized_token_estimate,
         extra,
         output_filter: None,
+    }
+}
+
+fn preserve_hidden_role_extra(msg: &ChatMessage) -> serde_json::Map<String, serde_json::Value> {
+    match msg.role.as_str() {
+        "plan" => preserve_extra_key(&msg.extra, "plan"),
+        "event" => preserve_extra_key(&msg.extra, "event"),
+        _ => serde_json::Map::new(),
     }
 }
 
@@ -100,7 +107,7 @@ pub fn sanitize_messages_for_model_switch(msgs: &mut Vec<ChatMessage>) {
 
     for msg in msgs.iter_mut() {
         msg.usage = None;
-        msg.extra = serde_json::Map::new();
+        msg.extra = preserve_hidden_role_extra(msg);
         msg.finish_reason = None;
         msg.reasoning_content = None;
 
@@ -434,7 +441,7 @@ pub fn compress_in_place(
         messages.retain(|msg| !is_ui_only_message(msg));
         for msg in messages.iter_mut() {
             msg.usage = None;
-            msg.extra.clear();
+            msg.extra = preserve_hidden_role_extra(msg);
         }
     }
 
@@ -612,6 +619,23 @@ mod tests {
         }
     }
 
+    fn assert_only_hidden_plan_extra(message: &ChatMessage) {
+        assert_eq!(message.role, "plan");
+        assert_eq!(message.extra["plan"]["version"], serde_json::json!(1));
+        assert_eq!(message.extra.len(), 1);
+        assert!(!message.extra.contains_key("unrelated"));
+    }
+
+    fn assert_only_hidden_event_extra(message: &ChatMessage) {
+        assert_eq!(message.role, "event");
+        assert_eq!(
+            message.extra["event"]["subkind"],
+            serde_json::json!("plan_delta")
+        );
+        assert_eq!(message.extra.len(), 1);
+        assert!(!message.extra.contains_key("unrelated"));
+    }
+
     #[test]
     fn sanitize_messages_for_model_switch_drops_ui_only_messages() {
         let mut messages = vec![
@@ -655,17 +679,8 @@ mod tests {
         let sanitized = sanitize_messages_for_new_thread(&messages);
 
         assert_eq!(sanitized.len(), 2);
-        assert_eq!(sanitized[0].role, "plan");
-        assert_eq!(sanitized[0].extra["plan"]["version"], serde_json::json!(1));
-        assert_eq!(sanitized[0].extra.len(), 1);
-        assert!(!sanitized[0].extra.contains_key("unrelated"));
-        assert_eq!(sanitized[1].role, "event");
-        assert_eq!(
-            sanitized[1].extra["event"]["subkind"],
-            serde_json::json!("plan_delta")
-        );
-        assert_eq!(sanitized[1].extra.len(), 1);
-        assert!(!sanitized[1].extra.contains_key("unrelated"));
+        assert_only_hidden_plan_extra(&sanitized[0]);
+        assert_only_hidden_event_extra(&sanitized[1]);
     }
 
     #[test]
@@ -678,6 +693,36 @@ mod tests {
         let sanitized = sanitize_message_for_new_thread(&message);
 
         assert_eq!(sanitized.extra, message.extra);
+    }
+
+    #[test]
+    fn sanitize_messages_for_model_switch_preserves_hidden_role_extra_only() {
+        let mut messages = vec![make_plan_msg(), make_plan_delta_event()];
+
+        sanitize_messages_for_model_switch(&mut messages);
+
+        assert_eq!(messages.len(), 2);
+        assert_only_hidden_plan_extra(&messages[0]);
+        assert_only_hidden_event_extra(&messages[1]);
+    }
+
+    #[test]
+    fn compress_in_place_strip_metering_preserves_hidden_role_extra_only() {
+        let mut messages = vec![make_plan_msg(), make_plan_delta_event()];
+        let opts = CompressOptions {
+            strip_metering: true,
+            ..Default::default()
+        };
+
+        compress_in_place(&mut messages, &opts).unwrap();
+
+        let persisted: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.role != "cd_instruction")
+            .collect();
+        assert_eq!(persisted.len(), 2);
+        assert_only_hidden_plan_extra(persisted[0]);
+        assert_only_hidden_event_extra(persisted[1]);
     }
 
     #[test]
