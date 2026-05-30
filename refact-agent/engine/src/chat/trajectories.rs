@@ -868,6 +868,101 @@ async fn ensure_existing_trajectory_file_matches(path: &Path, chat_id: &str) -> 
     }
 }
 
+async fn read_existing_trajectory_object(
+    path: &Path,
+    chat_id: &str,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    if !fs::try_exists(path)
+        .await
+        .map_err(|e| format!("Failed to check trajectory existence: {}", e))?
+    {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("Failed to read existing trajectory: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse existing trajectory: {}", e))?;
+    if !trajectory_root_id_matches(&json, chat_id, path) {
+        return Err(format!(
+            "Existing trajectory file id mismatch for {}",
+            path.display()
+        ));
+    }
+    json.as_object()
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Existing trajectory JSON root must be an object for {}",
+                path.display()
+            )
+        })
+        .map(Some)
+}
+
+fn is_known_trajectory_top_level_key(key: &str) -> bool {
+    matches!(
+        key,
+        "id" | "title"
+            | "model"
+            | "mode"
+            | "tool_use"
+            | "messages"
+            | "created_at"
+            | "updated_at"
+            | "boost_reasoning"
+            | "checkpoints_enabled"
+            | "context_tokens_cap"
+            | "include_project_info"
+            | "isTitleGenerated"
+            | "auto_approve_editing_tools"
+            | "auto_approve_dangerous_commands"
+            | "autonomous_no_confirm"
+            | "reasoning_effort"
+            | "thinking_budget"
+            | "temperature"
+            | "frequency_penalty"
+            | "max_tokens"
+            | "previous_response_id"
+            | "parallel_tool_calls"
+            | "active_skill"
+            | "auto_enrichment_enabled"
+            | "buddy_meta"
+            | "auto_compact_enabled"
+            | "frozen_request_prefix"
+            | "claude_code_identity"
+            | "reactive_compact_attempts"
+            | "wake_up_at"
+            | "waiting_for_card_ids"
+            | "worktree"
+            | "parent_id"
+            | "link_type"
+            | "root_chat_id"
+            | "task_meta"
+            | "browser_meta"
+    )
+}
+
+fn preserve_existing_trajectory_metadata(
+    trajectory: &mut serde_json::Value,
+    existing: Option<serde_json::Map<String, serde_json::Value>>,
+) {
+    let Some(existing) = existing else {
+        return;
+    };
+    let Some(trajectory_object) = trajectory.as_object_mut() else {
+        return;
+    };
+    for (key, value) in existing {
+        let preserve_browser_meta = key == "browser_meta" && !trajectory_object.contains_key(&key);
+        let preserve_unknown =
+            !is_known_trajectory_top_level_key(&key) && !trajectory_object.contains_key(&key);
+        if preserve_browser_meta || preserve_unknown {
+            trajectory_object.insert(key, value);
+        }
+    }
+}
+
 async fn resolve_trajectory_data_save_path(
     gcx: Arc<GlobalContext>,
     id: &str,
@@ -1756,10 +1851,12 @@ pub async fn save_trajectory_snapshot(
             .map_err(|e| format!("Failed to create trajectories dir: {}", e))?;
         trajectories_dir.join(format!("{}.json", snapshot.chat_id))
     };
-    ensure_existing_trajectory_file_matches(&file_path, &snapshot.chat_id).await?;
+    let existing_trajectory =
+        read_existing_trajectory_object(&file_path, &snapshot.chat_id).await?;
 
     let updated_at = chrono::Utc::now().to_rfc3339();
     trajectory["updated_at"] = serde_json::Value::String(updated_at.clone());
+    preserve_existing_trajectory_metadata(&mut trajectory, existing_trajectory);
 
     let tmp_path = unique_trajectory_tmp_path(&file_path);
     let json_result = serde_json::to_string_pretty(&trajectory)
@@ -4608,6 +4705,176 @@ mod tests {
 
         assert!(err.contains("Existing trajectory file id mismatch"));
         assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn ordinary_save_preserves_existing_browser_meta_and_unknown_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "metadata-preserve-browser-custom";
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Existing Metadata",
+                "model": "model",
+                "mode": "agent",
+                "tool_use": "agent",
+                "messages": [{"role":"user","content":"old"}],
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "browser_meta": {
+                    "browser_runtime_id": "browser-preserve",
+                    "tab_urls": ["https://example.com/preserve"],
+                    "active_tab_id": "tab-preserve",
+                    "attach_screenshot_on_send": true
+                },
+                "custom_future_field": {
+                    "keep": true,
+                    "nested": {"value": 57}
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        save_trajectory_snapshot(
+            gcx,
+            test_snapshot(
+                chat_id,
+                "Updated Metadata",
+                vec![ChatMessage::new("user".to_string(), "new".to_string())],
+            ),
+        )
+        .await
+        .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Updated Metadata");
+        assert_eq!(
+            saved["browser_meta"]["browser_runtime_id"],
+            "browser-preserve"
+        );
+        assert_eq!(saved["custom_future_field"]["nested"]["value"], 57);
+    }
+
+    #[tokio::test]
+    async fn ordinary_save_removes_stale_provider_identity_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "metadata-clear-stale-provider";
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Provider Existing",
+                "model": "model",
+                "mode": "agent",
+                "tool_use": "agent",
+                "messages": [{"role":"user","content":"old"}],
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "previous_response_id": "resp_stale",
+                "frozen_request_prefix": {
+                    "schema_version": 1,
+                    "created_at": "2026-05-29T00:00:00Z",
+                    "system_prompt": "stale system",
+                    "tools_canonical": [{"type":"function"}]
+                },
+                "claude_code_identity": {
+                    "device_id": "device-stale",
+                    "session_id": "session-stale"
+                },
+                "custom_future_field": {"keep": true}
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        save_trajectory_snapshot(
+            gcx,
+            test_snapshot(
+                chat_id,
+                "Provider Cleared",
+                vec![ChatMessage::new("user".to_string(), "new".to_string())],
+            ),
+        )
+        .await
+        .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Provider Cleared");
+        assert!(saved.get("previous_response_id").is_none());
+        assert!(saved.get("frozen_request_prefix").is_none());
+        assert!(saved.get("claude_code_identity").is_none());
+        assert_eq!(saved["custom_future_field"]["keep"], true);
+    }
+
+    #[tokio::test]
+    async fn title_only_ordinary_save_preserves_unknown_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "metadata-title-only-preserve";
+        let path = dir
+            .path()
+            .join(".refact")
+            .join("trajectories")
+            .join(format!("{chat_id}.json"));
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "id": chat_id,
+                "title": "Old Title",
+                "model": "model",
+                "mode": "agent",
+                "tool_use": "agent",
+                "messages": [],
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "include_project_info": true,
+                "checkpoints_enabled": true,
+                "custom_future_field": {"nested": {"value": 58}}
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        save_trajectory_snapshot(gcx, test_snapshot(chat_id, "Retitled", Vec::new()))
+            .await
+            .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
+        assert_eq!(saved["title"], "Retitled");
+        assert_eq!(saved["custom_future_field"]["nested"]["value"], 58);
     }
 
     #[tokio::test]
