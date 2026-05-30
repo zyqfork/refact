@@ -75,6 +75,8 @@ impl Tool for ToolUpdatePlan {
         }
         .ok_or_else(|| format!("chat session `{chat_id}` not found"))?;
 
+        let result_truncation = internal_roles::bounded_plan_delta_note(note.clone()).1;
+
         let seq = {
             let mut session = session_arc.lock().await;
             if !has_base_plan_including_queued(&session) {
@@ -99,12 +101,29 @@ impl Tool for ToolUpdatePlan {
             false,
             vec![ContextEnum::ChatMessage(ChatMessage {
                 role: "tool".to_string(),
-                content: ChatContent::SimpleText(json!({ "seq": seq }).to_string()),
+                content: ChatContent::SimpleText(
+                    update_plan_tool_result(seq, result_truncation).to_string(),
+                ),
                 tool_call_id: tool_call_id.clone(),
                 ..Default::default()
             })],
         ))
     }
+}
+
+fn update_plan_tool_result(
+    seq: usize,
+    truncation: Option<internal_roles::PlanDeltaTruncation>,
+) -> Value {
+    let Some(truncation) = truncation else {
+        return json!({"seq": seq, "truncated": false});
+    };
+    json!({
+        "seq": seq,
+        "truncated": true,
+        "original_chars": truncation.original_chars,
+        "kept_chars": truncation.kept_chars,
+    })
 }
 
 fn has_base_plan_including_queued(session: &ChatSession) -> bool {
@@ -304,7 +323,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tool_result_json(&messages), json!({"seq": 2}));
+        assert_eq!(
+            tool_result_json(&messages),
+            json!({"seq": 2, "truncated": false})
+        );
         let session_arc = gcx
             .chat_sessions
             .read()
@@ -351,7 +373,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tool_result_json(&messages), json!({"seq": 3}));
+        assert_eq!(
+            tool_result_json(&messages),
+            json!({"seq": 3, "truncated": false})
+        );
         let session_arc = gcx
             .chat_sessions
             .read()
@@ -388,7 +413,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tool_result_json(&messages), json!({"seq": 1}));
+        let result = tool_result_json(&messages);
+        assert_eq!(result["seq"], json!(1));
+        assert_eq!(result["truncated"], json!(true));
+        assert_eq!(result["original_chars"], json!(original_chars));
         let session_arc = gcx
             .chat_sessions
             .read()
@@ -409,6 +437,7 @@ mod tests {
         );
         let kept_chars = plan_delta_payload(delta)["kept_chars"].as_u64().unwrap() as usize;
         assert!(kept_chars < internal_roles::MAX_PLAN_DELTA_CHARS);
+        assert_eq!(result["kept_chars"], json!(kept_chars));
     }
 
     #[tokio::test]

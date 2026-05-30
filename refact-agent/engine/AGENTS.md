@@ -166,7 +166,7 @@ Schema:
 }
 ```
 
-Returns `{ "seq": number }`, queues one hidden `event(plan_delta, "tool.update_plan", {seq, summary}, note)`, and appends `event(system_notice, "tool.update_plan", {seq, summary}, "Plan updated (delta N)")`. It requires an existing or queued base plan, rejects empty `note`, and rejects `summary` longer than 120 chars. `plan_delta` is append-only, snake_case on the wire, `Never` compressed, hidden from the normal transcript and general EventLog, and merged with the base plan for current-plan consumers.
+Returns `{ "seq": number, "truncated": false }` for normal notes. Notes are capped at 16KB chars (`MAX_PLAN_DELTA_CHARS`); when capped, the result is `{ "seq": number, "truncated": true, "original_chars": number, "kept_chars": number }`. It queues one hidden `event(plan_delta, "tool.update_plan", {seq, summary, truncated?, original_chars?, kept_chars?}, note)`, and appends `event(system_notice, "tool.update_plan", {seq, summary}, "Plan updated (delta N)")`. It requires an existing or queued base plan, rejects empty `note`, and rejects `summary` longer than 120 chars. `plan_delta` is append-only, snake_case on the wire, `Never` compressed, hidden from the normal transcript and general EventLog, and merged with the base plan for current-plan consumers.
 
 #### `get_plan`
 
