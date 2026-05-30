@@ -633,7 +633,7 @@ type DisplayItemCompressionProgress = {
   messageIndex: number;
 };
 
-type DisplayItem =
+export type DisplayItem =
   | DisplayItemAssistant
   | DisplayItemUser
   | DisplayItemContextFiles
@@ -1118,7 +1118,7 @@ function tryParseSkillActivated(
   }
 }
 
-function buildDisplayItems(
+export function buildDisplayItems(
   messages: ChatMessages,
   isStreaming: boolean,
 ): DisplayItem[] {
@@ -1438,7 +1438,7 @@ function buildDisplayItems(
   return items;
 }
 
-function tryIncrementalDisplayItemsUpdate(
+export function tryIncrementalDisplayItemsUpdate(
   previousMessages: ChatMessages | null,
   nextMessages: ChatMessages,
   previousItems: DisplayItem[] | null,
@@ -1483,6 +1483,18 @@ function tryIncrementalDisplayItemsUpdate(
   if (!isAssistantMessage(changedMessage)) return null;
 
   const previousMessage = previousMessages[changedIndex];
+  if (
+    isCompressedAssistantMessage(previousMessage) ||
+    isCompressedAssistantMessage(changedMessage)
+  ) {
+    return rebuildDisplayItemsFromStart(
+      previousItems,
+      nextMessages,
+      isStreaming,
+      changedIndex,
+    );
+  }
+
   if (
     !isAssistantMessage(previousMessage) ||
     assistantGroupingSignature(previousMessage) !==
