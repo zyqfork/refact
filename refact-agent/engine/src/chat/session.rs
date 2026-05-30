@@ -1506,8 +1506,11 @@ pub async fn get_or_create_session_with_trajectory(
                 let session = session_arc.lock().await;
                 session.trajectory_version
             };
-            if let Err(e) =
-                super::trajectories::persist_loaded_trajectory_repair_raw(&repair_patch).await
+            if let Err(e) = super::trajectories::persist_loaded_trajectory_repair_raw(
+                gcx.clone(),
+                &repair_patch,
+            )
+            .await
             {
                 warn!(
                     "Failed to persist repaired trajectory for {}: {}",

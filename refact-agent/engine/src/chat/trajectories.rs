@@ -371,30 +371,51 @@ pub async fn get_all_trajectories_dirs(gcx: Arc<GlobalContext>) -> Vec<PathBuf> 
     dirs
 }
 
-async fn get_all_task_roots(gcx: Arc<GlobalContext>) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = get_project_dirs(gcx.clone())
-        .await
-        .into_iter()
-        .map(|p| p.join(".refact").join("tasks"))
-        .collect();
+fn task_root_candidates(
+    gcx: Arc<GlobalContext>,
+) -> impl std::future::Future<Output = Vec<PathBuf>> {
+    async move {
+        let mut dirs: Vec<PathBuf> = get_project_dirs(gcx.clone())
+            .await
+            .into_iter()
+            .map(|p| p.join(".refact").join("tasks"))
+            .collect();
 
-    dirs.push(crate::tasks::storage::get_global_tasks_dir(gcx).await);
+        dirs.push(crate::tasks::storage::get_global_tasks_dir(gcx).await);
+        dirs
+    }
+}
+
+async fn get_all_task_roots(gcx: Arc<GlobalContext>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for dir in task_root_candidates(gcx).await {
+        if is_real_dir(&dir).await {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+async fn get_or_create_all_task_roots(gcx: Arc<GlobalContext>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for dir in task_root_candidates(gcx).await {
+        if ensure_real_dir_tree(&dir).await.is_ok() {
+            dirs.push(dir);
+        }
+    }
     dirs
 }
 
 async fn get_all_task_roots_from_weak(gcx_weak: &Weak<GlobalContext>) -> Vec<PathBuf> {
     match gcx_weak.upgrade() {
-        Some(gcx) => get_all_task_roots(gcx).await,
+        Some(gcx) => get_or_create_all_task_roots(gcx).await,
         None => vec![],
     }
 }
 
 pub(crate) async fn list_task_trajectory_dirs(gcx: &Arc<GlobalContext>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    for tasks_dir in crate::tasks::storage::get_all_tasks_dirs(gcx.clone()).await {
-        if !tasks_dir.exists() {
-            continue;
-        }
+    for tasks_dir in get_all_task_roots(gcx.clone()).await {
         let mut task_entries = match fs::read_dir(&tasks_dir).await {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -449,6 +470,12 @@ pub async fn get_buddy_conversations_dir(gcx: Arc<GlobalContext>) -> Result<Path
     let project_dirs = get_project_dirs(gcx).await;
     let workspace_root = project_dirs.first().ok_or("No workspace folder found")?;
     Ok(workspace_root.join(".refact/buddy/chats/conversations"))
+}
+
+async fn get_or_create_buddy_conversations_dir(gcx: Arc<GlobalContext>) -> Result<PathBuf, String> {
+    let dir = get_buddy_conversations_dir(gcx).await?;
+    ensure_real_dir_tree(&dir).await?;
+    Ok(dir)
 }
 
 fn normalize_system_prompt(system_prompt: Option<String>) -> Option<String> {
@@ -703,37 +730,9 @@ async fn normal_trajectory_candidate_paths(gcx: Arc<GlobalContext>, chat_id: &st
 
 async fn trajectory_candidate_paths(gcx: Arc<GlobalContext>, chat_id: &str) -> Vec<PathBuf> {
     let mut candidates = normal_trajectory_candidate_paths(gcx.clone(), chat_id).await;
-    let tasks_dirs = crate::tasks::storage::get_all_tasks_dirs(gcx.clone()).await;
-    for tasks_dir in tasks_dirs {
-        if tasks_dir.exists() {
-            if let Ok(mut entries) = tokio::fs::read_dir(&tasks_dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let task_dir = entry.path();
-                    if task_dir.is_dir() {
-                        let traj_base = task_dir.join("trajectories");
-                        for role in &["planner", "agents"] {
-                            let role_dir = traj_base.join(role);
-                            if role_dir.exists() {
-                                let direct = role_dir.join(format!("{}.json", chat_id));
-                                if direct.exists() {
-                                    candidates.push(direct);
-                                }
-                                if let Ok(mut sub_entries) = tokio::fs::read_dir(&role_dir).await {
-                                    while let Ok(Some(sub_entry)) = sub_entries.next_entry().await {
-                                        let sub_path = sub_entry.path();
-                                        if sub_path.is_dir() {
-                                            let nested = sub_path.join(format!("{}.json", chat_id));
-                                            if nested.exists() {
-                                                candidates.push(nested);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    for dir in list_task_trajectory_dirs(&gcx).await {
+        if let Some(path) = safe_trajectory_file_in_dir(&dir, chat_id).await {
+            candidates.push(path);
         }
     }
     candidates
@@ -843,8 +842,7 @@ async fn find_trajectory_or_buddy_file(
     validate_trajectory_id(chat_id).ok()?;
     let mut candidates = trajectory_candidate_paths(gcx.clone(), chat_id).await;
     if let Ok(buddy_dir) = get_buddy_conversations_dir(gcx).await {
-        let buddy_path = buddy_dir.join(format!("{}.json", chat_id));
-        if buddy_path.exists() {
+        if let Some(buddy_path) = safe_trajectory_file_in_dir(&buddy_dir, chat_id).await {
             candidates.push(buddy_path);
         }
     }
@@ -980,6 +978,87 @@ fn preserve_existing_trajectory_metadata(
     }
 }
 
+fn validate_task_trajectory_role(role: &str) -> Result<(), String> {
+    match role {
+        "planner" | "agents" => Ok(()),
+        _ => Err(format!("Invalid task trajectory role: {role}")),
+    }
+}
+
+fn validate_task_agent_id(agent_id: Option<&str>) -> Result<(), String> {
+    if let Some(agent_id) = agent_id {
+        validate_trajectory_id(agent_id).map_err(|e| e.message)?;
+    }
+    Ok(())
+}
+
+async fn safe_task_dir(gcx: Arc<GlobalContext>, task_id: &str) -> Result<PathBuf, String> {
+    crate::tasks::storage::validate_task_id(task_id)?;
+    for tasks_dir in get_all_task_roots(gcx).await {
+        let candidate = tasks_dir.join(task_id);
+        if is_real_dir(&candidate).await {
+            return Ok(candidate);
+        }
+    }
+    Err(format!("Task not found: {task_id}"))
+}
+
+async fn safe_task_trajectory_dir(
+    gcx: Arc<GlobalContext>,
+    task_meta: &super::types::TaskMeta,
+) -> Result<PathBuf, String> {
+    validate_task_trajectory_role(&task_meta.role)?;
+    validate_task_agent_id(task_meta.agent_id.as_deref())?;
+    let task_dir = safe_task_dir(gcx, &task_meta.task_id).await?;
+    let traj_dir = crate::tasks::storage::get_task_trajectory_dir(
+        &task_dir,
+        &task_meta.role,
+        task_meta.agent_id.as_deref(),
+    );
+    ensure_real_dir_tree(&traj_dir).await?;
+    Ok(traj_dir)
+}
+
+async fn safe_new_task_trajectory_file(
+    gcx: Arc<GlobalContext>,
+    task_meta: &super::types::TaskMeta,
+    chat_id: &str,
+) -> Result<PathBuf, String> {
+    let traj_dir = safe_task_trajectory_dir(gcx, task_meta).await?;
+    safe_new_trajectory_file_in_dir(&traj_dir, chat_id).await
+}
+
+async fn safe_new_buddy_trajectory_file(
+    gcx: Arc<GlobalContext>,
+    chat_id: &str,
+) -> Result<PathBuf, String> {
+    let buddy_dir = get_or_create_buddy_conversations_dir(gcx).await?;
+    safe_new_trajectory_file_in_dir(&buddy_dir, chat_id).await
+}
+
+async fn trajectory_source_path_is_allowed(gcx: Arc<GlobalContext>, path: &Path) -> bool {
+    if !is_real_file(path).await {
+        return false;
+    }
+
+    for root in get_all_trajectories_dirs(gcx.clone()).await {
+        if canonical_child_path_under_root(&root, path).await.is_ok() {
+            return true;
+        }
+    }
+    for root in list_task_trajectory_dirs(&gcx).await {
+        if canonical_child_path_under_root(&root, path).await.is_ok() {
+            return true;
+        }
+    }
+    if let Ok(root) = get_buddy_conversations_dir(gcx).await {
+        if is_real_dir(&root).await && canonical_child_path_under_root(&root, path).await.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 async fn resolve_trajectory_data_save_path(
     gcx: Arc<GlobalContext>,
     id: &str,
@@ -1003,25 +1082,11 @@ async fn resolve_trajectory_data_save_path(
     if let Some(value) = task_meta_value {
         let task_meta = serde_json::from_value::<super::types::TaskMeta>(value.clone())
             .map_err(|e| format!("Invalid task_meta: {}", e))?;
-        let task_dir =
-            crate::tasks::storage::find_task_dir(gcx.clone(), &task_meta.task_id).await?;
-        let traj_dir = crate::tasks::storage::get_task_trajectory_dir(
-            &task_dir,
-            &task_meta.role,
-            task_meta.agent_id.as_deref(),
-        );
-        fs::create_dir_all(&traj_dir)
-            .await
-            .map_err(|e| format!("Failed to create task trajectories dir: {}", e))?;
-        return Ok(traj_dir.join(format!("{}.json", id)));
+        return safe_new_task_trajectory_file(gcx.clone(), &task_meta, id).await;
     }
 
     if buddy_meta_present {
-        let buddy_dir = get_buddy_conversations_dir(gcx.clone()).await?;
-        fs::create_dir_all(&buddy_dir)
-            .await
-            .map_err(|e| format!("Failed to create buddy conversations dir: {}", e))?;
-        return Ok(buddy_dir.join(format!("{}.json", id)));
+        return safe_new_buddy_trajectory_file(gcx.clone(), id).await;
     }
 
     if let Some(candidate) = find_normal_trajectory_file(gcx.clone(), id).await {
@@ -1846,23 +1911,9 @@ pub async fn save_trajectory_snapshot(
     }
 
     let file_path = if let Some(ref task_meta) = snapshot.task_meta {
-        let task_dir =
-            crate::tasks::storage::find_task_dir(gcx.clone(), &task_meta.task_id).await?;
-        let traj_dir = crate::tasks::storage::get_task_trajectory_dir(
-            &task_dir,
-            &task_meta.role,
-            task_meta.agent_id.as_deref(),
-        );
-        tokio::fs::create_dir_all(&traj_dir)
-            .await
-            .map_err(|e| format!("Failed to create task trajectories dir: {}", e))?;
-        traj_dir.join(format!("{}.json", snapshot.chat_id))
+        safe_new_task_trajectory_file(gcx.clone(), task_meta, &snapshot.chat_id).await?
     } else if snapshot.buddy_meta.is_some() {
-        let buddy_dir = get_buddy_conversations_dir(gcx.clone()).await?;
-        tokio::fs::create_dir_all(&buddy_dir)
-            .await
-            .map_err(|e| format!("Failed to create buddy conversations dir: {}", e))?;
-        buddy_dir.join(format!("{}.json", snapshot.chat_id))
+        safe_new_buddy_trajectory_file(gcx.clone(), &snapshot.chat_id).await?
     } else if let Some(path) = existing_no_meta_path {
         path
     } else {
@@ -2015,11 +2066,18 @@ pub async fn maybe_save_trajectory(app: AppState, session_arc: Arc<AMutex<ChatSe
 }
 
 pub(crate) async fn persist_loaded_trajectory_repair_raw(
+    gcx: Arc<GlobalContext>,
     repair: &TrajectoryRepairPatch,
 ) -> Result<(), String> {
     let chat_id = &repair.chat_id;
     validate_trajectory_id(chat_id).map_err(|e| e.message)?;
     let file_path = &repair.source_path;
+    if !trajectory_source_path_is_allowed(gcx, file_path).await {
+        return Err(format!(
+            "Trajectory source path is not in an approved trajectory root: {}",
+            file_path.display()
+        ));
+    }
     let content = tokio::fs::read_to_string(&file_path)
         .await
         .map_err(|e| format!("Failed to read trajectory: {}", e))?;
@@ -2088,7 +2146,8 @@ async fn persist_loaded_trajectory_repair(gcx: Arc<GlobalContext>, mut loaded: L
         loaded.auto_approve_dangerous_commands_present,
     )
     .await;
-    if let Err(e) = persist_loaded_trajectory_repair_raw(&loaded.repair_patch()).await {
+    if let Err(e) = persist_loaded_trajectory_repair_raw(gcx.clone(), &loaded.repair_patch()).await
+    {
         warn!(
             "Failed to persist repaired trajectory for {}: {}",
             chat_id, e
@@ -2144,7 +2203,7 @@ pub async fn check_external_reload_pending(
             }
         };
         if let Some(repaired_version) = repaired_version {
-            if let Err(e) = persist_loaded_trajectory_repair_raw(&repair_patch).await {
+            if let Err(e) = persist_loaded_trajectory_repair_raw(gcx.clone(), &repair_patch).await {
                 warn!(
                     "Failed to persist repaired trajectory for {}: {}",
                     chat_id, e
@@ -2364,7 +2423,7 @@ async fn process_trajectory_change(gcx: Arc<GlobalContext>, chat_id: &str, is_re
             transition_identity_repaired.then_some(session.trajectory_version)
         };
         if let Some(repaired_version) = repaired_version {
-            if let Err(e) = persist_loaded_trajectory_repair_raw(&repair_patch).await {
+            if let Err(e) = persist_loaded_trajectory_repair_raw(gcx.clone(), &repair_patch).await {
                 warn!(
                     "Failed to persist repaired trajectory for {}: {}",
                     chat_id, e
@@ -2384,6 +2443,9 @@ fn task_trajectory_context_from_path(
     task_roots: &[PathBuf],
 ) -> Option<(String, String, Option<String>)> {
     for root in task_roots {
+        if !is_real_dir_sync(root) {
+            continue;
+        }
         let Ok(relative) = path.strip_prefix(root) else {
             continue;
         };
@@ -2412,7 +2474,9 @@ fn task_trajectory_context_from_path(
 }
 
 fn is_under_task_root(path: &Path, task_roots: &[PathBuf]) -> bool {
-    task_roots.iter().any(|root| path.starts_with(root))
+    task_roots
+        .iter()
+        .any(|root| is_real_dir_sync(root) && path.starts_with(root))
 }
 
 fn should_dispatch_trajectory_path(path: &Path, task_roots: &[PathBuf]) -> bool {
@@ -2476,16 +2540,13 @@ pub fn start_trajectory_watcher(gcx: Arc<GlobalContext>) {
         }
 
         for dir in &trajectories_dirs {
-            if let Err(e) = tokio::fs::create_dir_all(dir).await {
-                warn!(
-                    "Failed to create trajectories dir {:?} for watcher: {}",
-                    dir, e
-                );
+            if !is_real_dir(dir).await {
+                warn!("Skipping non-real trajectories dir {:?} for watcher", dir);
             }
         }
         for dir in &task_roots {
-            if let Err(e) = tokio::fs::create_dir_all(dir).await {
-                warn!("Failed to create tasks dir {:?} for watcher: {}", dir, e);
+            if !is_real_dir(dir).await {
+                warn!("Skipping non-real tasks dir {:?} for watcher", dir);
             }
         }
 
@@ -3596,6 +3657,10 @@ async fn collect_trajectory_list_candidates(
 
 async fn is_real_dir(path: &Path) -> bool {
     matches!(fs::symlink_metadata(path).await, Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink())
+}
+
+fn is_real_dir_sync(path: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(path), Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink())
 }
 
 async fn is_real_file(path: &Path) -> bool {
@@ -4813,6 +4878,94 @@ mod tests {
             tokio::fs::read_to_string(outside_path).await.unwrap(),
             before
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinked_task_trajectory_root_is_ignored_for_load_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "symlink-task-root-blocked";
+        let tasks_dir = dir.path().join(".refact").join("tasks");
+        tokio::fs::create_dir_all(tasks_dir.parent().unwrap())
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), &tasks_dir).unwrap();
+        let outside_path = outside
+            .path()
+            .join("task-symlink-root")
+            .join("trajectories")
+            .join("planner")
+            .join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &outside_path,
+            chat_id,
+            "Outside Task Root",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+
+        assert!(find_trajectory_path(gcx.clone(), chat_id).await.is_none());
+        assert!(load_trajectory_for_chat(gcx, chat_id).await.is_none());
+        let err = handle_v1_trajectories_delete(State(app), AxumPath(chat_id.to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status_code, StatusCode::NOT_FOUND);
+        assert!(tokio::fs::try_exists(outside_path).await.unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinked_task_trajectory_agent_dir_is_ignored_for_load_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (gcx, app) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "symlink-task-agent-blocked";
+        let agents_dir = dir
+            .path()
+            .join(".refact")
+            .join("tasks")
+            .join("task-symlink-agent")
+            .join("trajectories")
+            .join("agents");
+        tokio::fs::create_dir_all(&agents_dir).await.unwrap();
+        std::os::unix::fs::symlink(outside.path(), agents_dir.join("agent-1")).unwrap();
+        let outside_path = outside.path().join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &outside_path,
+            chat_id,
+            "Outside Task Agent",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+
+        assert!(find_trajectory_path(gcx.clone(), chat_id).await.is_none());
+        assert!(load_trajectory_for_chat(gcx, chat_id).await.is_none());
+        let err = handle_v1_trajectories_delete(State(app), AxumPath(chat_id.to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status_code, StatusCode::NOT_FOUND);
+        assert!(tokio::fs::try_exists(outside_path).await.unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinked_buddy_conversations_dir_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "symlink-buddy-blocked";
+        let buddy_parent = dir.path().join(".refact").join("buddy").join("chats");
+        tokio::fs::create_dir_all(&buddy_parent).await.unwrap();
+        std::os::unix::fs::symlink(outside.path(), buddy_parent.join("conversations")).unwrap();
+        let outside_path = outside.path().join(format!("{chat_id}.json"));
+        write_buddy_conversation_file(&outside_path, chat_id, "Outside Buddy").await;
+
+        assert!(find_trajectory_or_buddy_path(gcx.clone(), chat_id)
+            .await
+            .is_none());
+        assert!(load_trajectory_for_chat(gcx, chat_id).await.is_none());
     }
 
     #[tokio::test]
@@ -8640,12 +8793,47 @@ mod tests {
         .unwrap();
         tokio::fs::write(&path, &replacement).await.unwrap();
 
-        let err = persist_loaded_trajectory_repair_raw(&repair_patch)
+        let err = persist_loaded_trajectory_repair_raw(gcx.clone(), &repair_patch)
             .await
             .unwrap_err();
 
         assert!(err.contains("Trajectory source id mismatch for repair"));
         assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), replacement);
+    }
+
+    #[tokio::test]
+    async fn repair_source_outside_approved_roots_errors_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (gcx, _) = make_app_with_workspace(dir.path()).await;
+        let chat_id = "repair-source-outside-root";
+        let outside_path = outside.path().join(format!("{chat_id}.json"));
+        write_trajectory_file(
+            &outside_path,
+            chat_id,
+            "Outside Repair Source",
+            "2024-01-01T00:00:00Z",
+        )
+        .await;
+        let before = tokio::fs::read_to_string(&outside_path).await.unwrap();
+        let repair_patch = TrajectoryRepairPatch {
+            chat_id: chat_id.to_string(),
+            source_path: outside_path.clone(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            frozen_request_prefix: None,
+            auto_approve_editing_tools: true,
+            auto_approve_dangerous_commands: true,
+        };
+
+        let err = persist_loaded_trajectory_repair_raw(gcx, &repair_patch)
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("not in an approved trajectory root"));
+        assert_eq!(
+            tokio::fs::read_to_string(outside_path).await.unwrap(),
+            before
+        );
     }
 
     #[tokio::test]
@@ -8751,7 +8939,7 @@ mod tests {
         .unwrap();
         let normal_before = tokio::fs::read_to_string(&normal_path).await.unwrap();
 
-        persist_loaded_trajectory_repair_raw(&repair_patch)
+        persist_loaded_trajectory_repair_raw(gcx.clone(), &repair_patch)
             .await
             .unwrap();
 
